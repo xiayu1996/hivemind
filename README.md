@@ -15,6 +15,8 @@
 | [docs/design/02-distributed-execution.md](docs/design/02-distributed-execution.md) | 分布式执行层：多机队列、pi 运行器、守卫审计、模型分层与 failover、部署自更新 |
 | [docs/design/03-pipeline-quality.md](docs/design/03-pipeline-quality.md) | 流水线与质量闭环：两层状态机、并行调度、TDD 契约、E2E 回归 loop、反馈自迭代 |
 | [docs/design/04-observability.md](docs/design/04-observability.md) | 可观测性与成本账本：事件溯源三层模型、TokenUsage 归一、循环检测、invariants |
+| [docs/design/05-web-console.md](docs/design/05-web-console.md) | 内网 Web 控制台：节点健康、动态配置子系统、Prompt 工作台、成本/统计读面 |
+| [docs/design/06-codex-oauth.md](docs/design/06-codex-oauth.md) | Codex（ChatGPT 订阅 OAuth）集成机制：登录/刷新/多机分发/失效告警 |
 
 ## 目录结构
 
@@ -29,6 +31,7 @@ src/
   pipeline/       DoD schema / 收敛判据 / verdict 校验 / completion-verifier / 业务语言 lint
   regression/     RegressionScheduler + 场景注册表 + 归因二分 + 失败签名
   vcs/            worktree(移植) + mr(gh 优先, glab 第二)
+  console/        内网 Web 控制台(Vue3 SPA + REST): 节点健康/动态配置/prompt 工作台/成本统计
   verify/ report/ memory/ observability/ alert/ persistence/ config/ util/   busybee 移植为主
 prompts/          基线层 + per-phase prompt(独立文件)
 extensions/       pi extensions(hive-guard / mcp-adapter vendor / model-policy 兜底)

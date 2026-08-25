@@ -32,7 +32,7 @@ jobId 幂等规则（`task-<cardId>[-r<N>][-c<M>]`）、removeOnComplete:true、
 
 每机一个 Node daemon，注册时声明 hostId、能力标签、并发度（建议 1；Mac mini 跑 e2e 时并发 2 会互抢浏览器）、hivemind/pi/协议版本。
 
-- **心跳**：Redis `SETEX hm:worker:<hostId>`（TTL 15s，每 5s 刷），payload 带能力/版本/当前卡。
+- **心跳**：Redis `SETEX hm:worker:<hostId>`（TTL 15s，每 5s 刷），payload 带能力/版本三元组/当前卡/**内网 IP 与机器指标（loadavg/内存/磁盘余量）/凭据探针结果**（供 Web 控制台节点健康页，05 文档 §5）；心跳响应 piggyback `configVersion` 实现动态配置分发（每次心跳重申期望态，漏事件可自愈——busybee RemoteControl 教训）。
 - **失联两段式**：断 45s → offline 告警不打断（沿用"静默检测而非时长上限"哲学）；断 >30min（覆盖重启/更新窗口）→ orchestrator 撤销主机租约，卡带 freshWorktree 标记重投 capability 队列，当前 phase 从头重入（全量注入模式使跨机重建廉价，见 §2.3）；孤儿 worktree 等主机回归后本地回扫 quarantine。EventLog/证据都在中央，记录无损失。
 - worker 带同 hostId 回归 → 本地 StartupRecovery：从中央 DB 回扫属于本机的 in-flight 卡 → 从 phase checkpoint 重入（worktree 还在本地盘，恢复廉价）。
 
@@ -180,7 +180,7 @@ Context 跨供应商重放仅作为优化项后置（PoC-6 验证 codex→GLM �
 
 busybee CredentialHealth 从全局单一扩展为 per-provider 三态机（closed/open/half-open）：
 
-- 探针 = 经 pi 对该 provider 发一次小脑档最小补全（近零成本），half-open 探活通过则闭合；
+- 探针分两层：凭据层用 `pi auth check --provider <p> --json --no-refresh`（只读零副作用、不消耗 refresh token，06 文档 §6）；容量层经 pi 发一次小脑档最小补全（近零成本），half-open 探活通过则闭合；
 - 错误分类优先消费 RPC 结构化错误事件（PoC-5，不带则退回按 provider 录制的文案正则）；区分"凭据死了（要人）"与"容量限了（等窗口）"，处置沿用 escalation-policy 的 delay/circuit_break 分流；
 - 某 provider open → 新 run 按档位表横移 fallback 列；**三家全开才触发全局 intake 暂停**——单 provider 故障不再停摆全系统，多供应商的核心红利。
 

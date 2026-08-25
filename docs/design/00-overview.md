@@ -22,6 +22,8 @@ hivemind 以 pi（earendil-works/pi，provider 无关）为执行底座、Notion
 | 试点项目 | 个人新项目（GitHub）：MR 适配器优先 gh，glab 复用为第二适配 |
 | day1 供应商 | Codex（ChatGPT 订阅 OAuth）+ GLM（zai key）+ Grok（xai key）；无 Claude 凭据，opus/sonnet 作为预留映射列 |
 | 成本策略 | 软护栏（日/月阈值告警不阻断）+ 全量成本账本；可观测性重点设计（借鉴 deepseek-harness） |
+| Web 控制台（08-25 增补） | day1 提供内网运维面：节点健康（IP/机器指标）、动态配置、Prompt 工作台、成本/统计。Notion=业务面，控制台=运维面 |
+| 重试上限族（08-25 增补） | 收敛判据提前停 + 可配置硬上限最终停（上限设在离散重试轮次，不设在单次运行时长/token）；到限即失败 + 诊断报告 @人（需求侧 vs 系统侧两分法） |
 
 ## 3. 调研结论摘要
 
@@ -69,18 +71,18 @@ hivemind 以 pi（earendil-works/pi，provider 无关）为执行底座、Notion
 
 | 里程碑 | 内容 |
 |---|---|
-| **M0 地基 PoC**（先证伪最贵假设，~1 周） | pi RPC Context 导出/载入（PoC-2）、Windows Git Bash 冒烟（PoC-1）、RPC 错误事件结构（PoC-5）、Notion 评论 resolve 丢失与 @mention 通知实测（R1/R2）、pi 默认 vs 自建 prompt A/B（PoC-4） |
-| **M1 单机闭环** | Linux 上 orchestrator + 本机 worker + guard extension + Notion 双 DB + Story 页 builder，跑通 1 张真实卡全流水线（TDD 红绿证据链 + 盲审 + completion verifier + Notion 报告回写） |
-| **M2 并行与回归** | DECOMPOSE 拆解 + footprint 调度 + epic 集成分支合流 + 常驻 E2E 双池回归 + regression 物化 |
+| **M0 地基 PoC**（先证伪最贵假设，~1 周） | pi RPC Context 导出/载入（PoC-2）、Windows Git Bash 冒烟（PoC-1）、RPC 错误事件结构（PoC-5）、Notion 评论 resolve 丢失与 @mention 通知实测（R1/R2）、pi 默认 vs 自建 prompt A/B（PoC-4）、**Codex OAuth 五项（PoC-C1–C5：device code 登录/自动刷新/usage-limit 文案解析/无副作用探针/同机并发锁，06 文档 §9）** |
+| **M1 单机闭环** | Linux 上 orchestrator + 本机 worker + guard extension + Notion 双 DB + Story 页 builder，跑通 1 张真实卡全流水线（TDD 红绿证据链 + 盲审 + completion verifier + Notion 报告回写）；**Web 控制台骨架**（节点健康 + 任务视图 + 成本/config 只读） |
+| **M2 并行与回归** | DECOMPOSE 拆解 + footprint 调度 + epic 集成分支合流 + 常驻 E2E 双池回归 + regression 物化；**控制台动态配置写面 + 重试上限族接入** |
 | **M3 多机化** | capability 队列 + 派单信封 + 心跳失联 + 中央租约 + Mac mini（浏览器 e2e worker）接入 |
-| **M4 供应商矩阵与反馈闭环** | per-provider 熔断 + failover + 模型策略双 chokepoint + 成本账本 + 反馈 triage/friction/反思提案 + memory 投影 |
+| **M4 供应商矩阵与反馈闭环** | per-provider 熔断 + failover + 模型策略双 chokepoint + 成本账本 + 反馈 triage/friction/反思提案 + memory 投影；**Prompt 工作台完整版（灰度 + 行为回归对比）+ 供应商健康页** |
 | **M5 收口** | Windows 探针 worker + 三平台 self-update 滚动升级 + 行为回归统计基线 + 运行周报 |
 
 ## 6. 风险与 PoC 清单
 
 | # | 风险/假设 | 级 | 处置 |
 |---|---|---|---|
-| R0 | ChatGPT 订阅 OAuth 在第三方 harness 中使用的 ToS/封号风险 | 高 | 业务上知情接受；failover 链保证 codex 断供时 GLM/grok 整体接管；凭据探针最早发现 |
+| R0 | ChatGPT 订阅 OAuth 的 ToS/断供风险（OpenAI 官方 Codex for OSS 背书 pi，但背书是容忍非合同；Anthropic 已有关门先例） | 高 | 一机一账号（避开风控画像 + refresh rotation）；failover 链 day1 配好；凭据探针最早发现。详见 06 文档 §8 |
 | PoC-2 | RPC 能否导出/载入 Context JSON + mid-run 注入/abort/resume（checkpoint+failover+纠偏基石） | 高 | 实测（含 Windows CRLF 分帧）；fallback: extension turn 边界序列化 + before_agent_start 注入重建；不支持注入则降级 json 模式 + phase 边界注入 |
 | R1 | 人快速 resolve 评论致反馈丢失（list comments 只返回未 resolve） | 高 | 实测 comment.updated webhook 是否覆盖 resolve；不覆盖则约定"agent 回评确认后人再 resolve"+缩短轮询 |
 | R2 | API 评论中 @mention 是否真触发通知（needs_input 依赖） | 高 | 实测 |

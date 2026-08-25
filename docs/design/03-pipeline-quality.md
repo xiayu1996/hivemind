@@ -108,9 +108,28 @@ DECOMPOSE 为每个 Story 产出：
 | 失败后果 | 打回 CODE（收敛判据兜底） | 物化 regression 卡入队，不打断进行中内环 |
 | 判据 | 单轮决定性 | 样本级统计 |
 
-### 1.5 内环收敛判据
+### 1.5 内环收敛判据 + 可配置重试上限族（2026-08-25 修订）
 
-`failed_scenarios(N) ⊊ failed_scenarios(N-1)`（严格真子集）→ 放行续跑，不限轮次/时长/预算；持平、扩大或震荡 → verify_loop_exceeded → Notion @人并附收敛曲线。全系统只有两类真停点：`blocking_question` 和 `verify_loop_exceeded`。（"每轮修一个"拖长的钻空子风险：收敛曲线附在 Notion 卡供人随时叫停 + friction 事后反思。）
+两层兜底，先到先停：
+
+1. **收敛判据（提前停）**：`failed_scenarios(N) ⊊ failed_scenarios(N-1)`（严格真子集）→ 放行续跑；持平、扩大或震荡 → 立即 `verify_loop_exceeded`，不用等上限。
+2. **可配置硬上限族（最终停）**——全部经 Web 控制台动态配置（05 文档 §4），默认值刻意宽松：
+
+| 键 | 语义 | 默认 |
+|---|---|---|
+| maxInnerLoopRounds | CODE⇄VERIFY 内环总轮次 | 6 |
+| maxPhaseReentries | 单 phase 重入次数（failover/崩溃恢复/跨机重建合并计数） | 3 |
+| maxContinueRetries | 断线 continue 重试 | 8 |
+| maxRegressionReopens | 同一 Story 被 E2E loop 打回 REGRESSION_FIX 的次数 | 2 |
+
+**上限设在"离散重试轮次"，不设在单次运行的时长/token/预算上**——与 busybee 教训一致（后者只伤害真实工作，前者才是"系统在原地打转"的信号；busybee 自己也保留了 MAX_TEST_ITERS）。
+
+**到达上限的处置**：卡置失败 + Notion @创建人 + **诊断报告**（中脑基于收敛曲线、失败集合演化、轮次证据生成业务语言说明），按两分法给出结论与建议：
+
+- **需求侧**：需求太难或拆解粒度不合理 → 建议人工拆卡、补充上下文或调整 Spec；
+- **系统侧**：中间流程/逻辑存在缺陷（如验证契约歧义、prompt 误导、调度错误）→ 自动物化 friction 进反思提案管道（§4），累积后产出流程优化提案。
+
+全系统真停点因此为三类：`blocking_question`、`verify_loop_exceeded`（不收敛提前停）、`retry_limit_exceeded`（上限停 + 诊断）。（"每轮修一个"拖长的钻空子风险：收敛曲线附在 Notion 卡供人随时叫停 + 上限族最终兜底。）
 
 ## 2. TDD 执行契约
 
@@ -167,7 +186,7 @@ Notion 评论/打回/needs_input 回答
         └─ answer ────────────► 解锁对应 BLOCKED 卡，回注同一上下文继续
 ```
 
-**反思机制**：触发条件（任一）——同一角色 24h 被否 ≥3 次；同类 friction 累计 ≥N；行为回归统计显著劣化。触发后大脑生成**改进提案卡**（内容是具体 diff：prompt 措辞 / 调度规则参数 / 验证契约条款），贴 Notion 待人批准。批准后走 self-update 通道应用，并用行为回归统计验证新旧版本差异——**提案永远不自动生效，人批是唯一开关**。所有 triage 结果与提案采纳率带流速指标防断流。
+**反思机制**：触发条件（任一）——同一角色 24h 被否 ≥3 次；同类 friction 累计 ≥N；行为回归统计显著劣化；`retry_limit_exceeded` 诊断判为系统侧（§1.5）。触发后大脑生成**改进提案卡**（内容是具体 diff：prompt 措辞 / 调度规则参数 / 验证契约条款），贴 Notion 待人批准（可见性与讨论）。**批准后不直接改文件**：prompt 类提案自动生成 Prompt 工作台的 draft 版本，走"灰度 → 行为回归对比 → 发布/回滚"流程（05 文档 §6）；配置类提案落 config draft（05 文档 §4）。**提案永远不自动生效，人批是唯一开关**。所有 triage 结果与提案采纳率带流速指标防断流。
 
 ## 5. 交付定义（DoD）契约
 
