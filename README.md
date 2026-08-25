@@ -17,6 +17,7 @@
 | [docs/design/04-observability.md](docs/design/04-observability.md) | 可观测性与成本账本：事件溯源三层模型、TokenUsage 归一、循环检测、invariants |
 | [docs/design/05-web-console.md](docs/design/05-web-console.md) | 内网 Web 控制台：节点健康、动态配置子系统、Prompt 工作台、成本/统计读面 |
 | [docs/design/06-codex-oauth.md](docs/design/06-codex-oauth.md) | Codex（ChatGPT 订阅 OAuth）集成机制：登录/刷新/多机分发/失效告警 |
+| [docs/plan/tasks.md](docs/plan/tasks.md) | 实施任务清单：M0–M5 全量任务拆解，每项含输出物与验证方式 |
 
 ## 目录结构
 
@@ -39,4 +40,4 @@ extensions/       pi extensions(hive-guard / mcp-adapter vendor / model-policy �
 
 ## 状态
 
-设计冻结于 2026-08-22，实施路线 M0（地基 PoC）尚未开始。见 00-overview.md §路线图。
+设计冻结于 2026-08-22，实施路线 M0（地基 PoC）尚未开始。任务级拆解见 [docs/plan/tasks.md](docs/plan/tasks.md)。
