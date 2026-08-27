@@ -72,7 +72,43 @@ friendlyMessage = `You have hit your ChatGPT usage limit${plan}.${when}`.trim();
 "还有几分钟"。所以解析出来的分钟数**必须锚定到该事件自身的时间**，
 不能锚定到"我们读到它的时间"——事件在 outbox 里积压过就会算错窗口。
 
-## 待活体执行（M0-01 决策后）
+## 活体执行结果（2026-08-27，在 macOS 笔记本上完成授权）
+
+登录经 `scripts/pi-login.sh` → TUI `/login openai-codex` → **Browser login** 完成。
+
+| 项 | 结果 |
+|---|---|
+| C1 登录 | **PASS** `{"status":"ready","provider":"openai-codex","authType":"oauth"}` |
+| C1 刷新 | **PASS** 强制刷新后 expires 前推、凭据仍 ready，轮换成功 |
+| C1 真实一轮 | **PASS** 真实 Codex 跑通 RPC 一轮并完成 Context 往返（见下） |
+| C3 零副作用 | **PASS** 连续 5 次 `--no-refresh` 后 auth.json 的 mtime 与 size 完全未变；token 有效期内默认 check 也是 no-op |
+| C4 并发锁 | **PASS** 3 个并发强制刷新，**无 invalid_grant**，事后凭据仍 ready，expires 只推进一次 |
+| C2 活体 | 仍待真实撞墙（解析器已按源码模板单测通过） |
+| C5 | 仍待 Mac mini |
+
+### auth.json 实际形态
+
+`{ type: "oauth", access, refresh, expires, accountId }`，`expires` 为 epoch **毫秒**。
+
+**access token 有效期实测 10 天**（不是常见的 1 小时）。这有两面：好处是刷新极少被触发、日常稳定；
+坏处是**刷新路径长期不被走到，一旦坏掉要很久才暴露，且往往在无人值守时段炸**。
+→ CredentialHealth 必须主动盯 `expires` 剩余时长做提前告警，而不是等刷新失败才发现。
+
+### 新增两个坑
+
+1. **`--min-expiry` 不能超过 token 自身寿命**。`--min-expiry 300h`（>10 天）会让 pi
+   先真的刷新一次、然后仍不满足约束而报 `Failed to resolve credential` 退出码 1。
+   用它做健康探针会**每次白烧一次 refresh 且永远报失败**。探针一律用 `--no-refresh`。
+   （duration 只接受 `30m` / `1h` 这类，不支持 `d`。）
+
+2. **RPC 有两条互不相同的错误面**，PoC-5 的单一契约只覆盖第二条：
+   - **命令级拒绝** → `{"type":"response","success":false,"error":"..."}`（如 `set_model` 传坏模型）
+   - **provider 运行期失败** → assistant 消息 `stopReason:"error"` + `errorMessage`
+
+   runner 两条都要处理。附带发现 pi 在命令级错误里的文案会丢参数
+   （坏模型报 `Model not found: undefined/undefined`），可诊断性差，需自己补上下文。
+
+## 待活体执行（剩余）
 
 | 项 | 判据 | 阻塞原因 |
 |---|---|---|
