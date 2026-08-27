@@ -18,6 +18,7 @@
 | [docs/design/05-web-console.md](docs/design/05-web-console.md) | 内网 Web 控制台：节点健康、动态配置子系统、Prompt 工作台、成本/统计读面 |
 | [docs/design/06-codex-oauth.md](docs/design/06-codex-oauth.md) | Codex（ChatGPT 订阅 OAuth）集成机制：登录/刷新/多机分发/失效告警 |
 | [docs/plan/tasks.md](docs/plan/tasks.md) | 实施任务清单：M0–M5 全量任务拆解，每项含输出物与验证方式 |
+| [AGENTS.md](AGENTS.md) | 面向 agent 的仓库工作约定：架构不变量、pi 运行器铁律、代码风格、移植 checklist（`CLAUDE.md` 为其符号链接） |
 
 ## 目录结构
 
