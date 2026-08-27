@@ -44,7 +44,7 @@
 | M0-06 | ⛔ PoC-1：Windows Git Bash 下 pi RPC 冒烟 ×10（含工具调用任务） | `docs/poc/poc-1-windows.md` | 10/10 无 CRLF 分帧错误、无挂死；不过则报告中拍板降级为纯 Playwright 探针执行器 | M0-02 |
 | M0-07 | ✅ PoC-4：pi 默认 prompt vs 自建基线 A/B——3 张真实小卡各跑两条轨迹 | `docs/poc/poc-4-prompt-ab.md`（评分表 + 结论） | 每卡两条完整轨迹归档；盲评人（Ryan）不知分组；结论明确采用哪条基线 | M0-02 |
 | M0-08 | ✅ R1：Notion 评论 resolve 行为实测——`comment.updated` webhook 是否覆盖 resolve、list comments 对已 resolve 评论的可见性 | `docs/poc/notion-behavior.md` | 得出明确结论并回写 01 文档（是否需要"agent 回评确认后人再 resolve"协议约定） | — |
-| M0-09 | ⚠️ R2：API 创建评论中 @mention 是否触发移动端推送 | 同上文档补充 | Ryan 手机实收推送截图归档；不触发则 needs_input 旁路告警升级为必选路径并回写 01 文档 | — |
+| M0-09 | ⛔ R2：API 创建评论中 @mention 是否触发移动端推送 | 同上文档补充 | Ryan 手机实收推送截图归档；不触发则 needs_input 旁路告警升级为必选路径并回写 01 文档 | — |
 | M0-10 | ✅ Notion 页面规模与 mermaid 实测：300+ block 页面写入/读取、mermaid 渲染语法子集 | `docs/poc/notion-behavior.md` + `docs/poc/evidence/` | 300 块页面创建与更新无 API 拒绝且耗时可接受；子集内每种图渲染截图归档 | — |
 | M0-11 | ✅ PoC-C1：Codex device code 无头登录 + 自动刷新（Linux） | `docs/poc/poc-c-codex-oauth.md` | 登录后 RPC 跑通一轮；token 逼近过期后自动刷新，auth.json expires 更新且无人工介入、无 invalid_grant | M0-01, M0-02 |
 | M0-12 | ✅ PoC-C2：usage-limit 撞墙文案采集与解析 | 分诊正则 + `fixtures/codex-usage-limit.json` | 正则从真实 errorMessage 解析出 reset 分钟数 | M0-11 |

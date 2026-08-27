@@ -36,15 +36,20 @@
 每个 Spec 行的 blockId（区段锚块机制），锚点集合规模是每卡个位数到几十，完全在预算内。
 非锚点块上的评论由 `comment.created` webhook 覆盖，轮询不负责。
 
-## R2：@mention 推送 —— 待人确认
+## R2：@mention 推送 —— 结论未定（测法无效）
 
 已通过 API 在测试页发出一条含 `mention-user` 的评论 @Ryan。**需要 Ryan 确认手机是否收到推送**。
 
 一个必须记下的干扰项：本次评论经 claude.ai 的 Notion connector 发出，作者被记为 Ryan 本人
 ，而 Notion 通常不会因为"你 @ 你自己"而推送。
 hivemind 用自己的 integration token 时作者是 bot，@人属于跨用户提醒，行为可能不同。
-**因此本条无论结果如何都需在拿到 integration token 后用 bot 身份复测一次**，
-否则 needs_input 这条命脉通道的可用性没有真凭据。
+**2026-08-27 实测两次，Ryan 手机均未收到推送。**但这不构成"通道不可用"的结论——
+两次评论的作者都是 Ryan 本人（connector 以他的身份操作），而 Notion 不会为自我提及发通知。
+测法本身无效。
+
+**必须在拿到 integration token 后用 bot 身份复测**（跨用户提醒才是真实场景）。
+在复测给出确定结论之前，**needs_input 一律同时走旁路告警通道**（飞书/邮件，01 文档 §5 已有设计），
+不把阻塞提问的可达性单独押在 Notion @提醒上。这条降级默认开启，而不是等 R2 失败才启用。
 
 ## 块规模与原位更新 —— PASS
 
