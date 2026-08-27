@@ -102,7 +102,10 @@ webhook 只投递到 orchestrator（HTTPS + HMAC X-Notion-Signature 校验）。
 
 ### 3.2 评论水位（替代 busybee 的 MySQL 自增 id 方案）
 
-- 无全局"新评论"端点 → 维护**活跃集** = 非终态 Story ∪ 最近 7 天有变更页，逐页拉取。
+- 无全局"新评论"端点 → 维护**活跃集** = 非终态 Story ∪ 最近 7 天有变更页。
+- **按 page_id 拉取只返回页级评论；锚定在具体行（block）上的评论必须逐 block 拉取**（2026-08-27 实测，见 docs/poc/notion-behavior.md）。Story 页恰恰把 Spec 清单做成一行一块并鼓励人在具体 Spec 行上评论——最有价值的那类反馈正是页级拉取取不到的。而一个 Story 页有 300+ 块，全页逐块轮询在 2.5 rps 预算下不可行。
+- 因此轮询按**已登记的锚点 blockId 集合**拉取（Spec 行 + 区段锚块，每卡个位数到几十，预算内），非锚点块上的评论由 `comment.created` webhook 覆盖，轮询不负责。
+- **已 resolve 的评论 API 永久取不回**（无参数、无绕过；Notion 官方托管 MCP 有 `include_resolved` 但未开放给公共 REST）。故 webhook 秒级 ingest 是主路径（评论诞生即入库，早于人 resolve），轮询窗口须短于人的典型 resolve 时延，并在 Story 页模板里对人写明"等 agent 回评确认后再 resolve"。评论一旦 ingest 落库即为本地真相，不再依赖 Notion 侧可读性。
 - 水位表 `comment_watermark(page_id, max_created_time_seen, seen_ids_ring)`：created_time 水位 + **回看重叠 2min** + comment_id 唯一约束去重（时间粒度与乱序都被 id 去重兜住）。
 - 过滤本 integration bot 自家评论。评论轮询划 0.5 rps 预算；webhook 到达时插队立即拉该页，P50 延迟秒级。
 

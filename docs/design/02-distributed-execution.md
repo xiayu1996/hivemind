@@ -84,7 +84,9 @@ StallWatchdog 原样移植：静默检测而非时长上限，信号源换成 RP
 - pi 进程死后恢复 = 最后一份好快照起新 run 续跑（与跨供应商 failover 同一条代码路径，一次投资两处收益）；
 - 兜底：快照不可用 → 重跑整 phase（prompt 自包含损失有界）；
 - resume 前跑 JSONL 校验器：逐行 parse，尾部坏行截断到最后一个完整消息边界（损坏特征是尾部，截尾即修复）；每 phase 结束把 session 复制为不可变 checkpoint 进 EvidenceStore。
-- **PoC-2**：RPC 是否暴露"导出 Context"与"以给定 Context 起 session"。fallback：extension 在 turn 边界序列化（能看到完整消息流）+ before_agent_start 注入重建——两条都在已确认的 hook 能力范围内。
+- **PoC-2 已完成（2026-08-27，见 docs/poc/poc-2-context.md）**：导出面存在（RPC `get_messages`），但**没有任何 RPC 命令可以把 Context 灌回会话**——载入面只有 session 文件（`--session` / `--session-id` / `--fork` / `--clone`）。因此 checkpoint **必须保留可被 pi 直接加载的 session JSONL**，不能只存消息数组。往返等价、跨进程 resume、`steer` 中途注入、`abort` 后进程可复用均实测通过。
+- Context 等价比对须先剥离每次运行必然不同的易变字段：`id / parentId / timestamp / sessionId / requestId / durationMs / usage / cost / api`。
+- `steer` 仅在"当前回合的工具调用执行完、下一次 LLM 调用之前"投递：**回合内没有工具调用就等同于 follow_up**。故纯文本阶段（如 MR 文案）不可中途纠偏，只能整段重跑。
 
 ### 2.5 断线 continue-retry
 
@@ -123,14 +125,22 @@ RPC 下 pi 进程活着 session 就在内存：检测到流中断类终态错误
 
 ## 4. system prompt 与目标仓资产装载
 
-### 4.1 自建两层 prompt 完全替换 pi 默认
+### 4.1 自建两层 prompt 追加在 pi 默认之上
 
-pi 默认编码 prompt 是社区通用款，不为"无人值守流水线一环"设计（不知道产出要机器可解析、证据纪律、不确定就停下问）。自建：
+**2026-08-27 实测修订**（原为"完全替换"，见 docs/poc/poc-4-prompt-ab.md）：pi 默认 prompt 实测
+8,062 字符 ≈ 2.3k token（单条 system 消息），内容几乎全是**自家工具的正确用法**
+（用 bash 做 ls/rg/find、用 read 而非 cat、edit 的 oldText 必须精确匹配且不得重叠嵌套等）；
+它**不含**任何角色契约、验证纪律、证据规范。换掉它会让模型用错 pi 的 edit 工具。
+
+两者是互补而非竞争：默认段落管"怎么用 pi 的工具"，自建层管"hivemind 的工程纪律"。
+故用 `--append-system-prompt`（可多次，接受文本或文件）叠加，`--system-prompt` 完全替换
+降级为备选，仅在实测证明默认段落有害时启用。加上工具 schema ≈0.83k token，
+每请求固定开销 ≈3.1k token，计入 04 文档的 Token effect 账。自建：
 
 - **基线层**（全 phase 共享）：工具纪律、验证优先于声称、证据引用规范、禁止猜测、遵守 CLAUDE.md/rules 的元指令；
 - **phase 层**：角色、输入契约（注入的上文 artifact 结构）、输出契约（机器可解析结构化产出）；
 - **per-provider 风格微调段**：GPT-5.x-codex 系与 GLM 系对停止条件/主动性措辞响应差异显著，需 provider 变体开关。
-- 起点大量借鉴 busybee prompts.ts 已打磨的 phase prompt；**PoC-4 用 3–5 张金标卡 A/B 盲评守门**（pi 默认 vs 自建，再对比 provider 变体）。
+- 起点大量借鉴 busybee prompts.ts 已打磨的 phase prompt；**PoC-4 用 3–5 张金标卡盲评守门**，对照改为三臂：默认 / 默认+追加 / 完全替换（再对比 provider 变体）。
 
 ### 4.2 CLAUDE.md / skills 层叠（pi 原生，零自研）
 

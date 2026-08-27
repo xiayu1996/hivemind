@@ -98,6 +98,23 @@ hivemind 以 pi（earendil-works/pi，provider 无关）为执行底座、Notion
 | epic 分支长命偏离 / 大 MR 人审负担 | — | 中 | 每日 merge main；Notion 为主审阵地 + >8 Story 提示拆 |
 | Redis/Linux 单点、GUI 会话自动登录安全弱化 | — | 低 | 接受：中央 DB 为真相源可重建；盘加密 + 内网隔离 |
 
+## 6.5 M0 执行结果（2026-08-27）
+
+完整评审见 `docs/poc/m0-review.md`。总体：**架构无致命证伪，可进 M1**。
+
+| 风险/假设 | 结论 |
+|---|---|
+| PoC-2 Context 导出/载入 | PASS，但**无 RPC 载入命令**，checkpoint 必须保留 session JSONL |
+| PoC-5 错误事件结构 | PASS，单一提取契约（`stopReason==="error"` → `errorMessage`）+ 需优先级分类 |
+| R1 评论 resolve 丢失 | **原方案被证伪**：REST 永久取不回已 resolve 评论，协议已改 |
+| （新增）块级评论可见性 | **高影响**：按 page_id 拉取取不到 Spec 行上的评论，轮询改按锚点 blockId |
+| Notion 块膨胀 / mermaid | PASS，300 块 + 大页定点更新 + 锚点保全 + 三种图含中文均渲染 |
+| PoC-4 prompt | 默认 prompt 已量化，结论由"替换"改为"**追加**" |
+| Codex OAuth C1–C4 | 机制核实通过（登录入口在 TUI 非 CLI；auth check 退出码陷阱），活体待 M0-01 决策 |
+| PoC-1 Windows / C5 Mac mini | **未执行**：本轮在非目标节点上跑，未组网，目标机不可达；顺延至 M3 |
+
+阻塞 M1 的只剩 **provider 凭据**（GLM/Grok key 或 Codex 登录）。
+
 ## 7. 验证策略
 
 - **M0**：每个 PoC 有明确判据（RPC Context 往返 diff 为空、Windows 10 次冒烟全过、@mention 手机收到推送等）。

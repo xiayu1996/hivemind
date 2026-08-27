@@ -101,6 +101,30 @@ GLM/Grok（api_key 类）用 pi 的 `!command` 动态取密（`"!op read ..."` �
 - 风控画像共识："单账号 + 多机 + 24x7 重度自动化"叠加最危险——方案 A 同时是风控缓解。
 - **缓解**：failover 链（GLM/Grok 可整体接管）day1 配好 + 凭据探针最早发现 + 成本账本让"切 API 计费"的备选随时可算账。
 
+## 8.5 M0 实测修订（2026-08-27）
+
+完整记录见 `docs/poc/poc-c-codex-oauth.md`。三点必须落到实现与手册：
+
+1. **没有 `pi auth login` CLI**。auth 子命令只有 `print-api-key` / `print-bearer-token` / `check`。
+   device code 登录确实存在（二进制内 `"Device code login (headless)"`），但入口是**交互式 TUI 的 `/login`**。
+   无头机器的登录方式是：ssh 进去跑一次交互式 `pi` → `/login` 选 device code → 拿 user_code 去浏览器授权。
+   这是**一次性带外手工步骤**，不可脚本化，新机器接入手册必须显式包含。
+
+2. **`pi auth check` 的退出码不可信**：无凭据时输出
+   `{"status":"not_ready","reason":"credentials_not_configured"}` 而 **exit code 仍为 0**。
+   凭据探针必须解析 JSON `status` 字段，`if pi auth check; then` 形式会永远判定为健康。
+
+3. **一机一账号的理由要精确化**。`~/.pi/agent/auth.json` 与 `~/.codex/auth.json` 是两套独立凭据，
+   由各自登录流程签发——在同一台机器上给 pi 登录**不会**弄坏已有的 codex CLI 登录态。
+   真正互踩的是**把同一份 auth.json 复制到多台机器**：refresh token 轮换会让先刷新方使另一方失效。
+   pi 对 auth.json 用 `proper-lockfile` 加文件锁，同机并发刷新安全，但文件锁不跨主机。
+   → 结论不变（不复制凭据文件、每台跑 pi 的机器独立登录），但"是否需要第二个 ChatGPT 账号"
+   取决于同一账号在两台机器上并发 24x7 使用的风控画像，而非技术上的凭据冲突。
+
+4. **usage-limit 窗口是相对值**：文案里的分钟数是 pi 生成字符串那一刻由 `resets_at` 折算的，
+   必须锚定**事件自身的时间戳**；事件在 outbox 积压后再解析会算错恢复窗口。
+   解析器与单测见 `poc/codex-oauth/usage-limit-parser.mjs`。
+
 ## 9. PoC 增补（并入 M0）
 
 | # | 验证内容 | 判据 |
