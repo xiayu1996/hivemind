@@ -73,9 +73,9 @@
 | ID | 任务 | 输出物 | 验证方式 | 前置 |
 |---|---|---|---|---|
 | M1-05 | ✅ PiRunner port + RPC adapter：spawn / prompt / 事件流 / abort / kill；握手失败即 kill 不复用可疑子进程（cumora 教训） | `src/runner/` | 罐头回放契约测试（fixture 取自 M0-03/05 采集）；握手失败注入用例确认进程被 kill | M0-16, M1-01 |
-| M1-06 | Context checkpoint：每 assistant turn 经 RPC 拉 Context JSON → 原子写 + SHA-256 + 保留最近 N 份 + 恢复逻辑 | `src/runner/context-checkpoint.ts` | 单测：最后一份损坏回退上一份；e2e：run 中 `kill -9` 后从快照起新 run 续跑成功 | M1-05 |
-| M1-07 | continue-retry：流中断错误识别（基于 M0-05 错误模式表）+ 同 session 注入 continue + `maxContinueRetries` 计数 | `src/runner/continue-retry.ts` | fixture 注入中断观察重试与计数；超限进 `retry_limit_exceeded` 真停点 | M1-05 |
-| M1-08 | 无状态全量注入组装器：phase 输入 = 上一 phase 结构化 artifact 从中央存储读出拼进 prompt | `src/pipeline/phase-input.ts` | 同一 phase 两次组装字节一致（幂等）；删除本地缓存仅凭中央数据可重建（跨机重建的单机模拟） | M1-02 |
+| M1-06 | ✅ Context checkpoint：每 assistant turn 经 RPC 拉 Context JSON → 原子写 + SHA-256 + 保留最近 N 份 + 恢复逻辑 | `src/runner/context-checkpoint.ts` | 单测：最后一份损坏回退上一份；e2e：run 中 `kill -9` 后从快照起新 run 续跑成功 | M1-05 |
+| M1-07 | ✅ continue-retry：流中断错误识别（基于 M0-05 错误模式表）+ 同 session 注入 continue + `maxContinueRetries` 计数 | `src/runner/continue-retry.ts` | fixture 注入中断观察重试与计数；超限进 `retry_limit_exceeded` 真停点 | M1-05 |
+| M1-08 | ✅ 无状态全量注入组装器：phase 输入 = 上一 phase 结构化 artifact 从中央存储读出拼进 prompt | `src/pipeline/phase-input.ts` | 同一 phase 两次组装字节一致（幂等）；删除本地缓存仅凭中央数据可重建（跨机重建的单机模拟） | M1-02 |
 
 ### M1-C 守卫
 

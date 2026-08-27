@@ -75,6 +75,8 @@ export interface PiRunner {
   getState(): Promise<Record<string, unknown>>;
   setAutoRetry(enabled: boolean): Promise<void>;
   stop(): Promise<void>;
+  /** Forceful termination, for watchdogs and quarantine. No graceful shutdown. */
+  kill(): Promise<void>;
   readonly alive: boolean;
 }
 

@@ -141,6 +141,14 @@ export class RpcPiRunner implements PiRunner {
     return this.#events;
   }
 
+  /**
+   * Terminates the process immediately. Used by watchdogs, by quarantine, and to
+   * reproduce a host dying mid-run.
+   */
+  async kill(): Promise<void> {
+    await this.#killNow();
+  }
+
   async stop(): Promise<void> {
     if (!this.#proc || this.#exit) return;
     this.#proc.stdin.end();
