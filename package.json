@@ -10,7 +10,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "oxlint src poc scripts",
+    "lint": "oxlint src poc scripts extensions",
     "test": "vitest run",
     "test:watch": "vitest",
     "db:migrate": "tsx src/persistence/migrate.ts"

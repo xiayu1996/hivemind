@@ -100,11 +100,22 @@ function messageText(m) {
 }
 
 // A tool call gives the turn more than one LLM call, which is the only place a
-// steering message can be delivered. Triggered by USE_TOOL in the user text.
+// steering message can be delivered, and it is how guard denials are exercised
+// without a real model. Triggered by USE_TOOL in the user text; the text after
+// `USE_TOOL:` becomes the bash command, so a caller can aim a specific command
+// at the guard.
+const DEFAULT_TOOL_COMMAND = "sleep 6; echo mock-tool-done";
+
 function wantsToolCall(messages) {
   const lastUser = messages.toReversed().find((m) => m.role === "user");
   const alreadyRan = messages.some((m) => m.role === "tool" || Array.isArray(m?.tool_calls));
   return messageText(lastUser).includes("USE_TOOL") && !alreadyRan;
+}
+
+function toolCommand(messages) {
+  const lastUser = messages.toReversed().find((m) => m.role === "user");
+  const match = /USE_TOOL:([^\n]*)/.exec(messageText(lastUser));
+  return match ? match[1].trim() : DEFAULT_TOOL_COMMAND;
 }
 
 function scriptedReply(messages) {
@@ -204,7 +215,7 @@ const server = createServer(async (req, res) => {
             index: 0,
             id: "call_mock_1",
             type: "function",
-            function: { name: "bash", arguments: JSON.stringify({ command: "sleep 6; echo mock-tool-done" }) },
+            function: { name: "bash", arguments: JSON.stringify({ command: toolCommand(messages) }) },
           }],
         },
         finish_reason: null,
