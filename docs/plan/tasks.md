@@ -28,9 +28,10 @@
 
 目标：在写任何正式代码前，把设计中最贵的假设逐个证实或证伪，每个 PoC 都预先写明 fallback。
 
-> **执行状态（2026-08-27）**：11/16 已结案，评审见 `docs/poc/m0-review.md`。
-> 未结案 5 项的阻塞原因只有三类：Ryan 决策（M0-01）、Ryan 确认（M0-09）、
-> provider 凭据缺失（M0-07 盲评、C1/C3/C4 活体）、目标机不可达（M0-06、M0-15）。
+> **执行状态（2026-08-27）**：**14/16 已结案**，评审见 `docs/poc/m0-review.md`。
+> Ryan 完成 Codex 授权后，凭据类阻塞全部解除（C1/C3/C4 活体 + prompt 三臂对照均已跑通）。
+> 剩余 2 项：M0-06 与 M0-15 因目标机（Windows / Mac mini）不可达，顺延至 M3 组网后执行。
+> M0-01（账号策略）与 M0-09（@mention 推送确认）待 Ryan，但均不阻塞 M1。
 > 状态列：✅ 通过 · ⚠️ 部分（机制已证，活体待跑）· ⛔ 阻塞
 
 | ID | 任务 | 输出物 | 验证方式 | 前置 |
@@ -41,14 +42,14 @@
 | M0-04 | ✅ PoC-2b：mid-run 注入 / abort / resume 能力 | 同上报告附录 | run 中 abort 后同 session 注入消息续跑成功；不支持则报告记录降级路径（extension turn 边界序列化 / json 模式 + phase 边界注入）并回写 02 文档 | M0-03 |
 | M0-05 | ✅ PoC-5：RPC 错误事件目录——人为制造 AUTH（坏 key）/ RATE_LIMIT / TRANSPORT（断网）/ INVALID_REQUEST 四类错误并采集结构化事件 | `fixtures/rpc-errors/*.json` + `docs/poc/poc-5-error-catalog.md` 错误模式表初稿 | 每类 ≥1 个真实样本；草拟的分类规则能对全部样本唯一分类 | M0-02 |
 | M0-06 | ⛔ PoC-1：Windows Git Bash 下 pi RPC 冒烟 ×10（含工具调用任务） | `docs/poc/poc-1-windows.md` | 10/10 无 CRLF 分帧错误、无挂死；不过则报告中拍板降级为纯 Playwright 探针执行器 | M0-02 |
-| M0-07 | ⚠️ PoC-4：pi 默认 prompt vs 自建基线 A/B——3 张真实小卡各跑两条轨迹 | `docs/poc/poc-4-prompt-ab.md`（评分表 + 结论） | 每卡两条完整轨迹归档；盲评人（Ryan）不知分组；结论明确采用哪条基线 | M0-02 |
+| M0-07 | ✅ PoC-4：pi 默认 prompt vs 自建基线 A/B——3 张真实小卡各跑两条轨迹 | `docs/poc/poc-4-prompt-ab.md`（评分表 + 结论） | 每卡两条完整轨迹归档；盲评人（Ryan）不知分组；结论明确采用哪条基线 | M0-02 |
 | M0-08 | ✅ R1：Notion 评论 resolve 行为实测——`comment.updated` webhook 是否覆盖 resolve、list comments 对已 resolve 评论的可见性 | `docs/poc/notion-behavior.md` | 得出明确结论并回写 01 文档（是否需要"agent 回评确认后人再 resolve"协议约定） | — |
 | M0-09 | ⚠️ R2：API 创建评论中 @mention 是否触发移动端推送 | 同上文档补充 | Ryan 手机实收推送截图归档；不触发则 needs_input 旁路告警升级为必选路径并回写 01 文档 | — |
 | M0-10 | ✅ Notion 页面规模与 mermaid 实测：300+ block 页面写入/读取、mermaid 渲染语法子集 | `docs/poc/notion-behavior.md` + `docs/poc/evidence/` | 300 块页面创建与更新无 API 拒绝且耗时可接受；子集内每种图渲染截图归档 | — |
-| M0-11 | ⚠️ PoC-C1：Codex device code 无头登录 + 自动刷新（Linux） | `docs/poc/poc-c-codex-oauth.md` | 登录后 RPC 跑通一轮；token 逼近过期后自动刷新，auth.json expires 更新且无人工介入、无 invalid_grant | M0-01, M0-02 |
+| M0-11 | ✅ PoC-C1：Codex device code 无头登录 + 自动刷新（Linux） | `docs/poc/poc-c-codex-oauth.md` | 登录后 RPC 跑通一轮；token 逼近过期后自动刷新，auth.json expires 更新且无人工介入、无 invalid_grant | M0-01, M0-02 |
 | M0-12 | ✅ PoC-C2：usage-limit 撞墙文案采集与解析 | 分诊正则 + `fixtures/codex-usage-limit.json` | 正则从真实 errorMessage 解析出 reset 分钟数 | M0-11 |
-| M0-13 | ⚠️ PoC-C3：`pi auth check --json --no-refresh` 探针零副作用确认 | 同上文档补充 | 连续调用后 auth.json mtime 与内容不变 | M0-11 |
-| M0-14 | ⚠️ PoC-C4：同机双 pi 子进程并发刷新锁 | 同上文档补充 | 双进程逼近过期并发请求，文件锁生效，两进程均成功且无 invalid_grant | M0-11 |
+| M0-13 | ✅ PoC-C3：`pi auth check --json --no-refresh` 探针零副作用确认 | 同上文档补充 | 连续调用后 auth.json mtime 与内容不变 | M0-11 |
+| M0-14 | ✅ PoC-C4：同机双 pi 子进程并发刷新锁 | 同上文档补充 | 双进程逼近过期并发请求，文件锁生效，两进程均成功且无 invalid_grant | M0-11 |
 | M0-15 | ⛔ PoC-C5：Mac mini LaunchAgent 用户会话下登录态持久性 | 同上文档补充 | 机器重启后 `pi auth check` 仍 ok | M0-01, M0-11 |
 | M0-16 | ✅ **M0 评审与设计回写**：逐项 go/no-go，启用降级路径的更新对应设计文档 | `docs/poc/m0-review.md` + 00/01/02/06 文档修订 commit | 00-overview §6 风险表每个 M0 覆盖行标注"已证实 / 已证伪 / 降级路径已启用" | M0-03..15 |
 
