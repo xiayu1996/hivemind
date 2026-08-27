@@ -91,8 +91,6 @@ const SCRIPT = [
 const CHUNK_DELAY_MS = Number(process.env.MOCK_CHUNK_DELAY_MS ?? "0");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// A tool call gives the turn more than one LLM call, which is the only place a
-// steering message can be delivered. Triggered by USE_TOOL in the user text.
 function messageText(m) {
   if (typeof m?.content === "string") return m.content;
   if (Array.isArray(m?.content)) {
@@ -101,8 +99,10 @@ function messageText(m) {
   return "";
 }
 
+// A tool call gives the turn more than one LLM call, which is the only place a
+// steering message can be delivered. Triggered by USE_TOOL in the user text.
 function wantsToolCall(messages) {
-  const lastUser = [...messages].reverse().find((m) => m.role === "user");
+  const lastUser = messages.toReversed().find((m) => m.role === "user");
   const alreadyRan = messages.some((m) => m.role === "tool" || Array.isArray(m?.tool_calls));
   return messageText(lastUser).includes("USE_TOOL") && !alreadyRan;
 }
@@ -110,7 +110,7 @@ function wantsToolCall(messages) {
 function scriptedReply(messages) {
   const assistantCount = messages.filter((m) => m.role === "assistant").length;
   const scripted = SCRIPT[assistantCount] ?? `ACK-${assistantCount + 1} hivemind poc context anchor omega`;
-  const lastUser = [...messages].reverse().find((m) => m.role === "user");
+  const lastUser = messages.toReversed().find((m) => m.role === "user");
   return `${scripted} | echo:${messageText(lastUser).slice(0, 80)}`;
 }
 
@@ -159,7 +159,7 @@ const server = createServer(async (req, res) => {
   }
   if (FAULTS[fault]) {
     const f = FAULTS[fault];
-    res.writeHead(f.status, { "content-type": "application/json", ...(f.headers ?? {}) });
+    res.writeHead(f.status, { "content-type": "application/json", ...f.headers });
     res.end(JSON.stringify(f.body));
     return;
   }

@@ -63,8 +63,8 @@
 
 | ID | 任务 | 输出物 | 验证方式 | 前置 |
 |---|---|---|---|---|
-| M1-01 | 工程化骨架：Node 版本 pin、ESM、TS 配置、oxlint、vitest、GitHub Actions CI（lint + unit） | 可构建仓库 + CI workflow | CI 绿；本地 `npm test` 通过 | — |
-| M1-02 | 中央 libsql schema v1（Drizzle）：epics / stories / leases / event_log / notion_outbox / cost_entries / config_entries / config_history / comment_watermark / human_feedback / verify_records 等 + 迁移 | `src/persistence/schema/` + 迁移脚本 | 空库迁移可重复执行（幂等）；`VERIFY.session_id != CODE.session_id` 的 DB CHECK 有触发用例单测 | M1-01 |
+| M1-01 | ✅ 工程化骨架：Node 版本 pin、ESM、TS 配置、oxlint、vitest、GitHub Actions CI（lint + unit） | 可构建仓库 + CI workflow | CI 绿；本地 `npm test` 通过 | — |
+| M1-02 | ✅ 中央 libsql schema v1（Drizzle）：epics / stories / leases / event_log / notion_outbox / cost_entries / config_entries / config_history / comment_watermark / human_feedback / verify_records 等 + 迁移 | `src/persistence/schema/` + 迁移脚本 | 空库迁移可重复执行（幂等）；`VERIFY.session_id != CODE.session_id` 的 DB CHECK 有触发用例单测 | M1-01 |
 | M1-03 | config 子系统（读面）：代码 defaults + 每 key zod schema + 元信息 `{scope, reload, description}` + DB overlay merge + 热更接口 | `src/config/` | 单测：非法值拒绝、overlay 优先级、DB 清空后系统仍以 defaults 可跑 | M1-02 |
 | M1-04 | lease CAS 移植：busybee lease.service SQL 语义上移中央 libsql | `src/persistence/lease.ts` | 并发 CAS 单测（同一卡不可能出现双持有者） | M1-02 |
 

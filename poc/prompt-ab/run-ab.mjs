@@ -7,7 +7,7 @@
 // Each arm gets a pristine copy of the fixture repo. Arm identity goes into a key
 // file the scoring sheet does not contain, so scoring can be done blind.
 
-import { mkdirSync, writeFileSync, cpSync, rmSync, readFileSync } from "node:fs";
+import { writeFileSync, cpSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { PiRpc } from "../rpc-context/rpc-client.mjs";

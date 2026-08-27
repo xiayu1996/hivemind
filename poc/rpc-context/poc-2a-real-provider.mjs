@@ -17,7 +17,7 @@ mkdirSync(OUT, { recursive: true });
 const VOLATILE = new Set(["id", "parentId", "timestamp", "sessionId", "requestId", "durationMs", "usage", "cost", "api"]);
 const canonical = (v) => Array.isArray(v) ? v.map(canonical)
   : (v && typeof v === "object")
-    ? Object.fromEntries(Object.keys(v).sort().filter((k) => !VOLATILE.has(k)).map((k) => [k, canonical(v[k])]))
+    ? Object.fromEntries(Object.keys(v).toSorted().filter((k) => !VOLATILE.has(k)).map((k) => [k, canonical(v[k])]))
     : v;
 
 const textOf = (m) => JSON.stringify(m?.content ?? "");

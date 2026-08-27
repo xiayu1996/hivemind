@@ -19,7 +19,7 @@ export class PiRpc {
 
     this.proc = spawn(PI_BIN, ["--mode", "rpc", ...args], {
       cwd: opts.cwd ?? process.cwd(),
-      env: { ...process.env, ...(opts.env ?? {}) },
+      env: { ...process.env, ...opts.env },
       stdio: ["pipe", "pipe", "pipe"],
     });
 

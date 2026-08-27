@@ -6,7 +6,7 @@
 // Pass criterion: messages after reload are semantically identical to the export,
 // and the reloaded session keeps answering in the original conversation's sequence.
 
-import { mkdtempSync, mkdirSync, copyFileSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { PiRpc, MOCK_ARGS } from "./rpc-client.mjs";
@@ -23,7 +23,7 @@ function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
   if (value && typeof value === "object") {
     const out = {};
-    for (const k of Object.keys(value).sort()) {
+    for (const k of Object.keys(value).toSorted()) {
       if (VOLATILE.has(k)) continue;
       out[k] = canonical(value[k]);
     }
