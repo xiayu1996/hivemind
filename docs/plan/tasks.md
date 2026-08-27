@@ -81,7 +81,7 @@
 
 | ID | 任务 | 输出物 | 验证方式 | 前置 |
 |---|---|---|---|---|
-| M1-09 | danger-rules 移植 + 两处修订：Windows 路径 normalize 后统一 posix 分隔符再匹配；gh 红线增补（gh pr merge / gh workflow run） | `src/guard/danger-rules.ts` | busybee 原单测全部迁移通过 + 新增 Windows 反斜杠用例 + gh 红线拦截用例 | M1-01 |
+| M1-09 | ✅ danger-rules 移植 + 两处修订：Windows 路径 normalize 后统一 posix 分隔符再匹配；gh 红线增补（gh pr merge / gh workflow run） | `src/guard/danger-rules.ts` | busybee 原单测全部迁移通过 + 新增 Windows 反斜杠用例 + gh 红线拦截用例 | M1-01 |
 | M1-10 | hive-guard extension：tool_call hook 执行 block、`PI_GUARD_POLICY` env 注入 per-phase 策略、deny 带 reason、本地 tool-audit.jsonl 副通道 | `extensions/hive-guard.ts` | e2e：诱导 agent 执行 rm -rf / push main，被 block 且 EventLog 与 tool-audit.jsonl 两通道均有记录 | M1-05, M1-09 |
 | M1-11 | per-phase 策略组装 + VERIFY 物理禁写：disallowedTools 全列写类工具 + bash 写模式启发式（重定向/sed -i/tee）+ tree-pin 指纹前后比对（失配 → quarantine + verdict 作废） | `src/guard/policy.ts` | VERIFY 会话内尝试 5 种写路径（写工具/重定向/sed -i/tee/git commit）全部被拦或被 tree-pin 侦测 | M1-10 |
 | M1-12 | 日志脱敏：record waterfall 导出脱敏（规范日志永不改写）+ JWT 过滤 `eyJ[A-Za-z0-9_-]{20,}` | `src/observability/redact.ts` | 单测：含 access/refresh token 样本导出后无泄漏；全 evidence/导出目录 grep 无 eyJ 长串 | M1-01 |
