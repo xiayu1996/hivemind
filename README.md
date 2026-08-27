@@ -4,7 +4,7 @@
 
 - 执行底座：[pi](https://github.com/earendil-works/pi)（provider 无关，day1 供应商：Codex / GLM / Grok，预留 Claude）
 - 编排拓扑：中心 orchestrator（Linux, systemd）+ 多机 worker（Mac mini / Windows），编排式流水线 + 解耦并行（CODE 按 footprint 并行、E2E 持续回归 loop）
-- 血统：[busybee](../busybee) 的下一代独立系统，移植其约 60% 已验证的 harness 基础设施与全部生产教训
+- 血统：busybee（作者的上一代 agent 服务，私有仓库）的下一代独立系统，移植其约 60% 已验证的 harness 基础设施与全部生产教训
 
 ## 设计文档
 
@@ -40,4 +40,9 @@ extensions/       pi extensions(hive-guard / mcp-adapter vendor / model-policy �
 
 ## 状态
 
-设计冻结于 2026-08-22，实施路线 M0（地基 PoC）尚未开始。任务级拆解见 [docs/plan/tasks.md](docs/plan/tasks.md)。
+设计冻结于 2026-08-22。当前进度：
+
+- **M0 地基 PoC**：14/16 结案（PoC-1 Windows 与 C5 Mac mini 因目标机未组网顺延至 M3）。执行记录与逐项 go/no-go 见 [docs/poc/](docs/poc/)，产出 6 项设计修订与 2 项新增高影响约束。
+- **M1 单机闭环**：8/37 进行中（工程骨架、中央 schema、config 子系统、租约 CAS、pi 运行器全套已落地）。
+
+任务级拆解与验收判据见 [docs/plan/tasks.md](docs/plan/tasks.md)。
