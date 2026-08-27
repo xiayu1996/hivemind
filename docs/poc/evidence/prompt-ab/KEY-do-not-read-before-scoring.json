@@ -1,0 +1,41 @@
+[
+  {
+    "label": "arm-2",
+    "arm": "default",
+    "elapsedMs": 37527,
+    "ranTests": false,
+    "touchedTests": false,
+    "green": true,
+    "usage": {
+      "input": 13863,
+      "output": 1576,
+      "cost": 0.0513484
+    }
+  },
+  {
+    "label": "arm-3",
+    "arm": "append",
+    "elapsedMs": 18308,
+    "ranTests": false,
+    "touchedTests": false,
+    "green": true,
+    "usage": {
+      "input": 11326,
+      "output": 612,
+      "cost": 0.0319416
+    }
+  },
+  {
+    "label": "arm-1",
+    "arm": "replace",
+    "elapsedMs": 18074,
+    "ranTests": false,
+    "touchedTests": false,
+    "green": true,
+    "usage": {
+      "input": 8298,
+      "output": 681,
+      "cost": 0.0276352
+    }
+  }
+]

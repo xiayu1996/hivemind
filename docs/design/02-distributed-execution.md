@@ -144,7 +144,8 @@ RPC 下 pi 进程活着 session 就在内存：检测到流中断类终态错误
 
 ### 4.2 CLAUDE.md / skills 层叠（pi 原生，零自研）
 
-- **全局层**：worktree 统一在 `~/hivemind-work/worktrees/<repo>/<card>/`，上层 `~/hivemind-work/` 放全局 AGENTS.md（编码基线规范），pi 向上层叠自动生效；由 self-update 分发保持三机一致；
+- **全局层**：worktree 统一在 `~/hivemind-work/worktrees/<repo>/<card>/`，上层 `~/hivemind-work/` 放全局 AGENTS.md（编码基线规范）；由 self-update 分发保持三机一致；
+- **⚠️ 污染防护（2026-08-27 实测）**：pi 沿目录向上发现 CLAUDE.md/AGENTS.md，**会读到与本任务无关的人类个人指令**（实测三臂 A/B 全部继承了 `~/.claude/CLAUDE.md` 的个人措辞规则）。这种污染静默、不报错、只让行为悄悄偏移，事后极难归因。故**不依赖"把 worktree 放在某个目录下"这种位置约定**：runner spawn 时显式控制发现范围——`--no-context-files` 后由 runner 显式装载允许的层（推荐，可审计），或确保 worktree 根之上不存在任何非 hivemind 的 context 文件。无论哪种，**实际生效的 context 文件清单必须记进规范日志**。
 - **目标仓层**：repo 自己的 CLAUDE.md/.claude/rules 随 worktree 天然存在，且在 FENCED_PATTERNS 内 agent 改不了自己的规则；
 - **skills**：pi 原生支持 agentskills.io 规范，直接挂现有 ~/.claude/skills 目录，技能库零迁移。per-phase 技能可见性粒度待核实（无则全量可见 + prompt 约束）。
 

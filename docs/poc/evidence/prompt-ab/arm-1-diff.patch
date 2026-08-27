@@ -1,0 +1,14 @@
+diff --git a/src/cart.js b/src/cart.js
+index c5adf61..1c542f4 100644
+--- a/src/cart.js
++++ b/src/cart.js
+@@ -7,7 +7,6 @@ export function applyDiscount(amount, discountAmount) {
+ }
+ 
+ export function total(items, discountAmount, taxRate) {
+-  const sub = subtotal(items);
+-  const taxed = sub + sub * taxRate;
+-  return applyDiscount(taxed, discountAmount);
++  const discounted = applyDiscount(subtotal(items), discountAmount);
++  return discounted + discounted * taxRate;
+ }

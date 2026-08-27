@@ -1,0 +1,33 @@
+diff --git a/src/cart.js b/src/cart.js
+index c5adf61..4d18912 100644
+--- a/src/cart.js
++++ b/src/cart.js
+@@ -6,8 +6,25 @@ export function applyDiscount(amount, discountAmount) {
+   return amount - discountAmount;
+ }
+ 
++// Coupons are applied in their supplied order, so percentage coupons can stack.
++// A percentage coupon uses a decimal rate (for example, 0.1 for 10%).
++export function applyCoupon(amount, coupons) {
++  const stack = Array.isArray(coupons) ? coupons : [coupons];
++
++  return stack.reduce((remaining, coupon) => {
++    if (coupon.type === "percentage") {
++      return remaining - remaining * coupon.value;
++    }
++
++    if (coupon.type === "flat") {
++      return remaining - coupon.value;
++    }
++
++    throw new TypeError(`Unsupported coupon type: ${coupon.type}`);
++  }, amount);
++}
++
+ export function total(items, discountAmount, taxRate) {
+-  const sub = subtotal(items);
+-  const taxed = sub + sub * taxRate;
+-  return applyDiscount(taxed, discountAmount);
++  const discounted = applyDiscount(subtotal(items), discountAmount);
++  return discounted + discounted * taxRate;
+ }
