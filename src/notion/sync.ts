@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { z } from "zod";
 
 export type NotionWebhookType =
   | "page.created"
@@ -23,6 +24,26 @@ export interface NotionSyncOptions {
   onError?: (error: unknown) => void;
 }
 
+const webhookEnvelopeSchema = z.object({
+  id: z.string().min(1),
+  type: z.string().min(1),
+  entity: z.object({ id: z.string().min(1), type: z.string().min(1) }).passthrough(),
+  data: z.record(z.string(), z.unknown()),
+}).passthrough();
+
+const SUPPORTED_WEBHOOK_TYPES = new Set<NotionWebhookType>([
+  "page.created",
+  "page.properties_updated",
+  "page.content_updated",
+  "comment.created",
+]);
+
+export type NotionWebhookRequestResult =
+  | { status: 200; accepted: true }
+  | { status: 202; accepted: false; reason: "unsupported_event" }
+  | { status: 400; accepted: false; reason: "invalid_payload" }
+  | { status: 401; accepted: false; reason: "invalid_signature" };
+
 export function verifyNotionWebhookSignature(
   body: Buffer,
   suppliedSignature: string,
@@ -32,6 +53,38 @@ export function verifyNotionWebhookSignature(
   if (!/^[a-f0-9]{64}$/i.test(supplied)) return false;
   const expected = createHmac("sha256", secret).update(body).digest("hex");
   return timingSafeEqual(Buffer.from(supplied.toLowerCase(), "hex"), Buffer.from(expected, "hex"));
+}
+
+/** Validates and maps the current Notion webhook envelope into a poll signal. */
+export async function handleNotionWebhookRequest(
+  body: Buffer,
+  suppliedSignature: string,
+  secret: string,
+  coordinator: Pick<NotionSyncCoordinator, "handleWebhook">,
+): Promise<NotionWebhookRequestResult> {
+  if (!verifyNotionWebhookSignature(body, suppliedSignature, secret)) {
+    return { status: 401, accepted: false, reason: "invalid_signature" };
+  }
+  let json: unknown;
+  try {
+    json = JSON.parse(body.toString("utf8"));
+  } catch {
+    return { status: 400, accepted: false, reason: "invalid_payload" };
+  }
+  const parsed = webhookEnvelopeSchema.safeParse(json);
+  if (!parsed.success) return { status: 400, accepted: false, reason: "invalid_payload" };
+  if (!SUPPORTED_WEBHOOK_TYPES.has(parsed.data.type as NotionWebhookType)) {
+    return { status: 202, accepted: false, reason: "unsupported_event" };
+  }
+  const type = parsed.data.type as NotionWebhookType;
+  const pageId = type === "comment.created"
+    ? parsed.data.data.page_id
+    : parsed.data.entity.type === "page" ? parsed.data.entity.id : undefined;
+  if (typeof pageId !== "string" || pageId.length === 0) {
+    return { status: 400, accepted: false, reason: "invalid_payload" };
+  }
+  await coordinator.handleWebhook({ id: parsed.data.id, type, pageId });
+  return { status: 200, accepted: true };
 }
 
 /** Webhooks accelerate polling; the active-set cycle remains the guarantee. */

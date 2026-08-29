@@ -6,7 +6,7 @@
 
 | Area | Evidence | Result |
 |---|---|---|
-| Unit and integration suite | `npm test` | 41 files, 315 tests passed |
+| Unit and integration suite | `npm test` | 42 files, 321 tests passed |
 | Type, lint and builds | `npm run typecheck`; `npm run lint`; `npm run build`; `npm run build:console` | Passed |
 | Empty database migration | `HIVEMIND_DB_URL=file:<temporary path> npm run db:migrate` | `0001_init.sql` applied on Windows; the Windows ESM entry-point bug found during this run was fixed |
 | Windows pi RPC | Git Bash invocation of `scripts/smoke-windows-rpc.ts` | 10/10 handshakes and real bash tool calls; no framing error or hang |
