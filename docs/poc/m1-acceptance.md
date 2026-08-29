@@ -25,7 +25,7 @@ The current machine has no `~/.hivemind/secrets.env`. The no-refresh credential 
 - M1-35: deliver one real Feishu webhook or SMTP alert.
 - M1-37: run one real Notion card unattended through DESIGN, CODE, VERIFY, MERGE and MR creation, then verify all four exit criteria.
 
-M1-30 has passed both CLI adapter contract suites. Its live GitHub MR link will be added after the implementation branch is pushed.
+M1-30 passed both CLI adapter contract suites and the adapter created [GitHub PR #1](https://github.com/xiayu1996/hivemind/pull/1).
 
 ## Exit criteria status
 

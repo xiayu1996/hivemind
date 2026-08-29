@@ -44,6 +44,6 @@ extensions/       pi extensions(hive-guard / mcp-adapter vendor / model-policy �
 设计冻结于 2026-08-22。当前进度：
 
 - **M0 地基 PoC**：15/16 结案（PoC-1 Windows 已在目标机 10/10 通过；仅 C5 Mac mini 待接入）。执行记录与逐项 go/no-go 见 [docs/poc/](docs/poc/)。
-- **M1 单机闭环**：28/37 已验证，8 项外部活体验收待凭据，M1-37 出口验收尚未执行；Windows 本机单测、真实 pi、可观测链与浏览器控制台均已跑通。
+- **M1 单机闭环**：29/37 已验证，7 项外部活体验收待凭据，M1-37 出口验收尚未执行；Windows 本机单测、真实 pi、可观测链、浏览器控制台与真实 MR 创建均已跑通。
 
 任务级拆解与验收判据见 [docs/plan/tasks.md](docs/plan/tasks.md)。

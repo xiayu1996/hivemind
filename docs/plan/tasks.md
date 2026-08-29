@@ -59,7 +59,7 @@
 
 目标：Linux 单机上 orchestrator + worker + guard + Notion 双 DB，跑通一张真实卡全流水线；控制台骨架同期上线（调 PoC/prompt 需要这个读面）。
 
-> **执行状态（2026-08-29，Windows）**：28/37 已验证，8 项实现完成但真实外部服务验收待凭据，M1-37 未开始。
+> **执行状态（2026-08-29，Windows）**：29/37 已验证，7 项实现完成但真实外部服务验收待凭据，M1-37 未开始。
 > 状态列：✅ 输出物与本机可执行判据均通过 · ⚠️ 实现/离线验证完成但外部活体判据待跑 · ⛔ 出口判据被外部前置阻塞。
 
 ### M1-A 工程地基
@@ -125,7 +125,7 @@
 | ID | 任务 | 输出物 | 验证方式 | 前置 |
 |---|---|---|---|---|
 | M1-29 | ✅ worktree 子系统移植：tree-pin / quarantine / `~/hivemind-work` 布局 | `src/vcs/worktree.ts` | Windows 真实 git worktree 单测通过；R-5 声明见 `docs/reviews/m1-worktree-r5.md` | M1-01 |
-| M1-30 | ⚠️ MR adapter：MRPort 接口，gh 优先实现、glab 第二适配 | `src/vcs/mr/` | gh/glab 契约 dry-run 通过；当前变更推送后创建真实 MR | M1-29 |
+| M1-30 | ✅ MR adapter：MRPort 接口，gh 优先实现、glab 第二适配 | `src/vcs/mr/` | gh/glab 契约 dry-run 通过；MRPort 实际创建 [GitHub PR #1](https://github.com/xiayu1996/hivemind/pull/1) | M1-29 |
 
 ### M1-H 可观测最小集
 
