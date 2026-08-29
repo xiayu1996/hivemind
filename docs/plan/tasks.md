@@ -104,10 +104,10 @@
 | M1-16 | ✅ outbox 事务：先落库后发请求 + `(target, payload_hash)` 判重回放 + 发送后崩溃远端探针 | `src/notion/outbox.ts` | 单测 + 故障注入：远端已生效但本地未标 sent，重启探测后不重复发送 | M1-02, M1-15 |
 | M1-17 | ⚠️ DB bootstrap：脚本创建 Stories/Epics 两 DB 全属性（select 方案）+ board view 人工 bootstrap 手册 | `scripts/notion-bootstrap.ts` + 手册 | schema/调用契约单测通过；当前 Windows 无 `~/.hivemind/secrets.env`，空 workspace 活体待跑 | M1-15 |
 | M1-18 | ⚠️ Story 页 builder：五锚定区段 + blockId 持久化 + 区段内 diff 原位更新 + 验证轮次 toggle 只追加（>8 轮归档子页） | `src/notion/blocks/` | diff/锚点/归档单测通过；真实 Notion 页连续 3 轮更新待 M1-17 活体 | M1-16, M1-17 |
-| M1-19 | ⚠️ 评论水位 ingest：`comment_watermark`（created_time 水位 + 2min 回看 + comment_id 唯一去重） | `src/notion/comment-ingest.ts` | 重叠窗口、块锚点、bot 过滤与事务水位单测通过；真实评论秒级入库待凭据 | M1-02, M1-15 |
+| M1-19 | ⚠️ 评论水位 ingest：`comment_watermark`（created_time 水位 + 2min 回看 + comment_id 唯一去重） | `src/notion/comment-ingest.ts` | 重叠窗口、块锚点、bot 过滤、事务水位与 SDK 分页映射单测通过；真实评论秒级入库待凭据 | M1-02, M1-15 |
 | M1-20 | ⚠️ webhook 接收 + 轮询兜底：page.properties_updated / content_updated / comment.created + 活跃集 60s 轮询收敛 | `src/notion/sync.ts` | webhook 签名/去重与关闭 webhook 后轮询逻辑单测通过；真实 workspace 收敛待凭据 | M1-19 |
 | M1-21 | ⚠️ 意图解释器 v1：属性影子值比对判人工指令 → 拖列/评论基础语义（回答阻塞/继续开发/人工停靠/恢复）+ 120s human-wins window | `src/notion/intent-interpreter.ts` | 表驱动单测通过；真实拖列与 120s human-wins 活体待凭据 | M1-19, M1-23 |
-| M1-22 | ⚠️ 图片管道：本地 evidence store → 异步 File Upload（≤20MB）→ 失败降级文字占位不阻塞 | `src/notion/media.ts` | 大小/类型/异步降级单测通过；真实截图上传待凭据 | M1-16 |
+| M1-22 | ⚠️ 图片管道：本地 evidence store → 异步 File Upload（≤20MB）→ 失败降级文字占位不阻塞 | `src/notion/media.ts` | 大小/类型/异步降级与 SDK 单段上传/attach 契约通过；真实截图上传待凭据 | M1-16 |
 
 ### M1-F 流水线核心
 
@@ -140,7 +140,7 @@
 
 | ID | 任务 | 输出物 | 验证方式 | 前置 |
 |---|---|---|---|---|
-| M1-35 | ⚠️ 旁路告警通道：飞书 webhook / 邮件；needs_input 与 P0 级走此通道（Notion 故障时的唯一出口） | `src/alert/` | 双通道契约/部分失败/脱敏单测通过；无 webhook/SMTP 凭据，真实推送待跑 | M1-01 |
+| M1-35 | ⚠️ 旁路告警通道：飞书 webhook / 邮件；needs_input 与 P0 级走此通道（Notion 故障时的唯一出口） | `src/alert/` | 双通道契约/部分失败/脱敏单测通过，`smoke-alert.ts` 已就绪；无 webhook/SMTP 凭据，真实推送待跑 | M1-01 |
 | M1-36 | ✅ 控制台骨架：Fastify 挂 Vue3+Vite SPA（仅内网）+ 节点健康页 + 任务视图（EventLog 时间线 + trace HTML）+ 成本只读 + config 只读 + Bull Board 挂载 | `src/console/` + `console-ui/` | Windows loopback 实际数据启动；内置浏览器四页与只读 Bull Board 检查通过；公网通配绑定被拒 | M1-32, M1-33 |
 
 ### M1-J 验收

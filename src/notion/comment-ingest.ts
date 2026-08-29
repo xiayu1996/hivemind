@@ -14,7 +14,7 @@ export interface NotionComment {
 
 export interface NotionCommentSource {
   /** Returns all currently visible, unresolved comments for a page or block. */
-  listComments(targetId: string): Promise<NotionComment[]>;
+  listComments(targetId: string, pageId: string): Promise<NotionComment[]>;
 }
 
 export interface CommentIngestOptions {
@@ -60,7 +60,7 @@ export class CommentIngestor {
     const anchors = JSON.parse(String(watermark.anchor_block_ids)) as string[];
     const targets = [pageId, ...anchors.toSorted((a, b) => a.localeCompare(b, "en"))];
     const collected: NotionComment[] = [];
-    for (const target of targets) collected.push(...await this.source.listComments(target));
+    for (const target of targets) collected.push(...await this.source.listComments(target, pageId));
 
     const byId = new Map<string, NotionComment>();
     for (const item of collected) {
