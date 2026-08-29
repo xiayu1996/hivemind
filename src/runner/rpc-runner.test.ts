@@ -12,7 +12,8 @@ const runners: RpcPiRunner[] = [];
 // The fake speaks the RPC protocol on stdin/stdout, so it stands in for the binary.
 function makeNodeRunner(mode = "normal", extraEnv: Record<string, string> = {}) {
   const runner = new RpcPiRunner({
-    binary: FAKE_PI,
+    binary: process.execPath,
+    binaryArgs: [FAKE_PI],
     provider: "fake",
     model: "fake-1",
     cwd: process.cwd(),
@@ -36,7 +37,8 @@ describe("handshake", () => {
 
   it("kills the process when the handshake never answers, instead of reusing it", async () => {
     const runner = new RpcPiRunner({
-      binary: FAKE_PI,
+      binary: process.execPath,
+      binaryArgs: [FAKE_PI],
       provider: "fake", model: "fake-1", cwd: process.cwd(),
       env: { FAKE_PI_MODE: "silent" },
       handshakeTimeoutMs: 1_500,

@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { createClient, type Client } from "@libsql/client";
 import { getTableConfig } from "drizzle-orm/sqlite-core";
-import { migrate } from "./migrate.js";
+import { pathToFileURL } from "node:url";
+import { resolve } from "node:path";
+import { isMainModule, migrate } from "./migrate.js";
 import * as schema from "./schema.js";
 
 async function freshDb(): Promise<Client> {
@@ -13,6 +15,11 @@ async function freshDb(): Promise<Client> {
 const now = () => Date.now();
 
 describe("migrations", () => {
+  it("recognises a Windows entry point without hand-building a file URL", () => {
+    const entry = resolve("src/persistence/migrate.ts");
+    expect(isMainModule(pathToFileURL(entry).href, entry)).toBe(true);
+  });
+
   it("applies on an empty database", async () => {
     const client = createClient({ url: ":memory:" });
     const ran = await migrate(client);
@@ -129,16 +136,17 @@ describe("state and stop-reason constraints", () => {
 });
 
 describe("outbox idempotency", () => {
-  it("rejects a replayed payload with the same hash", async () => {
+  it("deduplicates by target and payload hash without conflating different pages", async () => {
     const client = await freshDb();
-    const insert = () =>
+    const insert = (target: string) =>
       client.execute({
-        sql: `INSERT INTO notion_outbox (operation, payload, payload_hash, created_at)
-              VALUES ('append_blocks', '{}', 'hash-1', ?)`,
-        args: [now()],
+        sql: `INSERT INTO notion_outbox (operation, target, payload, payload_hash, created_at)
+              VALUES ('append_blocks', ?, '{}', 'hash-1', ?)`,
+        args: [target, now()],
       });
-    await insert();
-    await expect(insert()).rejects.toThrow(/UNIQUE/i);
+    await insert("page-1");
+    await expect(insert("page-1")).rejects.toThrow(/UNIQUE/i);
+    await expect(insert("page-2")).resolves.toBeDefined();
     client.close();
   });
 });

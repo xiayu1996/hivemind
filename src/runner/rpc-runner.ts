@@ -19,6 +19,8 @@ const SIGKILL_GRACE_MS = 5_000;
 
 export interface RpcRunnerConfig extends RunnerSpawnOptions {
   binary: string;
+  /** Arguments placed before pi's own CLI arguments, primarily for test launchers. */
+  binaryArgs?: string[];
   /** How long the startup round trip may take before the process is killed. */
   handshakeTimeoutMs?: number;
 }
@@ -54,11 +56,15 @@ export class RpcPiRunner implements PiRunner {
   async start(): Promise<void> {
     if (this.#proc) throw new Error("runner already started");
 
-    this.#proc = spawn(this.config.binary, ["--mode", "rpc", ...buildArgs(this.config)], {
+    this.#proc = spawn(
+      this.config.binary,
+      [...(this.config.binaryArgs ?? []), "--mode", "rpc", ...buildArgs(this.config)],
+      {
       cwd: this.config.cwd,
       env: { ...process.env, ...this.config.env },
       stdio: ["pipe", "pipe", "pipe"],
-    });
+      },
+    );
 
     this.#proc.stdout.setEncoding("utf8");
     this.#proc.stdout.on("data", (chunk: string) => this.#ingest(chunk));

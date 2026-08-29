@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   GuardPolicyError,
   POLICY_ENV_VAR,
+  assembleGuardPolicy,
   compileFencedPatterns,
   parseGuardPolicy,
   serializeGuardPolicy,
@@ -16,6 +17,7 @@ const policy: GuardPolicy = {
   extraWriteRoots: ["/ev/card-12"],
   disallowedTools: ["write", "edit"],
   fencedPatterns: ["(^|/)secrets/"],
+  bannedBash: ["\\bgit\\s+commit\\b"],
   auditPath: "/audit/tool-audit.jsonl",
 };
 
@@ -53,15 +55,46 @@ describe("rejection", () => {
   });
 
   it("rejects a list field that is not a list of strings", () => {
-    for (const key of ["extraWriteRoots", "disallowedTools", "fencedPatterns"]) {
+    for (const key of ["extraWriteRoots", "disallowedTools", "fencedPatterns", "bannedBash"]) {
       expect(() => parseGuardPolicy(JSON.stringify({ ...policy, [key]: "x" }))).toThrow(GuardPolicyError);
       expect(() => parseGuardPolicy(JSON.stringify({ ...policy, [key]: [1] }))).toThrow(GuardPolicyError);
     }
   });
 
   it("accepts empty lists", () => {
-    const bare = { ...policy, extraWriteRoots: [], disallowedTools: [], fencedPatterns: [] };
+    const bare = { ...policy, extraWriteRoots: [], disallowedTools: [], fencedPatterns: [], bannedBash: [] };
     expect(parseGuardPolicy(JSON.stringify(bare))).toEqual(bare);
+  });
+});
+
+describe("phase assembly", () => {
+  const base = {
+    cardId: "S-12",
+    runId: "run-1",
+    worktreePath: "/wt/task-1",
+    evidencePath: "/ev/card-12",
+    auditPath: "/audit/tool-audit.jsonl",
+  };
+
+  it("makes VERIFY read-only while preserving its evidence root", () => {
+    const assembled = assembleGuardPolicy({ ...base, phase: "VERIFY" });
+    expect(assembled.extraWriteRoots).toEqual([base.evidencePath]);
+    expect(assembled.disallowedTools).toEqual(expect.arrayContaining(["write", "edit", "powershell"]));
+    expect(assembled.bannedBash).toHaveLength(4);
+  });
+
+  it("keeps CODE writable apart from unconditional red lines", () => {
+    const assembled = assembleGuardPolicy({ ...base, phase: "CODE" });
+    expect(assembled.disallowedTools).toEqual([]);
+    expect(assembled.bannedBash).toEqual([]);
+  });
+
+  it("is byte-stable for the same input", () => {
+    const input = { ...base, phase: "VERIFY" as const, fencedPatterns: ["z", "a", "z"] };
+    expect(serializeGuardPolicy(assembleGuardPolicy(input))).toBe(
+      serializeGuardPolicy(assembleGuardPolicy(input)),
+    );
+    expect(assembleGuardPolicy(input).fencedPatterns).toEqual(["a", "z"]);
   });
 });
 

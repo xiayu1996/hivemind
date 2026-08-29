@@ -109,19 +109,39 @@ const DEFAULT_TOOL_COMMAND = "sleep 6; echo mock-tool-done";
 function wantsToolCall(messages) {
   const lastUser = messages.toReversed().find((m) => m.role === "user");
   const alreadyRan = messages.some((m) => m.role === "tool" || Array.isArray(m?.tool_calls));
-  return messageText(lastUser).includes("USE_TOOL") && !alreadyRan;
+  const text = messageText(lastUser);
+  return (/USE_(?:TOOL|WRITE):/.test(text) || text.includes("Perform an independent blind verification")) && !alreadyRan;
 }
 
-function toolCommand(messages) {
+function toolRequest(messages) {
   const lastUser = messages.toReversed().find((m) => m.role === "user");
-  const match = /USE_TOOL:([^\n]*)/.exec(messageText(lastUser));
-  return match ? match[1].trim() : DEFAULT_TOOL_COMMAND;
+  const text = messageText(lastUser);
+  if (text.includes("Perform an independent blind verification")) {
+    const scenario = /\bS-[A-Za-z0-9-]+\b/.exec(text)?.[0] ?? "S-MOCK-01-unit";
+    return { name: "bash", arguments: { command: `echo HIVEMIND_TEST_RESULT ${scenario} passed` } };
+  }
+  const write = /USE_WRITE:([^\n]*)/.exec(text);
+  if (write) {
+    return { name: "write", arguments: { path: write[1].trim(), content: "mock write\n" } };
+  }
+  const command = /USE_TOOL:([^\n]*)/.exec(text);
+  return {
+    name: "bash",
+    arguments: { command: command ? command[1].trim() : DEFAULT_TOOL_COMMAND },
+  };
 }
 
 function scriptedReply(messages) {
   const assistantCount = messages.filter((m) => m.role === "assistant").length;
   const scripted = SCRIPT[assistantCount] ?? `ACK-${assistantCount + 1} hivemind poc context anchor omega`;
   const lastUser = messages.toReversed().find((m) => m.role === "user");
+  if (messageText(lastUser).includes("Judge whether this phase exit is actually complete")) {
+    return JSON.stringify({ done: true, reason: "Mock side effects are complete." });
+  }
+  if (messageText(lastUser).includes("Perform an independent blind verification")) {
+    const scenario = /\bS-[A-Za-z0-9-]+\b/.exec(messageText(lastUser))?.[0] ?? "S-MOCK-01-unit";
+    return JSON.stringify({ scenarios: [{ id: scenario, status: "passed" }] });
+  }
   return `${scripted} | echo:${messageText(lastUser).slice(0, 80)}`;
 }
 
@@ -206,6 +226,7 @@ const server = createServer(async (req, res) => {
   }));
 
   if (toolCall) {
+    const request = toolRequest(messages);
     res.write(sseChunk({
       id, object: "chat.completion.chunk", created, model: MODEL_ID,
       choices: [{
@@ -215,7 +236,7 @@ const server = createServer(async (req, res) => {
             index: 0,
             id: "call_mock_1",
             type: "function",
-            function: { name: "bash", arguments: JSON.stringify({ command: toolCommand(messages) }) },
+            function: { name: request.name, arguments: JSON.stringify(request.arguments) },
           }],
         },
         finish_reason: null,

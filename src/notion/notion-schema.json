@@ -1,0 +1,37 @@
+{
+  "databaseTitles": {
+    "epics": "Epics",
+    "stories": "Stories"
+  },
+  "propertyNames": {
+    "title": "标题",
+    "epic": "Epic",
+    "epicStatus": "Epic 状态",
+    "storyRelation": "Stories",
+    "storyCount": "Story 总数",
+    "completedCount": "已完成数",
+    "costRollup": "成本汇总(USD)",
+    "targetDate": "目标日期",
+    "aiStatus": "AI 状态",
+    "phase": "执行阶段",
+    "priority": "优先级",
+    "repository": "目标仓库",
+    "capabilities": "能力标签",
+    "targetBranch": "目标分支",
+    "mergeRequest": "MR",
+    "cost": "成本(USD)",
+    "tokens": "Tokens",
+    "rounds": "轮次",
+    "creator": "创建人",
+    "taskId": "任务 ID",
+    "syncFingerprint": "同步指纹",
+    "completionValue": "完成值"
+  },
+  "options": {
+    "epicStatus": ["待拆解", "拆解待确认", "进行中", "已完成"],
+    "aiStatus": ["待启动", "进行中", "需要输入", "待人确认", "人工停靠", "已完成", "失败"],
+    "phase": ["排队中", "需求分析", "开发中", "验证中", "端到端", "MR 已建"],
+    "priority": ["P0", "P1", "P2", "P3"],
+    "capabilities": ["web", "browser-e2e", "ios", "windows"]
+  }
+}

@@ -10,6 +10,7 @@ import { dirname } from "node:path";
 import { DEFAULT_FENCED_PATTERNS } from "../src/guard/danger-rules.js";
 import {
   POLICY_ENV_VAR,
+  compileBannedBashPatterns,
   compileFencedPatterns,
   parseGuardPolicy,
   type GuardPolicy,
@@ -72,9 +73,11 @@ export default function (api: PiExtensionApi): void {
 
   let policy: GuardPolicy;
   let fencedPatterns: RegExp[];
+  let bannedBashPatterns: RegExp[];
   try {
     policy = parseGuardPolicy(raw);
     fencedPatterns = [...DEFAULT_FENCED_PATTERNS, ...compileFencedPatterns(policy.fencedPatterns)];
+    bannedBashPatterns = compileBannedBashPatterns(policy.bannedBash);
   } catch (cause) {
     denyAll(api, `policy rejected: ${(cause as Error).message}`);
     return;
@@ -83,7 +86,7 @@ export default function (api: PiExtensionApi): void {
   api.on("tool_call", (event: ToolCallEvent) => {
     let decision;
     try {
-      decision = decideToolCall(event, policy, fencedPatterns);
+      decision = decideToolCall(event, policy, fencedPatterns, bannedBashPatterns);
     } catch (cause) {
       // An exception inside the guard is not evidence that the call is safe.
       decision = { block: true, reason: `guard failed: ${(cause as Error).message}` };

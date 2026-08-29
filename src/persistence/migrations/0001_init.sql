@@ -47,6 +47,36 @@ CREATE TABLE IF NOT EXISTS stories (
 CREATE INDEX IF NOT EXISTS idx_stories_state ON stories(state);
 CREATE INDEX IF NOT EXISTS idx_stories_epic ON stories(epic_id);
 
+CREATE TABLE IF NOT EXISTS story_specs (
+  spec_id          TEXT PRIMARY KEY,
+  story_id         TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  seq              INTEGER NOT NULL,
+  text              TEXT NOT NULL,
+  status            TEXT NOT NULL CHECK (status IN ('pending','passed','failed','withdrawn')),
+  notion_block_id   TEXT UNIQUE,
+  UNIQUE (story_id, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_story_specs_story ON story_specs(story_id, seq);
+
+CREATE TABLE IF NOT EXISTS notion_sections (
+  story_id          TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  section            TEXT NOT NULL CHECK (section IN (
+                     'metadata','requirement','specification','design','verification','questions')),
+  anchor_block_id    TEXT NOT NULL UNIQUE,
+  content_block_id   TEXT,
+  PRIMARY KEY (story_id, section)
+);
+
+CREATE TABLE IF NOT EXISTS notion_verification_rounds (
+  story_id          TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  round             INTEGER NOT NULL,
+  toggle_block_id   TEXT NOT NULL UNIQUE,
+  summary           TEXT NOT NULL,
+  archived_page_id  TEXT,
+  created_at        INTEGER NOT NULL,
+  PRIMARY KEY (story_id, round)
+);
+
 -- Card-level lease. Held by a host for the whole card (host stickiness); renewed
 -- at phase boundaries. Acquisition and renewal are compare-and-swap on the
 -- (holder, fence) pair so a stale holder can never overwrite a newer one.
@@ -81,13 +111,15 @@ CREATE TABLE IF NOT EXISTS notion_outbox (
   card_id       TEXT,
   priority      INTEGER NOT NULL DEFAULT 2,
   operation     TEXT NOT NULL,
+  target        TEXT NOT NULL,
   payload       TEXT NOT NULL,
-  payload_hash  TEXT NOT NULL UNIQUE,
+  payload_hash  TEXT NOT NULL,
   state         TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','sent','failed')),
   attempts      INTEGER NOT NULL DEFAULT 0,
   last_error    TEXT,
   created_at    INTEGER NOT NULL,
-  sent_at       INTEGER
+  sent_at       INTEGER,
+  UNIQUE (target, payload_hash)
 );
 CREATE INDEX IF NOT EXISTS idx_outbox_pending ON notion_outbox(state, priority, id);
 
@@ -99,10 +131,12 @@ CREATE TABLE IF NOT EXISTS cost_entries (
   card_id        TEXT,
   phase          TEXT,
   purpose        TEXT,
+  tier           TEXT,
   provider       TEXT NOT NULL,
-  model          TEXT NOT NULL,
+  model_id       TEXT NOT NULL,
+  host_id        TEXT,
   prompt_version TEXT,
-  input_tokens      INTEGER NOT NULL DEFAULT 0,
+  uncached_input_tokens INTEGER NOT NULL DEFAULT 0,
   output_tokens     INTEGER NOT NULL DEFAULT 0,
   cache_read_tokens INTEGER NOT NULL DEFAULT 0,
   cache_write_tokens INTEGER NOT NULL DEFAULT 0,
