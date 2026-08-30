@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 // Typed query surface over the hand-written migrations in ./migrations.
 // The migrations are authoritative; schema.test.ts fails if the two drift apart.
@@ -193,21 +193,23 @@ export const costEntries = sqliteTable("cost_entries", {
 }, (t) => [index("idx_cost_card").on(t.cardId, t.ts), index("idx_cost_provider").on(t.provider, t.ts)]);
 
 export const configEntries = sqliteTable("config_entries", {
-  key: text("key").primaryKey(),
+  scopeId: text("scope_id").notNull().default("global"),
+  key: text("key").notNull(),
   valueJson: text("value_json").notNull(),
   version: integer("version").notNull().default(1),
   updatedBy: text("updated_by").notNull(),
   updatedAt: ms("updated_at").notNull(),
-});
+}, (t) => [primaryKey({ columns: [t.scopeId, t.key] })]);
 
 export const configHistory = sqliteTable("config_history", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  scopeId: text("scope_id").notNull().default("global"),
   key: text("key").notNull(),
   version: integer("version").notNull(),
   valueJson: text("value_json").notNull(),
   updatedBy: text("updated_by").notNull(),
   ts: ms("ts").notNull(),
-}, (t) => [index("idx_config_history_key").on(t.key, t.version)]);
+}, (t) => [index("idx_config_history_key").on(t.scopeId, t.key, t.version)]);
 
 export const commentWatermark = sqliteTable("comment_watermark", {
   pageId: text("page_id").primaryKey(),
