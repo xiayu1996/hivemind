@@ -84,6 +84,14 @@ export class PlanApprovalStore {
     return { id: String(row.id), state: String(row.state) as EpicState };
   }
 
+  async approvedEventCount(epicId: string): Promise<number> {
+    const row = (await this.client.execute({
+      sql: "SELECT COUNT(*) AS count FROM epic_approval_events WHERE epic_id = ?",
+      args: [epicId],
+    })).rows[0];
+    return Number(row?.count ?? 0);
+  }
+
   async approve(input: ApprovalInput): Promise<boolean> {
     const time = this.now();
     const epic = await this.getEpic(input.epicId);
