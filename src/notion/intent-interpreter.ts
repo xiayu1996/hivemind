@@ -1,4 +1,4 @@
-import type { StoryState } from "../orchestrator/state-machine.js";
+import type { EpicState, StoryState } from "../orchestrator/state-machine.js";
 import schema from "./notion-schema.json" with { type: "json" };
 
 export const HUMAN_WINS_MS = 120_000;
@@ -22,6 +22,13 @@ export type CommentIntent =
   | { type: "answer_blocker"; body: string }
   | { type: "feedback"; body: string };
 
+export type EpicPropertyIntent =
+  | { type: "none" }
+  | { type: "approve_plan"; humanWinsUntil: number }
+  | { type: "unsupported_property_change"; observedEpicStatus: string; humanWinsUntil: number };
+
+export type EpicCommentIntent = { type: "approve_plan" } | { type: "request_revision" } | { type: "feedback" };
+
 export function interpretPropertyChange(input: PropertyChangeInput): PropertyIntent {
   if (input.observedAiStatus === input.shadowAiStatus) return { type: "none" };
   const humanWinsUntil = input.now + HUMAN_WINS_MS;
@@ -39,6 +46,30 @@ export function interpretPropertyChange(input: PropertyChangeInput): PropertyInt
   }
   if (input.observedAiStatus === activeColumn) return { type: "continue_development", humanWinsUntil };
   return { type: "unsupported_property_change", observedAiStatus: input.observedAiStatus, humanWinsUntil };
+}
+
+export function interpretEpicPropertyChange(
+  shadowEpicStatus: string,
+  observedEpicStatus: string,
+  internalState: EpicState,
+  now: number,
+): EpicPropertyIntent {
+  if (shadowEpicStatus === observedEpicStatus) return { type: "none" };
+  const humanWinsUntil = now + HUMAN_WINS_MS;
+  if (internalState === "PLAN_APPROVAL" && observedEpicStatus === schema.options.epicStatus[2]!) {
+    return { type: "approve_plan", humanWinsUntil };
+  }
+  return { type: "unsupported_property_change", observedEpicStatus, humanWinsUntil };
+}
+
+export function interpretEpicComment(state: EpicState, body: string): EpicCommentIntent {
+  const text = body.trim().toLocaleLowerCase();
+  if (state !== "PLAN_APPROVAL") return { type: "feedback" };
+  if (["批准", "approve", "approved"].includes(text)) return { type: "approve_plan" };
+  if (["修改", "请修改拆解方案", "revise", "request changes"].includes(text)) {
+    return { type: "request_revision" };
+  }
+  return { type: "feedback" };
 }
 
 export function interpretComment(state: StoryState, body: string): CommentIntent {
