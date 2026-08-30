@@ -68,3 +68,16 @@ describe("@scenario S-M2-02-comment plan approval", () => {
     client.close();
   });
 });
+
+describe("@scenario S-M2-02-replay plan approval", () => {
+  it("deduplicates webhook and polling replays before Stories and dispatches are materialized", async () => {
+    const { client, approvals } = await presentedPlan();
+    await Promise.all([
+      approvals.approve({ epicId: "M2", eventId: "approval-1", source: "drag" }),
+      approvals.approve({ epicId: "M2", eventId: "approval-1", source: "drag" }),
+    ]);
+    expect(await approvals.approvedEventCount("M2")).toBe(1);
+    expect((await client.execute("SELECT story_id FROM execution_dispatches")).rows).toEqual([{ story_id: "S-M2-02" }]);
+    client.close();
+  });
+});
