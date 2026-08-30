@@ -33,6 +33,7 @@ import { NotionGatewayStoryApi, ingestReadyStories } from "../src/notion/story-i
 import { NotionStoryInputSync } from "../src/notion/story-input-sync.js";
 import { NotionStoryPageDelivery } from "../src/notion/story-page-delivery.js";
 import { NotionStoryDelivery, NotionStoryPropertyDelivery } from "../src/notion/story-property-delivery.js";
+import { NotionEpicPlanDelivery } from "../src/notion/epic-plan-delivery.js";
 import { NotionStoryProjection } from "../src/notion/story-projection.js";
 import { NotionSyncCoordinator, type NotionSyncPoller } from "../src/notion/sync.js";
 import { registerNotionWebhookRoute } from "../src/notion/webhook-route.js";
@@ -138,6 +139,7 @@ async function main(): Promise<void> {
   const delivery = new NotionStoryDelivery(
     new NotionStoryPageDelivery(handle.client, gateway),
     new NotionStoryPropertyDelivery(gateway, handle.client),
+    new NotionEpicPlanDelivery(gateway, handle.client, dataSourceId),
   );
 
   let coordinator: NotionSyncCoordinator;

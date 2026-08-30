@@ -93,6 +93,7 @@ export class NotionStoryDelivery implements NotionOutboxDelivery {
   constructor(
     private readonly page: NotionOutboxDelivery,
     private readonly properties: NotionOutboxDelivery,
+    private readonly epicPlan?: NotionOutboxDelivery,
   ) {}
 
   isApplied(record: NotionOutboxRecord): Promise<boolean> {
@@ -106,6 +107,11 @@ export class NotionStoryDelivery implements NotionOutboxDelivery {
   private delivery(record: NotionOutboxRecord): NotionOutboxDelivery {
     if (record.operation === "sync_story_page") return this.page;
     if (record.operation === "sync_story_properties") return this.properties;
+    if (this.epicPlan && (record.operation === "present_epic_plan" || record.operation === "create_story_page")) {
+      return this.epicPlan;
+    }
+    // An operation with no delivery would sit pending forever, retried on every
+    // cycle, so it is louder to fail here than to let the row rot.
     throw new Error(`unsupported Story outbox operation: ${record.operation}`);
   }
 }
