@@ -23,6 +23,7 @@ import { type ExplicitContextFile } from "../src/runner/context-files.js";
 import { PiModelCatalog, resolveModel } from "../src/runner/model-resolver.js";
 import { ConfigStore } from "../src/config/store.js";
 import { ModelPolicy } from "../src/runner/model-policy.js";
+import { retryLimits } from "../src/pipeline/retry-limits.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
 import { BlindVerifyExecutor } from "../src/verify/executor.js";
 import { discoverMRPort } from "../src/vcs/mr/adapters.js";
@@ -112,6 +113,7 @@ async function main(): Promise<void> {
     });
     // The judge answers one yes/no question per phase exit; running it on the
     // phase's own tier is what made it the pipeline's quietest cost line.
+    const limits = await retryLimits(await ConfigStore.load(handle.client));
     const judgeModel = await new ModelPolicy(
       await ConfigStore.load(handle.client),
       new PiModelCatalog({ binary: piBinary, cwd: worktreePath }),
@@ -142,6 +144,7 @@ async function main(): Promise<void> {
       completionJudge,
       contextFiles: contextFiles(),
       recordTelemetry: (input) => recorder.record(input),
+      maxContinueRetries: limits.maxContinueRetries,
     });
     const blindExecutor = new BlindVerifyExecutor(
       {
@@ -203,7 +206,10 @@ async function main(): Promise<void> {
       verifier,
       delivery,
       new NotionStoryProjection(handle.client),
-      integration ? { integration } : {},
+      {
+        ...(integration ? { integration } : {}),
+        maxInnerLoopRounds: limits.maxInnerLoopRounds,
+      },
     ).run(cardId);
     console.log(JSON.stringify(result));
   } finally {

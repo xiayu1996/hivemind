@@ -10,6 +10,7 @@ import { alertChannelsFromConfig } from "../src/alert/config.js";
 import { AlertRouter } from "../src/alert/index.js";
 import { alertNeedsInput } from "../src/alert/story-alerts.js";
 import { assertOutOfBandChannel } from "../src/alert/required-channel.js";
+import { diagnoseRetryLimit, renderRetryReport } from "../src/pipeline/retry-limits.js";
 import { loadSecretsFile, upsertSecretFile } from "../src/config/secrets-file.js";
 import { ConfigStore } from "../src/config/store.js";
 import { breakerPolicy, intakeHalted, usableProviders } from "../src/runner/circuit-breaker.js";
@@ -393,8 +394,18 @@ async function main(): Promise<void> {
       if (result.stdout.trim()) console.log(result.stdout.trim());
       await reconcileProjections();
       const completed = await store.getStory(cardId);
-      if (completed.state === "NEEDS_INPUT" && !(await alertNeedsInput(alerts, completed))) {
-        console.error(`Story ${cardId} stopped for input but no out-of-band channel took the alert`);
+      if (completed.state === "NEEDS_INPUT") {
+        // A spent budget is only actionable with the curve that spent it and a
+        // verdict on which side to look at.
+        const report = renderRetryReport(
+          cardId,
+          completed.stopReason ?? "needs_input",
+          diagnoseRetryLimit(await store.getVerificationFailureHistory(cardId)),
+        );
+        console.warn(report);
+        if (!(await alertNeedsInput(alerts, completed, report))) {
+          console.error(`Story ${cardId} stopped for input but no out-of-band channel took the alert`);
+        }
       }
   };
 
