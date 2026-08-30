@@ -16,20 +16,33 @@ interface DeliveredStory {
   verification: string;
 }
 
-function evidenceForStory(storyId: string, subjects: readonly string[]): { red: string; green: string } | null {
-  const red = `test(${storyId}): red`;
-  const green = `feat(${storyId}): green`;
-  const redIndex = subjects.indexOf(red);
-  const greenIndex = subjects.indexOf(green);
-  if (redIndex < 0 || greenIndex < 0 || redIndex >= greenIndex) return null;
-  return { red, green };
+/** Red and green commits are named after the scenario they cover, not after
+ * the Story, so a Story's evidence is every scenario pair beneath its id. */
+function evidenceForStory(storyId: string, subjects: readonly string[]): Array<{ red: string; green: string }> {
+  const reds = new Map<string, string>();
+  const pairs = new Map<string, { red: string; green: string }>();
+  for (const subject of subjects) {
+    const match = /^(test|feat)\(([^)]+)\): (red|green)$/.exec(subject);
+    if (!match) continue;
+    const [, kind, scenarioId, colour] = match as unknown as [string, string, string, string];
+    if (scenarioId !== storyId && !scenarioId.startsWith(`${storyId}-`)) continue;
+    if (kind === "test" && colour === "red") {
+      if (!reds.has(scenarioId)) reds.set(scenarioId, subject);
+      continue;
+    }
+    if (kind !== "feat" || colour !== "green") continue;
+    const red = reds.get(scenarioId);
+    if (red !== undefined && !pairs.has(scenarioId)) pairs.set(scenarioId, { red, green: subject });
+  }
+  return [...pairs.entries()].toSorted(([left], [right]) => left.localeCompare(right)).map(([, pair]) => pair);
 }
 
 function renderDescription(epicId: string, title: string, stories: readonly DeliveredStory[], subjects: readonly string[]): string {
   const chapters = stories.map((story) => {
     const evidence = evidenceForStory(story.id, subjects);
-    if (!evidence) throw new Error(`invalid red-to-green evidence for Story ${story.id}`);
-    return `## ${story.id}: ${story.title}\n\nOutcome: ${story.outcome}\n\nVerification: ${story.verification}\n\nEvidence: \`${evidence.red}\` -> \`${evidence.green}\``;
+    if (evidence.length === 0) throw new Error(`invalid red-to-green evidence for Story ${story.id}`);
+    const trail = evidence.map((pair) => `\`${pair.red}\` -> \`${pair.green}\``).join("; ");
+    return `## ${story.id}: ${story.title}\n\nOutcome: ${story.outcome}\n\nVerification: ${story.verification}\n\nEvidence: ${trail}`;
   });
   return `# Epic ${epicId}: ${title}\n\n${chapters.join("\n\n")}\n`;
 }

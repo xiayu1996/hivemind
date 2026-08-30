@@ -51,3 +51,43 @@ describe("@scenario S-M2-06-epicmr", () => {
     expect(create).not.toHaveBeenCalled();
   });
 });
+
+describe("@scenario S-M2-06-epicmr Story ids that follow the decomposition grammar", () => {
+  let client: ReturnType<typeof createClient>;
+
+  beforeEach(async () => {
+    client = createClient({ url: ":memory:" });
+    await migrate(client);
+    await client.batch([
+      { sql: "INSERT INTO epics (id, notion_page_id, title, state, repo, integration_branch, created_at, updated_at) VALUES ('M2', 'epic-page', 'Delivery', 'EXECUTING', 'owner/repo', 'epic/M2', 1, 1)" },
+      { sql: "INSERT INTO stories (id, epic_id, notion_page_id, title, requirement, state, created_at, updated_at) VALUES ('S-M2-06', 'M2', 'story-06', 'Epic delivery', 'One review request per Epic', 'DELIVERED', 1, 1)" },
+      { sql: "INSERT INTO phase_runs (run_id, card_id, phase, round, prompt_sha256, status, started_at, ended_at) VALUES ('merge-06', 'S-M2-06', 'MERGE', 1, '0000000000000000000000000000000000000000000000000000000000000000', 'completed', 1, 1)" },
+      { sql: "INSERT INTO phase_artifacts (run_id, card_id, phase, round, kind, body, created_at) VALUES ('merge-06', 'S-M2-06', 'MERGE', 1, 'delivery-report', 'All scenarios passed.', 1)" },
+    ], "write");
+  });
+  afterEach(() => client.close());
+
+  it("reads the red-to-green trail from the scenario commits the Story owns", async () => {
+    const subjects = [
+      "test(S-M2-06-freshness): red",
+      "feat(S-M2-06-freshness): green",
+      "test(S-M2-06-epicmr): red",
+      "feat(S-M2-06-epicmr): green",
+      "test(S-M2-05-subset): red",
+      "feat(S-M2-05-subset): green",
+    ];
+    const git = { run: vi.fn(async (_cwd: string, args: string[]) => (args[0] === "log" ? `${subjects.join("\n")}\n` : "")) };
+    const requests: Array<{ body: string }> = [];
+    const create = vi.fn(async (request: { body: string }) => {
+      requests.push(request);
+      return { url: "https://github.com/owner/repo/pull/43", provider: "github" as const };
+    });
+    const delivery = new EpicMrDelivery(client, { create }, { worktreePath: "integration", git, now: () => 3 });
+
+    await expect(delivery.deliver("M2")).resolves.toEqual({ mrUrl: "https://github.com/owner/repo/pull/43" });
+    const body = requests[0]?.body ?? "";
+    expect(body).toContain("`test(S-M2-06-epicmr): red` -> `feat(S-M2-06-epicmr): green`");
+    expect(body).toContain("`test(S-M2-06-freshness): red` -> `feat(S-M2-06-freshness): green`");
+    expect(body).not.toContain("S-M2-05-subset");
+  });
+});
