@@ -3,6 +3,7 @@ import type { CanonicalEvent } from "../observability/canonical-log.js";
 import { ProjectionRegistry } from "../observability/projections/registry.js";
 import { renderTraceHtml } from "../observability/projections/trace-html.js";
 import { traceProjection } from "../observability/projections/units.js";
+import { summarizeFootprintDeviation } from "../orchestrator/footprint-deviation.js";
 import type { ConsoleDataSource } from "./server.js";
 
 function plain(row: Row): Record<string, unknown> {
@@ -61,6 +62,20 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
               reasoning_tokens, cost_usd, ts
          FROM cost_entries ORDER BY ts DESC`,
     )).rows.map(plain);
+  }
+
+  /** DECOMPOSE quality: only Stories whose actual footprint was captured at merge can be scored. */
+  async stats(): Promise<unknown> {
+    const rows = (await this.client.execute(
+      "SELECT id, predicted_footprint, actual_footprint FROM stories WHERE actual_footprint IS NOT NULL ORDER BY id",
+    )).rows;
+    return {
+      footprintDeviation: summarizeFootprintDeviation(rows.map((row) => ({
+        storyId: String(row.id),
+        predictedFootprint: JSON.parse(String(row.predicted_footprint)),
+        actualFootprint: JSON.parse(String(row.actual_footprint)),
+      }))),
+    };
   }
 
   async config(): Promise<unknown[]> {

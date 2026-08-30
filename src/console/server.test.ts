@@ -6,6 +6,7 @@ const data: ConsoleDataSource = {
   tasks: async () => [{ id: "story-1", events: [{ type: "turn_end" }], traceHtml: "<div>trace</div>" }],
   costs: async () => [{ runId: "run-1", costUsd: 0.1 }],
   config: async () => [{ key: "pipeline.maxRounds", value: 6 }],
+  stats: async () => ({ footprintDeviation: { stories: 0, deviationRate: 0, unpredictedStoryRate: 0, perStory: [] } }),
 };
 
 describe("read-only console", () => {
