@@ -8,6 +8,7 @@ import { LibsqlPhaseRecorder } from "../src/observability/phase-recorder.js";
 import { BlindVerifyStoryPort } from "../src/orchestrator/blind-verify-port.js";
 import { PiStoryPhasePort } from "../src/orchestrator/pi-phase-port.js";
 import { StoryExecutionStore } from "../src/orchestrator/story-execution-store.js";
+import { LibsqlActualFootprintStore } from "../src/vcs/actual-footprint.js";
 import { NotionStoryProjection } from "../src/notion/story-projection.js";
 import { SingleStoryWorker } from "../src/orchestrator/story-worker.js";
 import { PiCompletionJudge } from "../src/pipeline/completion-verifier.js";
@@ -152,6 +153,7 @@ async function main(): Promise<void> {
     const delivery = new GitMrStoryDelivery(await discoverMRPort(), {
       worktreePath,
       targetBranch,
+      actualFootprints: new LibsqlActualFootprintStore(handle.client),
     });
     const result = await new SingleStoryWorker(
       store,

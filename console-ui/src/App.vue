@@ -1,7 +1,7 @@
 <script setup>
 import { ref, watchEffect } from "vue";
 
-const views = ["nodes", "tasks", "costs", "config"];
+const views = ["nodes", "tasks", "costs", "config", "stats"];
 const current = ref(views.includes(location.pathname.slice(1)) ? location.pathname.slice(1) : "nodes");
 const rows = ref([]);
 const error = ref("");
@@ -11,7 +11,8 @@ watchEffect(async () => {
   try {
     const response = await fetch(`/api/${current.value}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    rows.value = await response.json();
+    const payload = await response.json();
+    rows.value = Array.isArray(payload) ? payload : [payload];
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : "Request failed";
   }
