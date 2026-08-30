@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { StoryDeliveryPort } from "../orchestrator/story-worker.js";
+import { normalizeActualFootprint, type ActualFootprintRecorder } from "./actual-footprint.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -23,6 +24,7 @@ export interface GitMrDeliveryOptions {
   worktreePath: string;
   targetBranch?: string;
   git?: GitCommandPort;
+  actualFootprints?: ActualFootprintRecorder;
 }
 
 /** Publishes a clean Story branch for integration; only Epic delivery may create an MR. */
@@ -50,7 +52,29 @@ export class GitMrStoryDelivery implements StoryDeliveryPort {
     const status = await this.git.run(this.options.worktreePath, ["status", "--porcelain"]);
     if (status.trim() !== "") throw new Error("worktree has uncommitted changes at delivery");
     await this.git.run(this.options.worktreePath, ["push", "--set-upstream", "origin", story.branch]);
+    await this.recordActualFootprint(story.id, story.branch);
     void input.mergeArtifact;
     return { mrUrl: null };
+  }
+
+  /** The published diff is what the Story really touched; DECOMPOSE is scored against it. */
+  private async recordActualFootprint(storyId: string, branch: string): Promise<void> {
+    const footprints = this.options.actualFootprints;
+    if (!footprints) return;
+    const targetBranch = this.options.targetBranch ?? "main";
+    const baseRevision = (await this.git.run(this.options.worktreePath, ["merge-base", `origin/${targetBranch}`, branch])).trim();
+    const storyRevision = (await this.git.run(this.options.worktreePath, ["rev-parse", "HEAD"])).trim();
+    const nameStatus = await this.git.run(
+      this.options.worktreePath,
+      ["diff", "--name-status", "-z", "--find-renames", baseRevision, storyRevision],
+    );
+    await footprints.capture({
+      storyId,
+      integrationBranch: targetBranch,
+      baseRevision,
+      storyRevision,
+      actualFootprint: normalizeActualFootprint(nameStatus),
+    });
+    await footprints.apply(storyId);
   }
 }
