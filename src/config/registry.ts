@@ -197,6 +197,13 @@ export const CONFIG_KEYS = {
   }),
 
   // --- parallel scheduling ---
+  "schedule.maxConcurrentStories": def({
+    schema: positiveInt.max(16),
+    default: 2,
+    scope: "per-host",
+    reload: "hot",
+    description: "How many Stories one host runs at once. The scheduler decides which Stories may run together; this decides how many of them fit on this machine.",
+  }),
   "schedule.hotspotPaths": def({
     schema: z.array(repositoryRelativePath),
     default: [],

@@ -1,3 +1,4 @@
+import type { Row } from "@libsql/client";
 import { execFile } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
@@ -41,6 +42,7 @@ import { NotionStoryProjection } from "../src/notion/story-projection.js";
 import { NotionSyncCoordinator, type NotionSyncPoller } from "../src/notion/sync.js";
 import { registerNotionWebhookRoute } from "../src/notion/webhook-route.js";
 import { PlanApprovalStore } from "../src/orchestrator/plan-approval.js";
+import { dispatchableStories, planRepositoryStoryExecution } from "../src/orchestrator/scheduler.js";
 import { StoryExecutionStore } from "../src/orchestrator/story-execution-store.js";
 import { openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
@@ -274,50 +276,33 @@ async function main(): Promise<void> {
     }
   };
 
-  const cycle = async (): Promise<void> => {
-    if (running) return;
-    running = true;
-    try {
-      await syncIntake();
-      await reconcileProjections();
-      await decomposeWaitingEpic();
-      const queued = (await handle.client.execute({
-        sql: `SELECT id, repo, branch, target_branch FROM stories
-              WHERE state IN ('QUEUED', 'DESIGN', 'CODE', 'MERGE') AND repo = ?
-              ORDER BY priority ASC, created_at ASC LIMIT 1`,
-        args: [repositorySlug],
-      })).rows[0];
-      if (!queued) return;
-      const cardId = String(queued.id);
-      // One account per vendor: the window and the concurrency limit belong to
-      // the account, so the breaker state that decides this is central.
-      const chain = providerOverride ? [providerOverride] : await modelPolicy.providersFor("code");
-      // A breaker that opened on credentials names no window of its own, so the
-      // read-only probe is the only thing that can ever close it again.
-      await probeOpenProviders(
-        chain,
-        providerHealth,
-        (name) => probeProviderReadiness(piBinary, name),
-        await breakerPolicy(config),
-      );
-      const healths = await providerHealth.snapshot();
-      const available = usableProviders(chain, healths, Date.now());
-      if (intakeHalted(chain, healths, Date.now())) {
-        const detail = chain.map((name) => `${name}=${healths.get(name)?.lastErrorClass ?? "open"}`).join(", ");
-        console.warn(`intake halted: every provider in the chain is open (${detail})`);
-        await alerts.send({
-          kind: "p0",
-          title: "Every model provider is unavailable",
-          body: `hivemind stopped taking cards: ${detail}`,
-        }).catch((cause: unknown) => console.error("P0 alert failed:", (cause as Error).message));
-        return;
-      }
-      const provider = available[0]!;
-      const model = modelOverride ?? (await modelPolicy.resolve("code", provider)).id;
-      if (!queued.branch) throw new Error(`Story ${cardId} does not declare a branch`);
-      const branch = String(queued.branch);
-      const targetBranch = queued.target_branch ? String(queued.target_branch) : "main";
-      if (!queued.repo) throw new Error(`Story ${cardId} does not declare a repository`);
+  let lastP0 = "";
+  let lastP0At = 0;
+  const reportP0 = async (title: string, error: unknown): Promise<void> => {
+    const message = error instanceof Error ? error.message : title;
+    const time = Date.now();
+    // One line per distinct failure per ten minutes: a provider outage would
+    // otherwise page the operator once per cycle.
+    if (message === lastP0 && time - lastP0At < 10 * 60_000) return;
+    lastP0 = message;
+    lastP0At = time;
+    if (alerts.channelCount === 0) {
+      console.error(`P0: ${title} (no out-of-band alert channel):`, message);
+      return;
+    }
+    const delivered = await alerts.send({ kind: "p0", title, body: message });
+    if (delivered.delivered.length === 0) {
+      console.error("P0 alert failed on every channel:", JSON.stringify(delivered.failed));
+    }
+  };
+
+  const inFlight = new Map<string, Promise<void>>();
+
+  const runStory = async (cardId: string, row: Row, provider: string, model: string): Promise<void> => {
+      if (!row.branch) throw new Error(`Story ${cardId} does not declare a branch`);
+      const branch = String(row.branch);
+      const targetBranch = row.target_branch ? String(row.target_branch) : "main";
+      if (!row.repo) throw new Error(`Story ${cardId} does not declare a repository`);
       const layout = worktreeLayout(workRoot);
       let location = locateWorktree(repositoryId, cardId, layout);
       if (!(await exists(location.worktreePath))) {
@@ -389,35 +374,86 @@ async function main(): Promise<void> {
       if (completed.state === "NEEDS_INPUT" && !(await alertNeedsInput(alerts, completed))) {
         console.error(`Story ${cardId} stopped for input but no out-of-band channel took the alert`);
       }
+  };
+
+  const cycle = async (): Promise<void> => {
+    if (running) return;
+    running = true;
+    try {
+      await syncIntake();
+      await reconcileProjections();
+      await decomposeWaitingEpic();
+
+      const rows = (await handle.client.execute({
+        sql: `SELECT id, state, repo, branch, target_branch, depends_on, predicted_footprint
+                FROM stories WHERE repo = ? ORDER BY priority ASC, created_at ASC`,
+        args: [repositorySlug],
+      })).rows;
+      const byId = new Map(rows.map((row) => [String(row.id), row]));
+      // Footprints decide what may run beside what; priority only decides the
+      // order within a batch that is already free of conflicts.
+      const plan = await planRepositoryStoryExecution(config, dispatchableStories(rows.map((row) => ({
+        id: String(row.id),
+        state: String(row.state),
+        dependsOn: JSON.parse(String(row.depends_on ?? "[]")) as string[],
+        predictedFootprint: JSON.parse(String(row.predicted_footprint ?? "[]")) as string[],
+      }))));
+      if (plan.kind === "dependency_cycle") {
+        throw new Error(`Story dependencies form a cycle: ${plan.cycle.join(" -> ")}`);
+      }
+      if (plan.kind === "unschedulable") {
+        console.warn(`Stories cannot be scheduled and are waiting on something outside the set: ${plan.stranded.join(", ")}`);
+      }
+      const batch = (plan.batches[0] ?? []).filter((cardId) => !inFlight.has(cardId));
+      if (batch.length === 0) return;
+
+      // One account per vendor: the window and the concurrency limit belong to
+      // the account, so the breaker state that decides this is central.
+      const chain = providerOverride ? [providerOverride] : await modelPolicy.providersFor("code");
+      // A breaker that opened on credentials names no window of its own, so the
+      // read-only probe is the only thing that can ever close it again.
+      await probeOpenProviders(
+        chain,
+        providerHealth,
+        (name) => probeProviderReadiness(piBinary, name),
+        await breakerPolicy(config),
+      );
+      const healths = await providerHealth.snapshot();
+      const available = usableProviders(chain, healths, Date.now());
+      if (intakeHalted(chain, healths, Date.now())) {
+        const detail = chain.map((name) => `${name}=${healths.get(name)?.lastErrorClass ?? "open"}`).join(", ");
+        console.warn(`intake halted: every provider in the chain is open (${detail})`);
+        await alerts.send({
+          kind: "p0",
+          title: "Every model provider is unavailable",
+          body: `hivemind stopped taking cards: ${detail}`,
+        }).catch((cause: unknown) => console.error("P0 alert failed:", (cause as Error).message));
+        return;
+      }
+      const provider = available[0]!;
+      const model = modelOverride ?? (await modelPolicy.resolve("code", provider)).id;
+
+      await config.reload();
+      const limit = config.get("schedule.maxConcurrentStories");
+      for (const cardId of batch) {
+        if (inFlight.size >= limit) break;
+        const row = byId.get(cardId);
+        if (!row) continue;
+        const attempt = runStory(cardId, row, provider, model)
+          .catch((error: unknown) => reportP0(`Story ${cardId} failed`, error))
+          .finally(() => inFlight.delete(cardId));
+        inFlight.set(cardId, attempt);
+      }
     } finally {
       running = false;
     }
   };
 
-  let lastP0 = "";
-  let lastP0At = 0;
   const runCycle = async (): Promise<void> => {
     try {
       await cycle();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "local orchestrator cycle failed";
-      const time = Date.now();
-      if (message !== lastP0 || time - lastP0At >= 10 * 60_000) {
-        lastP0 = message;
-        lastP0At = time;
-        if (alerts.channelCount === 0) {
-          console.error("P0: local orchestrator cycle failed (no out-of-band alert channel):", message);
-        } else {
-          const deliveryResult = await alerts.send({
-            kind: "p0",
-            title: "Local orchestrator cycle failed",
-            body: message,
-          });
-          if (deliveryResult.delivered.length === 0) {
-            console.error("P0 alert failed on every channel:", JSON.stringify(deliveryResult.failed));
-          }
-        }
-      }
+      await reportP0("Local orchestrator cycle failed", error);
       throw error;
     }
   };

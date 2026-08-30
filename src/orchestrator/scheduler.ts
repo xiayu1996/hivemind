@@ -90,6 +90,31 @@ export async function planRepositoryStoryExecution(
   return planStoryExecution(stories, config.get("schedule.hotspotPaths"));
 }
 
+/** States a Story can still be dispatched from. A parked or failed Story is
+ * not work the scheduler may plan; a delivered one is a dependency that is
+ * already satisfied. */
+const DISPATCHABLE = new Set(["QUEUED", "DESIGN", "CODE", "VERIFY", "MERGE", "REGRESSION_FIX"]);
+
+export interface RepositoryStory extends SchedulableStory {
+  state: string;
+}
+
+/**
+ * Narrows a repository's Stories to the ones the scheduler may plan, and drops
+ * the dependencies they no longer wait on. A dependency that left the set
+ * unresolved would otherwise strand its dependents forever.
+ */
+export function dispatchableStories(stories: readonly RepositoryStory[]): SchedulableStory[] {
+  const open = new Set(stories.filter((story) => DISPATCHABLE.has(story.state)).map((story) => story.id));
+  return stories
+    .filter((story) => open.has(story.id))
+    .map((story) => ({
+      id: story.id,
+      dependsOn: story.dependsOn.filter((dependency) => open.has(dependency)),
+      predictedFootprint: story.predictedFootprint,
+    }));
+}
+
 export function planStoryExecution(stories: readonly SchedulableStory[], hotspots: readonly string[]): StoryExecutionPlan {
   const cycle = findDependencyCycle(stories);
   if (cycle) return { kind: "dependency_cycle", cycle, batches: [] };
