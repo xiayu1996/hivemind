@@ -155,15 +155,19 @@
 
 目标：Epic 拆解 + 多 Story 并行 + epic 集成分支合流 + 常驻 E2E 双池回归；控制台开写面，重试上限族全量接入。
 
+> **执行状态（2026-08-30，自举）**：S-M2-01..06 已由 hivemind 流水线自举开发完成并经评审合并
+> （PR #3..#8，全部 CI 绿；记录见 docs/poc/m2-selfhost-progress.md）。S-M2-07 停靠等待供应商配额
+> （zai 无余额 / codex 用量窗口）。状态列：✅ 自举交付 · ⛔ 配额阻塞。
+
 | ID | 任务 | 输出物 | 验证方式 | 前置 |
 |---|---|---|---|---|
-| M2-01 | DECOMPOSE phase：Epic → Story 拆解 + `depends_on` + `predicted_footprint`（目录/模块粒度，刻意不用文件粒度）+ 业务语言 lint（Spec 不得含实现词汇） | `src/orchestrator/decompose.ts` + prompt | 3 个真实 Epic 拆解产物过 schema 校验；lint 单测拦截含代码词汇的 Spec 行 | M1-37 |
-| M2-02 | PLAN_APPROVAL 人批 gate：拆解结果贴 Notion，人批准前 Epic 不进 EXECUTING | 状态机扩展 + Notion 呈现 | e2e：未批不动；批准（拖列/评论）后启动 | M2-01 |
-| M2-03 | footprint 调度纯函数：拓扑序 + footprint 两两相交判定 + hotspot 命中强制串行 + 环检测 | `src/orchestrator/scheduler.ts` | 表驱动单测：相交/不相交/hotspot/依赖环/混合场景 | M2-01 |
-| M2-04 | hotspot 清单资产化：config 键承载（路由表/i18n/schema 等），随项目演化持续增补 | config 键 + 文档 | 修改 config 后下一次调度决策立即反映（单测） | M1-03, M2-03 |
-| M2-05 | epic 集成分支 + 合流：`epic/<id>` cut、Story 分支 rebase onto epic HEAD、agent 现场解冲突、子集重验（本 Story + footprint 相交 Story 场景）、依赖 Story 延迟 cut | `src/vcs/merge-flow.ts` | e2e：两张有依赖的 Story 顺序合入；人为制造冲突验证解冲突 + 子集重验路径 | M2-03 |
-| M2-06 | Epic 单 MR + 分支保鲜：commit 按 Story 分段保留 red/green、文案按 Story 分章；epic 分支每日 merge main；>8 Story 提示人拆 Epic | MR 生成扩展 + 定时任务 | MR 内 commit 序列可辨认每个 Story 的 red→green；定时 merge 日志；9 Story Epic 触发提示 | M2-05, M1-30 |
-| M2-07 | actual_footprint 回写 + 预测偏差率指标 | 合入钩子 + stats 投影扩展 | 合入后 DB 有 actual 值；偏差率出现在控制台统计页 | M2-05 |
+| M2-01 | ✅ DECOMPOSE phase：Epic → Story 拆解 + `depends_on` + `predicted_footprint`（目录/模块粒度，刻意不用文件粒度）+ 业务语言 lint（Spec 不得含实现词汇） | `src/orchestrator/decompose.ts` + prompt | 3 个真实 Epic 拆解产物过 schema 校验；lint 单测拦截含代码词汇的 Spec 行；自举交付 [PR #3](https://github.com/xiayu1996/hivemind/pull/3)：拆解产物校验 + 业务语言 lint 纯函数，真实 Epic 拆解活体验证随 S-M2-03+ 使用 | M1-37 |
+| M2-02 | ✅ PLAN_APPROVAL 人批 gate：拆解结果贴 Notion，人批准前 Epic 不进 EXECUTING | 状态机扩展 + Notion 呈现 | e2e：未批不动；批准（拖列/评论）后启动；自举交付 [PR #4](https://github.com/xiayu1996/hivemind/pull/4)：epic_plans/approval_events/dispatches + epic-input-sync 接入真实同步路径 | M2-01 |
+| M2-03 | ✅ footprint 调度纯函数：拓扑序 + footprint 两两相交判定 + hotspot 命中强制串行 + 环检测 | `src/orchestrator/scheduler.ts` | 表驱动单测：相交/不相交/hotspot/依赖环/混合场景；自举交付 [PR #5](https://github.com/xiayu1996/hivemind/pull/5)：调度纯函数 + 表驱动用例 | M2-01 |
+| M2-04 | ✅ hotspot 清单资产化：config 键承载（路由表/i18n/schema 等），随项目演化持续增补 | config 键 + 文档 | 修改 config 后下一次调度决策立即反映（单测）；自举交付 [PR #6](https://github.com/xiayu1996/hivemind/pull/6)：hotspot 注册表进 config，调度决策即时反映 | M1-03, M2-03 |
+| M2-05 | ✅ epic 集成分支 + 合流：`epic/<id>` cut、Story 分支 rebase onto epic HEAD、agent 现场解冲突、子集重验（本 Story + footprint 相交 Story 场景）、依赖 Story 延迟 cut | `src/vcs/merge-flow.ts` | e2e：两张有依赖的 Story 顺序合入；人为制造冲突验证解冲突 + 子集重验路径；自举交付 [PR #7](https://github.com/xiayu1996/hivemind/pull/7)：集成 CUT/合流/子集重验；依赖顺序合流 e2e 待 M2-14 演练 | M2-03 |
+| M2-06 | ✅ Epic 单 MR + 分支保鲜：commit 按 Story 分段保留 red/green、文案按 Story 分章；epic 分支每日 merge main；>8 Story 提示人拆 Epic | MR 生成扩展 + 定时任务 | MR 内 commit 序列可辨认每个 Story 的 red→green；定时 merge 日志；9 Story Epic 触发提示；自举交付 [PR #8](https://github.com/xiayu1996/hivemind/pull/8)：epic-delivery + 分支保鲜 + >8 Story 拆分提示；red/green commit 按 scenario 命名 | M2-05, M1-30 |
+| M2-07 | ⛔actual_footprint 回写 + 预测偏差率指标 | 合入钩子 + stats 投影扩展 | 合入后 DB 有 actual 值；偏差率出现在控制台统计页；停靠：三次尝试均遇供应商配额（zai 余额/codex 窗口），恢复命令见 docs/poc/m2-selfhost-progress.md | M2-05 |
 | M2-08 | 场景注册表：scenario_id → owner_story / 所属池 / 最后验证时间 | `src/regression/scenario-registry.ts` | schema 单测 + Story 交付时场景自动登记 e2e | M1-24 |
 | M2-09 | RegressionScheduler 双池：活跃 epic 池（epic HEAD）+ main 历史全集池（低频）；事件触发 + 空闲 LRU 轮询 + 让位前台任务 | `src/regression/scheduler.ts` | 排程决策纯函数单测；e2e：Story 合入后该 epic 全量场景自动排一轮 | M2-08 |
 | M2-10 | 样本级统计判定 + 失败签名：单次失败标 suspect 连排 N 次复测、窗口失败率超阈值才立卡、`(scenario_id, failure_signature)` 唯一索引去重 | `src/regression/verdict.ts` | 模拟 30% 随机失败的 flaky 场景不立卡；确定性失败立卡且重复失败不重复立卡 | M2-09 |
