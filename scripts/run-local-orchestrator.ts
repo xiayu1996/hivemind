@@ -9,6 +9,7 @@ import { alertChannelsFromConfig } from "../src/alert/config.js";
 import { AlertRouter } from "../src/alert/index.js";
 import { alertNeedsInput } from "../src/alert/story-alerts.js";
 import { loadSecretsFile, upsertSecretFile } from "../src/config/secrets-file.js";
+import { ConfigStore } from "../src/config/store.js";
 import { CommentIngestor } from "../src/notion/comment-ingest.js";
 import { NotionEpicInputSync } from "../src/notion/epic-input-sync.js";
 import { NotionGateway, NotionGatewayError } from "../src/notion/gateway.js";
@@ -101,6 +102,7 @@ async function main(): Promise<void> {
     transport: createNotionHttpTransport({ token }),
   });
   const store = new StoryExecutionStore(handle.client);
+  const config = await ConfigStore.load(handle.client);
   const storyApi = new NotionGatewayStoryApi(gateway);
   const botUserId = stored.get("NOTION_BOT_USER_ID");
   const comments = new CommentIngestor(
@@ -270,16 +272,21 @@ async function main(): Promise<void> {
         // The worker already recorded the phase failure. Bound automatic
         // reentries: DESIGN and CODE re-dispatch until the budget is spent,
         // VERIFY/MERGE failures park immediately for a human resume decision.
+        // A card that never left QUEUED failed before the pipeline started, so
+        // nothing recorded the attempt: without counting it here the dispatch
+        // query selects the same card on every cycle, forever.
         const card = await store.getStory(cardId).catch(() => undefined);
-        if (card && card.state !== "QUEUED" && card.state !== "DELIVERED") {
+        if (card && card.state !== "DELIVERED") {
+          await config.reload();
+          const budget = config.get("retry.maxPhaseReentries");
           await store.recordPhaseReentry(cardId);
           const reentries = card.phaseReentries + 1;
-          const reenterable = (card.state === "DESIGN" || card.state === "CODE") && reentries < 3;
+          const reenterable = ["QUEUED", "DESIGN", "CODE"].includes(card.state) && reentries < budget;
           if (!reenterable) {
             await store.stopForInput(cardId, card.state, "retry_limit_exceeded", `reentry-${cardId}`);
             console.warn(`Story ${cardId} parked after ${reentries} failed attempt(s) in ${card.state}`);
           } else {
-            console.warn(`Story ${cardId} will re-enter ${card.state} (attempt ${reentries}/3)`);
+            console.warn(`Story ${cardId} will re-enter ${card.state} (attempt ${reentries}/${budget})`);
           }
         }
         throw error;
