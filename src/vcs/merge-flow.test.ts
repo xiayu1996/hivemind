@@ -27,4 +27,28 @@ describe("EpicMergeFlow", () => {
     ]));
     expect(calls.some(({ args }) => args.includes("push") || args.includes("main") && args[0] === "merge")).toBe(false);
   });
+
+  it("S-M2-05-subset blocks integration when the pending Story has no scenario mapping", async () => {
+    const calls: Array<{ cwd: string; args: string[] }> = [];
+    const git = { run: vi.fn(async (cwd: string, args: string[]) => {
+      calls.push({ cwd, args });
+      if (args.join(" ") === "branch --show-current") return cwd === "story" ? story.branch : "epic/E-1";
+      return "";
+    }) };
+    const verify = vi.fn(async (scenarioIds: readonly string[]) => ({ passed: true as const, scenarioIds }));
+    const flow = new EpicMergeFlow(git, verify, { storyWorktree: "story", integrationWorktree: "integration" });
+
+    await expect(flow.merge({
+      epicId: "E-1",
+      story: { ...story, scenarioIds: [] },
+      integratedStories: [],
+    })).resolves.toEqual({
+      kind: "verification_failed",
+      integrationBranch: "epic/E-1",
+      scenarioIds: [],
+      reason: "missing scenario mapping for Story S-M2-05-integration",
+    });
+    expect(verify).not.toHaveBeenCalled();
+    expect(calls.some(({ args }) => args[0] === "merge")).toBe(false);
+  });
 });
