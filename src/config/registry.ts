@@ -136,6 +136,13 @@ export const CONFIG_KEYS = {
     reload: "hot",
     description: "Provider order tried when one is circuit-broken.",
   }),
+  "retry.providerAutoRetries": def({
+    schema: z.number().int().min(0).max(10),
+    default: 0,
+    scope: "global",
+    reload: "hot",
+    description: "pi's own provider-level retry count. Must stay 0: hivemind owns the failover decision, and a retry inside pi re-runs part of a phase on a model the orchestrator did not choose. Startup refuses a non-zero value.",
+  }),
   "provider.failureThreshold": def({
     schema: positiveInt.max(20),
     default: 3,
