@@ -1,5 +1,5 @@
 import { readdir, readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Client } from "@libsql/client";
 
@@ -61,7 +61,11 @@ export async function migrate(client: Client): Promise<string[]> {
   return ran;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+export function isMainModule(metaUrl: string, argv1: string | undefined): boolean {
+  return argv1 !== undefined && fileURLToPath(metaUrl) === resolve(argv1);
+}
+
+if (isMainModule(import.meta.url, process.argv[1])) {
   const { createClient } = await import("@libsql/client");
   const url = process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db";
   const client = createClient({ url });

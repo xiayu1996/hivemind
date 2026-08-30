@@ -23,11 +23,14 @@ export const stories = sqliteTable("stories", {
   epicId: text("epic_id"),
   notionPageId: text("notion_page_id").notNull().unique(),
   title: text("title").notNull(),
+  requirement: text("requirement").notNull(),
   state: text("state").notNull(),
   phase: text("phase"),
   priority: integer("priority").notNull().default(2),
   repo: text("repo"),
   branch: text("branch"),
+  targetBranch: text("target_branch"),
+  mrUrl: text("mr_url"),
   capabilities: text("capabilities").notNull().default("[]"),
   dependsOn: text("depends_on").notNull().default("[]"),
   predictedFootprint: text("predicted_footprint").notNull().default("[]"),
@@ -36,9 +39,71 @@ export const stories = sqliteTable("stories", {
   phaseReentries: integer("phase_reentries").notNull().default(0),
   regressionReopens: integer("regression_reopens").notNull().default(0),
   stopReason: text("stop_reason"),
+  resumeState: text("resume_state"),
+  notionAiStatusShadow: text("notion_ai_status_shadow"),
+  humanWinsUntil: ms("human_wins_until"),
+  lastHumanActionAt: ms("last_human_action_at"),
   createdAt: ms("created_at").notNull(),
   updatedAt: ms("updated_at").notNull(),
 }, (t) => [index("idx_stories_state").on(t.state), index("idx_stories_epic").on(t.epicId)]);
+
+export const phaseRuns = sqliteTable("phase_runs", {
+  runId: text("run_id").primaryKey(),
+  cardId: text("card_id").notNull(),
+  phase: text("phase").notNull(),
+  round: integer("round").notNull(),
+  sessionId: text("session_id"),
+  promptSha256: text("prompt_sha256").notNull(),
+  status: text("status").notNull(),
+  failure: text("failure"),
+  startedAt: ms("started_at").notNull(),
+  endedAt: ms("ended_at"),
+}, (t) => [
+  uniqueIndex("phase_runs_card_phase_round_unique").on(t.cardId, t.phase, t.round),
+  index("idx_phase_runs_card").on(t.cardId, t.startedAt),
+]);
+
+export const phaseArtifacts = sqliteTable("phase_artifacts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  runId: text("run_id").notNull(),
+  cardId: text("card_id").notNull(),
+  phase: text("phase").notNull(),
+  round: integer("round").notNull(),
+  kind: text("kind").notNull(),
+  body: text("body").notNull(),
+  createdAt: ms("created_at").notNull(),
+}, (t) => [
+  uniqueIndex("phase_artifacts_run_kind_unique").on(t.runId, t.kind),
+  index("idx_phase_artifacts_card").on(t.cardId, t.phase, t.round),
+]);
+
+export const storySpecs = sqliteTable("story_specs", {
+  specId: text("spec_id").primaryKey(),
+  storyId: text("story_id").notNull(),
+  seq: integer("seq").notNull(),
+  text: text("text").notNull(),
+  status: text("status").notNull(),
+  notionBlockId: text("notion_block_id").unique(),
+}, (t) => [
+  uniqueIndex("story_specs_story_seq_unique").on(t.storyId, t.seq),
+  index("idx_story_specs_story").on(t.storyId, t.seq),
+]);
+
+export const notionSections = sqliteTable("notion_sections", {
+  storyId: text("story_id").notNull(),
+  section: text("section").notNull(),
+  anchorBlockId: text("anchor_block_id").notNull().unique(),
+  contentBlockId: text("content_block_id"),
+}, (t) => [uniqueIndex("notion_sections_story_section_unique").on(t.storyId, t.section)]);
+
+export const notionVerificationRounds = sqliteTable("notion_verification_rounds", {
+  storyId: text("story_id").notNull(),
+  round: integer("round").notNull(),
+  toggleBlockId: text("toggle_block_id").notNull().unique(),
+  summary: text("summary").notNull(),
+  archivedPageId: text("archived_page_id"),
+  createdAt: ms("created_at").notNull(),
+}, (t) => [uniqueIndex("notion_verification_story_round_unique").on(t.storyId, t.round)]);
 
 export const leases = sqliteTable("leases", {
   cardId: text("card_id").primaryKey(),
@@ -68,14 +133,18 @@ export const notionOutbox = sqliteTable("notion_outbox", {
   cardId: text("card_id"),
   priority: integer("priority").notNull().default(2),
   operation: text("operation").notNull(),
+  target: text("target").notNull(),
   payload: text("payload").notNull(),
-  payloadHash: text("payload_hash").notNull().unique(),
+  payloadHash: text("payload_hash").notNull(),
   state: text("state").notNull().default("pending"),
   attempts: integer("attempts").notNull().default(0),
   lastError: text("last_error"),
   createdAt: ms("created_at").notNull(),
   sentAt: ms("sent_at"),
-}, (t) => [index("idx_outbox_pending").on(t.state, t.priority, t.id)]);
+}, (t) => [
+  uniqueIndex("notion_outbox_target_hash_unique").on(t.target, t.payloadHash),
+  index("idx_outbox_pending").on(t.state, t.priority, t.id),
+]);
 
 export const costEntries = sqliteTable("cost_entries", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -83,10 +152,12 @@ export const costEntries = sqliteTable("cost_entries", {
   cardId: text("card_id"),
   phase: text("phase"),
   purpose: text("purpose"),
+  tier: text("tier"),
   provider: text("provider").notNull(),
-  model: text("model").notNull(),
+  modelId: text("model_id").notNull(),
+  hostId: text("host_id"),
   promptVersion: text("prompt_version"),
-  inputTokens: integer("input_tokens").notNull().default(0),
+  uncachedInputTokens: integer("uncached_input_tokens").notNull().default(0),
   outputTokens: integer("output_tokens").notNull().default(0),
   cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
   cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
@@ -139,6 +210,7 @@ export const humanFeedback = sqliteTable("human_feedback", {
   round: integer("round"),
   channel: text("channel").notNull(),
   body: text("body").notNull(),
+  appliedAt: ms("applied_at"),
   createdAt: ms("created_at").notNull(),
 }, (t) => [index("idx_feedback_channel").on(t.channel, t.createdAt)]);
 
@@ -151,11 +223,26 @@ export const verifyRecords = sqliteTable("verify_records", {
   verdict: text("verdict").notNull(),
   failedScenarios: text("failed_scenarios").notNull().default("[]"),
   evidenceDir: text("evidence_dir"),
+  screenshots: text("screenshots").notNull().default("[]"),
   createdAt: ms("created_at").notNull(),
 }, (t) => [
   uniqueIndex("verify_records_card_id_round_unique").on(t.cardId, t.round),
   index("idx_verify_card").on(t.cardId, t.round),
 ]);
+
+export const notionMediaDelivery = sqliteTable("notion_media_delivery", {
+  evidenceId: text("evidence_id").primaryKey(),
+  cardId: text("card_id").notNull().references(() => stories.id, { onDelete: "cascade" }),
+  round: integer("round").notNull(),
+  scenarioId: text("scenario_id").notNull(),
+  localPath: text("local_path").notNull(),
+  targetBlockId: text("target_block_id").notNull(),
+  status: text("status").notNull().default("pending"),
+  uploadId: text("upload_id"),
+  failure: text("failure"),
+  createdAt: ms("created_at").notNull(),
+  updatedAt: ms("updated_at").notNull(),
+}, (t) => [index("idx_notion_media_pending").on(t.status, t.createdAt)]);
 
 export const schemaMigrations = sqliteTable("schema_migrations", {
   name: text("name").primaryKey(),

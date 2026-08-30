@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_FENCED_PATTERNS } from "./danger-rules.js";
-import { compileFencedPatterns, type GuardPolicy } from "./policy.js";
+import { compileBannedBashPatterns, compileFencedPatterns, type GuardPolicy } from "./policy.js";
 import { decideToolCall, type ToolCallEvent } from "./tool-decision.js";
 
 const policy: GuardPolicy = {
@@ -11,6 +11,7 @@ const policy: GuardPolicy = {
   extraWriteRoots: ["/ev/card-12"],
   disallowedTools: [],
   fencedPatterns: [],
+  bannedBash: [],
   auditPath: "/audit/tool-audit.jsonl",
 };
 
@@ -49,6 +50,38 @@ describe("bash", () => {
   it("blocks a bash call with no command string instead of assuming it is safe", () => {
     expect(decideToolCall(call("bash", {}), policy, fenced).block).toBe(true);
     expect(decideToolCall(call("bash", null), policy, fenced).block).toBe(true);
+  });
+});
+
+describe("read-only bash", () => {
+  const readOnlyPolicy = {
+    ...policy,
+    phase: "VERIFY",
+    bannedBash: [
+      "(?:^|[^>])(?:>>|>)(?![>&])\\s*\\S+",
+      "\\bsed\\s+[^\\n]*?-i(?:[^\\s]*)?(?:\\s|$)",
+      "(?:^|[|;]\\s*)tee(?:\\s|$)",
+      "\\bgit\\s+commit\\b",
+    ],
+  };
+  const patterns = compileBannedBashPatterns(readOnlyPolicy.bannedBash);
+
+  for (const command of [
+    "printf x > src/a.ts",
+    "sed -i 's/a/b/' src/a.ts",
+    "printf x | tee src/a.ts",
+    "git commit -am green",
+  ]) {
+    it(`blocks ${command}`, () => {
+      const decision = decideToolCall(call("bash", { command }), readOnlyPolicy, fenced, patterns);
+      expect(decision).toMatchObject({ block: true, reason: "shell write is forbidden in VERIFY" });
+    });
+  }
+
+  it("still permits verification commands", () => {
+    for (const command of ["npm test", "git diff --check", "printf x 2>&1"]) {
+      expect(decideToolCall(call("bash", { command }), readOnlyPolicy, fenced, patterns).block).toBe(false);
+    }
   });
 });
 

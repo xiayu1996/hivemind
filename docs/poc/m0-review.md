@@ -2,7 +2,7 @@
 
 > 评审日期 2026-08-27 · 执行环境：macOS 笔记本 · pi 0.84.3 pin
 > 总体结论：**架构无致命证伪，可进 M1**；产出 6 项设计修订、2 项新增高影响约束。
-> **2026-08-27 补充**：Ryan 完成 Codex 授权后，C1/C3/C4 与 M0-07 已活体跑通，14/16 结案。
+> **2026-08-29 补充**：PoC-1 已在目标 Windows 10/10 跑通，15/16 结案；仅余 Mac mini C5。
 
 ## 逐项结论
 
@@ -13,7 +13,7 @@
 | M0-03 | PoC-2a Context 往返 | **PASS** | canonical diff 为空，重载后按序续跑 |
 | M0-04 | PoC-2b 注入/abort/resume | **PASS** | steer 投递、abort 后进程可复用、跨进程 resume 全通 |
 | M0-05 | PoC-5 错误目录 | **PASS** | 7 类样本入 fixtures，单一提取契约 + 优先级分类规则 |
-| M0-06 | Windows 冒烟 | **未执行** | 物理不可达（本机非目标节点、未组网） |
+| M0-06 | Windows 冒烟 | **PASS** | pi 0.84.3 + Git Bash：10/10 握手、工具调用、framing 均通过 |
 | M0-07 | prompt A/B | **PASS（n=1）** | 三臂实测：基线层带来证据纪律与提问纪律且更便宜；append 维持默认，replace 待多试次 |
 | M0-08 | R1 评论 resolve | **原方案被证伪** | REST 永久取不回已 resolve 评论；协议已修订 |
 | M0-09 | R2 @mention 推送 | **待 Ryan 确认** | 已发出测试 @；且需 bot 身份复测（见下） |
@@ -63,5 +63,4 @@
 ## 进入 M1 的前置
 
 - 阻塞 M1 的只有 **provider 凭据**（GLM/Grok key 或 Codex 登录）——没有它无法跑真实卡。
-- Windows/Mac mini 相关项（M0-06/C5）不阻塞 M1（M1 是 Linux 单机闭环），
-  顺延到 M3 组网后与 M3-08 一并执行。
+- Windows M0-06 已补测通过；Mac mini C5 不阻塞 M1，顺延到 M3 与 M3-08 一并执行。

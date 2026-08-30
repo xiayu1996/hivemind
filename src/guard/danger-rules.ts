@@ -122,8 +122,12 @@ export function checkFilePath(
   if (fencedPatterns.some((pattern) => pattern.test(candidate))) {
     return { deny: true, reason: "fenced file" };
   }
-  const abs = resolve(worktreePath, filePath);
-  if (isWithinRoot(abs, worktreePath)) return { deny: false };
+  // Resolve both sides with the host path semantics. On Windows a POSIX-looking
+  // test/worktree root such as /wt/card becomes D:/wt/card; comparing the
+  // resolved candidate to the unresolved root would deny every relative write.
+  const worktreeRoot = resolve(worktreePath);
+  const abs = resolve(worktreeRoot, filePath);
+  if (isWithinRoot(abs, worktreeRoot)) return { deny: false };
   for (const root of extraWriteRoots) {
     if (isWithinRoot(abs, resolve(root))) return { deny: false };
   }

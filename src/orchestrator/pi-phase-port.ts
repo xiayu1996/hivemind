@@ -1,0 +1,192 @@
+import { mkdir, readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { z } from "zod";
+import {
+  POLICY_ENV_VAR,
+  assembleGuardPolicy,
+  serializeGuardPolicy,
+} from "../guard/policy.js";
+import { verifyCompletion, type CompletionJudge } from "../pipeline/completion-verifier.js";
+import { CANONICAL_CAPTURE_ENV } from "../observability/capture-contract.js";
+import { loadPromptLayers } from "../pipeline/prompt-loader.js";
+import { lastAssistantText } from "../runner/assistant-text.js";
+import { loadExplicitContextBundle, type ExplicitContextFile } from "../runner/context-files.js";
+import { promptWithContinueRetry } from "../runner/continue-retry.js";
+import type { ResolvedModel } from "../runner/model-resolver.js";
+import { RpcPiRunner, type RpcRunnerConfig } from "../runner/rpc-runner.js";
+import type { PiRunner, PromptResult } from "../runner/types.js";
+import type {
+  ManagedPhaseInput,
+  ManagedPhaseResult,
+  StoryPhasePort,
+} from "./story-worker.js";
+import type { StoryPhase } from "./story-execution-store.js";
+
+const designResult = z.object({
+  design_summary: z.string().trim().min(1),
+  dod_yaml: z.string().trim().min(1),
+}).strict();
+const codeResult = z.object({ implementation: z.string().trim().min(1) }).strict();
+const mergeResult = z.object({ delivery_report: z.string().trim().min(1) }).strict();
+
+export interface PhaseTelemetryInput {
+  runId: string;
+  cardId: string;
+  phase: StoryPhase;
+  messages: unknown[];
+  result: PromptResult;
+  providerPayloads: unknown[];
+}
+
+export interface PiStoryPhasePortOptions {
+  binary: string;
+  model: ResolvedModel;
+  worktreePath: string;
+  promptRoot: string;
+  sessionRoot: string;
+  evidencePath: string;
+  auditPath: string;
+  guardExtension: string;
+  canonicalCaptureExtension: string;
+  completionJudge: CompletionJudge;
+  contextFiles?: ExplicitContextFile[];
+  extensions?: string[];
+  env?: Record<string, string>;
+  maxContinueRetries?: number;
+  createRunner?: (config: RpcRunnerConfig) => PiRunner;
+  recordTelemetry?: (input: PhaseTelemetryInput) => Promise<void>;
+  readProviderPayloads?: (path: string) => Promise<unknown[]>;
+}
+
+function parseResult(input: ManagedPhaseInput, raw: string): ManagedPhaseResult["artifacts"] {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch (cause) {
+    throw new Error(`${input.phase} returned invalid JSON: ${(cause as Error).message}`, { cause });
+  }
+  switch (input.phase) {
+    case "DESIGN": {
+      const parsed = designResult.parse(value);
+      return [
+        { kind: "design-summary", body: parsed.design_summary },
+        { kind: "dod", body: parsed.dod_yaml },
+      ];
+    }
+    case "CODE":
+    case "REGRESSION_FIX":
+      return [{ kind: "implementation", body: codeResult.parse(value).implementation }];
+    case "MERGE":
+      return [{ kind: "delivery-report", body: mergeResult.parse(value).delivery_report }];
+  }
+}
+
+function sessionId(state: Record<string, unknown>): string {
+  const value = state.sessionFile ?? state.sessionId;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error("phase runner did not expose a session identifier");
+  }
+  return value;
+}
+
+function toolsFor(phase: ManagedPhaseInput["phase"]): string[] {
+  return phase === "CODE" || phase === "REGRESSION_FIX"
+    ? ["read", "bash", "edit", "write"]
+    : ["read", "bash"];
+}
+
+async function readProviderPayloads(path: string): Promise<unknown[]> {
+  const text = await readFile(path, "utf8");
+  return text.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as unknown);
+}
+
+/** Real pi-backed phase port with guard injection, strict output parsing and completion judgment. */
+export class PiStoryPhasePort implements StoryPhasePort {
+  private readonly createRunner: (config: RpcRunnerConfig) => PiRunner;
+
+  constructor(private readonly options: PiStoryPhasePortOptions) {
+    this.createRunner = options.createRunner ?? ((config) => new RpcPiRunner(config));
+  }
+
+  async run(input: ManagedPhaseInput): Promise<ManagedPhaseResult> {
+    const [layers, context] = await Promise.all([
+      loadPromptLayers(this.options.promptRoot, input.phase),
+      loadExplicitContextBundle(this.options.contextFiles ?? []),
+    ]);
+    const systemPrompt = `${layers.combined}${context.text}`;
+    const tools = toolsFor(input.phase);
+    const sessionDir = join(this.options.sessionRoot, input.runId);
+    const runEvidencePath = join(this.options.evidencePath, input.runId);
+    const capturePath = join(runEvidencePath, "provider-requests.jsonl");
+    await Promise.all([
+      mkdir(sessionDir, { recursive: true }),
+      mkdir(runEvidencePath, { recursive: true }),
+      mkdir(dirname(this.options.auditPath), { recursive: true }),
+    ]);
+    const policy = assembleGuardPolicy({
+      phase: input.phase,
+      cardId: input.context.cardId,
+      runId: input.runId,
+      worktreePath: this.options.worktreePath,
+      evidencePath: this.options.evidencePath,
+      auditPath: this.options.auditPath,
+    });
+    const runner = this.createRunner({
+      binary: this.options.binary,
+      provider: this.options.model.provider,
+      model: this.options.model.id,
+      cwd: this.options.worktreePath,
+      sessionDir,
+      tools,
+      extensions: [
+        ...(this.options.extensions ?? []),
+        this.options.guardExtension,
+        this.options.canonicalCaptureExtension,
+      ],
+      contextFiles: "explicit",
+      systemPrompt: { mode: "replace", text: systemPrompt },
+      env: {
+        ...this.options.env,
+        [POLICY_ENV_VAR]: serializeGuardPolicy(policy),
+        [CANONICAL_CAPTURE_ENV]: capturePath,
+      },
+    });
+
+    try {
+      await runner.start();
+      await runner.setAutoRetry(false);
+      const phaseSessionId = sessionId(await runner.getState());
+      const result = await promptWithContinueRetry(runner, input.prompt, {
+        maxContinueRetries: this.options.maxContinueRetries ?? 8,
+      });
+      if (result.failure) throw new Error(result.failure.errorMessage);
+      const messages = await runner.getMessages();
+      const providerPayloads = await (this.options.readProviderPayloads ?? readProviderPayloads)(capturePath);
+      if (providerPayloads.length === 0) throw new Error("phase provider request was not captured");
+      const raw = lastAssistantText(messages);
+      const artifacts = parseResult(input, raw);
+      const completion = await verifyCompletion(this.options.completionJudge, {
+        phase: input.phase,
+        claimedArtifact: raw,
+        sideEffects: {
+          settled: result.settled,
+          sessionId: phaseSessionId,
+          eventCount: result.events.length,
+          usage: result.usage,
+        },
+      });
+      if (!completion.done) throw new Error(completion.reason);
+      await this.options.recordTelemetry?.({
+        runId: input.runId,
+        cardId: input.context.cardId,
+        phase: input.phase,
+        messages,
+        result,
+        providerPayloads,
+      });
+      return { sessionId: phaseSessionId, artifacts };
+    } finally {
+      await runner.stop().catch(() => undefined);
+    }
+  }
+}

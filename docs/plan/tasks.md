@@ -28,9 +28,9 @@
 
 目标：在写任何正式代码前，把设计中最贵的假设逐个证实或证伪，每个 PoC 都预先写明 fallback。
 
-> **执行状态（2026-08-27）**：**14/16 已结案**，评审见 `docs/poc/m0-review.md`。
+> **执行状态（2026-08-29）**：**15/16 已结案**，评审见 `docs/poc/m0-review.md`。
 > Ryan 完成 Codex 授权后，凭据类阻塞全部解除（C1/C3/C4 活体 + prompt 三臂对照均已跑通）。
-> 剩余 2 项：M0-06 与 M0-15 因目标机（Windows / Mac mini）不可达，顺延至 M3 组网后执行。
+> M0-06 已在目标 Windows 完成 10/10；仅余 M0-15，待 Mac mini 接入后执行。
 > M0-01（账号策略）与 M0-09（@mention 推送确认）待 Ryan，但均不阻塞 M1。
 > 状态列：✅ 通过 · ⚠️ 部分（机制已证，活体待跑）· ⛔ 阻塞
 
@@ -41,7 +41,7 @@
 | M0-03 | ✅ PoC-2a：RPC Context 导出/载入 | `poc/rpc-context/` 脚本 + `docs/poc/poc-2-context.md` | 导出 Context JSON → 新进程载入 → 再导出，两份 JSON 语义 diff 为空；载入后续跑一轮回答与原上下文连贯 | M0-02 |
 | M0-04 | ✅ PoC-2b：mid-run 注入 / abort / resume 能力 | 同上报告附录 | run 中 abort 后同 session 注入消息续跑成功；不支持则报告记录降级路径（extension turn 边界序列化 / json 模式 + phase 边界注入）并回写 02 文档 | M0-03 |
 | M0-05 | ✅ PoC-5：RPC 错误事件目录——人为制造 AUTH（坏 key）/ RATE_LIMIT / TRANSPORT（断网）/ INVALID_REQUEST 四类错误并采集结构化事件 | `fixtures/rpc-errors/*.json` + `docs/poc/poc-5-error-catalog.md` 错误模式表初稿 | 每类 ≥1 个真实样本；草拟的分类规则能对全部样本唯一分类 | M0-02 |
-| M0-06 | ⛔ PoC-1：Windows Git Bash 下 pi RPC 冒烟 ×10（含工具调用任务） | `docs/poc/poc-1-windows.md` | 10/10 无 CRLF 分帧错误、无挂死；不过则报告中拍板降级为纯 Playwright 探针执行器 | M0-02 |
+| M0-06 | ✅ PoC-1：Windows Git Bash 下 pi RPC 冒烟 ×10（含工具调用任务） | `scripts/smoke-windows-rpc.ts` + `docs/poc/poc-1-windows.md` | 10/10 无 CRLF 分帧错误、无挂死；不过则报告中拍板降级为纯 Playwright 探针执行器 | M0-02 |
 | M0-07 | ✅ PoC-4：pi 默认 prompt vs 自建基线 A/B——3 张真实小卡各跑两条轨迹 | `docs/poc/poc-4-prompt-ab.md`（评分表 + 结论） | 每卡两条完整轨迹归档；盲评人（Ryan）不知分组；结论明确采用哪条基线 | M0-02 |
 | M0-08 | ✅ R1：Notion 评论 resolve 行为实测——`comment.updated` webhook 是否覆盖 resolve、list comments 对已 resolve 评论的可见性 | `docs/poc/notion-behavior.md` | 得出明确结论并回写 01 文档（是否需要"agent 回评确认后人再 resolve"协议约定） | — |
 | M0-09 | ⛔ R2：API 创建评论中 @mention 是否触发移动端推送 | 同上文档补充 | Ryan 手机实收推送截图归档；不触发则 needs_input 旁路告警升级为必选路径并回写 01 文档 | — |
@@ -58,6 +58,9 @@
 ## M1 单机闭环
 
 目标：Linux 单机上 orchestrator + worker + guard + Notion 双 DB，跑通一张真实卡全流水线；控制台骨架同期上线（调 PoC/prompt 需要这个读面）。
+
+> **执行状态（2026-08-30，Windows）**：29/37 已完成全部本地判据，M1-17..22/M1-35 的真实外部服务判据待一次性凭据；M1-37 已具备生产入口与本地真实进程全链路，真实 Notion 卡验收待凭据。
+> 状态列：✅ 输出物与本机可执行判据均通过 · ⚠️ 实现/离线验证完成但外部活体判据待跑 · ⛔ 出口判据被外部前置阻塞。
 
 ### M1-A 工程地基
 
@@ -83,68 +86,68 @@
 |---|---|---|---|---|
 | M1-09 | ✅ danger-rules 移植 + 两处修订：Windows 路径 normalize 后统一 posix 分隔符再匹配；gh 红线增补（gh pr merge / gh workflow run） | `src/guard/danger-rules.ts` | busybee 原单测全部迁移通过 + 新增 Windows 反斜杠用例 + gh 红线拦截用例 | M1-01 |
 | M1-10 | ✅ hive-guard extension：tool_call hook 执行 block、`PI_GUARD_POLICY` env 注入 per-phase 策略、deny 带 reason、本地 tool-audit.jsonl 副通道 | `extensions/hive-guard.ts` | e2e：诱导 agent 执行 rm -rf / push main，被 block 且 EventLog 与 tool-audit.jsonl 两通道均有记录 | M1-05, M1-09 |
-| M1-11 | per-phase 策略组装 + VERIFY 物理禁写：disallowedTools 全列写类工具 + bash 写模式启发式（重定向/sed -i/tee）+ tree-pin 指纹前后比对（失配 → quarantine + verdict 作废） | `src/guard/policy.ts` | VERIFY 会话内尝试 5 种写路径（写工具/重定向/sed -i/tee/git commit）全部被拦或被 tree-pin 侦测 | M1-10 |
-| M1-12 | 日志脱敏：record waterfall 导出脱敏（规范日志永不改写）+ JWT 过滤 `eyJ[A-Za-z0-9_-]{20,}` | `src/observability/redact.ts` | 单测：含 access/refresh token 样本导出后无泄漏；全 evidence/导出目录 grep 无 eyJ 长串 | M1-01 |
+| M1-11 | ✅ per-phase 策略组装 + VERIFY 物理禁写：disallowedTools 全列写类工具 + bash 写模式启发式（重定向/sed -i/tee）+ tree-pin 指纹前后比对（失配 → quarantine + verdict 作废） | `src/guard/policy.ts` + `src/guard/tree-pin.ts` | VERIFY 会话内尝试 5 种写路径（写工具/重定向/sed -i/tee/git commit）全部被拦或被 tree-pin 侦测 | M1-10 |
+| M1-12 | ✅ 日志脱敏：record waterfall 导出脱敏（规范日志永不改写）+ JWT 过滤 `eyJ[A-Za-z0-9_-]{20,}` | `src/observability/redact.ts` | 单测：含 access/refresh token 样本导出后无泄漏；全 evidence/导出目录 grep 无 eyJ 长串 | M1-01 |
 
 ### M1-D prompt 资产
 
 | ID | 任务 | 输出物 | 验证方式 | 前置 |
 |---|---|---|---|---|
-| M1-13 | 两层 system prompt：基线层（工具纪律/验证优先于声称/证据规范/不猜就问）+ per-phase 层，独立文件；吸收 M0-07 A/B 结论 | `prompts/` 全套 + 装载器 | 装载器单测（层叠顺序/缺文件报错）；prompt 内无硬编码验证命令（评审 checklist） | M0-07 |
-| M1-14 | worktree 上层全局 AGENTS.md 层叠布局（`~/hivemind-work/worktrees/`） | 布局约定 + 全局 AGENTS.md | 抽查 pi run 轨迹确认模型可复述 AGENTS.md 关键约束 | M1-13 |
+| M1-13 | ✅ 两层 system prompt：基线层（工具纪律/验证优先于声称/证据规范/不猜就问）+ per-phase 层，独立文件；吸收 M0-07 A/B 结论 | `prompts/` 全套 + 装载器 | 装载器单测（层叠顺序/缺文件报错）；prompt 内无硬编码验证命令（评审 checklist） | M0-07 |
+| M1-14 | ✅ 显式 context 文件装载：默认 `--no-context-files`，只注入获准的全局/目标仓规则，并记录路径、稳定标签与 SHA-256 清单 | `src/runner/context-files.ts` + 隔离 smoke | 真实 pi provider request 证明祖先 AGENTS.md 被排除、获准文件被注入；生效清单可审计 | M1-13 |
 
 ### M1-E Notion 集成
 
 | ID | 任务 | 输出物 | 验证方式 | 前置 |
 |---|---|---|---|---|
-| M1-15 | NotionGateway：全局令牌桶 2.5 rps + 优先级队列（人机交互写 > 状态属性 > 报告 blocks > 投影）+ 5s 写合并 + 同步指纹防抖 + 429 按 Retry-After 退避 | `src/notion/gateway.ts` | 单测：桶速率/优先级插队/写合并/指纹防抖；压测 100 并发写请求无 429 雪崩 | M1-01 |
-| M1-16 | outbox 事务：先落库后发请求 + payload_hash 判重回放 | `src/notion/outbox.ts` | 单测 + 故障注入：发送中 kill 进程，重启回放后 Notion 无重复块 | M1-02, M1-15 |
-| M1-17 | DB bootstrap：脚本创建 Stories/Epics 两 DB 全属性（select 方案）+ board view 人工 bootstrap 手册 | `scripts/notion-bootstrap.ts` + 手册 | 空 workspace 跑出两 DB 属性齐全；照手册操作后看板 7 列可拖 | M1-15 |
-| M1-18 | Story 页 builder：五锚定区段 + blockId 持久化 + 区段内 diff 原位更新 + 验证轮次 toggle 只追加（>8 轮归档子页） | `src/notion/blocks/` | 单测：diff 计划生成；e2e：同一页连续 3 轮更新，人工加在 Spec 行上的评论锚点不丢 | M1-16, M1-17 |
-| M1-19 | 评论水位 ingest：`comment_watermark`（created_time 水位 + 2min 回看 + comment_id 唯一去重） | `src/notion/comment-ingest.ts` | 单测：回看重叠窗口内重复评论只 ingest 一次；实测新评论秒级到库 | M1-02, M1-15 |
-| M1-20 | webhook 接收 + 轮询兜底：page.properties_updated / content_updated / comment.created + 活跃集 60s 轮询收敛 | `src/notion/sync.ts` | e2e：停掉 webhook 入口，系统仍在轮询周期内收敛全部变更 | M1-19 |
-| M1-21 | 意图解释器 v1：属性影子值比对判人工指令 → 拖列/评论基础语义（回答阻塞/继续开发/人工停靠/恢复）+ 120s human-wins window | `src/notion/intent-interpreter.ts` | 表驱动单测覆盖每种意图；e2e：拖列触发对应状态迁移且 120s 内系统不反向覆盖 | M1-19, M1-23 |
-| M1-22 | 图片管道：本地 evidence store → 异步 File Upload（≤20MB）→ 失败降级文字占位不阻塞 | `src/notion/media.ts` | e2e：截图出现在 Notion 页；注入上传失败走占位且主流程不受阻 | M1-16 |
+| M1-15 | ✅ NotionGateway：全局令牌桶 2.5 rps + 优先级队列（人机交互写 > 状态属性 > 报告 blocks > 投影）+ 5s 写合并 + 同步指纹防抖 + 429 按 Retry-After 退避 | `src/notion/gateway.ts` | 单测：桶速率/优先级插队/写合并/指纹防抖；压测 100 并发写请求无 429 雪崩 | M1-01 |
+| M1-16 | ✅ outbox 事务：先落库后发请求 + `(target, payload_hash)` 判重回放 + 发送后崩溃远端探针 | `src/notion/outbox.ts` | 单测 + 故障注入：远端已生效但本地未标 sent，重启探测后不重复发送 | M1-02, M1-15 |
+| M1-17 | ⚠️ DB bootstrap：脚本创建 Stories/Epics 两 DB 全属性（select 方案）+ board view 人工 bootstrap 手册 | `scripts/notion-bootstrap.ts` + 手册 | schema/调用契约单测通过；当前 Windows 无 `~/.hivemind/secrets.env`，空 workspace 活体待跑 | M1-15 |
+| M1-18 | ⚠️ Story 页 builder：五锚定区段 + blockId 持久化 + 区段内 diff 原位更新 + 验证轮次 toggle 只追加（>8 轮归档子页） | `src/notion/blocks/` + `story-page-delivery.ts` | 经 NotionGateway/outbox 的内存传输集成连续 9 轮通过：Spec blockId 稳定、前三轮只追加、第 9 轮仅归档最老轮；真实 Notion 页连续 3 轮待 M1-17 活体 | M1-16, M1-17 |
+| M1-19 | ⚠️ 评论水位 ingest：`comment_watermark`（created_time 水位 + 2min 回看 + comment_id 唯一去重） | `src/notion/comment-ingest.ts` | 重叠窗口、块锚点、bot 过滤、事务水位与 SDK 分页映射单测通过；真实评论秒级入库待凭据 | M1-02, M1-15 |
+| M1-20 | ⚠️ webhook 接收 + 轮询兜底：page.properties_updated / content_updated / comment.created + 活跃集 60s 轮询收敛 | `src/notion/sync.ts`、`src/notion/webhook-route.ts` | 官方事件 envelope 映射、原始字节 HMAC、HTTP 路由、去重与关闭 webhook 后轮询逻辑单测通过；真实 workspace 收敛待凭据 | M1-19 |
+| M1-21 | ⚠️ 意图解释器 v1：属性影子值比对判人工指令 → 拖列/评论基础语义（回答阻塞/继续开发/人工停靠/恢复）+ 120s human-wins window | `src/notion/intent-interpreter.ts` | 表驱动单测通过；真实拖列与 120s human-wins 活体待凭据 | M1-19, M1-23 |
+| M1-22 | ⚠️ 图片管道：本地 evidence store → 异步 File Upload（≤20MB）→ 失败降级文字占位不阻塞 | `src/notion/media.ts` | 大小/类型/异步降级与 SDK 单段上传/attach 契约通过；真实截图上传待凭据 | M1-16 |
 
 ### M1-F 流水线核心
 
 | ID | 任务 | 输出物 | 验证方式 | 前置 |
 |---|---|---|---|---|
-| M1-23 | Epic/Story 两层状态机（单机版）：迁移表 + 合法性校验 + HUMAN_PARKED 最高优先级 | `src/orchestrator/state-machine.ts` | 全迁移表单测；非法迁移抛错；PARKED 状态下任何系统迁移被拒 | M1-02 |
-| M1-24 | DoD 契约：YAML schema + 全局 scenario_id 规则（S-EPIC12-03）+ 五层测试矩阵声明 + L3 映射完整性扫描（测试标记 vs DoD diff） | `src/pipeline/dod.ts` | schema 单测；扫描单测：缺 scenario_id 标记 → VERIFY 直接 fail | M1-01 |
-| M1-25 | 收敛判据纯函数：`failed_scenarios(N) ⊊ failed_scenarios(N-1)` 严格真子集 + 持平/扩大/震荡分类 | `src/pipeline/convergence.ts` | 表驱动单测（空集/首轮/震荡序列/持平） | M1-01 |
-| M1-26 | verdict L3 代码校验：URL host 白名单、截图真实存在且 mtime 在本轮窗口、结果从轨迹提取非自报、红绿证据双通道挖掘（git 历史 + 轨迹；挖不到 → 盲审升级） | `src/pipeline/verdict.ts` | 伪造 verdict fixture（自报通过但轨迹无证据/截图 mtime 过期）全部被拒 | M1-24 |
-| M1-27 | completion verifier：每 phase 出口独立小脑单次调用判 done 真伪，fail-closed，否决理由注回同轮 | `src/pipeline/completion-verifier.ts` | 单测：verifier 异常 → 判未完成；e2e 一次真实 phase 出口走通 | M1-05 |
-| M1-28 | VERIFY 盲审执行器：独立 session（DB CHECK 强制）+ 只读+测试+浏览器工具面 | `src/verify/` | 用 CODE 的 session_id 落 VERIFY 结果被 DB 拒绝；盲审轨迹确认未读 CODE 会话内容 | M1-11, M1-26 |
+| M1-23 | ✅ Epic/Story 两层状态机（单机版）：迁移表 + 合法性校验 + HUMAN_PARKED 最高优先级 | `src/orchestrator/state-machine.ts` | 全迁移表单测；非法迁移抛错；PARKED 状态下任何系统迁移被拒 | M1-02 |
+| M1-24 | ✅ DoD 契约：YAML schema + 全局 scenario_id 规则（S-EPIC12-03）+ 五层测试矩阵声明 + L3 映射完整性扫描（测试标记 vs DoD diff） | `src/pipeline/dod.ts` | schema 单测；扫描单测：缺 scenario_id 标记 → VERIFY 直接 fail | M1-01 |
+| M1-25 | ✅ 收敛判据纯函数：`failed_scenarios(N) ⊊ failed_scenarios(N-1)` 严格真子集 + 持平/扩大/震荡分类 | `src/pipeline/convergence.ts` | 表驱动单测（空集/首轮/震荡序列/持平） | M1-01 |
+| M1-26 | ✅ verdict L3 代码校验：URL host 白名单、截图真实存在且 mtime 在本轮窗口、结果从轨迹提取非自报、红绿证据双通道挖掘（git 历史 + 轨迹；挖不到 → 盲审升级） | `src/pipeline/verdict.ts` | 伪造 verdict fixture（自报通过但轨迹无证据/截图 mtime 过期）全部被拒 | M1-24 |
+| M1-27 | ✅ completion verifier：每 phase 出口独立小脑单次调用判 done 真伪，fail-closed，否决理由注回同轮 | `src/pipeline/completion-verifier.ts` | fail-closed 单测 + `smoke-completion-verifier.ts` 真实 pi fresh session 通过 | M1-05 |
+| M1-28 | ✅ VERIFY 盲审执行器：独立 session（DB CHECK 强制）+ 只读+测试+浏览器工具面 | `src/verify/` | DB CHECK 触发用例 + `smoke-blind-verify.ts` 真实 pi fresh session/轨迹证据通过 | M1-11, M1-26 |
 
 ### M1-G VCS
 
 | ID | 任务 | 输出物 | 验证方式 | 前置 |
 |---|---|---|---|---|
-| M1-29 | worktree 子系统移植：tree-pin / quarantine / `~/hivemind-work` 布局 | `src/vcs/worktree.ts` | busybee 原单测迁移全过；R-5 checklist 声明 | M1-01 |
-| M1-30 | MR adapter：MRPort 接口，gh 优先实现、glab 第二适配 | `src/vcs/mr/` | 契约测试（dry-run）+ 真实创建一个 MR 成功 | M1-29 |
+| M1-29 | ✅ worktree 子系统移植：tree-pin / quarantine / `~/hivemind-work` 布局 | `src/vcs/worktree.ts` | Windows 真实 git worktree 单测通过；R-5 声明见 `docs/reviews/m1-worktree-r5.md` | M1-01 |
+| M1-30 | ✅ MR adapter：MRPort 接口，gh 优先实现、glab 第二适配 | `src/vcs/mr/` | gh/glab 契约 dry-run 通过；MRPort 实际创建 [GitHub PR #1](https://github.com/xiayu1996/hivemind/pull/1) | M1-29 |
 
 ### M1-H 可观测最小集
 
 | ID | 任务 | 输出物 | 验证方式 | 前置 |
 |---|---|---|---|---|
-| M1-31 | 规范日志：`run-events.jsonl` envelope `{type, seq, time, data, ignorable?}` + turn/step 数值坐标成对开闭 + Model-visible ⟺ logged（request/header 记全量 system prompt + tool schemas）+ `interrupted` 只由恢复设施补写 | `src/observability/canonical-log.ts` | 单测：未知事件 required-on-read 拒绝重建；一次真实 run 后由日志重建的模型请求与实际请求 diff 为空 | M1-05 |
-| M1-32 | 投影 registry + 首批 unit：tokenUsage（四桶）/ cost / stats（turns/steps/llmMs/toolMs/ttft）/ trace 树（busybee trace-html 复用）；缓存 `(runId, key, ver, seq, val)` 且日志先落盘 | `src/observability/projections/` | 投影纯函数单测；删缓存重 fold 结果与缓存一致（缓存只是快捷方式的证明） | M1-31 |
-| M1-33 | cost_entries 落账：消费 pi `usage.cost` → per run 写账本 | `src/observability/cost-ledger.ts` | 一次真实 run 后账本金额与 pi 自报一致 | M1-32 |
-| M1-34 | emit 上报边界：采集处非阻塞入队零 I/O + worker spool + `(runId, seq)` 收端去重（单机同进程，接口按跨机设计） | `src/observability/exporter.ts` | 故障注入：收端挂掉 agent 循环不受影响，恢复后补齐无重复 | M1-31 |
+| M1-31 | ✅ 规范日志：`run-events.jsonl` envelope `{type, seq, time, data, ignorable?}` + turn/step 数值坐标成对开闭 + Model-visible ⟺ logged（request/header 记全量 system prompt + tool schemas）+ `interrupted` 只由恢复设施补写 | `src/observability/canonical-log.ts` | required-on-read/坐标/恢复单测；真实 pi 请求经日志重建后 JSON 归一 diff 为空 | M1-05 |
+| M1-32 | ✅ 投影 registry + 首批 unit：tokenUsage（四桶）/ cost / stats（turns/steps/llmMs/toolMs/ttft）/ trace 树；缓存 `(runId, key, ver, seq, val)` 且日志先落盘 | `src/observability/projections/` | 纯函数/缓存 fail-soft 单测；无缓存重 fold 与缓存值一致 | M1-31 |
+| M1-33 | ✅ cost_entries 落账：消费 pi `usage.cost` → per run 写账本 | `src/observability/cost-ledger.ts` | `smoke-observability-console.ts` 真实 pi 自报与账本逐值一致 | M1-32 |
+| M1-34 | ✅ emit 上报边界：采集处非阻塞入队零 I/O + worker spool + `(runId, seq)` 收端去重（单机同进程，接口按跨机设计） | `src/observability/exporter.ts` | 收端故障/恢复/崩溃窗口故障注入通过，无重复 | M1-31 |
 
 ### M1-I 告警与控制台
 
 | ID | 任务 | 输出物 | 验证方式 | 前置 |
 |---|---|---|---|---|
-| M1-35 | 旁路告警通道：飞书 webhook / 邮件；needs_input 与 P0 级走此通道（Notion 故障时的唯一出口） | `src/alert/` | 触发一次真实推送到达 | M1-01 |
-| M1-36 | 控制台骨架：Fastify 挂 Vue3+Vite SPA（仅内网）+ 节点健康页 + 任务视图（EventLog 时间线 + trace HTML）+ 成本只读 + config 只读 + Bull Board 挂载 | `src/console/` + `console-ui/` | 内网浏览器四页均有真实数据；公网不可达；页面数据与 DB 抽查一致 | M1-32, M1-33 |
+| M1-35 | ⚠️ 旁路告警通道：飞书 webhook / 邮件；needs_input 与 P0 级走此通道（Notion 故障时的唯一出口） | `src/alert/` | 双通道契约/部分失败/脱敏单测通过，`smoke-alert.ts` 已就绪；无 webhook/SMTP 凭据，真实推送待跑 | M1-01 |
+| M1-36 | ✅ 控制台骨架：Fastify 挂 Vue3+Vite SPA（仅内网）+ 节点健康页 + 任务视图（EventLog 时间线 + trace HTML）+ 成本只读 + config 只读 + Bull Board 挂载 | `src/console/` + `console-ui/` | Windows loopback 实际数据启动；内置浏览器四页与只读 Bull Board 检查通过；公网通配绑定被拒 | M1-32, M1-33 |
 
 ### M1-J 验收
 
 | ID | 任务 | 输出物 | 验证方式 | 前置 |
 |---|---|---|---|---|
-| M1-37 | **M1 端到端验收**：一张真实卡从 Notion 建卡 → DESIGN → CODE⇄VERIFY → MERGE → MR 创建全程无人干预 | `docs/poc/m1-acceptance.md`（轨迹与截图索引） | ① 全程无人干预；② Notion 页面完整（Spec 状态/设计/验证 toggle/成本属性）；③ EventLog/trace/成本账本三面可查且一致；④ danger-rules 注入测试被 block 且双通道留痕 | M1-01..36 |
+| M1-37 | ⛔ **M1 端到端验收**：一张真实卡从 Notion 建卡 → DESIGN → CODE⇄VERIFY → MERGE → MR 创建全程无人干预 | `scripts/run-local-orchestrator.ts` + `docs/poc/m1-acceptance.md`（进行中） | 真实 pi.exe + 本地 provider + 独立盲审 + libsql + Git remote 的全链通过；生产入口已串起 Notion intake/worktree/worker/MR/outbox，真实卡与页面四判据待一次性凭据 | M1-01..36 |
 
 ---
 

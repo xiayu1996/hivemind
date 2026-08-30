@@ -21,8 +21,76 @@ export interface GuardPolicy {
   disallowedTools: string[];
   /** Extra fenced path patterns as regex sources, merged with the defaults. */
   fencedPatterns: string[];
+  /** Phase-specific shell write patterns, applied after unconditional red lines. */
+  bannedBash: string[];
   /** Absolute path of the local append-only tool audit. */
   auditPath: string;
+}
+
+export type GuardPhase =
+  | "DESIGN"
+  | "DECOMPOSE"
+  | "CODE"
+  | "REGRESSION_FIX"
+  | "VERIFY"
+  | "E2E"
+  | "MERGE"
+  | "DISTILL"
+  | "REPORT";
+
+export interface GuardPolicyInput {
+  phase: GuardPhase;
+  cardId: string;
+  runId: string;
+  worktreePath: string;
+  evidencePath?: string;
+  auditPath: string;
+  fencedPatterns?: string[];
+}
+
+const READ_ONLY_PHASES = new Set<GuardPhase>([
+  "DESIGN",
+  "DECOMPOSE",
+  "VERIFY",
+  "E2E",
+  "MERGE",
+  "DISTILL",
+  "REPORT",
+]);
+
+/** Built-in write-capable tools that must not exist in a read-only phase. */
+export const WRITE_TOOLS = ["apply_patch", "edit", "notebook_edit", "powershell", "write"] as const;
+
+/**
+ * Bash writes that cannot be removed with a tool allowlist because VERIFY still
+ * needs a shell to build and test. Tree-pin remains the backstop for forms this
+ * deliberately small heuristic set cannot enumerate.
+ */
+export const READ_ONLY_BASH_PATTERNS = [
+  "(?:^|[^>])(?:>>|>)(?![>&])\\s*\\S+",
+  "\\bsed\\s+[^\\n]*?-i(?:[^\\s]*)?(?:\\s|$)",
+  "(?:^|[|;]\\s*)tee(?:\\s|$)",
+  "\\bgit\\s+commit\\b",
+] as const;
+
+function sortedUnique(values: readonly string[]): string[] {
+  return [...new Set(values)].toSorted((a, b) => a.localeCompare(b, "en"));
+}
+
+/** Creates the complete, deterministic policy injected before a phase starts. */
+export function assembleGuardPolicy(input: GuardPolicyInput): GuardPolicy {
+  const readOnly = READ_ONLY_PHASES.has(input.phase);
+  return {
+    phase: input.phase,
+    cardId: input.cardId,
+    runId: input.runId,
+    worktreePath: input.worktreePath,
+    extraWriteRoots: input.evidencePath ? [input.evidencePath] : [],
+    disallowedTools: readOnly ? [...WRITE_TOOLS] : [],
+    fencedPatterns: sortedUnique(input.fencedPatterns ?? []),
+    bannedBash: readOnly ? [...READ_ONLY_BASH_PATTERNS] : [],
+    auditPath: input.auditPath,
+  };
 }
 
 export class GuardPolicyError extends Error {
@@ -75,6 +143,7 @@ export function parseGuardPolicy(raw: string): GuardPolicy {
     extraWriteRoots: requireStringArray(source, "extraWriteRoots"),
     disallowedTools: requireStringArray(source, "disallowedTools"),
     fencedPatterns: requireStringArray(source, "fencedPatterns"),
+    bannedBash: requireStringArray(source, "bannedBash"),
   };
 }
 
@@ -94,6 +163,16 @@ export function compileFencedPatterns(sources: string[]): RegExp[] {
       return new RegExp(source, "i");
     } catch (cause) {
       throw new GuardPolicyError(`invalid fenced pattern ${source}: ${(cause as Error).message}`);
+    }
+  });
+}
+
+export function compileBannedBashPatterns(sources: string[]): RegExp[] {
+  return sources.map((source) => {
+    try {
+      return new RegExp(source, "i");
+    } catch (cause) {
+      throw new GuardPolicyError(`invalid bash pattern ${source}: ${(cause as Error).message}`);
     }
   });
 }

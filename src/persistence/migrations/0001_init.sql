@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS stories (
   epic_id           TEXT REFERENCES epics(id) ON DELETE CASCADE,
   notion_page_id    TEXT NOT NULL UNIQUE,
   title             TEXT NOT NULL,
+  requirement       TEXT NOT NULL,
   state             TEXT NOT NULL CHECK (state IN (
                       'QUEUED','DESIGN','CODE','VERIFY','MERGE','DELIVERED',
                       'REGRESSION_FIX','NEEDS_INPUT','HUMAN_PARKED','FAILED')),
@@ -32,6 +33,8 @@ CREATE TABLE IF NOT EXISTS stories (
   priority          INTEGER NOT NULL DEFAULT 2,
   repo              TEXT,
   branch            TEXT,
+  target_branch     TEXT,
+  mr_url             TEXT,
   capabilities      TEXT NOT NULL DEFAULT '[]',
   depends_on        TEXT NOT NULL DEFAULT '[]',
   predicted_footprint TEXT NOT NULL DEFAULT '[]',
@@ -41,11 +44,79 @@ CREATE TABLE IF NOT EXISTS stories (
   regression_reopens INTEGER NOT NULL DEFAULT 0,
   stop_reason       TEXT CHECK (stop_reason IS NULL OR stop_reason IN (
                       'blocking_question','verify_loop_exceeded','retry_limit_exceeded')),
+  resume_state      TEXT CHECK (resume_state IS NULL OR resume_state IN (
+                      'QUEUED','DESIGN','CODE','VERIFY','MERGE','REGRESSION_FIX','NEEDS_INPUT')),
+  notion_ai_status_shadow TEXT,
+  human_wins_until  INTEGER,
+  last_human_action_at INTEGER,
   created_at        INTEGER NOT NULL,
   updated_at        INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_stories_state ON stories(state);
 CREATE INDEX IF NOT EXISTS idx_stories_epic ON stories(epic_id);
+
+CREATE TABLE IF NOT EXISTS phase_runs (
+  run_id            TEXT PRIMARY KEY,
+  card_id           TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  phase              TEXT NOT NULL CHECK (phase IN (
+                     'DESIGN','CODE','VERIFY','MERGE','REGRESSION_FIX')),
+  round              INTEGER NOT NULL CHECK (round > 0),
+  session_id         TEXT,
+  prompt_sha256      TEXT NOT NULL CHECK (length(prompt_sha256) = 64),
+  status             TEXT NOT NULL CHECK (status IN ('running','completed','failed')),
+  failure            TEXT,
+  started_at         INTEGER NOT NULL,
+  ended_at           INTEGER,
+  UNIQUE (card_id, phase, round),
+  CHECK ((status = 'running' AND ended_at IS NULL) OR
+         (status <> 'running' AND ended_at IS NOT NULL)),
+  CHECK (status = 'failed' OR failure IS NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_phase_runs_card ON phase_runs(card_id, started_at);
+
+CREATE TABLE IF NOT EXISTS phase_artifacts (
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id             TEXT NOT NULL REFERENCES phase_runs(run_id) ON DELETE CASCADE,
+  card_id            TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  phase              TEXT NOT NULL CHECK (phase IN (
+                     'DESIGN','CODE','VERIFY','MERGE','REGRESSION_FIX')),
+  round              INTEGER NOT NULL CHECK (round > 0),
+  kind               TEXT NOT NULL,
+  body               TEXT NOT NULL,
+  created_at         INTEGER NOT NULL,
+  UNIQUE (run_id, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_phase_artifacts_card ON phase_artifacts(card_id, phase, round);
+
+CREATE TABLE IF NOT EXISTS story_specs (
+  spec_id          TEXT PRIMARY KEY,
+  story_id         TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  seq              INTEGER NOT NULL,
+  text              TEXT NOT NULL,
+  status            TEXT NOT NULL CHECK (status IN ('pending','passed','failed','withdrawn')),
+  notion_block_id   TEXT UNIQUE,
+  UNIQUE (story_id, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_story_specs_story ON story_specs(story_id, seq);
+
+CREATE TABLE IF NOT EXISTS notion_sections (
+  story_id          TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  section            TEXT NOT NULL CHECK (section IN (
+                     'metadata','requirement','specification','design','verification','questions')),
+  anchor_block_id    TEXT NOT NULL UNIQUE,
+  content_block_id   TEXT,
+  PRIMARY KEY (story_id, section)
+);
+
+CREATE TABLE IF NOT EXISTS notion_verification_rounds (
+  story_id          TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  round             INTEGER NOT NULL,
+  toggle_block_id   TEXT NOT NULL UNIQUE,
+  summary           TEXT NOT NULL,
+  archived_page_id  TEXT,
+  created_at        INTEGER NOT NULL,
+  PRIMARY KEY (story_id, round)
+);
 
 -- Card-level lease. Held by a host for the whole card (host stickiness); renewed
 -- at phase boundaries. Acquisition and renewal are compare-and-swap on the
@@ -81,13 +152,15 @@ CREATE TABLE IF NOT EXISTS notion_outbox (
   card_id       TEXT,
   priority      INTEGER NOT NULL DEFAULT 2,
   operation     TEXT NOT NULL,
+  target        TEXT NOT NULL,
   payload       TEXT NOT NULL,
-  payload_hash  TEXT NOT NULL UNIQUE,
+  payload_hash  TEXT NOT NULL,
   state         TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','sent','failed')),
   attempts      INTEGER NOT NULL DEFAULT 0,
   last_error    TEXT,
   created_at    INTEGER NOT NULL,
-  sent_at       INTEGER
+  sent_at       INTEGER,
+  UNIQUE (target, payload_hash)
 );
 CREATE INDEX IF NOT EXISTS idx_outbox_pending ON notion_outbox(state, priority, id);
 
@@ -99,10 +172,12 @@ CREATE TABLE IF NOT EXISTS cost_entries (
   card_id        TEXT,
   phase          TEXT,
   purpose        TEXT,
+  tier           TEXT,
   provider       TEXT NOT NULL,
-  model          TEXT NOT NULL,
+  model_id       TEXT NOT NULL,
+  host_id        TEXT,
   prompt_version TEXT,
-  input_tokens      INTEGER NOT NULL DEFAULT 0,
+  uncached_input_tokens INTEGER NOT NULL DEFAULT 0,
   output_tokens     INTEGER NOT NULL DEFAULT 0,
   cache_read_tokens INTEGER NOT NULL DEFAULT 0,
   cache_write_tokens INTEGER NOT NULL DEFAULT 0,
@@ -162,6 +237,7 @@ CREATE TABLE IF NOT EXISTS human_feedback (
   round       INTEGER,
   channel     TEXT NOT NULL CHECK (channel IN ('answer','rework','defect','preference','unclassified')),
   body        TEXT NOT NULL,
+  applied_at  INTEGER,
   created_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_channel ON human_feedback(channel, created_at);
@@ -177,8 +253,27 @@ CREATE TABLE IF NOT EXISTS verify_records (
   verdict           TEXT NOT NULL CHECK (verdict IN ('accepted','rejected','inconclusive')),
   failed_scenarios  TEXT NOT NULL DEFAULT '[]',
   evidence_dir      TEXT,
+  screenshots       TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(screenshots)),
   created_at        INTEGER NOT NULL,
   UNIQUE (card_id, round),
   CHECK (verify_session_id <> code_session_id)
 );
 CREATE INDEX IF NOT EXISTS idx_verify_card ON verify_records(card_id, round);
+
+CREATE TABLE IF NOT EXISTS notion_media_delivery (
+  evidence_id       TEXT PRIMARY KEY,
+  card_id           TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  round             INTEGER NOT NULL CHECK (round >= 1),
+  scenario_id       TEXT NOT NULL,
+  local_path        TEXT NOT NULL,
+  target_block_id   TEXT NOT NULL,
+  status            TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','uploaded','placeholder')),
+  upload_id         TEXT,
+  failure           TEXT,
+  created_at        INTEGER NOT NULL,
+  updated_at        INTEGER NOT NULL,
+  CHECK ((status = 'uploaded' AND upload_id IS NOT NULL AND failure IS NULL) OR
+         (status = 'placeholder' AND upload_id IS NULL AND failure IS NOT NULL) OR
+         (status = 'pending' AND upload_id IS NULL AND failure IS NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_notion_media_pending ON notion_media_delivery(status, created_at);

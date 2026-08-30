@@ -111,7 +111,8 @@ hivemind 以 pi（earendil-works/pi，provider 无关）为执行底座、Notion
 | Notion 块膨胀 / mermaid | PASS，300 块 + 大页定点更新 + 锚点保全 + 三种图含中文均渲染 |
 | PoC-4 prompt | 默认 prompt 已量化，结论由"替换"改为"**追加**" |
 | Codex OAuth C1–C4 | 机制核实通过（登录入口在 TUI 非 CLI；auth check 退出码陷阱），活体待 M0-01 决策 |
-| PoC-1 Windows / C5 Mac mini | **未执行**：本轮在非目标节点上跑，未组网，目标机不可达；顺延至 M3 |
+| PoC-1 Windows | **PASS（2026-08-29 补测）**：Git Bash 下真实 pi RPC + 工具调用 10/10，无 framing 错误或挂死 |
+| C5 Mac mini | **未执行**：目标机尚未接入；顺延至 M3 |
 
 阻塞 M1 的只剩 **provider 凭据**（GLM/Grok key 或 Codex 登录）。
 

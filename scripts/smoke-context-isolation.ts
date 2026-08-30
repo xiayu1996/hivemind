@@ -1,40 +1,109 @@
-// Verifies the mitigation for the context-file contamination found in M0:
-// pi walks up from cwd and will load an unrelated personal CLAUDE.md. Running
-// under a directory that has one as an ancestor must NOT pick it up when
-// contextFiles is "explicit".
+// Verifies against a real pi process that inherited AGENTS.md files are absent
+// from the provider request while explicitly approved context is present.
+
+import { spawn, type ChildProcess } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { loadExplicitContextBundle } from "../src/runner/context-files.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
 
-const CONTAMINATED_CWD = `${process.env.HOME}/.claude/jobs`;
-const PROBE = "Reply with exactly the word: ping";
+const REPO = fileURLToPath(new URL("..", import.meta.url));
+const PI_BIN = process.env.PI_BIN ?? join(
+  homedir(), ".hivemind", "pi", "0.84.3", "pi", process.platform === "win32" ? "pi.exe" : "pi",
+);
+const MOCK_PORT = process.env.HIVEMIND_MOCK_PORT ?? "8133";
+const POISON = "CONTEXT_POISON_MUST_NOT_REACH_PROVIDER";
+const ALLOWED = "EXPLICIT_CONTEXT_REACHED_PROVIDER";
 
-async function run(contextFiles: "explicit" | "inherit"): Promise<string> {
+function startMock(logPath: string): ChildProcess {
+  return spawn(
+    process.execPath,
+    [join(REPO, "poc", "rpc-context", "mock-provider-server.mjs"), "--port", MOCK_PORT],
+    {
+      env: { ...process.env, MOCK_LOG_REQUESTS: logPath },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+}
+
+async function waitForMock(): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    try {
+      if ((await fetch(`http://127.0.0.1:${MOCK_PORT}/v1/models`)).ok) return;
+    } catch {
+      // The mock has not bound its port yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("mock provider never became reachable");
+}
+
+async function run(
+  cwd: string,
+  sessionDir: string,
+  contextFiles: "explicit" | "inherit",
+  systemText?: string,
+): Promise<void> {
   const runner = new RpcPiRunner({
-    binary: `${process.env.HOME}/.hivemind/pi/0.84.3/pi/pi`,
-    provider: "openai-codex",
-    model: "gpt-5.4-mini",
-    cwd: CONTAMINATED_CWD,
+    binary: PI_BIN,
+    provider: "mock",
+    model: "mock-1",
+    cwd,
     tools: [],
+    extensions: [join(REPO, "poc", "rpc-context", "mock-provider-extension.mjs")],
+    sessionDir,
     contextFiles,
+    env: { HIVEMIND_MOCK_PORT: MOCK_PORT },
+    ...(systemText ? { systemPrompt: { mode: "append" as const, text: systemText } } : {}),
   });
-  await runner.start();
-  await runner.setAutoRetry(false);
-  await runner.prompt(PROBE, 120_000);
-  const messages = await runner.getMessages();
-  await runner.stop();
-  return JSON.stringify(messages.at(-1));
+  try {
+    await runner.start();
+    await runner.setAutoRetry(false);
+    await runner.prompt("Reply with ping.", 45_000);
+  } finally {
+    await runner.stop();
+  }
 }
 
-const inherit = await run("inherit");
-const explicit = await run("explicit");
+async function main(): Promise<void> {
+  const work = await mkdtemp(join(tmpdir(), "hivemind-context-isolation-"));
+  const contaminatedRoot = join(work, "contaminated");
+  const cwd = join(contaminatedRoot, "child");
+  const allowedPath = join(work, "allowed.md");
+  const requestLog = join(work, "requests.jsonl");
+  await mkdir(cwd, { recursive: true });
+  await writeFile(join(contaminatedRoot, "AGENTS.md"), `${POISON}\n`, "utf8");
+  await writeFile(allowedPath, `${ALLOWED}\n`, "utf8");
+  const bundle = await loadExplicitContextBundle([{ label: "approved-test-context", path: allowedPath }]);
 
-const leaked = (s: string) => /Mr\.?Ryan/i.test(s);
-console.log("cwd:", CONTAMINATED_CWD);
-console.log("inherit  -> personal instruction leaked:", leaked(inherit));
-console.log("explicit -> personal instruction leaked:", leaked(explicit));
-console.log(leaked(inherit) && !leaked(explicit)
-  ? "PASS: isolation works and the hazard is real"
-  : "INCONCLUSIVE: see raw output below");
-if (!(leaked(inherit) && !leaked(explicit))) {
-  console.log("inherit :", inherit.slice(0, 300));
-  console.log("explicit:", explicit.slice(0, 300));
+  const mock = startMock(requestLog);
+  try {
+    await waitForMock();
+    await run(cwd, join(work, "inherit-sessions"), "inherit");
+    await run(cwd, join(work, "explicit-sessions"), "explicit", bundle.text);
+
+    const requests = (await readFile(requestLog, "utf8")).trim().split("\n");
+    if (requests.length !== 2) throw new Error(`expected 2 provider requests, got ${requests.length}`);
+    const inherited = requests[0] ?? "";
+    const explicit = requests[1] ?? "";
+    const hazardConfirmed = inherited.includes(POISON);
+    const poisonBlocked = !explicit.includes(POISON);
+    const approvedLoaded = explicit.includes(ALLOWED);
+    console.log(`inherit contains ancestor AGENTS.md: ${hazardConfirmed}`);
+    console.log(`explicit excludes ancestor AGENTS.md: ${poisonBlocked}`);
+    console.log(`explicit includes approved context: ${approvedLoaded}`);
+    console.log(`effective context sha256: ${bundle.files[0]?.sha256}`);
+    if (!hazardConfirmed || !poisonBlocked || !approvedLoaded) throw new Error("context isolation contract failed");
+    console.log("PASS: provider request contains only explicitly approved context");
+  } finally {
+    mock.kill("SIGKILL");
+    await rm(work, { recursive: true, force: true });
+  }
 }
+
+main().catch((error: unknown) => {
+  console.error("FAILED:", error);
+  process.exit(1);
+});

@@ -13,7 +13,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { JsonlDecoder } from "../src/runner/jsonl.js";
-import { POLICY_ENV_VAR, serializeGuardPolicy, type GuardPolicy } from "../src/guard/policy.js";
+import {
+  POLICY_ENV_VAR,
+  assembleGuardPolicy,
+  serializeGuardPolicy,
+  type GuardPolicy,
+} from "../src/guard/policy.js";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const PI_BIN = process.env.PI_BIN ?? `${process.env.HOME}/.hivemind/pi/0.84.3/pi/pi`;
@@ -21,17 +26,31 @@ const MOCK_PORT = process.env.HIVEMIND_MOCK_PORT ?? "8131";
 
 interface Probe {
   label: string;
-  command: string;
+  prompt: string;
+  auditTarget: string;
   expectBlocked: boolean;
   expectReason?: string;
 }
 
-const HARMLESS: Probe = { label: "ordinary command", command: "echo hello-from-mock", expectBlocked: false };
+const HARMLESS: Probe = {
+  label: "ordinary command",
+  prompt: "USE_TOOL:echo hello-from-mock",
+  auditTarget: "echo hello-from-mock",
+  expectBlocked: false,
+};
 
 const PROBES: Probe[] = [
-  { label: "rm -rf", command: "rm -rf /tmp/hivemind-guard-victim", expectBlocked: true, expectReason: "recursive rm is forbidden" },
-  { label: "push main", command: "git push origin main", expectBlocked: true, expectReason: "push to master/main is forbidden" },
+  { label: "rm -rf", prompt: "USE_TOOL:rm -rf /tmp/hivemind-guard-victim", auditTarget: "rm -rf /tmp/hivemind-guard-victim", expectBlocked: true, expectReason: "recursive rm is forbidden" },
+  { label: "push main", prompt: "USE_TOOL:git push origin main", auditTarget: "git push origin main", expectBlocked: true, expectReason: "push to master/main is forbidden" },
   HARMLESS,
+];
+
+const VERIFY_PROBES: Probe[] = [
+  { label: "write tool", prompt: "USE_WRITE:verify-write.txt", auditTarget: "write", expectBlocked: true, expectReason: "not available in the VERIFY phase" },
+  { label: "redirection", prompt: "USE_TOOL:printf x > verify-redirect.txt", auditTarget: "printf x > verify-redirect.txt", expectBlocked: true, expectReason: "shell write is forbidden in VERIFY" },
+  { label: "sed -i", prompt: "USE_TOOL:sed -i 's/a/b/' src/a.ts", auditTarget: "sed -i 's/a/b/' src/a.ts", expectBlocked: true, expectReason: "shell write is forbidden in VERIFY" },
+  { label: "tee", prompt: "USE_TOOL:printf x | tee verify-tee.txt", auditTarget: "printf x | tee verify-tee.txt", expectBlocked: true, expectReason: "shell write is forbidden in VERIFY" },
+  { label: "git commit", prompt: "USE_TOOL:git commit -am verify", auditTarget: "git commit -am verify", expectBlocked: true, expectReason: "shell write is forbidden in VERIFY" },
 ];
 
 function startMock(): ChildProcess {
@@ -68,7 +87,7 @@ async function runProbe(probe: Probe, policy: GuardPolicy, withPolicy = true): P
       "--provider", "mock",
       "--model", "mock-1",
       "--no-context-files",
-      "--tools", "bash",
+      "--tools", "bash,write",
     ],
     {
       cwd: policy.worktreePath,
@@ -98,7 +117,7 @@ async function runProbe(probe: Probe, policy: GuardPolicy, withPolicy = true): P
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk: string) => process.stderr.write(`[pi] ${chunk}`));
 
-  child.stdin.write(`${JSON.stringify({ type: "prompt", message: `USE_TOOL:${probe.command}`, id: "p1" })}\n`);
+  child.stdin.write(`${JSON.stringify({ type: "prompt", message: probe.prompt, id: "p1" })}\n`);
 
   try {
     await settled;
@@ -120,16 +139,21 @@ function readAudit(auditPath: string): Array<Record<string, unknown>> {
 async function main(): Promise<void> {
   const workDir = mkdtempSync(join(tmpdir(), "hivemind-guard-"));
   const auditPath = join(workDir, "audit", "tool-audit.jsonl");
-  const policy: GuardPolicy = {
+  const policy = assembleGuardPolicy({
     phase: "CODE",
     cardId: "S-smoke",
     runId: "run-smoke",
     worktreePath: workDir,
-    extraWriteRoots: [],
-    disallowedTools: [],
-    fencedPatterns: [],
     auditPath,
-  };
+  });
+  const verifyPolicy = assembleGuardPolicy({
+    phase: "VERIFY",
+    cardId: "S-smoke",
+    runId: "run-smoke-verify",
+    worktreePath: workDir,
+    evidencePath: join(workDir, "evidence"),
+    auditPath,
+  });
 
   const mock = startMock();
   const failures: string[] = [];
@@ -148,7 +172,7 @@ async function main(): Promise<void> {
         failures.push(`${probe.label}: event stream is missing the reason "${probe.expectReason}"`);
       }
 
-      const audit = readAudit(auditPath).filter((record) => record.target === probe.command);
+      const audit = readAudit(auditPath).filter((record) => record.target === probe.auditTarget);
       if (audit.length === 0) {
         failures.push(`${probe.label}: no audit record for the command`);
       } else {
@@ -159,6 +183,18 @@ async function main(): Promise<void> {
         }
       }
       console.log(`${probe.label}: stream_blocked=${blockedInStream} audit_records=${audit.length}`);
+    }
+
+    for (const probe of VERIFY_PROBES) {
+      const events = await runProbe(probe, verifyPolicy);
+      const stream = JSON.stringify(events);
+      const audit = readAudit(auditPath).filter((record) => record.target === probe.auditTarget);
+      if (!stream.includes("hive-guard:")) failures.push(`${probe.label}: VERIFY call was not blocked`);
+      if (probe.expectReason && !stream.includes(probe.expectReason)) {
+        failures.push(`${probe.label}: event stream is missing the reason "${probe.expectReason}"`);
+      }
+      if (audit.at(-1)?.decision !== "deny") failures.push(`${probe.label}: audit denial is missing`);
+      console.log(`VERIFY ${probe.label}: blocked=${stream.includes("hive-guard:")} audit_records=${audit.length}`);
     }
 
     // A guard that cannot read its policy must deny rather than fall back to

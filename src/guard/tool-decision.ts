@@ -49,6 +49,7 @@ export function decideToolCall(
   event: ToolCallEvent,
   policy: GuardPolicy,
   fencedPatterns: RegExp[],
+  bannedBashPatterns: RegExp[] = [],
 ): GuardDecision {
   if (policy.disallowedTools.includes(event.toolName)) {
     return {
@@ -64,7 +65,11 @@ export function decideToolCall(
       return { block: true, reason: "bash call carried no command string" };
     }
     const verdict = checkBash(command);
-    return { block: verdict.deny, reason: verdict.reason, target: command };
+    if (verdict.deny) return { block: true, reason: verdict.reason, target: command };
+    if (bannedBashPatterns.some((pattern) => pattern.test(command))) {
+      return { block: true, reason: `shell write is forbidden in ${policy.phase}`, target: command };
+    }
+    return { block: false, target: command };
   }
 
   if (READ_ONLY_TOOLS.has(event.toolName)) {
