@@ -1,6 +1,7 @@
 import { createClient } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { migrate } from "../persistence/migrate.js";
+import { parseDoD } from "../pipeline/dod.js";
 import { StoryExecutionStore } from "./story-execution-store.js";
 import {
   SingleStoryWorker,
@@ -235,5 +236,67 @@ describe("SingleStoryWorker", () => {
       { round: 1, verdict: "rejected" },
       { round: 2, verdict: "accepted" },
     ]);
+  });
+});
+
+describe("SingleStoryWorker DESIGN re-entry after a crash", () => {
+  let client: ReturnType<typeof createClient>;
+  let store: StoryExecutionStore;
+
+  beforeEach(async () => {
+    client = createClient({ url: ":memory:" });
+    await migrate(client);
+    store = new StoryExecutionStore(client, (() => {
+      let time = 1_000;
+      return () => time++;
+    })());
+    await store.createStory({
+      id: "S-EPIC1-01",
+      notionPageId: "page-1",
+      title: "Run one Story",
+      requirement: "Execute the full Story pipeline without skipping verification.",
+      repo: "xiayu1996/hivemind",
+      branch: "story/epic1-01",
+    });
+  });
+
+  afterEach(() => client.close());
+
+  it("reuses the frozen Definition of Done instead of burning DESIGN sessions against it", async () => {
+    await store.transition("S-EPIC1-01", "QUEUED", "DESIGN", "system", "run-design");
+    await store.beginPhase({ runId: "run-design", cardId: "S-EPIC1-01", phase: "DESIGN", round: 1, prompt: "design" });
+    await store.completePhase({
+      runId: "run-design",
+      sessionId: "session-design",
+      artifacts: [{ kind: "design-summary", body: "Design" }, { kind: "dod", body: DOD }],
+    });
+    // The crash lands here: the setpoint is frozen but the Story never left DESIGN.
+    await store.freezeDefinitionOfDone("S-EPIC1-01", parseDoD(DOD));
+
+    const phases = vi.fn(async (input: ManagedPhaseInput) => (input.phase === "CODE"
+      ? { sessionId: `session-code-${input.round}`, artifacts: [{ kind: "implementation", body: "done" }] }
+      : { sessionId: "session-merge", artifacts: [{ kind: "delivery-report", body: "Both scenarios passed." }] }));
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => ({
+        sessionId: `session-verify-${input.round}`,
+        verdict: "accepted" as const,
+        failedScenarios: [],
+        artifact: "{}",
+      })),
+    };
+    const worker = new SingleStoryWorker(
+      store,
+      { run: phases },
+      verifier,
+      { deliver: vi.fn(async () => ({ mrUrl: "https://example.test/pull/1" })) },
+      { enqueue: vi.fn(async () => undefined) },
+    );
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
+    expect(phases.mock.calls.map(([input]) => input.phase)).not.toContain("DESIGN");
+    const artifacts = await client.execute(
+      "SELECT kind FROM phase_artifacts WHERE card_id = 'S-EPIC1-01' AND phase = 'DESIGN' ORDER BY kind",
+    );
+    expect(artifacts.rows).toMatchObject([{ kind: "design-summary" }, { kind: "dod" }]);
   });
 });

@@ -449,6 +449,16 @@ export class StoryExecutionStore {
     return parseDoD(stringValue(row.body, "Definition of Done"));
   }
 
+  /** The frozen setpoint, or null when DESIGN has not produced one yet. */
+  async findFrozenDefinitionOfDone(cardId: string): Promise<DefinitionOfDone | null> {
+    const frozen = await this.client.execute({
+      sql: "SELECT COUNT(*) AS count FROM story_specs WHERE story_id = ?",
+      args: [cardId],
+    });
+    if (Number(frozen.rows[0]?.count) === 0) return null;
+    return this.getDefinitionOfDone(cardId);
+  }
+
   async recordVerification(runId: string, input: VerificationRecordInput): Promise<void> {
     const time = this.now();
     const declared = new Set((await this.client.execute({

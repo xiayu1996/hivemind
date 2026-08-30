@@ -197,6 +197,11 @@ export class SingleStoryWorker {
         await this.store.freezeDefinitionOfDone(cardId, definitionOfDone);
         return { definitionOfDone, runId };
       } catch (cause) {
+        // A frozen DoD is the Story's setpoint. Re-entering DESIGN after a
+        // crash between the freeze and the transition must adopt it, not spend
+        // sessions failing to replace it and cascade its artifacts away.
+        const frozen = await this.store.findFrozenDefinitionOfDone(cardId);
+        if (frozen) return { definitionOfDone: frozen, runId };
         if (attempt > 0) throw cause;
         await this.store.invalidateCompletedPhase(cardId, "DESIGN", 1, (cause as Error).message);
       }
