@@ -8,7 +8,7 @@ describe("EpicMergeFlow", () => {
     const calls: Array<{ cwd: string; args: string[] }> = [];
     const git = { run: vi.fn(async (cwd: string, args: string[]) => {
       calls.push({ cwd, args });
-      if (args.join(" ") === "branch --show-current") return cwd === "story" ? story.branch : "epic/E-1";
+      if (args.join(" ") === "branch --show-current") return cwd === "story" ? story.branch : "main";
       if (args[0] === "show-ref") throw new Error("missing ref");
       return "";
     }) };
