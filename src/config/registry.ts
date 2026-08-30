@@ -136,6 +136,14 @@ export const CONFIG_KEYS = {
     reload: "hot",
     description: "Provider order tried when one is circuit-broken.",
   }),
+  "alert.requireOutOfBandChannel": def({
+    schema: z.boolean(),
+    default: true,
+    scope: "global",
+    reload: "drain-restart",
+    description: "Refuse to start without a Feishu or SMTP channel. A Notion @mention raises no push notification (PoC R2), so the board is not a notification surface and needs_input would otherwise reach nobody.",
+    dangerous: true,
+  }),
   "retry.providerAutoRetries": def({
     schema: z.number().int().min(0).max(10),
     default: 0,

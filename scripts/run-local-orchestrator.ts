@@ -8,6 +8,7 @@ import Fastify from "fastify";
 import { alertChannelsFromConfig } from "../src/alert/config.js";
 import { AlertRouter } from "../src/alert/index.js";
 import { alertNeedsInput } from "../src/alert/story-alerts.js";
+import { assertOutOfBandChannel } from "../src/alert/required-channel.js";
 import { loadSecretsFile, upsertSecretFile } from "../src/config/secrets-file.js";
 import { ConfigStore } from "../src/config/store.js";
 import { breakerPolicy, intakeHalted, usableProviders } from "../src/runner/circuit-breaker.js";
@@ -74,12 +75,6 @@ async function main(): Promise<void> {
   if (!token) throw new Error("NOTION_TOKEN is missing from ~/.hivemind/secrets.env");
   if (!dataSourceId) throw new Error("HIVEMIND_NOTION_STORIES_DATA_SOURCE_ID is missing");
   const alertChannels = alertChannelsFromConfig(stored);
-  if (alertChannels.length === 0) {
-    // Notion stays reachable in this mode, so needs_input still surfaces on the
-    // board; the out-of-band channel only matters when Notion itself is down.
-    console.warn("WARNING: no out-of-band alert channel configured (FEISHU_WEBHOOK_URL or SMTP). " +
-      "needs_input and P0 notifications surface only through the Notion board.");
-  }
   const alerts = new AlertRouter(alertChannels);
 
   const repositoryPath = resolve(required("--repository-path"));
@@ -116,6 +111,7 @@ async function main(): Promise<void> {
   const piBinary = process.env.PI_BIN ?? join(homedir(), ".hivemind", "pi", "0.84.3", "pi",
     process.platform === "win32" ? "pi.exe" : "pi");
   const modelPolicy = new ModelPolicy(config, new PiModelCatalog({ binary: piBinary }));
+  await assertOutOfBandChannel(alerts, config);
   await assertProviderRetriesDisabled(config);
   await assertModelPolicy(config, new PiModelCatalog({ binary: piBinary }));
   const storyApi = new NotionGatewayStoryApi(gateway);
@@ -342,7 +338,9 @@ async function main(): Promise<void> {
       if (result.stdout.trim()) console.log(result.stdout.trim());
       await reconcileProjections();
       const completed = await store.getStory(cardId);
-      await alertNeedsInput(alerts, completed);
+      if (completed.state === "NEEDS_INPUT" && !(await alertNeedsInput(alerts, completed))) {
+        console.error(`Story ${cardId} stopped for input but no out-of-band channel took the alert`);
+      }
     } finally {
       running = false;
     }
