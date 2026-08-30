@@ -250,9 +250,13 @@ export class BlindVerifyExecutor {
       if (!raw) throw new Error("VERIFY returned no assistant verdict");
       const candidates = jsonPayloadCandidates(raw);
       if (candidates.length === 0) throw new Error("VERIFY returned no parseable JSON verdict");
-      const parsed = verifierReplySchema.safeParse(candidates[0]);
-      if (!parsed.success) throw new Error("VERIFY returned a malformed verdict");
-      document = toVerdictDocument(parsed.data);
+      // The last well-formed payload is the verdict; an earlier one is a draft
+      // the verifier wrote while reasoning and then replaced.
+      const verdicts = candidates.map((candidate) => verifierReplySchema.safeParse(candidate))
+        .flatMap((candidate) => (candidate.success ? [candidate.data] : []));
+      const parsed = verdicts.at(-1);
+      if (!parsed) throw new Error("VERIFY returned a malformed verdict");
+      document = toVerdictDocument(parsed);
     } catch (cause) {
       runnerError = cause instanceof Error ? cause.message : "VERIFY failed";
     } finally {

@@ -79,7 +79,13 @@ export async function verifyCompletion(
   try {
     const candidates = jsonPayloadCandidates(raw);
     if (candidates.length === 0) throw new SyntaxError("no JSON payload found in the judge response");
-    const parsed = judgmentSchema.parse(candidates[0]);
+    // A response can carry a draft judgment it then walks back. Any judgment
+    // that withholds done wins over one that grants it: this layer exists to
+    // fail closed, so it must never adopt the most permissive payload on offer.
+    const judgments = candidates.map((candidate) => judgmentSchema.safeParse(candidate))
+      .flatMap((result) => (result.success ? [result.data] : []));
+    if (judgments.length === 0) judgmentSchema.parse(candidates[0]);
+    const parsed = judgments.find((judgment) => !judgment.done) ?? judgments.at(-1)!;
     return parsed.done
       ? { done: true, reason: parsed.reason, feedback: null }
       : rejected(parsed.reason);

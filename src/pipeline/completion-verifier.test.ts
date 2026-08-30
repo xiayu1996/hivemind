@@ -37,3 +37,22 @@ describe("verifyCompletion", () => {
       .resolves.toMatchObject({ done: false, reason: expect.stringContaining("invalid output") });
   });
 });
+
+describe("verifyCompletion payload selection", () => {
+  it("fails closed when a draft payload claims done and the answer after it does not", async () => {
+    const judge: CompletionJudge = {
+      complete: async () => [
+        "<think>",
+        "```json",
+        '{"done":true,"reason":"looks complete"}',
+        "```",
+        "on reflection no test command ever ran</think>",
+        '{"done":false,"reason":"no test command appears in the trajectory"}',
+      ].join("\n"),
+    };
+    expect(await verifyCompletion(judge, input)).toMatchObject({
+      done: false,
+      reason: "no test command appears in the trajectory",
+    });
+  });
+});

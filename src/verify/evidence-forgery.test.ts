@@ -86,3 +86,21 @@ describe("verify evidence cannot be forged from arbitrary tool output", () => {
     expect(result.validationErrors.join(" ")).toMatch(/no passing test result/);
   });
 });
+
+describe("verify verdict selection", () => {
+  it("takes the verdict the verifier ended on, not the draft it replaced", async () => {
+    const reply = [
+      "```json",
+      '{"scenarios":[{"id":"S-EPIC-01-unit","status":"passed"}]}',
+      "```",
+      "That draft was wrong: the run is red.",
+      '{"scenarios":[{"id":"S-EPIC-01-unit","status":"failed"}]}',
+    ].join("\n");
+    const result = await verdictOf([
+      { type: "message_end", message: { role: "assistant", content: reply } },
+    ]);
+
+    expect(result.record.verdict).toBe("rejected");
+    expect(result.record.failedScenarios).toEqual(["S-EPIC-01-unit"]);
+  });
+});
