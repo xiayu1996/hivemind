@@ -136,6 +136,27 @@ export const CONFIG_KEYS = {
     reload: "hot",
     description: "Provider order tried when one is circuit-broken.",
   }),
+  "provider.failureThreshold": def({
+    schema: positiveInt.max(20),
+    default: 3,
+    scope: "global",
+    reload: "hot",
+    description: "Consecutive transient failures on one provider before its breaker opens and the chain drops that node.",
+  }),
+  "provider.transientOpenMs": def({
+    schema: positiveInt.max(3_600_000),
+    default: 60_000,
+    scope: "global",
+    reload: "hot",
+    description: "How long a breaker stays open after transient failures, before a probe may run.",
+  }),
+  "provider.rateLimitOpenMs": def({
+    schema: positiveInt.max(3_600_000),
+    default: 30_000,
+    scope: "global",
+    reload: "hot",
+    description: "How long a breaker stays open after a rate limit that named no window of its own.",
+  }),
   "model.deferIfResetWithinMin": def({
     schema: positiveInt.max(180),
     default: 15,
