@@ -51,7 +51,7 @@ export interface StoryDeliveryPort {
   deliver(input: {
     story: StorySnapshot;
     mergeArtifact: string;
-  }): Promise<{ mrUrl: string }>;
+  }): Promise<{ mrUrl: string | null }>;
 }
 
 export interface StoryProjectionPort {

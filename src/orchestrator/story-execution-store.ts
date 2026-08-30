@@ -12,6 +12,7 @@ export type StoryPhase = Exclude<Phase, "DECOMPOSE">;
 
 export interface StoryIntake {
   id: string;
+  epicId?: string;
   notionPageId: string;
   title: string;
   requirement: string;
@@ -157,7 +158,7 @@ export class StoryExecutionStore {
 
   async getStory(cardId: string): Promise<StorySnapshot> {
     const result = await this.client.execute({
-      sql: `SELECT id, notion_page_id, title, requirement, state, phase, repo, branch,
+      sql: `SELECT id, epic_id, notion_page_id, title, requirement, state, phase, repo, branch,
                    target_branch, mr_url, resume_state,
                    inner_loop_rounds, phase_reentries, stop_reason
             FROM stories WHERE id = ?`,
@@ -167,6 +168,7 @@ export class StoryExecutionStore {
     if (!row) throw new Error(`Story does not exist: ${cardId}`);
     return {
       id: stringValue(row.id, "Story id"),
+      ...(optionalString(row.epic_id) ? { epicId: optionalString(row.epic_id)! } : {}),
       notionPageId: stringValue(row.notion_page_id, "Notion page id"),
       title: stringValue(row.title, "Story title"),
       requirement: stringValue(row.requirement, "Story requirement"),
@@ -568,8 +570,8 @@ export class StoryExecutionStore {
     if (update?.rowsAffected !== 1) throw new Error(`cannot record merge conflict unless Story is in MERGE: ${cardId}`);
   }
 
-  async markDelivered(cardId: string, runId: string, mrUrl: string): Promise<void> {
-    if (!mrUrl.startsWith("https://")) throw new Error("MR URL must use HTTPS");
+  async markDelivered(cardId: string, runId: string, mrUrl: string | null): Promise<void> {
+    if (mrUrl !== null && !mrUrl.startsWith("https://")) throw new Error("MR URL must use HTTPS");
     const time = this.now();
     const [update] = await this.client.batch([
       {
@@ -585,7 +587,7 @@ export class StoryExecutionStore {
                      ?, 'MERGE', 'story.delivered', ?, ?
               WHERE EXISTS (
                 SELECT 1 FROM stories
-                WHERE id = ? AND state = 'DELIVERED' AND mr_url = ? AND updated_at = ?
+                WHERE id = ? AND state = 'DELIVERED' AND mr_url IS ? AND updated_at = ?
               )`,
         args: [runId, runId, cardId, time, JSON.stringify({ mrUrl }), cardId, mrUrl, time],
       },
