@@ -12,6 +12,8 @@ import { loadSecretsFile, upsertSecretFile } from "../src/config/secrets-file.js
 import { ConfigStore } from "../src/config/store.js";
 import { breakerPolicy, intakeHalted, usableProviders } from "../src/runner/circuit-breaker.js";
 import { assertProviderRetriesDisabled } from "../src/runner/failover.js";
+import { probeProviderReadiness } from "../src/runner/auth-probe.js";
+import { probeOpenProviders } from "../src/runner/provider-probe.js";
 import { assertModelPolicy, ModelPolicy } from "../src/runner/model-policy.js";
 import { PiModelCatalog } from "../src/runner/model-resolver.js";
 import { LibsqlProviderHealthStore } from "../src/runner/provider-health-store.js";
@@ -246,6 +248,14 @@ async function main(): Promise<void> {
       // One account per vendor: the window and the concurrency limit belong to
       // the account, so the breaker state that decides this is central.
       const chain = providerOverride ? [providerOverride] : await modelPolicy.providersFor("code");
+      // A breaker that opened on credentials names no window of its own, so the
+      // read-only probe is the only thing that can ever close it again.
+      await probeOpenProviders(
+        chain,
+        providerHealth,
+        (name) => probeProviderReadiness(piBinary, name),
+        await breakerPolicy(config),
+      );
       const healths = await providerHealth.snapshot();
       const available = usableProviders(chain, healths, Date.now());
       if (intakeHalted(chain, healths, Date.now())) {
