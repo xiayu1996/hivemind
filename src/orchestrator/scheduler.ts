@@ -17,7 +17,16 @@ export interface DependencyCycle {
   batches: readonly [];
 }
 
-export type StoryExecutionPlan = PlannedStoryExecution | DependencyCycle;
+/** Some Story can never become eligible: it depends on an id outside the set,
+ * or on a Story that is itself stranded. Reported rather than dropped, because
+ * a plan that silently omits a Story reads as a successful plan. */
+export interface UnschedulableStories {
+  kind: "unschedulable";
+  stranded: readonly string[];
+  batches: readonly (readonly string[])[];
+}
+
+export type StoryExecutionPlan = PlannedStoryExecution | DependencyCycle | UnschedulableStories;
 
 function findDependencyCycle(stories: readonly SchedulableStory[]): readonly string[] | undefined {
   const storiesById = new Map(stories.map((story) => [story.id, story]));
@@ -95,7 +104,9 @@ export function planStoryExecution(stories: readonly SchedulableStory[], hotspot
       if (batch.some((candidate) => storiesConflict(story, candidate, hotspots))) continue;
       batch.push(story);
     }
-    if (batch.length === 0) break;
+    if (batch.length === 0) {
+      return { kind: "unschedulable", stranded: remaining.map((story) => story.id).toSorted(), batches };
+    }
     batches.push(batch.map((story) => story.id));
     for (const story of batch) completed.add(story.id);
     const batchIds = new Set(batch.map((story) => story.id));

@@ -83,3 +83,18 @@ describe("planStoryExecution", () => {
     if (hotspotStories) expect(storiesShareHotspot(...hotspotStories, hotspots)).toBe(true);
   });
 });
+
+describe("S-M2-03-stranded unsatisfiable dependencies", () => {
+  it("names the Stories it could not schedule instead of dropping them from the plan", () => {
+    const plan = planStoryExecution([
+      { id: "S-EPIC1-01", dependsOn: [], predictedFootprint: ["src/a"] },
+      { id: "S-EPIC1-02", dependsOn: ["S-EPIC1-99"], predictedFootprint: ["src/b"] },
+    ], []);
+
+    expect(plan).toEqual({
+      kind: "unschedulable",
+      stranded: ["S-EPIC1-02"],
+      batches: [["S-EPIC1-01"]],
+    });
+  });
+});
