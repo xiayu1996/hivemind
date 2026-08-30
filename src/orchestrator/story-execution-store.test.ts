@@ -103,3 +103,27 @@ describe("StoryExecutionStore", () => {
     expect(artifacts.rows).toMatchObject([{ kind: "design-summary" }]);
   });
 });
+
+describe("StoryExecutionStore merge recovery", () => {
+  let client: ReturnType<typeof createClient>;
+  let store: StoryExecutionStore;
+  beforeEach(async () => {
+    client = createClient({ url: ":memory:" });
+    await migrate(client);
+    store = new StoryExecutionStore(client, () => 10);
+    await store.createStory({ id: "S-M2-05-conflict", notionPageId: "page-conflict", title: "Conflict", requirement: "Resolve an integration conflict." });
+    await store.transition("S-M2-05-conflict", "QUEUED", "DESIGN", "system", "design");
+    await store.transition("S-M2-05-conflict", "DESIGN", "CODE", "system", "code");
+    await store.transition("S-M2-05-conflict", "CODE", "VERIFY", "system", "verify");
+    await store.transition("S-M2-05-conflict", "VERIFY", "MERGE", "system", "merge");
+  });
+  afterEach(() => client.close());
+
+  it("S-M2-05-conflict returns an unresolved rebase conflict to CODE and records it without delivering", async () => {
+    await store.recordMergeConflict("S-M2-05-conflict", "merge-run", "CONFLICT (content): Merge conflict in src/vcs/merge-flow.ts");
+    await expect(store.getStory("S-M2-05-conflict")).resolves.toMatchObject({ state: "CODE", phase: "CODE", mrUrl: null });
+    await expect(client.execute("SELECT type, data FROM event_log WHERE run_id = 'merge-run'")).resolves.toMatchObject({
+      rows: [{ type: "merge.conflict", data: JSON.stringify({ reason: "CONFLICT (content): Merge conflict in src/vcs/merge-flow.ts" }) }],
+    });
+  });
+});
