@@ -96,6 +96,11 @@ function sessionId(state: Record<string, unknown>): string {
 // eslint-disable-next-line eslint/no-control-regex -- ESC is the literal byte being stripped
 const ANSI_PATTERN = /\u001b\[[0-9;]*[A-Za-z]/g;
 
+// Test runners state an outcome as a standalone marker: a glyph, or an
+// upper-case PASS/FAIL word. Lower-case prose never qualifies.
+const FAILED_MARKER = /(?:^|\s)(?:[×✗✕✘]|FAIL(?:ED)?)(?=\s|:|$)/;
+const PASSED_MARKER = /(?:^|\s)(?:[✓✔]|PASS(?:ED)?)(?=\s|:|$)/;
+
 function trajectory(events: readonly RpcEvent[]): TrajectoryEvidence[] {
   const evidence: TrajectoryEvidence[] = [];
   for (const event of events) {
@@ -110,16 +115,18 @@ function trajectory(events: readonly RpcEvent[]): TrajectoryEvidence[] {
   for (const output of collectToolOutputs(events).map((raw) => raw.replace(ANSI_PATTERN, ""))) {
     for (const match of output.matchAll(/\bHIVEMIND_TEST_RESULT\s+(\S+)\s+(passed|failed|inconclusive)\b/g)) {
       evidence.push({ type: "test_result", scenarioId: match[1]!, status: match[2]! });
-      continue;
     }
-    // Runner-native fallback: a line that both names a scenario id and states
-    // an outcome counts as observed evidence, so a verifier that ran the
-    // tests but skipped the echo protocol is not rejected for it.
+    // Runner-native fallback for a verifier that ran the tests but skipped the
+    // echo protocol. Only a standalone runner marker counts: prose or source
+    // text that merely mentions a scenario id beside the word "passed" is not
+    // evidence, or any read-only grep could mint its own green verdict.
+    // Failure is read first so a test title containing "passed" cannot turn a
+    // red line green.
     for (const line of output.split(/\r?\n/)) {
       const scenarioId = /\bS-[A-Z0-9]+-\d{2}-[a-z0-9]+\b/.exec(line)?.[0];
       if (!scenarioId) continue;
-      if (/\u2713|\bpassed\b/.test(line)) evidence.push({ type: "test_result", scenarioId, status: "passed" });
-      else if (/\u2717|\u2715|\bfailed\b/.test(line)) evidence.push({ type: "test_result", scenarioId, status: "failed" });
+      if (FAILED_MARKER.test(line)) evidence.push({ type: "test_result", scenarioId, status: "failed" });
+      else if (PASSED_MARKER.test(line)) evidence.push({ type: "test_result", scenarioId, status: "passed" });
     }
   }
   return evidence;
@@ -141,6 +148,8 @@ function collectToolOutputs(events: readonly RpcEvent[]): string[] {
     if (event.type !== "message" && event.type !== "message_update" && event.type !== "message_end") continue;
     const message = event.message as Record<string, unknown> | undefined;
     if (String(message?.role ?? "") !== "toolResult") continue;
+    // A tool call that itself failed proves nothing; its output must not be mined.
+    if (event.isError === true || message?.isError === true) continue;
     const output = textOfContent(message?.content);
     if (output) outputs.push(output);
   }
@@ -257,11 +266,12 @@ export class BlindVerifyExecutor {
       await this.pins.quarantine(input.worktreePath, "tree-pin mismatch after VERIFY");
     }
 
+    const observed = trajectory(events);
     const validation = document
       ? await validateVerdict({
           verdict: document,
           declaredScenarioIds: input.declaredScenarioIds,
-          trajectory: trajectory(events),
+          trajectory: observed,
           commitMessages: input.commitMessages,
           evidenceRoot: input.evidencePath,
           allowedHosts: input.allowedHosts,
@@ -274,10 +284,18 @@ export class BlindVerifyExecutor {
       ...(validation?.errors ?? []),
       ...(!pin.matches ? ["tree-pin changed during VERIFY"] : []),
     ];
-    const failedScenarios = document?.scenarios
-      .filter((scenario) => scenario.status !== "passed")
-      .map((scenario) => scenario.id)
-      .toSorted() ?? [...input.declaredScenarioIds].toSorted();
+    const declared = new Set(input.declaredScenarioIds);
+    // The convergence criterion must run on observed failures, not on what the
+    // verifier said about itself: a scenario the trajectory shows failing is
+    // failed even when the verdict claims otherwise.
+    const observedFailures = observed
+      .filter((event) => event.status === "failed" && event.scenarioId !== undefined && declared.has(event.scenarioId))
+      .map((event) => event.scenarioId!);
+    const failedScenarios = [...new Set([
+      ...(document?.scenarios.filter((scenario) => scenario.status !== "passed").map((scenario) => scenario.id)
+        ?? [...declared]),
+      ...observedFailures,
+    ])].toSorted();
     const verdict: VerifyRecord["verdict"] = !document || !validation
       ? "inconclusive"
       : validation.valid && pin.matches && failedScenarios.length === 0
