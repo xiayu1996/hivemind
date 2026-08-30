@@ -33,6 +33,28 @@ describe("EpicMergeFlow", () => {
     expect(calls.some(({ args }) => args.includes("push") || args.includes("main") && args[0] === "merge")).toBe(false);
   });
 
+  it("S-M2-05-conflict retains only an actual unresolved rebase conflict and never merges it", async () => {
+    const calls: Array<{ cwd: string; args: string[] }> = [];
+    const git = { run: vi.fn(async (cwd: string, args: string[]) => {
+      calls.push({ cwd, args });
+      if (args.join(" ") === "branch --show-current") return cwd === "story" ? story.branch : "epic/E-1";
+      if (args.join(" ") === "rebase epic/E-1") throw new Error("rebase failed");
+      if (args.join(" ") === "diff --name-only --diff-filter=U") return "src/vcs/merge-flow.ts\n";
+      return "";
+    }) };
+    const verify = vi.fn();
+    const flow = new EpicMergeFlow(git, verify, { storyWorktree: "story", integrationWorktree: "integration" });
+
+    await expect(flow.merge({ epicId: "E-1", story, integratedStories: [] })).resolves.toEqual({
+      kind: "conflict",
+      integrationBranch: "epic/E-1",
+      reason: "rebase failed",
+    });
+    expect(calls).toContainEqual({ cwd: "story", args: ["diff", "--name-only", "--diff-filter=U"] });
+    expect(verify).not.toHaveBeenCalled();
+    expect(calls.some(({ args }) => args[0] === "merge")).toBe(false);
+  });
+
   it("S-M2-05-subset blocks integration when the pending Story has no scenario mapping", async () => {
     const calls: Array<{ cwd: string; args: string[] }> = [];
     const git = { run: vi.fn(async (cwd: string, args: string[]) => {
