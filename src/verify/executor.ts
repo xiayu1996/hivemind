@@ -2,7 +2,7 @@ import { z } from "zod";
 import { assembleGuardPolicy, type GuardPolicy } from "../guard/policy.js";
 import { captureTreePin, evaluateTreePin, type TreePin } from "../guard/tree-pin.js";
 import { validateVerdict, type TrajectoryEvidence, type VerdictDocument } from "../pipeline/verdict.js";
-import type { PiRunner, RpcEvent } from "../runner/types.js";
+import type { PiRunner, RpcEvent, TokenUsage } from "../runner/types.js";
 
 const scenarioSchema = z.object({
   id: z.string().min(1),
@@ -57,6 +57,8 @@ export interface BlindVerifyResult {
   validationErrors: string[];
   treeChanged: boolean;
   events: RpcEvent[];
+  usage: TokenUsage;
+  messages: unknown[];
 }
 
 function assistantText(events: readonly RpcEvent[]): string | null {
@@ -173,6 +175,15 @@ export class BlindVerifyExecutor {
     let verifySessionId = "";
     let document: VerdictDocument | null = null;
     let runnerError: string | null = null;
+    let usage: TokenUsage = {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      reasoning: 0,
+      costUsd: 0,
+    };
+    let messages: unknown[] = [];
 
     try {
       await runner.start();
@@ -183,6 +194,8 @@ export class BlindVerifyExecutor {
       }
       const result = await runner.prompt(promptFor(input));
       events = [...result.events];
+      usage = result.usage;
+      messages = await runner.getMessages();
       if (result.failure) throw new Error(result.failure.errorMessage);
       const raw = assistantText(events);
       if (!raw) throw new Error("VERIFY returned no assistant verdict");
@@ -239,6 +252,6 @@ export class BlindVerifyExecutor {
       createdAt: endedAt,
     };
     await this.records.insert(record);
-    return { record, validationErrors, treeChanged: !pin.matches, events };
+    return { record, validationErrors, treeChanged: !pin.matches, events, usage, messages };
   }
 }

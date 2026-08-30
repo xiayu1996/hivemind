@@ -52,6 +52,7 @@ export interface DesiredStoryPage {
 
 export type StoryPageOperation =
   | { type: "create_section"; section: StorySection }
+  | { type: "insert_metadata"; content: string }
   | { type: "insert_content"; section: StorySection; afterBlockId: string; content: string }
   | { type: "update_block"; blockId: string; content: string }
   | { type: "insert_spec"; afterBlockId: string; specId: string; seq: number; content: string }
@@ -97,6 +98,8 @@ export function planStoryPageUpdate(
     if (snapshot.metadata.content !== desired.metadata) {
       operations.push({ type: "update_block", blockId: snapshot.metadata.blockId, content: desired.metadata });
     }
+  } else {
+    operations.push({ type: "insert_metadata", content: desired.metadata });
   }
   planSectionContent(operations, "design", snapshot.sections.design, desired.design);
   planSectionContent(operations, "questions", snapshot.sections.questions, desired.questions);

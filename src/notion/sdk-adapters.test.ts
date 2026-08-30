@@ -2,7 +2,13 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { NotionSdkCommentSource, NotionSdkMediaPort, createNotionHttpTransport } from "./sdk-adapters.js";
+import { NotionGateway } from "./gateway.js";
+import {
+  NotionGatewayCommentSource,
+  NotionSdkCommentSource,
+  NotionSdkMediaPort,
+  createNotionHttpTransport,
+} from "./sdk-adapters.js";
 
 describe("Notion HTTP transport", () => {
   it("maps the gateway contract to the versioned API and exposes Retry-After", async () => {
@@ -44,6 +50,36 @@ describe("Notion SDK comment source", () => {
       id: "c1", pageId: "page-1", blockId: "block-1", body: "first comment",
     })]);
     expect(list).toHaveBeenNthCalledWith(2, expect.objectContaining({ start_cursor: "next" }));
+  });
+});
+
+describe("Notion gateway comment source", () => {
+  it("paginates comments without bypassing the central gateway", async () => {
+    const paths: string[] = [];
+    const gateway = new NotionGateway({
+      ratePerSecond: 1_000_000,
+      transport: async (request) => {
+        paths.push(request.path);
+        return {
+          status: 200,
+          data: {
+            results: paths.length === 1 ? [{
+              id: "c1",
+              parent: { type: "block_id", block_id: "block-1" },
+              discussion_id: "d1",
+              created_by: { id: "user-1" },
+              created_time: "2026-08-29T00:00:00.000Z",
+              rich_text: [{ plain_text: "comment" }],
+            }] : [],
+            has_more: paths.length === 1,
+            next_cursor: paths.length === 1 ? "next" : null,
+          },
+        };
+      },
+    });
+    await expect(new NotionGatewayCommentSource(gateway).listComments("block-1", "page-1"))
+      .resolves.toEqual([expect.objectContaining({ id: "c1", body: "comment" })]);
+    expect(paths[1]).toContain("start_cursor=next");
   });
 });
 

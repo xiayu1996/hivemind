@@ -77,4 +77,24 @@ describe("Notion webhook HTTP route", () => {
     expect(response.json()).toEqual({ accepted: false, reason: "invalid_request" });
     await app.close();
   });
+
+  it("captures the one-time verification token without returning it", async () => {
+    const captureVerificationToken = vi.fn(async () => undefined);
+    const app = Fastify({ logger: false });
+    await registerNotionWebhookRoute(app, {
+      captureVerificationToken,
+      coordinator: { handleWebhook: vi.fn(async () => undefined) },
+    });
+    const response = await app.inject({
+      method: "POST",
+      url: "/webhooks/notion",
+      headers: { "content-type": "application/json" },
+      payload: { verification_token: "captured-token" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ accepted: true, verificationTokenCaptured: true });
+    expect(response.body).not.toContain("captured-token");
+    expect(captureVerificationToken).toHaveBeenCalledWith("captured-token");
+    await app.close();
+  });
 });

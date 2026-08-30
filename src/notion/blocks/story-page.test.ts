@@ -90,4 +90,18 @@ describe("planStoryPageUpdate", () => {
     expect(created).toEqual(["specification", "design", "verification", "questions"]);
     expect(created).not.toContain("requirement");
   });
+
+  it("creates metadata when the page template does not contain a callout", () => {
+    const withoutMetadata: StoryPageSnapshot = {
+      sections: snapshot.sections,
+      specs: snapshot.specs,
+      verificationRounds: snapshot.verificationRounds,
+    };
+    const plan = planStoryPageUpdate(withoutMetadata, {
+      metadata: "round 1",
+      design: "old design",
+      specs: [{ id: "S-1", seq: 1, status: "pending", text: "First behavior" }],
+    });
+    expect(plan).toContainEqual({ type: "insert_metadata", content: "round 1" });
+  });
 });

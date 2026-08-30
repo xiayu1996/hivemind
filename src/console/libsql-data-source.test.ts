@@ -8,7 +8,7 @@ describe("LibsqlConsoleDataSource", () => {
     const client = createClient({ url: ":memory:" });
     await migrate(client);
     await client.batch([
-      "INSERT INTO stories (id, notion_page_id, title, state, created_at, updated_at) VALUES ('s1','p1','Story','CODE',1,2)",
+      "INSERT INTO stories (id, notion_page_id, title, requirement, state, created_at, updated_at) VALUES ('s1','p1','Story','Requirement','CODE',1,2)",
       "INSERT INTO event_log (run_id, seq, card_id, type, ts, data) VALUES ('r1',0,'s1','turn_start',3,'{\"turn\":1}')",
       "INSERT INTO cost_entries (run_id, provider, model_id, cost_usd, ts) VALUES ('r1','mock','mock-1',0.1,4)",
       "INSERT INTO config_entries (key, value_json, updated_by, updated_at) VALUES ('sample','6','test',5)",

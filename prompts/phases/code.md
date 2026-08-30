@@ -5,3 +5,5 @@
 
 只改当前 Story 所需内容，遵守 worktree、fenced files 与发布红线。验证方式由仓库现场决定；完成时输出
 结构化 artifact，列出改动、实际证据、仍失败场景和无法验证的部分。
+
+最终只输出 JSON：`{"implementation":"..."}`，字段内容必须包含上述 artifact 的完整业务结论与证据索引。

@@ -59,7 +59,7 @@
 
 目标：Linux 单机上 orchestrator + worker + guard + Notion 双 DB，跑通一张真实卡全流水线；控制台骨架同期上线（调 PoC/prompt 需要这个读面）。
 
-> **执行状态（2026-08-29，Windows）**：29/37 已验证，7 项实现完成但真实外部服务验收待凭据，M1-37 未开始。
+> **执行状态（2026-08-30，Windows）**：29/37 已完成全部本地判据，M1-17..22/M1-35 的真实外部服务判据待一次性凭据；M1-37 已具备生产入口与本地真实进程全链路，真实 Notion 卡验收待凭据。
 > 状态列：✅ 输出物与本机可执行判据均通过 · ⚠️ 实现/离线验证完成但外部活体判据待跑 · ⛔ 出口判据被外部前置阻塞。
 
 ### M1-A 工程地基
@@ -103,7 +103,7 @@
 | M1-15 | ✅ NotionGateway：全局令牌桶 2.5 rps + 优先级队列（人机交互写 > 状态属性 > 报告 blocks > 投影）+ 5s 写合并 + 同步指纹防抖 + 429 按 Retry-After 退避 | `src/notion/gateway.ts` | 单测：桶速率/优先级插队/写合并/指纹防抖；压测 100 并发写请求无 429 雪崩 | M1-01 |
 | M1-16 | ✅ outbox 事务：先落库后发请求 + `(target, payload_hash)` 判重回放 + 发送后崩溃远端探针 | `src/notion/outbox.ts` | 单测 + 故障注入：远端已生效但本地未标 sent，重启探测后不重复发送 | M1-02, M1-15 |
 | M1-17 | ⚠️ DB bootstrap：脚本创建 Stories/Epics 两 DB 全属性（select 方案）+ board view 人工 bootstrap 手册 | `scripts/notion-bootstrap.ts` + 手册 | schema/调用契约单测通过；当前 Windows 无 `~/.hivemind/secrets.env`，空 workspace 活体待跑 | M1-15 |
-| M1-18 | ⚠️ Story 页 builder：五锚定区段 + blockId 持久化 + 区段内 diff 原位更新 + 验证轮次 toggle 只追加（>8 轮归档子页） | `src/notion/blocks/` | diff/锚点/归档单测通过；真实 Notion 页连续 3 轮更新待 M1-17 活体 | M1-16, M1-17 |
+| M1-18 | ⚠️ Story 页 builder：五锚定区段 + blockId 持久化 + 区段内 diff 原位更新 + 验证轮次 toggle 只追加（>8 轮归档子页） | `src/notion/blocks/` + `story-page-delivery.ts` | 经 NotionGateway/outbox 的内存传输集成连续 9 轮通过：Spec blockId 稳定、前三轮只追加、第 9 轮仅归档最老轮；真实 Notion 页连续 3 轮待 M1-17 活体 | M1-16, M1-17 |
 | M1-19 | ⚠️ 评论水位 ingest：`comment_watermark`（created_time 水位 + 2min 回看 + comment_id 唯一去重） | `src/notion/comment-ingest.ts` | 重叠窗口、块锚点、bot 过滤、事务水位与 SDK 分页映射单测通过；真实评论秒级入库待凭据 | M1-02, M1-15 |
 | M1-20 | ⚠️ webhook 接收 + 轮询兜底：page.properties_updated / content_updated / comment.created + 活跃集 60s 轮询收敛 | `src/notion/sync.ts`、`src/notion/webhook-route.ts` | 官方事件 envelope 映射、原始字节 HMAC、HTTP 路由、去重与关闭 webhook 后轮询逻辑单测通过；真实 workspace 收敛待凭据 | M1-19 |
 | M1-21 | ⚠️ 意图解释器 v1：属性影子值比对判人工指令 → 拖列/评论基础语义（回答阻塞/继续开发/人工停靠/恢复）+ 120s human-wins window | `src/notion/intent-interpreter.ts` | 表驱动单测通过；真实拖列与 120s human-wins 活体待凭据 | M1-19, M1-23 |
@@ -147,7 +147,7 @@
 
 | ID | 任务 | 输出物 | 验证方式 | 前置 |
 |---|---|---|---|---|
-| M1-37 | ⛔ **M1 端到端验收**：一张真实卡从 Notion 建卡 → DESIGN → CODE⇄VERIFY → MERGE → MR 创建全程无人干预 | `docs/poc/m1-acceptance.md`（进行中） | 当前 Windows 无 Notion/告警/provider 凭据，真实卡与 Notion 页面判据尚不能执行 | M1-01..36 |
+| M1-37 | ⛔ **M1 端到端验收**：一张真实卡从 Notion 建卡 → DESIGN → CODE⇄VERIFY → MERGE → MR 创建全程无人干预 | `scripts/run-local-orchestrator.ts` + `docs/poc/m1-acceptance.md`（进行中） | 真实 pi.exe + 本地 provider + 独立盲审 + libsql + Git remote 的全链通过；生产入口已串起 Notion intake/worktree/worker/MR/outbox，真实卡与页面四判据待一次性凭据 | M1-01..36 |
 
 ---
 

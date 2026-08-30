@@ -117,7 +117,7 @@ function toolRequest(messages) {
   const lastUser = messages.toReversed().find((m) => m.role === "user");
   const text = messageText(lastUser);
   if (text.includes("Perform an independent blind verification")) {
-    const scenario = /\bS-[A-Za-z0-9-]+\b/.exec(text)?.[0] ?? "S-MOCK-01-unit";
+    const scenario = /\bS-[A-Z0-9]+-\d{2}-[a-z0-9]+\b/.exec(text)?.[0] ?? "S-MOCK-01-unit";
     return { name: "bash", arguments: { command: `echo HIVEMIND_TEST_RESULT ${scenario} passed` } };
   }
   const write = /USE_WRITE:([^\n]*)/.exec(text);
@@ -139,8 +139,37 @@ function scriptedReply(messages) {
     return JSON.stringify({ done: true, reason: "Mock side effects are complete." });
   }
   if (messageText(lastUser).includes("Perform an independent blind verification")) {
-    const scenario = /\bS-[A-Za-z0-9-]+\b/.exec(messageText(lastUser))?.[0] ?? "S-MOCK-01-unit";
+    const scenario = /\bS-[A-Z0-9]+-\d{2}-[a-z0-9]+\b/.exec(messageText(lastUser))?.[0] ?? "S-MOCK-01-unit";
     return JSON.stringify({ scenarios: [{ id: scenario, status: "passed" }] });
+  }
+  const phaseInput = messageText(lastUser);
+  if (phaseInput.includes("Phase: DESIGN")) {
+    const storyId = /# Task (S-[A-Z0-9]+-\d{2})\b/.exec(phaseInput)?.[1] ?? "S-MOCK-01";
+    return JSON.stringify({
+      design_summary: "Use the central phase ledger and an independent verifier.",
+      dod_yaml: [
+        `story_id: ${storyId}`,
+        "design_summary: Persist phase artifacts and verify them independently.",
+        "scenarios:",
+        `  - id: ${storyId}-unit`,
+        "    given: A completed implementation",
+        "    when: blind verification runs",
+        "    then: the scenario passes from observed evidence",
+        "    layers: [integration]",
+        "baseline:",
+        "  type: acceptance_test",
+        "acceptance_criteria:",
+        "  - The Story reaches delivered after an accepted verdict.",
+        "predicted_footprint: [src/orchestrator]",
+        "depends_on: []",
+      ].join("\n"),
+    });
+  }
+  if (phaseInput.includes("Phase: CODE")) {
+    return JSON.stringify({ implementation: "The deterministic integration implementation is ready." });
+  }
+  if (phaseInput.includes("Phase: MERGE")) {
+    return JSON.stringify({ delivery_report: "The declared scenario passed blind verification." });
   }
   return `${scripted} | echo:${messageText(lastUser).slice(0, 80)}`;
 }

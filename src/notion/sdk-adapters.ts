@@ -2,8 +2,10 @@ import type { Client } from "@notionhq/client";
 import { Blob } from "node:buffer";
 import { basename } from "node:path";
 import { readFile } from "node:fs/promises";
+import { z } from "zod";
 import type { NotionComment, NotionCommentSource } from "./comment-ingest.js";
 import type { NotionTransport } from "./gateway.js";
+import type { NotionGateway } from "./gateway.js";
 import type { NotionMediaPort } from "./media.js";
 
 type CommentClient = Pick<Client, "comments">;
@@ -79,6 +81,54 @@ export class NotionSdkCommentSource implements NotionCommentSource {
         });
       }
       cursor = response.has_more && response.next_cursor ? response.next_cursor : undefined;
+    } while (cursor);
+    return comments;
+  }
+}
+
+const gatewayCommentListSchema = z.object({
+  results: z.array(z.object({
+    id: z.string().min(1),
+    discussion_id: z.string().min(1),
+    created_time: z.string().min(1),
+    created_by: z.object({ id: z.string().min(1) }).passthrough(),
+    parent: z.object({ type: z.string(), block_id: z.string().optional() }).passthrough(),
+    rich_text: z.array(z.object({ plain_text: z.string() }).passthrough()),
+  }).passthrough()),
+  has_more: z.boolean(),
+  next_cursor: z.string().nullable(),
+}).passthrough();
+
+/** Reads comments through NotionGateway so polling shares the global budget. */
+export class NotionGatewayCommentSource implements NotionCommentSource {
+  constructor(private readonly gateway: NotionGateway) {}
+
+  async listComments(targetId: string, pageId: string): Promise<NotionComment[]> {
+    const comments: NotionComment[] = [];
+    let cursor: string | undefined;
+    do {
+      const query = new URLSearchParams({ block_id: targetId, page_size: "100" });
+      if (cursor) query.set("start_cursor", cursor);
+      const response = await this.gateway.request({
+        method: "GET",
+        path: `/v1/comments?${query.toString()}`,
+        priority: "interaction",
+      });
+      const data = gatewayCommentListSchema.parse(response.data);
+      for (const item of data.results) {
+        const createdTime = Date.parse(item.created_time);
+        if (!Number.isFinite(createdTime)) throw new Error(`Notion comment has an invalid created_time: ${item.id}`);
+        comments.push({
+          id: item.id,
+          pageId,
+          blockId: item.parent.type === "block_id" ? item.parent.block_id ?? null : null,
+          discussionId: item.discussion_id,
+          authorId: item.created_by.id,
+          body: item.rich_text.map((part) => part.plain_text).join(""),
+          createdTime,
+        });
+      }
+      cursor = data.has_more && data.next_cursor ? data.next_cursor : undefined;
     } while (cursor);
     return comments;
   }

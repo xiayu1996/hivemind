@@ -14,7 +14,9 @@
     "lint": "oxlint src poc scripts extensions",
     "test": "vitest run",
     "test:watch": "vitest",
-    "db:migrate": "tsx src/persistence/migrate.ts"
+    "db:migrate": "tsx src/persistence/migrate.ts",
+    "story:run": "tsx scripts/run-story.ts",
+    "orchestrator:run": "tsx scripts/run-local-orchestrator.ts"
   },
   "dependencies": {
     "@bull-board/api": "^9.5.0",

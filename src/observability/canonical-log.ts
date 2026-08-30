@@ -38,6 +38,7 @@ const KNOWN_TYPES = new Set([
   "request/header",
   "request/context",
   "request/messages",
+  "request/provider-payload",
   "turn_start",
   "turn_end",
   "step_start",
@@ -139,6 +140,13 @@ export function rebuildModelRequest(events: readonly CanonicalEvent[]): RebuiltM
     context: parseData(contextEvent, contextSchema),
     messages: parseData(messagesEvent, messagesSchema).messages,
   };
+}
+
+/** Returns the exact provider-serialized request rather than a reconstructed approximation. */
+export function rebuildProviderPayload(events: readonly CanonicalEvent[]): unknown {
+  const event = events.findLast((candidate) => candidate.type === "request/provider-payload");
+  if (!event) throw new Error("canonical log is missing the provider payload");
+  return event.data;
 }
 
 const coordinateSchema = z.object({ turn: z.number().int().positive(), step: z.number().int().positive().optional() }).passthrough();

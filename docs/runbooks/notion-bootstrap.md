@@ -14,6 +14,8 @@
 
 4. 将输出的 database/data source ID 写入部署配置，不要写进凭据文件以外的日志。
 
+Windows 上的完整 bootstrap、Webhook 验证和单卡验收顺序见 `m1-live-acceptance.md`。Webhook 首次发送的 verification token 由服务原子写入 secrets 文件，响应和日志均不包含 token。
+
 ## Stories 看板
 
 1. 打开脚本创建的 Stories database，新增 Board view。

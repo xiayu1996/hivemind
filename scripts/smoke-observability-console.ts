@@ -109,8 +109,9 @@ async function main(): Promise<void> {
     await migrate(client);
     const now = Date.now();
     await client.execute({
-      sql: `INSERT INTO stories (id, notion_page_id, title, state, phase, branch, created_at, updated_at)
-            VALUES ('m1-windows', 'local-smoke', 'M1 Windows observability smoke', 'VERIFY', 'VERIFY', 'main', ?, ?)`,
+      sql: `INSERT INTO stories (id, notion_page_id, title, requirement, state, phase, branch, created_at, updated_at)
+            VALUES ('m1-windows', 'local-smoke', 'M1 Windows observability smoke',
+                    'Verify observability data', 'VERIFY', 'VERIFY', 'main', ?, ?)`,
       args: [now, now],
     });
     for (const event of canonical) {

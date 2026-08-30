@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { redactForExport } from "../observability/redact.js";
+import { lastAssistantText } from "../runner/assistant-text.js";
 import type { PiRunner } from "../runner/types.js";
 
 export interface CompletionJudge {
@@ -19,25 +20,6 @@ export interface CompletionDecision {
   feedback: string | null;
 }
 
-function assistantText(messages: unknown[]): string {
-  for (const value of messages.toReversed()) {
-    if (typeof value !== "object" || value === null) continue;
-    const message = value as { role?: unknown; content?: unknown };
-    if (message.role !== "assistant") continue;
-    if (typeof message.content === "string") return message.content;
-    if (Array.isArray(message.content)) {
-      return message.content
-        .filter((item): item is { type: "text"; text: string } =>
-          typeof item === "object" && item !== null &&
-          (item as { type?: unknown }).type === "text" &&
-          typeof (item as { text?: unknown }).text === "string")
-        .map((item) => item.text)
-        .join("");
-    }
-  }
-  throw new Error("completion verifier produced no assistant text");
-}
-
 /** Runs the judgment in its own fresh, tool-free pi session. */
 export class PiCompletionJudge implements CompletionJudge {
   constructor(private readonly createRunner: () => PiRunner) {}
@@ -49,7 +31,7 @@ export class PiCompletionJudge implements CompletionJudge {
       await runner.setAutoRetry(false);
       const result = await runner.prompt(prompt);
       if (result.failure) throw new Error(result.failure.errorMessage);
-      return assistantText(await runner.getMessages());
+      return lastAssistantText(await runner.getMessages());
     } finally {
       await runner.stop();
     }

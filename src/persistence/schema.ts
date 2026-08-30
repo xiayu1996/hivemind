@@ -23,11 +23,14 @@ export const stories = sqliteTable("stories", {
   epicId: text("epic_id"),
   notionPageId: text("notion_page_id").notNull().unique(),
   title: text("title").notNull(),
+  requirement: text("requirement").notNull(),
   state: text("state").notNull(),
   phase: text("phase"),
   priority: integer("priority").notNull().default(2),
   repo: text("repo"),
   branch: text("branch"),
+  targetBranch: text("target_branch"),
+  mrUrl: text("mr_url"),
   capabilities: text("capabilities").notNull().default("[]"),
   dependsOn: text("depends_on").notNull().default("[]"),
   predictedFootprint: text("predicted_footprint").notNull().default("[]"),
@@ -39,6 +42,36 @@ export const stories = sqliteTable("stories", {
   createdAt: ms("created_at").notNull(),
   updatedAt: ms("updated_at").notNull(),
 }, (t) => [index("idx_stories_state").on(t.state), index("idx_stories_epic").on(t.epicId)]);
+
+export const phaseRuns = sqliteTable("phase_runs", {
+  runId: text("run_id").primaryKey(),
+  cardId: text("card_id").notNull(),
+  phase: text("phase").notNull(),
+  round: integer("round").notNull(),
+  sessionId: text("session_id"),
+  promptSha256: text("prompt_sha256").notNull(),
+  status: text("status").notNull(),
+  failure: text("failure"),
+  startedAt: ms("started_at").notNull(),
+  endedAt: ms("ended_at"),
+}, (t) => [
+  uniqueIndex("phase_runs_card_phase_round_unique").on(t.cardId, t.phase, t.round),
+  index("idx_phase_runs_card").on(t.cardId, t.startedAt),
+]);
+
+export const phaseArtifacts = sqliteTable("phase_artifacts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  runId: text("run_id").notNull(),
+  cardId: text("card_id").notNull(),
+  phase: text("phase").notNull(),
+  round: integer("round").notNull(),
+  kind: text("kind").notNull(),
+  body: text("body").notNull(),
+  createdAt: ms("created_at").notNull(),
+}, (t) => [
+  uniqueIndex("phase_artifacts_run_kind_unique").on(t.runId, t.kind),
+  index("idx_phase_artifacts_card").on(t.cardId, t.phase, t.round),
+]);
 
 export const storySpecs = sqliteTable("story_specs", {
   specId: text("spec_id").primaryKey(),

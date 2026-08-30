@@ -6,6 +6,7 @@ import {
   CanonicalLogWriter,
   parseCanonicalLog,
   rebuildModelRequest,
+  rebuildProviderPayload,
   recoverInterruptedTurns,
   validateCoordinates,
 } from "./canonical-log.js";
@@ -41,6 +42,21 @@ describe("canonical log", () => {
       context: { provider: "mock", model: "test", contextWindow: 4096 },
       messages: [{ role: "user", content: "hello" }],
     });
+  });
+
+  it("round-trips the exact provider-serialized payload", () => {
+    const payload = {
+      model: "mock-1",
+      messages: [{ role: "system", content: "system" }, { role: "user", content: "hello" }],
+      tools: [{ type: "function", function: { name: "read", parameters: { type: "object" } } }],
+    };
+    const events = parseCanonicalLog(`${JSON.stringify({
+      type: "request/provider-payload",
+      seq: 0,
+      time: 1,
+      data: payload,
+    })}\n`);
+    expect(rebuildProviderPayload(events)).toEqual(payload);
   });
 
   it("lets recovery append interrupted and rejects unpaired normal logs", async () => {

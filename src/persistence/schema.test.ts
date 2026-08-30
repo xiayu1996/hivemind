@@ -43,7 +43,7 @@ describe("migrations", () => {
 });
 
 describe("drizzle schema matches the migrations", () => {
-  it("declares no table or column the database does not have", async () => {
+  it("has the same columns in both directions for every declared table", async () => {
     const client = await freshDb();
     const tables = new Set(
       (await client.execute(
@@ -68,6 +68,10 @@ describe("drizzle schema matches the migrations", () => {
       );
       for (const column of config.columns) {
         if (!actual.has(column.name)) drift.push(`missing column: ${config.name}.${column.name}`);
+      }
+      const declared = new Set(config.columns.map((column) => column.name));
+      for (const column of actual) {
+        if (!declared.has(column)) drift.push(`undeclared column: ${config.name}.${column}`);
       }
     }
 
@@ -108,8 +112,8 @@ describe("builder and verifier separation", () => {
 describe("state and stop-reason constraints", () => {
   const insertStory = (client: Client, state: string, stopReason: string | null = null) =>
     client.execute({
-      sql: `INSERT INTO stories (id, notion_page_id, title, state, stop_reason, created_at, updated_at)
-            VALUES (?, ?, 'x', ?, ?, ?, ?)`,
+      sql: `INSERT INTO stories (id, notion_page_id, title, requirement, state, stop_reason, created_at, updated_at)
+            VALUES (?, ?, 'x', 'requirement', ?, ?, ?, ?)`,
       args: [`s-${state}-${stopReason}`, `p-${state}-${stopReason}`, state, stopReason, now(), now()],
     });
 

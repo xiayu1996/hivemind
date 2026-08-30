@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS stories (
   epic_id           TEXT REFERENCES epics(id) ON DELETE CASCADE,
   notion_page_id    TEXT NOT NULL UNIQUE,
   title             TEXT NOT NULL,
+  requirement       TEXT NOT NULL,
   state             TEXT NOT NULL CHECK (state IN (
                       'QUEUED','DESIGN','CODE','VERIFY','MERGE','DELIVERED',
                       'REGRESSION_FIX','NEEDS_INPUT','HUMAN_PARKED','FAILED')),
@@ -32,6 +33,8 @@ CREATE TABLE IF NOT EXISTS stories (
   priority          INTEGER NOT NULL DEFAULT 2,
   repo              TEXT,
   branch            TEXT,
+  target_branch     TEXT,
+  mr_url             TEXT,
   capabilities      TEXT NOT NULL DEFAULT '[]',
   depends_on        TEXT NOT NULL DEFAULT '[]',
   predicted_footprint TEXT NOT NULL DEFAULT '[]',
@@ -46,6 +49,39 @@ CREATE TABLE IF NOT EXISTS stories (
 );
 CREATE INDEX IF NOT EXISTS idx_stories_state ON stories(state);
 CREATE INDEX IF NOT EXISTS idx_stories_epic ON stories(epic_id);
+
+CREATE TABLE IF NOT EXISTS phase_runs (
+  run_id            TEXT PRIMARY KEY,
+  card_id           TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  phase              TEXT NOT NULL CHECK (phase IN (
+                     'DESIGN','CODE','VERIFY','MERGE','REGRESSION_FIX')),
+  round              INTEGER NOT NULL CHECK (round > 0),
+  session_id         TEXT,
+  prompt_sha256      TEXT NOT NULL CHECK (length(prompt_sha256) = 64),
+  status             TEXT NOT NULL CHECK (status IN ('running','completed','failed')),
+  failure            TEXT,
+  started_at         INTEGER NOT NULL,
+  ended_at           INTEGER,
+  UNIQUE (card_id, phase, round),
+  CHECK ((status = 'running' AND ended_at IS NULL) OR
+         (status <> 'running' AND ended_at IS NOT NULL)),
+  CHECK (status = 'failed' OR failure IS NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_phase_runs_card ON phase_runs(card_id, started_at);
+
+CREATE TABLE IF NOT EXISTS phase_artifacts (
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id             TEXT NOT NULL REFERENCES phase_runs(run_id) ON DELETE CASCADE,
+  card_id            TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  phase              TEXT NOT NULL CHECK (phase IN (
+                     'DESIGN','CODE','VERIFY','MERGE','REGRESSION_FIX')),
+  round              INTEGER NOT NULL CHECK (round > 0),
+  kind               TEXT NOT NULL,
+  body               TEXT NOT NULL,
+  created_at         INTEGER NOT NULL,
+  UNIQUE (run_id, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_phase_artifacts_card ON phase_artifacts(card_id, phase, round);
 
 CREATE TABLE IF NOT EXISTS story_specs (
   spec_id          TEXT PRIMARY KEY,
