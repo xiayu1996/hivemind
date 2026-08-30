@@ -59,21 +59,35 @@ function footprintsIntersect(left: SchedulableStory, right: SchedulableStory): b
   return left.predictedFootprint.some((leftPath) => right.predictedFootprint.some((rightPath) => pathsIntersect(leftPath, rightPath)));
 }
 
-export function planStoryExecution(stories: readonly SchedulableStory[], _hotspots: readonly string[]): StoryExecutionPlan {
+function coversHotspot(story: SchedulableStory, hotspot: string): boolean {
+  return story.predictedFootprint.some((footprint) => pathsIntersect(footprint, hotspot));
+}
+
+function storiesConflict(left: SchedulableStory, right: SchedulableStory, hotspots: readonly string[]): boolean {
+  return footprintsIntersect(left, right) || hotspots.some((hotspot) => coversHotspot(left, hotspot) && coversHotspot(right, hotspot));
+}
+
+export function planStoryExecution(stories: readonly SchedulableStory[], hotspots: readonly string[]): StoryExecutionPlan {
   const cycle = findDependencyCycle(stories);
   if (cycle) return { kind: "dependency_cycle", cycle, batches: [] };
 
+  const remaining = [...stories];
+  const completed = new Set<string>();
   const batches: string[][] = [];
-  const scheduled: SchedulableStory[] = [];
-  for (const story of stories) {
-    if (scheduled.some((candidate) => footprintsIntersect(story, candidate))) {
-      batches.push([story.id]);
-    } else if (batches.length === 0) {
-      batches.push([story.id]);
-    } else {
-      batches[0]!.push(story.id);
+  while (remaining.length > 0) {
+    const batch: SchedulableStory[] = [];
+    for (const story of remaining) {
+      if (!story.dependsOn.every((dependency) => completed.has(dependency))) continue;
+      if (batch.some((candidate) => storiesConflict(story, candidate, hotspots))) continue;
+      batch.push(story);
     }
-    scheduled.push(story);
+    if (batch.length === 0) break;
+    batches.push(batch.map((story) => story.id));
+    for (const story of batch) completed.add(story.id);
+    const batchIds = new Set(batch.map((story) => story.id));
+    for (let index = remaining.length - 1; index >= 0; index -= 1) {
+      if (batchIds.has(remaining[index]!.id)) remaining.splice(index, 1);
+    }
   }
   return { kind: "planned", batches };
 }
