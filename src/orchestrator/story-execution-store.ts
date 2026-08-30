@@ -296,14 +296,14 @@ export class StoryExecutionStore {
     const promptSha256 = createHash("sha256").update(input.prompt).digest("hex");
     const results = await this.client.batch([
       // Supersedes a previous attempt in the same phase slot when it failed or
-      // was left running by a crash. Its history survives in event_log; only
-      // completed runs are immutable and reused through getCompletedPhase.
+      // was left running by a crash. The old row is deleted (its artifacts
+      // cascade away) because run_id is the primary key that artifacts
+      // reference; the attempt history survives in event_log. Completed runs
+      // stay immutable and are reused through getCompletedPhase.
       {
-        sql: `UPDATE phase_runs
-              SET run_id = ?, prompt_sha256 = ?, status = 'running', session_id = NULL,
-                  failure = NULL, started_at = ?, ended_at = NULL
+        sql: `DELETE FROM phase_runs
               WHERE card_id = ? AND phase = ? AND round = ? AND status <> 'completed'`,
-        args: [input.runId, promptSha256, time, input.cardId, input.phase, input.round],
+        args: [input.cardId, input.phase, input.round],
       },
       {
         sql: `INSERT INTO phase_runs
@@ -321,9 +321,8 @@ export class StoryExecutionStore {
         promptSha256,
       }, time),
     ], "write");
-    const superseded = Number(results[0]?.rowsAffected ?? 0);
     const inserted = Number(results[1]?.rowsAffected ?? 0);
-    if (superseded + inserted !== 1) {
+    if (inserted !== 1) {
       throw new Error(`cannot start ${input.phase} while Story is not in that phase`);
     }
   }
