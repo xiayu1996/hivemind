@@ -69,7 +69,7 @@ Node `>=26`，ESM，包管理用 npm。
 - **中央 libsql 是执行状态的唯一真相源**，Notion 只是人机界面与呈现。同一字段永不双向合并：系统 owner 字段只由 orchestrator 写，人 owner 字段只被 ingest。
 - **Notion 读写全部收敛在 orchestrator 的 NotionGateway**，worker 永不直连 Notion。单写者是"无需 CAS"这一简化的前提，破坏它就要补一整套冲突解决。
 - **跨 phase 上下文是无状态全量注入**，不做 session fork。`assemblePhasePrompt` 只读它的参数：不读时钟、不读文件系统、不取随机数，每个集合按稳定键排序。相同输入必须产出逐字节相同的 prompt——跨机重建、failover、崩溃恢复三件事都骑在这一条上，且它是 provider 前缀缓存生效的前提。
-- **全系统只有两类真停点**：`blocking_question` 与 `verify_loop_exceeded`。新增停点需要改设计文档。
+- **全系统只有三类真停点**：`blocking_question`、`verify_loop_exceeded`、`retry_limit_exceeded`（见 03 §1.5，DB CHECK 强制）。新增停点需要改设计文档。
 - **内环收敛判据是严格真子集**（`failed(N) ⊊ failed(N-1)`）；轮次硬上限（内环 6 / phase 重入 3 / continue 8 / regression 重开 2）只是最终兜底，上限设在离散轮次，不设在时长或 token。
 - **验证命令永不硬编码**，由 agent 看现场决定。防造假靠三层：prompt 约束、工具面物理掐断、verdict 代码校验；三层缺一不可，prompt 是最弱的一层。
 - **`VERIFY.session_id != CODE.session_id`** 由 DB CHECK 强制，不靠应用层自觉。

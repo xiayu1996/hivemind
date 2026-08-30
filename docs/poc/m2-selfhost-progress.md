@@ -42,6 +42,34 @@ manually — the independent-PR constraint from the board's delivery rule held.
   Notion pages drop out of the sync active set on 404; initial daemon cycle
   survives failures.
 
+## S-M2-07, delivered by hand after the block
+
+Both providers stayed quota-blocked, so the acceptance session took the card
+over and delivered it under the same TDD rule the pipeline follows: five
+scenarios, each a red commit followed by a green one, on `story/s-m2-07`.
+
+| Scenario | What it fixes |
+|---|---|
+| `S-M2-07-record` | The epic fast-forward captures the directories the Story really changed, before the merge, and applies them only after it |
+| `S-M2-07-store` | The capture table is durable across a crash, a re-merge supersedes a stale capture, and recovery applies only captures whose Story revision already landed |
+| `S-M2-07-deviation` | Prediction deviation as a pure function: directories touched without a prediction, predictions never touched, pooled rate and the share of Stories that under-predicted |
+| `S-M2-07-stats` | `/api/stats` and a console statistics page carry the rate |
+| `S-M2-07-live` | The live delivery path records the footprint too, so the metric is real before Epic execution exists |
+
+The pipeline had left an uncommitted implementation in its worktree and a red
+test whose ordering assertion compared a global mock invocation counter against
+an index into a different array, so it could never pass. The assertion was
+corrected to express the contract it meant.
+
+## Independent audit of the run
+
+Three reviews covered every commit of the day; the findings, the twelve defects
+fixed in response and the ranked backlog are in
+[docs/reviews/2026-08-30-m2-audit.md](../reviews/2026-08-30-m2-audit.md). The
+headline: the stories produced sound pure functions with real tests, but most
+are not reachable from any production path, and S-M2-06 had removed merge
+request creation from the pipeline entirely.
+
 ## Current blocker
 
 Both configured providers are quota-blocked: `zai-coding-cn` returns 429 code
