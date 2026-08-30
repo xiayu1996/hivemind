@@ -77,6 +77,7 @@ export async function planRepositoryStoryExecution(
   config: ConfigStore,
   stories: readonly SchedulableStory[],
 ): Promise<StoryExecutionPlan> {
+  await config.reload();
   return planStoryExecution(stories, config.get("schedule.hotspotPaths"));
 }
 
