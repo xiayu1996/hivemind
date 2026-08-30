@@ -1,6 +1,6 @@
 import { createClient } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { interpretEpicPropertyChange } from "../notion/intent-interpreter.js";
+import { interpretEpicComment, interpretEpicPropertyChange } from "../notion/intent-interpreter.js";
 import { migrate } from "../persistence/migrate.js";
 import { PlanApprovalStore } from "./plan-approval.js";
 
@@ -17,19 +17,19 @@ const plan = {
   }],
 };
 
+async function presentedPlan() {
+  const client = createClient({ url: ":memory:" });
+  await migrate(client);
+  const approvals = new PlanApprovalStore(client, () => 1_000);
+  await approvals.present({ epicId: "M2", notionPageId: "epic-page", title: "Plan approval", plan });
+  return { client, approvals };
+}
+
 describe("@scenario S-M2-02-wait plan approval", () => {
   let client: ReturnType<typeof createClient>;
   let approvals: PlanApprovalStore;
 
-  beforeEach(async () => {
-    client = createClient({ url: ":memory:" });
-    await migrate(client);
-    approvals = new PlanApprovalStore(client, () => 1_000);
-    await approvals.present({
-      epicId: "M2", notionPageId: "epic-page", title: "Plan approval", plan,
-    });
-  });
-
+  beforeEach(async () => ({ client, approvals } = await presentedPlan()));
   afterEach(() => client.close());
 
   it("keeps an unapproved Epic waiting without materializing or dispatching its Stories", async () => {
@@ -47,17 +47,24 @@ describe("@scenario S-M2-02-drag plan approval", () => {
     expect(interpretEpicPropertyChange("拆解待确认", "进行中", "PLAN_APPROVAL", 1_000)).toEqual({
       type: "approve_plan", humanWinsUntil: 121_000,
     });
-    const client = createClient({ url: ":memory:" });
-    await migrate(client);
-    const approvals = new PlanApprovalStore(client, () => 1_000);
-    await approvals.present({ epicId: "M2", notionPageId: "epic-page", title: "Plan approval", plan });
-
+    const { client, approvals } = await presentedPlan();
     expect(await approvals.approve({ epicId: "M2", eventId: "drag-1", source: "drag" })).toBe(true);
     expect(await approvals.getEpic("M2")).toMatchObject({ state: "EXECUTING" });
     expect((await client.execute("SELECT id, state FROM stories")).rows).toEqual([{ id: "S-M2-02", state: "QUEUED" }]);
     expect((await client.execute("SELECT story_id, state FROM execution_dispatches")).rows).toEqual([
       { story_id: "S-M2-02", state: "pending" },
     ]);
+    client.close();
+  });
+});
+
+describe("@scenario S-M2-02-comment plan approval", () => {
+  it("starts the Epic from an unambiguous Epic-page approval comment", async () => {
+    expect(interpretEpicComment("PLAN_APPROVAL", "批准")).toEqual({ type: "approve_plan" });
+    expect(interpretEpicComment("PLAN_APPROVAL", "Looks good to me")).toEqual({ type: "feedback" });
+    const { client, approvals } = await presentedPlan();
+    expect(await approvals.approve({ epicId: "M2", eventId: "comment-1", source: "comment" })).toBe(true);
+    expect(await approvals.getEpic("M2")).toMatchObject({ state: "EXECUTING" });
     client.close();
   });
 });
