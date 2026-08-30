@@ -27,6 +27,8 @@ export type EpicPropertyIntent =
   | { type: "approve_plan"; humanWinsUntil: number }
   | { type: "unsupported_property_change"; observedEpicStatus: string; humanWinsUntil: number };
 
+export type EpicCommentIntent = { type: "approve_plan" } | { type: "feedback" };
+
 export function interpretPropertyChange(input: PropertyChangeInput): PropertyIntent {
   if (input.observedAiStatus === input.shadowAiStatus) return { type: "none" };
   const humanWinsUntil = input.now + HUMAN_WINS_MS;
@@ -58,6 +60,14 @@ export function interpretEpicPropertyChange(
     return { type: "approve_plan", humanWinsUntil };
   }
   return { type: "unsupported_property_change", observedEpicStatus, humanWinsUntil };
+}
+
+export function interpretEpicComment(state: EpicState, body: string): EpicCommentIntent {
+  const text = body.trim().toLocaleLowerCase();
+  if (state === "PLAN_APPROVAL" && ["批准", "approve", "approved"].includes(text)) {
+    return { type: "approve_plan" };
+  }
+  return { type: "feedback" };
 }
 
 export function interpretComment(state: StoryState, body: string): CommentIntent {
