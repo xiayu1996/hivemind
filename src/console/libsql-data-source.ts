@@ -65,7 +65,7 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
 
   async config(): Promise<unknown[]> {
     return (await this.client.execute(
-      "SELECT key, value_json, version, updated_by, updated_at FROM config_entries ORDER BY key",
+      "SELECT scope_id, key, value_json, version, updated_by, updated_at FROM config_entries ORDER BY scope_id, key",
     )).rows.map((row) => Object.assign(plain(row), {
       value: JSON.parse(String(row.value_json)),
     }));

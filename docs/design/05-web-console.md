@@ -37,12 +37,12 @@
 ### 4.1 数据模型
 
 ```
-config_entries(key, value_json, version, updated_by, updated_at)
-config_history(key, version, value_json, diff, updated_by, ts)     -- 全量留痕, 可一键回滚
+config_entries(scope_id, key, value_json, version, updated_by, updated_at)
+config_history(scope_id, key, version, value_json, diff, updated_by, ts)     -- 全量留痕, 可一键回滚
 ```
 
 - **schema 即真相**：每个 key 在代码里有 zod schema（busybee env.ts 模式扩展）+ 元信息：`{ scope: global|per-host|per-repo, reload: hot|drain-restart, description }`。非法值在保存时拒绝；控制台表单由 schema 生成，不手写。
-- **默认值在代码，覆盖在 DB**：代码内 defaults 是兜底真相（DB 清空系统仍可跑）；config_entries 是 overlay。启动时 merge，运行期热更。
+- **默认值在代码，覆盖在 DB**：代码内 defaults 是兜底真相（DB 清空系统仍可跑）；config_entries 是 overlay。启动时 merge，运行期热更。`scope_id` 与 key 联合唯一；per-repo 键使用仓库标识作为 scope_id。
 
 ### 4.2 day1 纳入动态配置的键（预期时常变化的东西）
 
@@ -52,7 +52,7 @@ config_history(key, version, value_json, diff, updated_by, ts)     -- 全量留�
 | 调度 | 轮询周期、活跃集窗口、worker 失联宽限期、并发度 per-host | hot |
 | 模型策略 | 三档 × provider 的 model id 映射表、failover 链顺序、purpose→档位白名单 | hot |
 | 护栏 | 日/月成本阈值（全局 + per-provider）、单卡成本 p95 倍数告警 | hot |
-| 并行调度 | hotspot 文件清单（高冲突路径，随项目演化持续增补） | hot |
+| 并行调度 | hotspot 文件清单（高冲突路径，随项目演化持续增补；非空仓库相对路径） | hot |
 | 守卫 | extraWriteRoots 追加项、e2e host 白名单 | hot（下一次 spawn 生效） |
 | 暂停开关 | intake 急停、per-provider 手动摘除、self-update 开关/钉版本 | hot |
 
