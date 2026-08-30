@@ -304,9 +304,12 @@ export class StoryExecutionStore {
       // reference; the attempt history survives in event_log. Completed runs
       // stay immutable and are reused through getCompletedPhase.
       {
+        // Carries the same guard as the insert below: a start the Story's state
+        // rejects must delete nothing, and the batch commits either way.
         sql: `DELETE FROM phase_runs
-              WHERE card_id = ? AND phase = ? AND round = ? AND status <> 'completed'`,
-        args: [input.cardId, input.phase, input.round],
+              WHERE card_id = ? AND phase = ? AND round = ? AND status <> 'completed'
+                AND EXISTS (SELECT 1 FROM stories WHERE id = card_id AND state = ?)`,
+        args: [input.cardId, input.phase, input.round, input.phase],
       },
       {
         sql: `INSERT INTO phase_runs

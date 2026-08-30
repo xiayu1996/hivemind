@@ -150,3 +150,50 @@ describe("StoryExecutionStore Epic membership", () => {
     client.close();
   });
 });
+
+describe("StoryExecutionStore phase slot guard", () => {
+  it("keeps the previous attempt when the Story leaves the phase between the check and the write", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, () => 1_000);
+    await store.createStory({
+      id: "S-EPIC1-01",
+      notionPageId: "page-1",
+      title: "Race the phase slot",
+      requirement: "A rejected phase start must not destroy the attempt it refused to supersede.",
+      branch: "story/epic1-01",
+    });
+    await store.transition("S-EPIC1-01", "QUEUED", "DESIGN", "system", "run-0");
+    await client.execute({
+      sql: `INSERT INTO phase_runs (run_id, card_id, phase, round, prompt_sha256, status, failure, started_at, ended_at)
+            VALUES ('run-old', 'S-EPIC1-01', 'DESIGN', 1, ?, 'failed', 'runner died', 1, 2)`,
+      args: ["a".repeat(64)],
+    });
+
+    let raced = false;
+    const racing = {
+      execute: async (statement: unknown) => {
+        const result = await client.execute(statement as never);
+        const sql = String((statement as { sql?: string }).sql ?? "");
+        if (!raced && sql.includes("FROM stories")) {
+          raced = true;
+          await client.execute("UPDATE stories SET state = 'CODE' WHERE id = 'S-EPIC1-01'");
+        }
+        return result;
+      },
+      batch: (statements: unknown, mode: unknown) => client.batch(statements as never, mode as never),
+    } as unknown as typeof client;
+
+    await expect(new StoryExecutionStore(racing, () => 2_000).beginPhase({
+      runId: "run-new",
+      cardId: "S-EPIC1-01",
+      phase: "DESIGN",
+      round: 1,
+      prompt: "design again",
+    })).rejects.toThrow(/not in that phase/);
+
+    const rows = (await client.execute("SELECT run_id, status FROM phase_runs WHERE card_id = 'S-EPIC1-01'")).rows;
+    expect(rows).toMatchObject([{ run_id: "run-old", status: "failed" }]);
+    client.close();
+  });
+});
