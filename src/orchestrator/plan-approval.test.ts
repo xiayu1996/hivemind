@@ -34,7 +34,7 @@ describe("@scenario S-M2-02-wait plan approval", () => {
   it("keeps an unapproved Epic waiting without materializing or dispatching its Stories", async () => {
     expect(await approvals.getEpic("M2")).toMatchObject({ state: "PLAN_APPROVAL" });
     expect((await client.execute("SELECT id FROM stories")).rows).toEqual([]);
-    expect((await client.execute("SELECT id FROM execution_dispatches")).rows).toEqual([]);
+    expect((await client.execute("SELECT story_id FROM execution_dispatches")).rows).toEqual([]);
     expect((await client.execute("SELECT payload FROM notion_outbox")).rows).toContainEqual(expect.objectContaining({
       payload: expect.stringContaining("拆解待确认"),
     }));

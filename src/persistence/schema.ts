@@ -47,6 +47,28 @@ export const stories = sqliteTable("stories", {
   updatedAt: ms("updated_at").notNull(),
 }, (t) => [index("idx_stories_state").on(t.state), index("idx_stories_epic").on(t.epicId)]);
 
+export const epicPlans = sqliteTable("epic_plans", {
+  epicId: text("epic_id").primaryKey(),
+  body: text("body").notNull(),
+  createdAt: ms("created_at").notNull(),
+  updatedAt: ms("updated_at").notNull(),
+});
+
+export const epicApprovalEvents = sqliteTable("epic_approval_events", {
+  eventId: text("event_id").primaryKey(),
+  epicId: text("epic_id").notNull(),
+  source: text("source").notNull(),
+  createdAt: ms("created_at").notNull(),
+}, (t) => [index("idx_epic_approval_events_epic").on(t.epicId)]);
+
+export const executionDispatches = sqliteTable("execution_dispatches", {
+  storyId: text("story_id").primaryKey(),
+  epicId: text("epic_id").notNull(),
+  state: text("state").notNull(),
+  createdAt: ms("created_at").notNull(),
+  dispatchedAt: ms("dispatched_at"),
+}, (t) => [index("idx_execution_dispatches_pending").on(t.state, t.createdAt)]);
+
 export const phaseRuns = sqliteTable("phase_runs", {
   runId: text("run_id").primaryKey(),
   cardId: text("card_id").notNull(),

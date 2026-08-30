@@ -55,6 +55,34 @@ CREATE TABLE IF NOT EXISTS stories (
 CREATE INDEX IF NOT EXISTS idx_stories_state ON stories(state);
 CREATE INDEX IF NOT EXISTS idx_stories_epic ON stories(epic_id);
 
+-- An accepted decomposition stays immutable behind this human approval gate.
+CREATE TABLE IF NOT EXISTS epic_plans (
+  epic_id       TEXT PRIMARY KEY REFERENCES epics(id) ON DELETE CASCADE,
+  body          TEXT NOT NULL,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+
+-- Both webhook and polling deliveries name the same event id, so only the first
+-- delivery can open the gate.
+CREATE TABLE IF NOT EXISTS epic_approval_events (
+  event_id      TEXT PRIMARY KEY,
+  epic_id       TEXT NOT NULL REFERENCES epics(id) ON DELETE CASCADE,
+  source        TEXT NOT NULL CHECK (source IN ('comment','drag')),
+  created_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_epic_approval_events_epic ON epic_approval_events(epic_id);
+
+-- This durable dispatch intent is consumed by the normal Story scheduler.
+CREATE TABLE IF NOT EXISTS execution_dispatches (
+  story_id      TEXT PRIMARY KEY REFERENCES stories(id) ON DELETE CASCADE,
+  epic_id       TEXT NOT NULL REFERENCES epics(id) ON DELETE CASCADE,
+  state         TEXT NOT NULL CHECK (state IN ('pending','dispatched')),
+  created_at    INTEGER NOT NULL,
+  dispatched_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_execution_dispatches_pending ON execution_dispatches(state, created_at);
+
 CREATE TABLE IF NOT EXISTS phase_runs (
   run_id            TEXT PRIMARY KEY,
   card_id           TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
