@@ -65,7 +65,10 @@ async function main(): Promise<void> {
   if (!dataSourceId) throw new Error("HIVEMIND_NOTION_STORIES_DATA_SOURCE_ID is missing");
   const alertChannels = alertChannelsFromConfig(stored);
   if (alertChannels.length === 0) {
-    throw new Error("configure FEISHU_WEBHOOK_URL or SMTP settings for out-of-band alerts");
+    // Notion stays reachable in this mode, so needs_input still surfaces on the
+    // board; the out-of-band channel only matters when Notion itself is down.
+    console.warn("WARNING: no out-of-band alert channel configured (FEISHU_WEBHOOK_URL or SMTP). " +
+      "needs_input and P0 notifications surface only through the Notion board.");
   }
   const alerts = new AlertRouter(alertChannels);
 
@@ -218,13 +221,17 @@ async function main(): Promise<void> {
       if (message !== lastP0 || time - lastP0At >= 10 * 60_000) {
         lastP0 = message;
         lastP0At = time;
-        const deliveryResult = await alerts.send({
-          kind: "p0",
-          title: "Local orchestrator cycle failed",
-          body: message,
-        });
-        if (deliveryResult.delivered.length === 0) {
-          console.error("P0 alert failed on every channel:", JSON.stringify(deliveryResult.failed));
+        if (alerts.channelCount === 0) {
+          console.error("P0: local orchestrator cycle failed (no out-of-band alert channel):", message);
+        } else {
+          const deliveryResult = await alerts.send({
+            kind: "p0",
+            title: "Local orchestrator cycle failed",
+            body: message,
+          });
+          if (deliveryResult.delivered.length === 0) {
+            console.error("P0 alert failed on every channel:", JSON.stringify(deliveryResult.failed));
+          }
         }
       }
       throw error;

@@ -26,6 +26,10 @@ export interface AlertDelivery {
 export class AlertRouter {
   constructor(private readonly channels: readonly AlertChannel[]) {}
 
+  get channelCount(): number {
+    return this.channels.length;
+  }
+
   async send(message: AlertMessage): Promise<AlertDelivery> {
     if (message.kind !== "needs_input" && message.kind !== "p0") {
       return { attempted: [], delivered: [], failed: [] };

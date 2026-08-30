@@ -35,4 +35,13 @@ describe("alertNeedsInput", () => {
       stopReason: "verify_loop_exceeded",
     })).rejects.toThrow("needs-input alert failed on every channel");
   });
+
+  it("stays silent when no channel is configured at all", async () => {
+    const alerts = new AlertRouter([]);
+    await expect(alertNeedsInput(alerts, {
+      id: "S-EPIC1-01",
+      state: "NEEDS_INPUT",
+      stopReason: "blocking_question",
+    })).resolves.toBe(false);
+  });
 });
