@@ -61,7 +61,7 @@ export class EpicIntegrator {
     });
 
     if (result.kind === "merged") {
-      await this.store.markIntegrated(cardId);
+      await this.store.markIntegrated(cardId, result.integrationBranch);
       return result;
     }
     if (result.kind === "conflict") {

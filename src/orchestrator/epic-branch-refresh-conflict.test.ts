@@ -11,7 +11,7 @@ describe("@scenario S-M2-06-freshconflict", () => {
     const calls: string[][] = [];
     const git = { run: vi.fn(async (_cwd: string, args: string[]) => {
       calls.push(args);
-      if (args.join(" ") === "rev-parse main") return "main-revision\n";
+      if (args.join(" ") === "rev-parse origin/main") return "main-revision\n";
       if (args.join(" ") === "branch --show-current") return "main\n";
       return "";
     }) };
@@ -33,9 +33,9 @@ describe("@scenario S-M2-06-freshconflict", () => {
     const calls: string[][] = [];
     const git = { run: vi.fn(async (_cwd: string, args: string[]) => {
       calls.push(args);
-      if (args.join(" ") === "rev-parse main") return "main-revision\n";
+      if (args.join(" ") === "rev-parse origin/main") return "main-revision\n";
       if (args.join(" ") === "branch --show-current") return "epic/M2\n";
-      if (args.join(" ") === "merge --no-ff main") throw new Error("CONFLICT");
+      if (args.join(" ") === "merge --no-ff origin/main") throw new Error("CONFLICT");
       return "";
     }) };
     const refresh = new EpicBranchFreshness(client, { worktreePath: "integration", git, now: () => 100_000_000 });

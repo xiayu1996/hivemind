@@ -609,13 +609,22 @@ export class StoryExecutionStore {
   }
 
   /** The Story is on the Epic head. Recorded so a later Story's subset
-   * re-verification knows what it has to hold beside. */
-  async markIntegrated(cardId: string): Promise<void> {
-    await this.client.execute({
-      sql: `UPDATE execution_dispatches SET state = 'integrated', integrated_at = ?
-            WHERE story_id = ?`,
-      args: [this.now(), cardId],
-    });
+   * re-verification knows what it has to hold beside, and so the branch the
+   * Epic lives on is durable rather than inferred from a naming rule. */
+  async markIntegrated(cardId: string, integrationBranch: string): Promise<void> {
+    const time = this.now();
+    await this.client.batch([
+      {
+        sql: `UPDATE execution_dispatches SET state = 'integrated', integrated_at = ?
+              WHERE story_id = ?`,
+        args: [time, cardId],
+      },
+      {
+        sql: `UPDATE epics SET integration_branch = ?, updated_at = ?
+              WHERE id = (SELECT epic_id FROM stories WHERE id = ?) AND integration_branch IS NULL`,
+        args: [integrationBranch, time, cardId],
+      },
+    ], "write");
   }
 
   /** Stories already on this Epic's head, with the scenarios each one owns. */

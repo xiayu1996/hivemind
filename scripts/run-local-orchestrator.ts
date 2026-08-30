@@ -38,6 +38,9 @@ import { NotionEpicPlanDelivery } from "../src/notion/epic-plan-delivery.js";
 import { ingestEpicsForDecomposition } from "../src/notion/epic-intake.js";
 import { EpicDecomposer } from "../src/orchestrator/decompose-runner.js";
 import { PiDecomposePort } from "../src/orchestrator/pi-decompose-port.js";
+import { EpicBranchFreshness } from "../src/orchestrator/epic-branch-refresh.js";
+import { EpicMrDelivery } from "../src/vcs/epic-delivery.js";
+import { discoverMRPort } from "../src/vcs/mr/adapters.js";
 import { NotionStoryProjection } from "../src/notion/story-projection.js";
 import { NotionSyncCoordinator, type NotionSyncPoller } from "../src/notion/sync.js";
 import { registerNotionWebhookRoute } from "../src/notion/webhook-route.js";
@@ -395,6 +398,45 @@ async function main(): Promise<void> {
       }
   };
 
+  // An Epic that is fully integrated has one review request to open, and an
+  // Epic that is still executing has to keep up with main.
+  const maintainEpics = async (): Promise<void> => {
+    const layout = worktreeLayout(workRoot);
+    await config.reload();
+    const freshness = new EpicBranchFreshness(handle.client, {
+      worktreePath: (epicId) => locateWorktree(repositoryId, `epic-${epicId}`, layout).worktreePath,
+      intervalMs: config.get("schedule.epicBranchFreshnessMs"),
+    });
+    for (const result of await freshness.tick()) {
+      if (result.outcome === "failed") {
+        console.warn(`Epic ${result.epicId} branch refresh failed: ${result.reason}`);
+      }
+    }
+
+    const finished = (await handle.client.execute({
+      sql: `SELECT e.id FROM epics e
+             WHERE e.state = 'EXECUTING'
+               AND EXISTS (SELECT 1 FROM stories WHERE epic_id = e.id)
+               AND NOT EXISTS (
+                 SELECT 1 FROM stories s
+                   LEFT JOIN execution_dispatches d ON d.story_id = s.id
+                  WHERE s.epic_id = e.id
+                    AND (s.state <> 'DELIVERED' OR d.state IS NOT 'integrated')
+               )
+             ORDER BY e.updated_at LIMIT 1`,
+    })).rows[0];
+    if (!finished) return;
+    const epicId = String(finished.id);
+    const worktreePath = locateWorktree(repositoryId, `epic-${epicId}`, layout).worktreePath;
+    const delivered = await new EpicMrDelivery(handle.client, await discoverMRPort(), { worktreePath })
+      .deliver(epicId);
+    await handle.client.execute({
+      sql: "UPDATE epics SET state = 'EPIC_ACCEPT', mr_url = ?, updated_at = ? WHERE id = ? AND state = 'EXECUTING'",
+      args: [delivered.mrUrl, Date.now(), epicId],
+    });
+    console.log(`Epic ${epicId} review request: ${delivered.mrUrl}`);
+  };
+
   const cycle = async (): Promise<void> => {
     if (running) return;
     running = true;
@@ -402,6 +444,7 @@ async function main(): Promise<void> {
       await syncIntake();
       await reconcileProjections();
       await decomposeWaitingEpic();
+      await maintainEpics();
 
       const rows = (await handle.client.execute({
         sql: `SELECT id, state, epic_id, repo, branch, target_branch, depends_on, predicted_footprint

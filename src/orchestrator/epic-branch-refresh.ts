@@ -6,6 +6,7 @@ export interface EpicBranchFreshnessOptions {
   worktreePath: string | ((epicId: string) => string);
   git?: GitCommandPort;
   intervalMs?: number;
+  mainBranch?: string;
   now?: () => number;
 }
 
@@ -17,11 +18,13 @@ export type FreshnessResult =
 export class EpicBranchFreshness {
   private readonly git: GitCommandPort;
   private readonly intervalMs: number;
+  private readonly mainBranch: string;
   private readonly now: () => number;
 
   constructor(private readonly client: Client, private readonly options: EpicBranchFreshnessOptions) {
     this.git = options.git ?? processGitCommand;
     this.intervalMs = options.intervalMs ?? 86_400_000;
+    this.mainBranch = options.mainBranch ?? "main";
     this.now = options.now ?? Date.now;
     if (!Number.isInteger(this.intervalMs) || this.intervalMs < 1) throw new Error("freshness interval must be a positive integer");
   }
@@ -37,7 +40,11 @@ export class EpicBranchFreshness {
 
   private async refresh(epicId: string, integrationBranch: string): Promise<FreshnessResult> {
     const cwd = typeof this.options.worktreePath === "function" ? this.options.worktreePath(epicId) : this.options.worktreePath;
-    const sourceRevision = (await this.git.run(cwd, ["rev-parse", "main"])).trim();
+    // Merging the local ref would refresh the Epic against whatever this host
+    // last happened to pull, which on an idle worker is nothing at all.
+    const source = `origin/${this.mainBranch}`;
+    await this.git.run(cwd, ["fetch", "origin", this.mainBranch]);
+    const sourceRevision = (await this.git.run(cwd, ["rev-parse", source])).trim();
     const time = this.now();
     const lastSuccess = (await this.client.execute({
       sql: `SELECT ts FROM epic_branch_refresh_events
@@ -62,7 +69,7 @@ export class EpicBranchFreshness {
       return { epicId, outcome: "failed", reason };
     }
     try {
-      await this.git.run(cwd, ["merge", "--no-ff", "main"]);
+      await this.git.run(cwd, ["merge", "--no-ff", source]);
     } catch (cause) {
       const reason = cause instanceof Error ? cause.message : String(cause);
       try {
