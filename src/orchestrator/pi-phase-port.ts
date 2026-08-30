@@ -1,5 +1,5 @@
 import { mkdir, readFile } from "node:fs/promises";
-import { stringify } from "yaml";
+import { parse, stringify } from "yaml";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import {
@@ -100,12 +100,19 @@ function parseResult(input: ManagedPhaseInput, raw: string): ManagedPhaseResult[
  * criterion inside a labelled object; serialise both back to the string form
  * the frozen contract requires without changing their content. */
 function normalizeDodYaml(raw: unknown): string {
-  if (raw === null || typeof raw !== "object") return typeof raw === "string" ? raw : String(raw);
-  const document = { ...(raw as Record<string, unknown>) };
-  if (Array.isArray(document.acceptance_criteria)) {
-    document.acceptance_criteria = document.acceptance_criteria.map((item) => flattenToString(item));
+  if (raw === null || (typeof raw !== "object" && typeof raw !== "string")) return String(raw);
+  try {
+    const document = typeof raw === "string"
+      ? (parse(raw) as Record<string, unknown>)
+      : { ...(raw as Record<string, unknown>) };
+    if (Array.isArray(document.acceptance_criteria)) {
+      document.acceptance_criteria = document.acceptance_criteria.map((item) => flattenToString(item));
+    }
+    return stringify(document);
+  } catch {
+    // Not YAML after all; leave the original for schema validation to judge.
+    return typeof raw === "string" ? raw : String(raw);
   }
-  return stringify(document);
 }
 
 function flattenToString(item: unknown): string {
