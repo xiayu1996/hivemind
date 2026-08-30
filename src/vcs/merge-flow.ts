@@ -56,7 +56,15 @@ export class EpicMergeFlow {
     try {
       await this.git.run(this.options.storyWorktree, ["rebase", target]);
     } catch (cause) {
-      return { kind: "conflict", integrationBranch: target, reason: cause instanceof Error ? cause.message : String(cause) };
+      const reason = cause instanceof Error ? cause.message : String(cause);
+      try {
+        const unresolved = await this.git.run(this.options.storyWorktree, ["diff", "--name-only", "--diff-filter=U"]);
+        if (unresolved.trim() !== "") return { kind: "conflict", integrationBranch: target, reason };
+      } catch (inspectionCause) {
+        const inspectionReason = inspectionCause instanceof Error ? inspectionCause.message : String(inspectionCause);
+        return { kind: "verification_failed", integrationBranch: target, scenarioIds: [], reason: `${reason}; unable to inspect rebase state: ${inspectionReason}` };
+      }
+      return { kind: "verification_failed", integrationBranch: target, scenarioIds: [], reason };
     }
     const affectedStories = [
       input.story,
