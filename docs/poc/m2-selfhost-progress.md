@@ -9,7 +9,7 @@
 
 | Card | PR | Content | Notes |
 |---|---|---|---|
-| S-VAL-01 | [PR #2](https://github.com/xiayu1996/hivemind/pull/2) | `src/util/format.ts` + 6 scenario tests | M1-37 acceptance card; full unattended pipeline first proven here |
+| S-VAL-01 | [PR #2](https://github.com/xiayu1996/hivemind/pull/2) | `src/util/format.ts` + 6 scenario tests | M1-37 acceptance card; first end-to-end run, attended (see the audit) |
 | S-M2-01 | [PR #3](https://github.com/xiayu1996/hivemind/pull/3) | DECOMPOSE artifact validation + business-language lint | Pure functions; CN+EN implementation-vocabulary lint |
 | S-M2-02 | [PR #4](https://github.com/xiayu1996/hivemind/pull/4) | PLAN_APPROVAL gate: epic plans, approval events, dispatch intents | Wired into the real Notion sync coordinator after one rejected round |
 | S-M2-03 | [PR #5](https://github.com/xiayu1996/hivemind/pull/5) | Footprint scheduler: topology + intersection + hotspots + cycles | One round |
@@ -30,7 +30,8 @@ manually — the independent-PR constraint from the board's delivery rule held.
   criteria are flattened to the contracted string forms.
 - Verify evidence channel: real pi RPC `message_update`/`message_end`
   toolResult events are read (the fixture shape alone saw nothing), ANSI
-  stripped before scenario-id matching, plus a runner-native fallback matcher.
+  stripped before scenario-id matching, plus a runner-native fallback matcher
+  (since narrowed to standalone runner markers — see the audit).
 - Recovery semantics: failed phase attempts are superseded by delete+insert
   (their artifacts cascade); a completed result its own consumer rejects is
   invalidated once and regenerated; VERIFY/MERGE parking and human resume via
@@ -74,8 +75,10 @@ request creation from the pipeline entirely.
 
 Both configured providers are quota-blocked: `zai-coding-cn` returns 429 code
 1113 (balance exhausted), and `openai-codex` reports its usage limit reached
-(`xai` has no credentials). S-M2-07 is parked in NEEDS_INPUT with
-`retry_limit_exceeded` after three attempts.
+(`xai` has no credentials). No card can run through the pipeline until one
+provider is available; S-M2-07's work exists but its card is still parked in
+NEEDS_INPUT with `retry_limit_exceeded`, so an operator has to reconcile the
+card state with the delivered branch.
 
 Recovery once a provider is available:
 
