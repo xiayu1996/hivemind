@@ -121,6 +121,25 @@ describe("BlindVerifyExecutor", () => {
     expect(result.validationErrors.join(" ")).toMatch(/JSON|Unexpected token/i);
   });
 
+  it("extracts evidence from real pi toolResult messages without the echo protocol", async () => {
+    const events = [
+      {
+        type: "message",
+        message: {
+          role: "toolResult",
+          content: [{ type: "text", text: "\u2713 src/util/format.test.ts > S-EPIC-01-unit rounds correctly\nTests 1 passed (1)" }],
+        },
+      },
+      assistant(JSON.stringify({ scenarios: [{ id: "S-EPIC-01-unit", status: "passed" }] })),
+    ];
+    const result = await new BlindVerifyExecutor(
+      { create: () => runner({ events }) },
+      { insert: async () => undefined },
+      pins(),
+    ).run(input());
+    expect(result.record.verdict).toBe("accepted");
+  });
+
   it("extracts observed scenario results from real pi tool execution events", async () => {
     const events = [
       {

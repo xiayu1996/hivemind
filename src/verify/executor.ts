@@ -100,24 +100,54 @@ function trajectory(events: readonly RpcEvent[]): TrajectoryEvidence[] {
         ...(typeof event.scenarioId === "string" ? { scenarioId: event.scenarioId } : {}),
         ...(typeof event.status === "string" ? { status: event.status } : {}),
       });
-      continue;
     }
-    if (event.type !== "tool_execution_end" || event.isError === true) continue;
-    const result = event.result as Record<string, unknown> | undefined;
-    if (!Array.isArray(result?.content)) continue;
-    const output = result.content
-      .filter((part): part is { type: "text"; text: string } => {
-        if (typeof part !== "object" || part === null) return false;
-        const value = part as Record<string, unknown>;
-        return value.type === "text" && typeof value.text === "string";
-      })
-      .map((part) => part.text)
-      .join("\n");
+  }
+  for (const output of collectToolOutputs(events)) {
     for (const match of output.matchAll(/\bHIVEMIND_TEST_RESULT\s+(\S+)\s+(passed|failed|inconclusive)\b/g)) {
       evidence.push({ type: "test_result", scenarioId: match[1]!, status: match[2]! });
+      continue;
+    }
+    // Runner-native fallback: a line that both names a scenario id and states
+    // an outcome counts as observed evidence, so a verifier that ran the
+    // tests but skipped the echo protocol is not rejected for it.
+    for (const line of output.split(/\r?\n/)) {
+      const scenarioId = /\bS-[A-Z0-9]+-\d{2}-[a-z0-9]+\b/.exec(line)?.[0];
+      if (!scenarioId) continue;
+      if (/\u2713|\bpassed\b/.test(line)) evidence.push({ type: "test_result", scenarioId, status: "passed" });
+      else if (/\u2717|\u2715|\bfailed\b/.test(line)) evidence.push({ type: "test_result", scenarioId, status: "failed" });
     }
   }
   return evidence;
+}
+
+/** Tool output spans from both the fixture event shape and real pi RPC
+ * message events, so the evidence channel works against live sessions. */
+function collectToolOutputs(events: readonly RpcEvent[]): string[] {
+  const outputs: string[] = [];
+  for (const event of events) {
+    if (event.type === "tool_execution_end") {
+      if (event.isError === true) continue;
+      const output = textOfContent((event.result as Record<string, unknown> | undefined)?.content);
+      if (output) outputs.push(output);
+      continue;
+    }
+    if (event.type !== "message") continue;
+    const message = event.message as Record<string, unknown> | undefined;
+    if (String(message?.role ?? "") !== "toolResult") continue;
+    const output = textOfContent(message?.content);
+    if (output) outputs.push(output);
+  }
+  return outputs;
+}
+
+function textOfContent(content: unknown): string {
+  return Array.isArray(content)
+    ? (content as Array<{ type?: string; text?: string }>)
+      .filter((part): part is { type: "text"; text: string } =>
+        typeof part === "object" && part !== null && part.type === "text" && typeof part.text === "string")
+      .map((part) => part.text)
+      .join("\n")
+    : "";
 }
 
 function toVerdictDocument(value: z.infer<typeof verifierReplySchema>): VerdictDocument {
@@ -136,7 +166,7 @@ function promptFor(input: BlindVerifyInput): string {
     "Perform an independent blind verification of the current worktree.",
     "You have no access to the coding session. Do not modify source or repository state.",
     "Choose and run the relevant tests from the repository and the specification.",
-    "After each observed test result, print: HIVEMIND_TEST_RESULT <scenario_id> <passed|failed|inconclusive>.",
+    "Evidence protocol (mandatory): after observing the outcome of each scenario, print a line exactly of the form HIVEMIND_TEST_RESULT <scenario_id> <passed|failed|inconclusive>, once per declared scenario id. A verdict whose scenarios have no observable evidence in this session is rejected.",
     "Return only JSON: {\"scenarios\":[{\"id\":string,\"status\":\"passed\"|\"failed\"|\"inconclusive\",\"url\"?:string,\"screenshots\"?:string[]}]}",
     "Specification:",
     input.specification,
