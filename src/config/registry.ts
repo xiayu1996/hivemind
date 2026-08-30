@@ -109,6 +109,26 @@ export const CONFIG_KEYS = {
     reload: "hot",
     description: "Tier to provider-model mapping. Model ids are validated against the provider catalogue at startup, because pi accepts an unknown id with only a warning.",
   }),
+  "model.purposeTiers": def({
+    schema: z.record(
+      z.enum(["decompose", "design", "code", "verify", "merge", "completion_judge", "capacity_probe", "triage", "distiller"]),
+      z.enum(["brain", "standard", "cheap"]),
+    ),
+    default: {
+      decompose: "brain",
+      design: "brain",
+      code: "standard",
+      verify: "standard",
+      merge: "standard",
+      completion_judge: "cheap",
+      capacity_probe: "cheap",
+      triage: "cheap",
+      distiller: "cheap",
+    },
+    scope: "global",
+    reload: "hot",
+    description: "What each call site is for, and which tier serves it. Overriding a purpose here is the only way to move it between tiers.",
+  }),
   "model.failoverChain": def({
     schema: z.array(z.string()).min(1),
     default: ["openai-codex"],
