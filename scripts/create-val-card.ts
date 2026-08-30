@@ -1,3 +1,5 @@
+// Creates the M1-37 acceptance validation card, armed for intake. The task id
+// follows the DoD story-id grammar (S-<EPIC>-NN).
 import { loadSecretsFile } from "../src/config/secrets-file.js";
 import { NotionGateway } from "../src/notion/gateway.js";
 import { createNotionHttpTransport } from "../src/notion/sdk-adapters.js";
@@ -20,8 +22,8 @@ const created = await gateway.request({
   body: {
     parent: { type: "data_source_id", data_source_id: dataSourceId },
     properties: {
-      "标题": { title: [{ type: "text", text: { content: "S-VAL-001 数值格式化工具" } }] },
-      "任务 ID": { rich_text: [{ type: "text", text: { content: "S-VAL-001" } }] },
+      "标题": { title: [{ type: "text", text: { content: "S-VAL-01 数值格式化工具" } }] },
+      "任务 ID": { rich_text: [{ type: "text", text: { content: "S-VAL-01" } }] },
       "目标仓库": { select: { name: "hivemind" } },
       "目标分支": { rich_text: [{ type: "text", text: { content: "main" } }] },
       "优先级": { select: { name: "P1" } },
