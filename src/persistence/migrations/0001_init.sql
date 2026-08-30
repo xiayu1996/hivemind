@@ -176,6 +176,18 @@ CREATE TABLE IF NOT EXISTS event_log (
 );
 CREATE INDEX IF NOT EXISTS idx_event_log_card ON event_log(card_id, ts);
 
+-- Each Epic branch refresh is observable across scheduler restarts. The source
+-- revision names main's lineage; this table never records a write to main.
+CREATE TABLE IF NOT EXISTS epic_branch_refresh_events (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  epic_id        TEXT NOT NULL REFERENCES epics(id) ON DELETE CASCADE,
+  outcome        TEXT NOT NULL CHECK (outcome IN ('attempted','succeeded','skipped','failed')),
+  source_revision TEXT NOT NULL,
+  ts             INTEGER NOT NULL,
+  failure_reason TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_epic_branch_refresh_events_epic ON epic_branch_refresh_events(epic_id, ts, id);
+
 -- Transactional outbox: rows are written in the same transaction as the state
 -- change, then delivered. payload_hash makes replay after a crash idempotent.
 CREATE TABLE IF NOT EXISTS notion_outbox (
