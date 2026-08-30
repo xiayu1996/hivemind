@@ -150,9 +150,9 @@ function toolEvidenceDigest(messages: unknown[]): string[] {
 /** What each phase owes, so the completion judge does not import its own
  * assumptions from the phase name. */
 const PHASE_CONTRACTS: Record<ManagedPhaseInput["phase"], string> = {
-  DESIGN: "Read-only analysis: produce the design summary and the frozen DoD as JSON. No code changes.",
-  CODE: "Implement the DoD scenarios in the worktree with tests, run the relevant verification, and report the implementation JSON.",
-  REGRESSION_FIX: "Fix the regressed scenarios in the worktree and report the implementation JSON.",
+  DESIGN: "Read-only analysis: return one JSON object whose design_summary and dod_yaml are both strings; the dod_yaml value is a YAML-formatted string by contract, not a defect. Producing the DoD needs no code or test changes, so their absence proves nothing; a write attempt blocked by the guard is expected enforcement, not incompleteness.",
+  CODE: "Implement the DoD scenarios in the worktree with tests, run the relevant verification, and report the implementation JSON. Commit the work to the story branch so the worktree is clean.",
+  REGRESSION_FIX: "Fix the regressed scenarios in the worktree and report the implementation JSON. Commit the work to the story branch so the worktree is clean.",
   MERGE: "Prepare the delivery report JSON only. Publishing the branch and opening the MR are performed by the orchestrator outside this session; the agent must not merge, push or deploy.",
 };
 
