@@ -14,4 +14,13 @@ describe("planStoryExecution", () => {
 
     expect(result).toEqual({ kind: "planned", batches: [["S-CHECKOUT-01", "S-DELIVERY-01"]] });
   });
+
+  it("S-M2-03-intersect separates ready Stories whose business areas overlap", () => {
+    const result = planStoryExecution([
+      story("S-CHECKOUT-01", ["checkout"]),
+      story("S-CHECKOUT-02", ["checkout/pricing"]),
+    ], []);
+
+    expect(result).toEqual({ kind: "planned", batches: [["S-CHECKOUT-01"], ["S-CHECKOUT-02"]] });
+  });
 });
