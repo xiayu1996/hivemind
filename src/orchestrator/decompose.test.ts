@@ -1,3 +1,5 @@
+// @scenario S-M2-01-artifact
+// @scenario S-M2-01-language
 // oxlint-disable unicorn/no-thenable -- Given/When/Then is the external decomposition contract.
 import { describe, expect, it } from "vitest";
 import {
@@ -102,5 +104,29 @@ describe("evaluateDecomposition", () => {
       ...checkoutEpic,
       blockingQuestion: "Which receipt delivery method do customers need?",
     })).toMatchObject({ kind: "rejected", reasons: ["blocking question cannot include partial Stories"] });
+  });
+});
+
+describe("@scenario S-M2-01-language business words that only look technical", () => {
+  it("accepts the vocabulary a real requirement uses", () => {
+    for (const line of [
+      "客户输入优惠码后立即看到折后价。",
+      "The customer enters a promotion code and sees the discounted price.",
+      "运营在后台为一批客户实现自助退款。",
+      "The class of customers on the annual plan keeps its discount.",
+    ]) {
+      expect(inspectBusinessLanguage("requirement", line)).toEqual([]);
+    }
+  });
+
+  it("still refuses the words that describe construction rather than outcome", () => {
+    for (const line of [
+      "新增 scheduler 模块并重构调度函数。",
+      "Add a React component that calls the pricing API.",
+      "Update src/orchestrator/scheduler.ts and its schema.",
+      "改代码时顺手把数据库表也改了。",
+    ]) {
+      expect(inspectBusinessLanguage("requirement", line)).toHaveLength(1);
+    }
   });
 });

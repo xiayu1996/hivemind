@@ -1,3 +1,4 @@
+// @scenario S-M2-05-dependency
 import { createClient } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { migrate } from "../persistence/migrate.js";

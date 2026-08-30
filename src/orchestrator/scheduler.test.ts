@@ -1,3 +1,10 @@
+// @scenario S-M2-03-disjoint
+// @scenario S-M2-03-intersect
+// @scenario S-M2-03-hotspot
+// @scenario S-M2-03-cycle
+// @scenario S-M2-03-mixed
+// @scenario S-M2-03-stranded
+// @scenario S-M2-03-dispatchable
 import { describe, expect, it } from "vitest";
 import {
   dispatchableStories,

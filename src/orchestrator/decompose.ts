@@ -51,7 +51,12 @@ export type DecompositionResult = AcceptedDecomposition | RejectedDecomposition 
 const storyId = /^S-[A-Z0-9]+-\d{2}$/;
 const scenarioId = /^S-[A-Z0-9]+-\d{2}-[a-z0-9]+$/;
 const footprint = /^(?:[a-z0-9][a-z0-9-]*(?:\/[a-z0-9][a-z0-9-]*)*)$/;
-const implementationLanguage = /\b(?:api|class|code|component|database|function|implementation|module|npm|react|schema|sql|typescript)\b|\b(?:src|lib|app)\/[\w./-]+|```|(?:at\s+\S+\s*\([^)]*:\d+:\d+\))|(?:实现|代码|函数|组件|数据库|模块|测试|文件路径)/i;
+// Words that only ever describe construction. Deliberately narrower than it
+// looks: "code" belongs to a promotion code, "class" to a class of customers
+// and "实现" to realising a business outcome, so blacklisting those bounces
+// requirements that were written correctly. English "test" is not listed, so
+// its Chinese counterpart is not either.
+const implementationLanguage = /\b(?:api|component|database|function|implementation|module|npm|react|schema|sql|typescript)\b|\b(?:src|lib|app)\/[\w./-]+|```|(?:at\s+\S+\s*\([^)]*:\d+:\d+\))|(?:代码|函数|组件|数据库|模块|文件路径)/i;
 
 /** Finds internal construction language in the lines that are shown to people. */
 export function inspectBusinessLanguage(field: string, text: string): LanguageIssue[] {

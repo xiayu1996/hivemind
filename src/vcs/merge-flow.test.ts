@@ -1,3 +1,6 @@
+// @scenario S-M2-05-integration
+// @scenario S-M2-05-conflict
+// @scenario S-M2-05-subset
 import { describe, expect, it, vi } from "vitest";
 import { EpicMergeFlow } from "./merge-flow.js";
 

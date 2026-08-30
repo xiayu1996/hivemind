@@ -1,3 +1,4 @@
+// @scenario S-M2-04-config
 import { beforeEach, describe, expect, it } from "vitest";
 import { createClient, type Client } from "@libsql/client";
 import { ConfigStore } from "../config/store.js";
