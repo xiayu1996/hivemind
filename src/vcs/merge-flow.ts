@@ -1,3 +1,5 @@
+import { normalizeActualFootprint, type ActualFootprintRecorder } from "./actual-footprint.js";
+
 export interface MergeGitPort {
   run(cwd: string, args: string[]): Promise<string>;
 }
@@ -17,6 +19,7 @@ export interface EpicMergeFlowOptions {
   storyWorktree: string;
   integrationWorktree: string;
   mainBranch?: string;
+  actualFootprints?: ActualFootprintRecorder;
 }
 
 export type MergeResult =
@@ -85,7 +88,20 @@ export class EpicMergeFlow {
     if (!verification.passed || verification.scenarioIds.join("\0") !== scenarioIds.join("\0")) {
       return { kind: "verification_failed", integrationBranch: target, scenarioIds };
     }
+    if (this.options.actualFootprints) {
+      const baseRevision = (await this.git.run(this.options.integrationWorktree, ["rev-parse", "HEAD"])).trim();
+      const storyRevision = (await this.git.run(this.options.storyWorktree, ["rev-parse", "HEAD"])).trim();
+      const nameStatus = await this.git.run(this.options.integrationWorktree, ["diff", "--name-status", "-z", "--find-renames", baseRevision, storyRevision]);
+      await this.options.actualFootprints.capture({
+        storyId: input.story.id,
+        integrationBranch: target,
+        baseRevision,
+        storyRevision,
+        actualFootprint: normalizeActualFootprint(nameStatus),
+      });
+    }
     await this.git.run(this.options.integrationWorktree, ["merge", "--ff-only", input.story.branch]);
+    if (this.options.actualFootprints) await this.options.actualFootprints.apply(input.story.id);
     return { kind: "merged", integrationBranch: target, scenarioIds };
   }
 

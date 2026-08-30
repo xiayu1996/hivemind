@@ -58,6 +58,21 @@ CREATE TABLE IF NOT EXISTS stories (
 CREATE INDEX IF NOT EXISTS idx_stories_state ON stories(state);
 CREATE INDEX IF NOT EXISTS idx_stories_epic ON stories(epic_id);
 
+-- Capture is durable before Git fast-forward; recovery applies it only after the
+-- recorded Story revision is an ancestor of the integration branch.
+CREATE TABLE IF NOT EXISTS actual_footprint_captures (
+  story_id           TEXT PRIMARY KEY REFERENCES stories(id) ON DELETE CASCADE,
+  integration_branch TEXT NOT NULL,
+  base_revision      TEXT NOT NULL,
+  story_revision     TEXT NOT NULL,
+  actual_footprint   TEXT NOT NULL CHECK (json_valid(actual_footprint)),
+  state              TEXT NOT NULL CHECK (state IN ('pending','applied')),
+  created_at         INTEGER NOT NULL,
+  applied_at         INTEGER,
+  CHECK ((state = 'pending' AND applied_at IS NULL) OR (state = 'applied' AND applied_at IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_actual_footprint_captures_pending ON actual_footprint_captures(state, story_id);
+
 -- An accepted decomposition stays immutable behind this human approval gate.
 CREATE TABLE IF NOT EXISTS epic_plans (
   epic_id       TEXT PRIMARY KEY REFERENCES epics(id) ON DELETE CASCADE,

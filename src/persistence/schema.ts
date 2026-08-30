@@ -50,6 +50,17 @@ export const stories = sqliteTable("stories", {
   updatedAt: ms("updated_at").notNull(),
 }, (t) => [index("idx_stories_state").on(t.state), index("idx_stories_epic").on(t.epicId)]);
 
+export const actualFootprintCaptures = sqliteTable("actual_footprint_captures", {
+  storyId: text("story_id").primaryKey(),
+  integrationBranch: text("integration_branch").notNull(),
+  baseRevision: text("base_revision").notNull(),
+  storyRevision: text("story_revision").notNull(),
+  actualFootprint: text("actual_footprint").notNull(),
+  state: text("state").notNull(),
+  createdAt: ms("created_at").notNull(),
+  appliedAt: ms("applied_at"),
+}, (t) => [index("idx_actual_footprint_captures_pending").on(t.state, t.storyId)]);
+
 export const epicPlans = sqliteTable("epic_plans", {
   epicId: text("epic_id").primaryKey(),
   body: text("body").notNull(),

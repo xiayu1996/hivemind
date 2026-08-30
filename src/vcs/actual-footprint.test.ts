@@ -37,9 +37,9 @@ describe("S-M2-07-record actual footprint capture", () => {
       storyRevision: "story-revision",
       actualFootprint: [".", "src/console", "src/old", "src/vcs"],
     }]);
-    const fastForward = git.run.mock.invocationCallOrder[calls.findIndex(({ args }) => args[0] === "merge")];
-    expect(store.capture.mock.invocationCallOrder[0]).toBeLessThan(fastForward);
-    expect(store.apply.mock.invocationCallOrder[0]).toBeGreaterThan(fastForward);
+    const fastForward = git.run.mock.invocationCallOrder[calls.findIndex(({ args }) => args[0] === "merge")]!;
+    expect(store.capture.mock.invocationCallOrder[0]!).toBeLessThan(fastForward);
+    expect(store.apply.mock.invocationCallOrder[0]!).toBeGreaterThan(fastForward);
     expect(store.apply).toHaveBeenCalledWith(story.id);
   });
 });
