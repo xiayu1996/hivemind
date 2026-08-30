@@ -106,6 +106,15 @@ describe("validation", () => {
     await expect(store.set("model.failoverChain", [], "ryan")).rejects.toThrow(ConfigValidationError);
     await expect(store.set("guard.e2eHostAllowlist", "localhost", "ryan")).rejects.toThrow(ConfigValidationError);
   });
+
+  it("S-M2-04-invalid rejects an absolute hotspot path without replacing the valid repository list", async () => {
+    const store = await ConfigStore.load(client, { repository: "acme/storefront" });
+    await store.set("schedule.hotspotPaths", ["src/routes"], "maintainer");
+
+    await expect(store.set("schedule.hotspotPaths", ["/etc"], "maintainer")).rejects.toThrow(ConfigValidationError);
+
+    expect(store.get("schedule.hotspotPaths")).toEqual(["src/routes"]);
+  });
 });
 
 describe("history and rollback", () => {
