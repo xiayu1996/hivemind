@@ -17,9 +17,9 @@
 |---|---|---|---|
 | M0 | 地基 PoC：证伪最贵假设 | 16 | M0-16 go/no-go 评审，全部高风险项有结论 |
 | M1 | 单机闭环：一张真实卡全流水线 | 37 | M1-37 端到端验收四判据 |
-| M2 | 并行与回归：多 Story Epic + 常驻 E2E loop | 14 | M2-14 带依赖 Epic 并行 + 回归物化归因 |
+| M2 | 并行与回归 + 供应商矩阵：多 Story Epic + 常驻 E2E loop + provider 健康/配额/failover | 19 | M2-14 带依赖 Epic 并行 + 回归物化归因 |
 | M3 | 多机化：capability 队列 + Mac mini 接入 | 12 | M3-12 双机 Epic + 失联恢复演练 |
-| M4 | 供应商矩阵与反馈闭环 | 17 | M4-17 断供演练 + 完整反馈自迭代一轮 |
+| M4 | 反馈闭环与成本完整版 | 12 | M4-17 断供演练 + 完整反馈自迭代一轮 |
 | M5 | 收口：Windows worker + self-update + GA | 8 | M5-08 连续两周 7×24 无人干预 |
 
 ---
@@ -28,15 +28,14 @@
 
 目标：在写任何正式代码前，把设计中最贵的假设逐个证实或证伪，每个 PoC 都预先写明 fallback。
 
-> **执行状态（2026-08-29）**：**15/16 已结案**，评审见 `docs/poc/m0-review.md`。
-> Ryan 完成 Codex 授权后，凭据类阻塞全部解除（C1/C3/C4 活体 + prompt 三臂对照均已跑通）。
-> M0-06 已在目标 Windows 完成 10/10；仅余 M0-15，待 Mac mini 接入后执行。
-> M0-01（账号策略）与 M0-09（@mention 推送确认）待 Ryan，但均不阻塞 M1。
-> 状态列：✅ 通过 · ⚠️ 部分（机制已证，活体待跑）· ⛔ 阻塞
+> **执行状态（2026-08-30）**：M0-01 已拍板为**一供应商一账号**；M0-09 / M0-15 经 Ryan 确认本轮不追（⏸）；
+> M0-12 回退为 ⚠️——解析器只在 `poc/` 且真实撞墙样本从未采集。其余 12 项通过，评审见 `docs/poc/m0-review.md`。
+> Codex 授权后凭据类阻塞解除（C1/C3/C4 活体 + prompt 三臂对照均跑通）；M0-06 在目标 Windows 完成 10/10。
+> 状态列：✅ 通过 · ⚠️ 部分（机制已证，活体待跑）· ⏸ 经决策本轮不做 · ⛔ 阻塞
 
 | ID | 任务 | 输出物 | 验证方式 | 前置 |
 |---|---|---|---|---|
-| M0-01 | ⛔ **账号策略拍板（Ryan 决策项）**：一机一账号（Linux + Mac mini 各一个 ChatGPT 账号，06 文档方案 A）vs 单账号 broker（方案 B） | 00-overview §2 决策表新增一行 | 人拍板并落文档；若选方案 A 完成第二订阅购买 | — |
+| M0-01 | ✅ **账号策略已拍板（2026-08-30，Ryan）：一供应商一账号**——同一厂家的模型全局只有一个账号，横向扩展靠**增加供应商**而非增加同厂账号；取代 06 文档的方案 A（一机一账号） | 00-overview §2 决策表 + 本表 M2-15..19 | 已拍板。直接后果：并发额度与 usage window 是**供应商级全局资源**而非每机资源，多机共享同一账号，因此 provider 健康/配额跟踪与 failover 是多机化的**前置**，原 M4-01/03/04/05/06 与 M4-16 健康页前移为 M2-15..19 | — |
 | M0-02 | ✅ pi 安装与 pin：安装脚本将 pin 版本装入 `~/.hivemind/pi/<version>/` 并排目录；GLM(zai)/Grok(xai) key 配置就绪 | `scripts/install-pi.sh` + README 版本记录 | 全新环境执行脚本后 `pi --version` 等于 pin 值；zai/xai 各发一条最小 completion 成功 | — |
 | M0-03 | ✅ PoC-2a：RPC Context 导出/载入 | `poc/rpc-context/` 脚本 + `docs/poc/poc-2-context.md` | 导出 Context JSON → 新进程载入 → 再导出，两份 JSON 语义 diff 为空；载入后续跑一轮回答与原上下文连贯 | M0-02 |
 | M0-04 | ✅ PoC-2b：mid-run 注入 / abort / resume 能力 | 同上报告附录 | run 中 abort 后同 session 注入消息续跑成功；不支持则报告记录降级路径（extension turn 边界序列化 / json 模式 + phase 边界注入）并回写 02 文档 | M0-03 |
@@ -44,13 +43,13 @@
 | M0-06 | ✅ PoC-1：Windows Git Bash 下 pi RPC 冒烟 ×10（含工具调用任务） | `scripts/smoke-windows-rpc.ts` + `docs/poc/poc-1-windows.md` | 10/10 无 CRLF 分帧错误、无挂死；不过则报告中拍板降级为纯 Playwright 探针执行器 | M0-02 |
 | M0-07 | ✅ PoC-4：pi 默认 prompt vs 自建基线 A/B——3 张真实小卡各跑两条轨迹 | `docs/poc/poc-4-prompt-ab.md`（评分表 + 结论） | 每卡两条完整轨迹归档；盲评人（Ryan）不知分组；结论明确采用哪条基线 | M0-02 |
 | M0-08 | ✅ R1：Notion 评论 resolve 行为实测——`comment.updated` webhook 是否覆盖 resolve、list comments 对已 resolve 评论的可见性 | `docs/poc/notion-behavior.md` | 得出明确结论并回写 01 文档（是否需要"agent 回评确认后人再 resolve"协议约定） | — |
-| M0-09 | ⛔ R2：API 创建评论中 @mention 是否触发移动端推送 | 同上文档补充 | Ryan 手机实收推送截图归档；不触发则 needs_input 旁路告警升级为必选路径并回写 01 文档 | — |
+| M0-09 | ⏸ R2：API 创建评论中 @mention 是否触发移动端推送——**本轮不追（2026-08-30，Ryan）**。已知观察：自己 @ 自己确实收不到推送；bot @ 他人的情形未测 | 同上文档补充 | 按「不触发」处理：needs_input 旁路告警（M1-35）因此是**必选路径**，不得降级为「Notion 看板即可」 | — |
 | M0-10 | ✅ Notion 页面规模与 mermaid 实测：300+ block 页面写入/读取、mermaid 渲染语法子集 | `docs/poc/notion-behavior.md` + `docs/poc/evidence/` | 300 块页面创建与更新无 API 拒绝且耗时可接受；子集内每种图渲染截图归档 | — |
 | M0-11 | ✅ PoC-C1：Codex device code 无头登录 + 自动刷新（Linux） | `docs/poc/poc-c-codex-oauth.md` | 登录后 RPC 跑通一轮；token 逼近过期后自动刷新，auth.json expires 更新且无人工介入、无 invalid_grant | M0-01, M0-02 |
-| M0-12 | ✅ PoC-C2：usage-limit 撞墙文案采集与解析 | 分诊正则 + `fixtures/codex-usage-limit.json` | 正则从真实 errorMessage 解析出 reset 分钟数 | M0-11 |
+| M0-12 | ⚠️ PoC-C2：usage-limit 撞墙文案采集与解析 | 解析器 + 单测在 `poc/codex-oauth/`（`fixtures/codex-usage-limit.json` 从未生成，输出物栏原描述有误） | 解析器按 pi 0.84.3 源码模板反向生成用例、8 条单测全绿；**真实撞墙样本仍未采集**，且解析器尚在 `poc/`（可丢弃目录）未移植进 `src/`——移植见 M2-16 | M0-11 |
 | M0-13 | ✅ PoC-C3：`pi auth check --json --no-refresh` 探针零副作用确认 | 同上文档补充 | 连续调用后 auth.json mtime 与内容不变 | M0-11 |
 | M0-14 | ✅ PoC-C4：同机双 pi 子进程并发刷新锁 | 同上文档补充 | 双进程逼近过期并发请求，文件锁生效，两进程均成功且无 invalid_grant | M0-11 |
-| M0-15 | ⛔ PoC-C5：Mac mini LaunchAgent 用户会话下登录态持久性 | 同上文档补充 | 机器重启后 `pi auth check` 仍 ok | M0-01, M0-11 |
+| M0-15 | ⏸ PoC-C5：Mac mini LaunchAgent 用户会话下登录态持久性——**本轮不做（2026-08-30，Ryan）**，Mac mini 未接入 | 同上文档补充 | 推迟到 M3-08 接机前执行；不阻塞 M1/M2 | M0-01, M0-11 |
 | M0-16 | ✅ **M0 评审与设计回写**：逐项 go/no-go，启用降级路径的更新对应设计文档 | `docs/poc/m0-review.md` + 00/01/02/06 文档修订 commit | 00-overview §6 风险表每个 M0 覆盖行标注"已证实 / 已证伪 / 降级路径已启用" | M0-03..15 |
 
 ---
@@ -155,6 +154,10 @@
 
 目标：Epic 拆解 + 多 Story 并行 + epic 集成分支合流 + 常驻 E2E 双池回归；控制台开写面，重试上限族全量接入。
 
+> **2026-08-30 范围调整**：账号策略拍板为「一供应商一账号」后，usage window 与并发额度成为**供应商级全局资源**，
+> 多机共享同一账号。因此 provider 健康跟踪、配额解析与 failover 不再是 M4 的收尾工作，而是多机化的前置，
+> 原 M4-01/03/04/05/06 与 M4-16 健康页前移为 **M2-15..19**。M4-03（错误归一分类器）已在 M1-05 随 runner 落地并单测通过。
+
 > **执行状态（2026-08-30，自举 + 独立审核）**：S-M2-01..06 由 hivemind 流水线自举开发并合并
 > （PR #3..#8，全部 CI 绿；记录见 docs/poc/m2-selfhost-progress.md）。当日三轮独立审核结论见
 > [docs/reviews/2026-08-30-m2-audit.md](../reviews/2026-08-30-m2-audit.md)：产出的纯函数与单测本身成立，
@@ -177,6 +180,11 @@
 | M2-11 | 归因二分 + REGRESSION_FIX：新失败在合入序列上二分定位引入 Story → 该 Story 重开内环，队列最高优先级 | `src/regression/attribution.ts` | 3 个合入序列上人为引入回归，二分定位到正确 Story；REGRESSION_FIX 卡插队到队首 | M2-10 |
 | M2-12 | 重试上限族接入：maxInnerLoopRounds(6) / maxPhaseReentries(3) / maxContinueRetries(8) / maxRegressionReopens(2) 全部 config 化热更；到限 → `retry_limit_exceeded` 真停点 + 卡置失败 + 诊断报告（需求侧 vs 系统侧两分法）+ Notion @创建人附收敛曲线 | `src/pipeline/retry-limits.ts` + 诊断报告生成 | 每个上限用故障注入逼到限：卡置失败、Notion 收到 @ 通知、报告含收敛曲线与两分法结论；系统侧结论触发 friction 物化 | M1-25, M1-07 |
 | M2-13 | 控制台动态配置写面：zod schema 生成表单 + config_history 全量留痕 + 一键回滚 + `config.changed` EventLog 事件 + 高危键二次确认 | 控制台配置模块 | e2e：改 maxInnerLoopRounds 热生效于下一轮判定；回滚恢复旧值；非法值保存被拒；急停键有二次确认 | M1-36, M2-12 |
+| M2-15 | `resolveModel(purpose)` 单入口：purpose → 档位（大脑/中脑/小脑）→ provider model id 全部 config 化；启动校验模型 id 存在于目标 provider 目录 | `src/runner/model-policy.ts` | 单测全映射表；坏 id 启动即拒（pi 只给 warning 就当自定义模型跑并编造价格）；grep gate 保证仓内无绕过该入口直传 model 的调用 | M1-03 |
+| M2-16 | usage-limit 解析移植进 `src/`：reset 分钟数**锚定事件自身时间戳**；`≤ model.deferIfResetWithinMin` 走等待，`>` 走切换；绝不静默重试 | `src/runner/usage-limit.ts` | `poc/codex-oauth` 的 8 条用例迁移为单测；积压事件（读到时间晚于事件时间）算出的窗口仍正确 | M0-12 |
+| M2-17 | provider 熔断矩阵：closed/open/half-open + 双层探针（credential 层 `pi auth check --no-refresh` 零副作用 + capacity 层小脑最小 completion）；单 provider 熔断只摘链节点、全部熔断才停 intake | `src/runner/circuit-breaker.ts` | 状态机单测；演练：撤销一家凭据 → 熔断打开 → 链路横移 → 恢复凭据 → half-open 探针自愈闭合 | M2-16 |
+| M2-18 | failover 链执行：档位横移按 `model.failoverChain`；CODE/VERIFY **整 phase 重跑不中途混模**；启动断言 `retry.provider.maxRetries = 0` 否则拒启 | `src/runner/failover.ts` | 每类 phase 各一次 failover 演练，轨迹确认无中途混模；maxRetries 非 0 时启动被拒 | M2-17 |
+| M2-19 | provider 健康与配额记录面：`provider_health` 表（三态/最后探针/最后错误分类/窗口重置时刻/连续失败数）+ 控制台 providers 页 + 熔断与恢复进 EventLog | 迁移 + `src/console/` | 熔断/恢复/defer 全部事件在页面可见；健康态跨进程可读（多机共享同一供应商账号，状态必须在中央库） | M2-17, M1-36 |
 | M2-14 | **M2 验收**：一个 3+ Story 带依赖真实 Epic 并行执行至 Epic MR；E2E loop 常驻期间人为引入一处回归被自动物化、归因、修复 | `docs/poc/m2-acceptance.md` | ① 并行调度符合 footprint 判定（轨迹核对）；② 合流子集重验留痕；③ regression 卡自动立卡→归因→REGRESSION_FIX→修复合入；④ 重试上限演练记录齐全 | M2-01..13 |
 
 ---
