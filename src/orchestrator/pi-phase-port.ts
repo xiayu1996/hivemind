@@ -94,6 +94,30 @@ function parseResult(input: ManagedPhaseInput, raw: string): ManagedPhaseResult[
   throw new Error(`${input.phase} response contained no structurally valid payload`, { cause: lastCause });
 }
 
+/** Compacts observable tool activity out of the session so the completion
+ * judge can check artifact claims against what actually ran on the host.
+ * Head and tail are kept per result because pass/fail summaries sit at the
+ * end of long command output. */
+function toolEvidenceDigest(messages: unknown[]): string[] {
+  const results: string[] = [];
+  for (const message of messages) {
+    const record = message as { role?: string; content?: unknown };
+    if (record.role !== "toolResult") continue;
+    const text = Array.isArray(record.content)
+      ? (record.content as Array<{ type?: string; text?: string }>)
+        .filter((item) => item.type === "text")
+        .map((item) => item.text ?? "")
+        .join("\n")
+      : "";
+    const trimmed = text.trim();
+    if (!trimmed) continue;
+    results.push(trimmed.length <= 500
+      ? trimmed
+      : `${trimmed.slice(0, 250)}\n...\n${trimmed.slice(-250)}`);
+  }
+  return results.slice(-20);
+}
+
 function sessionId(state: Record<string, unknown>): string {
   const value = state.sessionFile ?? state.sessionId;
   if (typeof value !== "string" || value.length === 0) {
@@ -186,6 +210,7 @@ export class PiStoryPhasePort implements StoryPhasePort {
           sessionId: phaseSessionId,
           eventCount: result.events.length,
           usage: result.usage,
+          toolResults: toolEvidenceDigest(messages),
         },
       });
       if (!completion.done) throw new Error(completion.reason);
