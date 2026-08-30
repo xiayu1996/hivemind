@@ -84,6 +84,25 @@ export class PlanApprovalStore {
     return { id: String(row.id), state: String(row.state) as EpicState };
   }
 
+  async requestRevision(epicId: string, eventId: string): Promise<boolean> {
+    const epic = await this.getEpic(epicId);
+    if (epic.state !== "PLAN_APPROVAL") return false;
+    assertEpicTransition(epic.state, "DECOMPOSE");
+    const result = await this.client.execute({
+      sql: `UPDATE epics SET state = 'DECOMPOSE', updated_at = ?
+            WHERE id = ? AND state = 'PLAN_APPROVAL'`,
+      args: [this.now(), epicId],
+    });
+    if (result.rowsAffected === 1) {
+      await this.client.execute({
+        sql: `INSERT OR IGNORE INTO epic_approval_events (event_id, epic_id, source, created_at)
+              VALUES (?, ?, 'comment', ?)`,
+        args: [eventId, epicId, this.now()],
+      });
+    }
+    return result.rowsAffected === 1;
+  }
+
   async approvedEventCount(epicId: string): Promise<number> {
     const row = (await this.client.execute({
       sql: "SELECT COUNT(*) AS count FROM epic_approval_events WHERE epic_id = ?",

@@ -1,3 +1,4 @@
+// oxlint-disable unicorn/no-thenable -- Given/When/Then is the external decomposition contract.
 import { createClient } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { interpretEpicComment, interpretEpicPropertyChange } from "../notion/intent-interpreter.js";
