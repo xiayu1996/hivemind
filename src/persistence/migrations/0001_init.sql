@@ -73,6 +73,23 @@ CREATE TABLE IF NOT EXISTS actual_footprint_captures (
 );
 CREATE INDEX IF NOT EXISTS idx_actual_footprint_captures_pending ON actual_footprint_captures(state, story_id);
 
+-- Provider health is central, not per process: one account per vendor means the
+-- usage window and the concurrency limit are shared by every host, so a breaker
+-- one machine opens must be visible to the others.
+CREATE TABLE IF NOT EXISTS provider_health (
+  provider             TEXT PRIMARY KEY,
+  state                TEXT NOT NULL CHECK (state IN ('closed','open','half_open')),
+  consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  opened_at            INTEGER,
+  retry_at             INTEGER,
+  needs_human          INTEGER NOT NULL DEFAULT 0 CHECK (needs_human IN (0,1)),
+  last_error_class     TEXT,
+  last_error           TEXT,
+  last_probe_at        INTEGER,
+  updated_at           INTEGER NOT NULL,
+  CHECK ((state = 'closed' AND opened_at IS NULL) OR (state <> 'closed' AND opened_at IS NOT NULL))
+);
+
 -- An accepted decomposition stays immutable behind this human approval gate.
 CREATE TABLE IF NOT EXISTS epic_plans (
   epic_id       TEXT PRIMARY KEY REFERENCES epics(id) ON DELETE CASCADE,

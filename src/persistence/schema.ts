@@ -61,6 +61,19 @@ export const actualFootprintCaptures = sqliteTable("actual_footprint_captures", 
   appliedAt: ms("applied_at"),
 }, (t) => [index("idx_actual_footprint_captures_pending").on(t.state, t.storyId)]);
 
+export const providerHealth = sqliteTable("provider_health", {
+  provider: text("provider").primaryKey(),
+  state: text("state").notNull(),
+  consecutiveFailures: integer("consecutive_failures").notNull(),
+  openedAt: ms("opened_at"),
+  retryAt: ms("retry_at"),
+  needsHuman: integer("needs_human").notNull(),
+  lastErrorClass: text("last_error_class"),
+  lastError: text("last_error"),
+  lastProbeAt: ms("last_probe_at"),
+  updatedAt: ms("updated_at").notNull(),
+});
+
 export const epicPlans = sqliteTable("epic_plans", {
   epicId: text("epic_id").primaryKey(),
   body: text("body").notNull(),

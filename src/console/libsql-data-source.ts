@@ -78,6 +78,15 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
     };
   }
 
+  /** Breaker state is central because one account per vendor makes it shared. */
+  async providers(): Promise<unknown[]> {
+    return (await this.client.execute(
+      `SELECT provider, state, consecutive_failures, opened_at, retry_at, needs_human,
+              last_error_class, last_error, last_probe_at, updated_at
+         FROM provider_health ORDER BY provider`,
+    )).rows.map(plain);
+  }
+
   async config(): Promise<unknown[]> {
     return (await this.client.execute(
       "SELECT scope_id, key, value_json, version, updated_by, updated_at FROM config_entries ORDER BY scope_id, key",

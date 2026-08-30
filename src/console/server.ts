@@ -13,6 +13,7 @@ export interface ConsoleDataSource {
   costs(): Promise<unknown[]>;
   config(): Promise<unknown[]>;
   stats(): Promise<unknown>;
+  providers(): Promise<unknown[]>;
 }
 
 export interface ConsoleServerOptions {
@@ -39,6 +40,7 @@ export async function createConsoleServer(
   app.get("/api/costs", async () => data.costs());
   app.get("/api/config", async () => data.config());
   app.get("/api/stats", async () => data.stats());
+  app.get("/api/providers", async () => data.providers());
 
   const board = new FastifyAdapter();
   board.setBasePath("/queues");
@@ -59,7 +61,7 @@ export async function createConsoleServer(
     });
     const index = await readFile(join(uiRoot, "index.html"), "utf8");
     app.get("/", async (_request, reply) => reply.type("text/html").send(index));
-    for (const route of ["/nodes", "/tasks", "/costs", "/config", "/stats"]) {
+    for (const route of ["/nodes", "/tasks", "/costs", "/config", "/stats", "/providers"]) {
       app.get(route, async (_request, reply) => reply.type("text/html").send(index));
     }
   }

@@ -7,13 +7,14 @@ const data: ConsoleDataSource = {
   costs: async () => [{ runId: "run-1", costUsd: 0.1 }],
   config: async () => [{ key: "pipeline.maxRounds", value: 6 }],
   stats: async () => ({ footprintDeviation: { stories: 0, deviationRate: 0, unpredictedStoryRate: 0, perStory: [] } }),
+  providers: async () => [{ provider: "openai-codex", state: "closed" }],
 };
 
 describe("read-only console", () => {
   it("serves four real-data API views and health", async () => {
     const app = await createConsoleServer(data, { serveUi: false });
     await expect(app.inject({ method: "GET", url: "/health" }).then((response) => response.json())).resolves.toEqual({ status: "ok" });
-    for (const route of ["nodes", "tasks", "costs", "config"]) {
+    for (const route of ["nodes", "tasks", "costs", "config", "providers"]) {
       const response = await app.inject({ method: "GET", url: `/api/${route}` });
       expect(response.statusCode).toBe(200);
       expect(response.json()).toHaveLength(1);

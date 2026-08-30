@@ -1,7 +1,7 @@
 <script setup>
 import { ref, watchEffect } from "vue";
 
-const views = ["nodes", "tasks", "costs", "config", "stats"];
+const views = ["nodes", "tasks", "costs", "config", "stats", "providers"];
 const current = ref(views.includes(location.pathname.slice(1)) ? location.pathname.slice(1) : "nodes");
 const rows = ref([]);
 const error = ref("");
