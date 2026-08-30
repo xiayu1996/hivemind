@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { EpicMergeFlow } from "./merge-flow.js";
 
-const story = { id: "S-M2-05-integration", branch: "story/s-m2-05-integration", predictedFootprint: ["src/vcs"] };
+const story = {
+  id: "S-M2-05-integration",
+  branch: "story/s-m2-05-integration",
+  predictedFootprint: ["src/vcs"],
+  scenarioIds: ["S-M2-05-integration"],
+};
 
 describe("EpicMergeFlow", () => {
   it("S-M2-05-integration creates an Epic branch from main and merges a verified Story without touching main", async () => {
@@ -18,7 +23,7 @@ describe("EpicMergeFlow", () => {
     await expect(flow.merge({ epicId: "E-1", story, integratedStories: [] })).resolves.toEqual({
       kind: "merged",
       integrationBranch: "epic/E-1",
-      scenarioIds: [],
+      scenarioIds: ["S-M2-05-integration"],
     });
     expect(calls).toEqual(expect.arrayContaining([
       { cwd: "integration", args: ["switch", "-c", "epic/E-1", "main"] },

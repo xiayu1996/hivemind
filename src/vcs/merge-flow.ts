@@ -22,7 +22,7 @@ export interface EpicMergeFlowOptions {
 export type MergeResult =
   | { kind: "merged"; integrationBranch: string; scenarioIds: readonly string[] }
   | { kind: "conflict"; integrationBranch: string; reason: string }
-  | { kind: "verification_failed"; integrationBranch: string; scenarioIds: readonly string[] };
+  | { kind: "verification_failed"; integrationBranch: string; scenarioIds: readonly string[]; reason?: string };
 
 function integrationBranch(epicId: string): string {
   if (!/^[A-Za-z0-9._-]+$/.test(epicId)) throw new Error("Epic id cannot be used in a branch name");
@@ -58,12 +58,20 @@ export class EpicMergeFlow {
     } catch (cause) {
       return { kind: "conflict", integrationBranch: target, reason: cause instanceof Error ? cause.message : String(cause) };
     }
-    const scenarioIds = [...new Set([
-      ...(input.story.scenarioIds ?? []),
-      ...input.integratedStories
-        .filter((story) => intersects(input.story.predictedFootprint, story.predictedFootprint))
-        .flatMap((story) => story.scenarioIds ?? []),
-    ])].toSorted();
+    const affectedStories = [
+      input.story,
+      ...input.integratedStories.filter((story) => intersects(input.story.predictedFootprint, story.predictedFootprint)),
+    ];
+    const missingMapping = affectedStories.find((story) => !story.scenarioIds || story.scenarioIds.length === 0);
+    if (missingMapping) {
+      return {
+        kind: "verification_failed",
+        integrationBranch: target,
+        scenarioIds: [],
+        reason: `missing scenario mapping for Story ${missingMapping.id}`,
+      };
+    }
+    const scenarioIds = [...new Set(affectedStories.flatMap((story) => story.scenarioIds!))].toSorted();
     const verification = await this.verifySubset(scenarioIds);
     if (!verification.passed || verification.scenarioIds.join("\0") !== scenarioIds.join("\0")) {
       return { kind: "verification_failed", integrationBranch: target, scenarioIds };
