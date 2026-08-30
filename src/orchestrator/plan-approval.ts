@@ -128,11 +128,13 @@ export class PlanApprovalStore {
     for (const story of plan.stories) {
       const payload = JSON.stringify({ epicId: input.epicId, storyId: story.id });
       statements.push({
+        // The Story inherits the Epic's repository: without it the dispatcher,
+        // which selects by repository, would never see the Story at all.
         sql: `INSERT OR IGNORE INTO stories
-              (id, epic_id, notion_page_id, title, requirement, state, depends_on, predicted_footprint, created_at, updated_at)
-              VALUES (?, ?, ?, ?, ?, 'QUEUED', ?, ?, ?, ?)`,
+              (id, epic_id, notion_page_id, title, requirement, state, repo, depends_on, predicted_footprint, created_at, updated_at)
+              SELECT ?, ?, ?, ?, ?, 'QUEUED', e.repo, ?, ?, ?, ? FROM epics e WHERE e.id = ?`,
         args: [story.id, input.epicId, storyPageId(input.epicId, story.id), story.title, story.requirement,
-          JSON.stringify(story.dependsOn), JSON.stringify(story.predictedFootprint), time, time],
+          JSON.stringify(story.dependsOn), JSON.stringify(story.predictedFootprint), time, time, input.epicId],
       }, {
         sql: `INSERT OR IGNORE INTO execution_dispatches (story_id, epic_id, state, created_at)
               VALUES (?, ?, 'pending', ?)`,

@@ -47,6 +47,7 @@ import { discoverMRPort } from "../src/vcs/mr/adapters.js";
 import { NotionStoryProjection } from "../src/notion/story-projection.js";
 import { NotionSyncCoordinator, type NotionSyncPoller } from "../src/notion/sync.js";
 import { registerNotionWebhookRoute } from "../src/notion/webhook-route.js";
+import { IntegrationDispatchStore } from "../src/orchestrator/integration-dispatch.js";
 import { PlanApprovalStore } from "../src/orchestrator/plan-approval.js";
 import { dispatchableStories, planRepositoryStoryExecution } from "../src/orchestrator/scheduler.js";
 import { StoryExecutionStore } from "../src/orchestrator/story-execution-store.js";
@@ -249,7 +250,7 @@ async function main(): Promise<void> {
   // the approval gate has nothing to gate and the board's Epics never move.
   const decomposeWaitingEpic = async (): Promise<void> => {
     if (!epicsDataSourceId) return;
-    const waiting = await ingestEpicsForDecomposition(handle.client, gateway, epicsDataSourceId);
+    const waiting = await ingestEpicsForDecomposition(handle.client, gateway, epicsDataSourceId, repositorySlug);
     const pending = (await handle.client.execute(
       "SELECT id FROM epics WHERE state IN ('INTAKE', 'DECOMPOSE') ORDER BY updated_at LIMIT 1",
     )).rows[0];
@@ -308,6 +309,22 @@ async function main(): Promise<void> {
   const inFlight = new Map<string, Promise<void>>();
 
   const runStory = async (cardId: string, row: Row, provider: string, model: string): Promise<void> => {
+      // A Story the approval gate created has no branch yet: the cut is delayed
+      // until its dependencies are on the Epic head, which is where the branch
+      // has to start from.
+      if (!row.branch && row.epic_id) {
+        const claim = await new IntegrationDispatchStore(handle.client)
+          .claimStart(cardId, `story/${cardId.toLowerCase()}`);
+        if (claim.kind === "blocked") {
+          console.log(`Story ${cardId} waits for ${claim.waitingFor.join(", ")}`);
+          return;
+        }
+        const claimed = (await handle.client.execute({
+          sql: "SELECT branch, target_branch FROM stories WHERE id = ?",
+          args: [cardId],
+        })).rows[0];
+        row = { ...row, branch: claimed?.branch ?? null, target_branch: claimed?.target_branch ?? null } as Row;
+      }
       if (!row.branch) throw new Error(`Story ${cardId} does not declare a branch`);
       const branch = String(row.branch);
       const targetBranch = row.target_branch ? String(row.target_branch) : "main";

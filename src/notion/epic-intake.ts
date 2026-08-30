@@ -42,6 +42,7 @@ export async function ingestEpicsForDecomposition(
   client: Client,
   gateway: NotionGateway,
   epicsDataSourceId: string,
+  repositorySlug: string,
   now: () => number = Date.now,
 ): Promise<EpicIntake[]> {
   const response = await gateway.request({
@@ -68,10 +69,13 @@ export async function ingestEpicsForDecomposition(
     const id = epicIdFrom(title);
     const time = now();
     await client.execute({
-      sql: `INSERT INTO epics (id, notion_page_id, title, state, created_at, updated_at)
-            VALUES (?, ?, ?, 'INTAKE', ?, ?)
-            ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at`,
-      args: [id, pageId, title, time, time],
+      sql: `INSERT INTO epics (id, notion_page_id, title, state, repo, created_at, updated_at)
+            VALUES (?, ?, ?, 'INTAKE', ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              title = excluded.title,
+              repo = COALESCE(epics.repo, excluded.repo),
+              updated_at = excluded.updated_at`,
+      args: [id, pageId, title, repositorySlug, time, time],
     });
     ingested.push({ id, notionPageId: pageId, title, requirement });
   }

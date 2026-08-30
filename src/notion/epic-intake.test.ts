@@ -42,7 +42,7 @@ describe("ingestEpicsForDecomposition", () => {
   afterEach(() => client.close());
 
   it("takes the Epic id from the title token the board already uses", async () => {
-    const ingested = await ingestEpicsForDecomposition(client, gateway(), "epics-ds", () => 5);
+    const ingested = await ingestEpicsForDecomposition(client, gateway(), "epics-ds", "owner/repo", () => 5);
 
     expect(ingested).toMatchObject([{ id: "M2", notionPageId: "epic-page", title: "M2 并行与回归" }]);
     expect(ingested[0]?.requirement).toContain("业务目标: 多个 Story 并行推进。");
@@ -52,23 +52,23 @@ describe("ingestEpicsForDecomposition", () => {
   });
 
   it("is safe to run every cycle: an Epic already known keeps its state", async () => {
-    await ingestEpicsForDecomposition(client, gateway(), "epics-ds", () => 5);
+    await ingestEpicsForDecomposition(client, gateway(), "epics-ds", "owner/repo", () => 5);
     await client.execute("UPDATE epics SET state = 'DECOMPOSE' WHERE id = 'M2'");
 
-    await ingestEpicsForDecomposition(client, gateway(), "epics-ds", () => 6);
+    await ingestEpicsForDecomposition(client, gateway(), "epics-ds", "owner/repo", () => 6);
 
     expect((await client.execute("SELECT state FROM epics")).rows).toMatchObject([{ state: "DECOMPOSE" }]);
   });
 
   it("refuses a title with no usable id rather than inventing one", async () => {
     pages = [page("epic-page", "并行与回归", "待拆解")];
-    await expect(ingestEpicsForDecomposition(client, gateway(), "epics-ds", () => 5))
+    await expect(ingestEpicsForDecomposition(client, gateway(), "epics-ds", "owner/repo", () => 5))
       .rejects.toThrow(/Epic id/);
   });
 
   it("ignores an Epic with no requirement text to decompose", async () => {
     blocks = [];
-    await expect(ingestEpicsForDecomposition(client, gateway(), "epics-ds", () => 5)).resolves.toEqual([]);
+    await expect(ingestEpicsForDecomposition(client, gateway(), "epics-ds", "owner/repo", () => 5)).resolves.toEqual([]);
     expect((await client.execute("SELECT COUNT(*) AS count FROM epics")).rows[0]?.count).toBe(0);
   });
 });
