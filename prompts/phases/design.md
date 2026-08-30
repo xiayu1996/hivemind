@@ -11,3 +11,4 @@ scenario_id、五层测试矩阵的适用项或带理由的豁免、predicted fo
 最终只输出 JSON：`{"design_summary":"...","dod_yaml":"..."}`。`dod_yaml` 必须是完整、可解析的 Story DoD YAML，
 且它是 JSON 字符串值——把整份 YAML 放进字符串（换行用 
  转义），不要把它写成嵌套 JSON 对象。
+YAML 里每个 acceptance_criteria 元素必须是纯字符串（不要写成带键的对象）。

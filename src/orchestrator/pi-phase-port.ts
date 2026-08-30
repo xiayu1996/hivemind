@@ -66,12 +66,7 @@ function parseArtifacts(input: ManagedPhaseInput, value: unknown): ManagedPhaseR
   switch (input.phase) {
     case "DESIGN": {
       const candidate = value as { design_summary?: unknown; dod_yaml?: unknown };
-      // Models sometimes inline the DoD as a nested object; serialising it
-      // back to YAML keeps the frozen contract a string without changing it.
-      const dodYaml = candidate.dod_yaml !== null && typeof candidate.dod_yaml === "object"
-        ? stringify(candidate.dod_yaml)
-        : candidate.dod_yaml;
-      const parsed = designResult.parse({ ...candidate, dod_yaml: dodYaml });
+      const parsed = designResult.parse({ ...candidate, dod_yaml: normalizeDodYaml(candidate.dod_yaml) });
       return [
         { kind: "design-summary", body: parsed.design_summary },
         { kind: "dod", body: parsed.dod_yaml },
@@ -99,6 +94,26 @@ function parseResult(input: ManagedPhaseInput, raw: string): ManagedPhaseResult[
     }
   }
   throw new Error(`${input.phase} response contained no structurally valid payload`, { cause: lastCause });
+}
+
+/** Models occasionally inline the DoD as a nested object or hide a string
+ * criterion inside a labelled object; serialise both back to the string form
+ * the frozen contract requires without changing their content. */
+function normalizeDodYaml(raw: unknown): string {
+  if (raw === null || typeof raw !== "object") return typeof raw === "string" ? raw : String(raw);
+  const document = { ...(raw as Record<string, unknown>) };
+  if (Array.isArray(document.acceptance_criteria)) {
+    document.acceptance_criteria = document.acceptance_criteria.map((item) => flattenToString(item));
+  }
+  return stringify(document);
+}
+
+function flattenToString(item: unknown): string {
+  if (typeof item === "string") return item;
+  if (item !== null && typeof item === "object" && !Array.isArray(item)) {
+    return Object.entries(item).map(([key, value]) => `${key}: ${String(value)}`).join("; ");
+  }
+  return stringify(item);
 }
 
 /** Compacts observable tool activity out of the session so the completion
