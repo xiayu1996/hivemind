@@ -20,8 +20,11 @@ async function main(): Promise<void> {
 
   const story = await store.getStory(cardId);
   if (story.state !== "NEEDS_INPUT") throw new Error(`Story ${cardId} is ${story.state}, not NEEDS_INPUT`);
-  const target = story.resumeState;
-  if (!target || target === "NEEDS_INPUT") throw new Error(`Story ${cardId} has no restorable state`);
+  const restored = story.resumeState;
+  if (!restored || restored === "NEEDS_INPUT") throw new Error(`Story ${cardId} has no restorable state`);
+  // Same mapping as the comment-driven resume: re-entering VERIFY means the
+  // code round runs again, so the verifier judges a fresh implementation.
+  const target = restored === "VERIFY" ? "CODE" : restored;
 
   await store.transition(cardId, "NEEDS_INPUT", target, "human", `${cardId.toLowerCase()}-resume-${randomUUID()}`);
   await handle.client.execute({

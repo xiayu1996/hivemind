@@ -131,7 +131,9 @@ function collectToolOutputs(events: readonly RpcEvent[]): string[] {
       if (output) outputs.push(output);
       continue;
     }
-    if (event.type !== "message") continue;
+    // pi streams tool output as message events (update/end) with role
+    // toolResult; accept both the streaming and settled shapes.
+    if (event.type !== "message" && event.type !== "message_update" && event.type !== "message_end") continue;
     const message = event.message as Record<string, unknown> | undefined;
     if (String(message?.role ?? "") !== "toolResult") continue;
     const output = textOfContent(message?.content);
@@ -166,6 +168,7 @@ function promptFor(input: BlindVerifyInput): string {
     "Perform an independent blind verification of the current worktree.",
     "You have no access to the coding session. Do not modify source or repository state.",
     "Choose and run the relevant tests from the repository and the specification.",
+    "Run tests in a mode that reports each individual test name, so every scenario's outcome is observable in the transcript.",
     "Evidence protocol (mandatory): after observing the outcome of each scenario, print a line exactly of the form HIVEMIND_TEST_RESULT <scenario_id> <passed|failed|inconclusive>, once per declared scenario id. A verdict whose scenarios have no observable evidence in this session is rejected.",
     "Return only JSON: {\"scenarios\":[{\"id\":string,\"status\":\"passed\"|\"failed\"|\"inconclusive\",\"url\"?:string,\"screenshots\"?:string[]}]}",
     "Specification:",
