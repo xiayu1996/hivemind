@@ -42,7 +42,7 @@ export interface PropertyUpdateResult {
 }
 
 export class NotionGatewayError extends Error {
-  constructor(message: string) {
+  constructor(message: string, readonly status?: number) {
     super(message);
     this.name = "NotionGatewayError";
   }
@@ -187,7 +187,7 @@ export class NotionGateway {
       response = await this.#transport(request);
     }
     if (response.status < 200 || response.status >= 300) {
-      throw new NotionGatewayError(`${request.method} ${request.path} failed with status ${response.status}`);
+      throw new NotionGatewayError(`${request.method} ${request.path} failed with status ${response.status}`, response.status);
     }
     return response;
   }

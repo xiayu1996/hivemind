@@ -2,6 +2,7 @@ import { z } from "zod";
 import { redactForExport } from "../observability/redact.js";
 import { lastAssistantText } from "../runner/assistant-text.js";
 import type { PiRunner } from "../runner/types.js";
+import { jsonPayloadCandidates } from "../util/json-payload.js";
 
 export interface CompletionJudge {
   /** A single tool-free small-model call. */
@@ -72,7 +73,9 @@ export async function verifyCompletion(
   }
 
   try {
-    const parsed = judgmentSchema.parse(JSON.parse(raw) as unknown);
+    const candidates = jsonPayloadCandidates(raw);
+    if (candidates.length === 0) throw new SyntaxError("no JSON payload found in the judge response");
+    const parsed = judgmentSchema.parse(candidates[0]);
     return parsed.done
       ? { done: true, reason: parsed.reason, feedback: null }
       : rejected(parsed.reason);

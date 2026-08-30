@@ -10,7 +10,7 @@ import { AlertRouter } from "../src/alert/index.js";
 import { alertNeedsInput } from "../src/alert/story-alerts.js";
 import { loadSecretsFile, upsertSecretFile } from "../src/config/secrets-file.js";
 import { CommentIngestor } from "../src/notion/comment-ingest.js";
-import { NotionGateway } from "../src/notion/gateway.js";
+import { NotionGateway, NotionGatewayError } from "../src/notion/gateway.js";
 import { NotionMediaReconciler } from "../src/notion/media-reconciler.js";
 import { NotionMediaPipeline } from "../src/notion/media.js";
 import { NotionOutbox } from "../src/notion/outbox.js";
@@ -138,16 +138,30 @@ async function main(): Promise<void> {
     await media.reconcile();
     await registerActiveStories();
   };
+  // Archived or deleted pages must not spin the fallback poller forever: a
+  // 404 drops the page from the active set instead of surfacing as an error.
+  const pollOnce = async (pageId: string, attempt: () => Promise<unknown>): Promise<void> => {
+    try {
+      await attempt();
+    } catch (error) {
+      if (error instanceof NotionGatewayError && error.status === 404) {
+        coordinator.unregisterActivePage(pageId);
+        console.warn(`Notion page ${pageId} is gone; dropped from the sync active set`);
+        return;
+      }
+      throw error;
+    }
+  };
   const poller: NotionSyncPoller = {
     pollProperties: async (pageId) => {
       await syncIntake();
-      await inputSync.pollProperties(pageId);
+      await pollOnce(pageId, () => inputSync.pollProperties(pageId));
     },
     pollContent: async (pageId) => {
       await syncIntake();
-      await inputSync.pollContent(pageId);
+      await pollOnce(pageId, () => inputSync.pollContent(pageId));
     },
-    pollComments: async (pageId) => { await inputSync.pollComments(pageId); },
+    pollComments: async (pageId) => { await pollOnce(pageId, () => inputSync.pollComments(pageId)); },
   };
   coordinator = new NotionSyncCoordinator(poller, {
     intervalMs: 60_000,

@@ -10,6 +10,7 @@ import { verifyCompletion, type CompletionJudge } from "../pipeline/completion-v
 import { CANONICAL_CAPTURE_ENV } from "../observability/capture-contract.js";
 import { loadPromptLayers } from "../pipeline/prompt-loader.js";
 import { lastAssistantText } from "../runner/assistant-text.js";
+import { jsonPayloadCandidates } from "../util/json-payload.js";
 import { loadExplicitContextBundle, type ExplicitContextFile } from "../runner/context-files.js";
 import { promptWithContinueRetry } from "../runner/continue-retry.js";
 import type { ResolvedModel } from "../runner/model-resolver.js";
@@ -60,23 +61,6 @@ export interface PiStoryPhasePortOptions {
 
 /** Collects JSON payloads the model may have wrapped in prose or a code fence.
  * Schema validation below decides whether a candidate is the real phase result. */
-function jsonCandidates(raw: string): unknown[] {
-  const candidates: unknown[] = [];
-  const tryParse = (text: string): void => {
-    try {
-      candidates.push(JSON.parse(text));
-    } catch {
-      // Not JSON; keep looking for a parseable span.
-    }
-  };
-  tryParse(raw);
-  for (const match of raw.matchAll(/```[^\n]*\n([\s\S]*?)```/g)) tryParse(match[1]!.trim());
-  const start = raw.indexOf("{");
-  const end = raw.lastIndexOf("}");
-  if (start >= 0 && end > start) tryParse(raw.slice(start, end + 1));
-  return candidates;
-}
-
 function parseArtifacts(input: ManagedPhaseInput, value: unknown): ManagedPhaseResult["artifacts"] {
   switch (input.phase) {
     case "DESIGN": {
@@ -95,7 +79,7 @@ function parseArtifacts(input: ManagedPhaseInput, value: unknown): ManagedPhaseR
 }
 
 function parseResult(input: ManagedPhaseInput, raw: string): ManagedPhaseResult["artifacts"] {
-  const candidates = jsonCandidates(raw);
+  const candidates = jsonPayloadCandidates(raw);
   if (candidates.length === 0) {
     throw new Error(`${input.phase} returned invalid JSON`);
   }

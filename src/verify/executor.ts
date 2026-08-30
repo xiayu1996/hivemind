@@ -3,6 +3,7 @@ import { assembleGuardPolicy, type GuardPolicy } from "../guard/policy.js";
 import { captureTreePin, evaluateTreePin, type TreePin } from "../guard/tree-pin.js";
 import { validateVerdict, type TrajectoryEvidence, type VerdictDocument } from "../pipeline/verdict.js";
 import type { PiRunner, RpcEvent, TokenUsage } from "../runner/types.js";
+import { jsonPayloadCandidates } from "../util/json-payload.js";
 
 const scenarioSchema = z.object({
   id: z.string().min(1),
@@ -200,7 +201,9 @@ export class BlindVerifyExecutor {
       if (result.failure) throw new Error(result.failure.errorMessage);
       const raw = assistantText(events);
       if (!raw) throw new Error("VERIFY returned no assistant verdict");
-      const parsed = verifierReplySchema.safeParse(JSON.parse(raw));
+      const candidates = jsonPayloadCandidates(raw);
+      if (candidates.length === 0) throw new Error("VERIFY returned no parseable JSON verdict");
+      const parsed = verifierReplySchema.safeParse(candidates[0]);
       if (!parsed.success) throw new Error("VERIFY returned a malformed verdict");
       document = toVerdictDocument(parsed.data);
     } catch (cause) {
