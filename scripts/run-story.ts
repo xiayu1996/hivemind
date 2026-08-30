@@ -18,6 +18,8 @@ import { POLICY_ENV_VAR, serializeGuardPolicy, type GuardPolicy } from "../src/g
 import { probeProviderReadiness } from "../src/runner/auth-probe.js";
 import { type ExplicitContextFile } from "../src/runner/context-files.js";
 import { PiModelCatalog, resolveModel } from "../src/runner/model-resolver.js";
+import { ConfigStore } from "../src/config/store.js";
+import { ModelPolicy } from "../src/runner/model-policy.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
 import { BlindVerifyExecutor } from "../src/verify/executor.js";
 import { discoverMRPort } from "../src/vcs/mr/adapters.js";
@@ -100,10 +102,21 @@ async function main(): Promise<void> {
       modelId: model.id,
       hostId: hostname(),
     });
+    // The judge answers one yes/no question per phase exit; running it on the
+    // phase's own tier is what made it the pipeline's quietest cost line.
+    const judgeModel = await new ModelPolicy(
+      await ConfigStore.load(handle.client),
+      new PiModelCatalog({ binary: piBinary, cwd: worktreePath }),
+    ).resolve("completion_judge", model.provider).catch((cause: unknown) => {
+      // A provider with no cheap tier still gets a judge, but never silently:
+      // the phase model is the expensive fallback, not the intended one.
+      console.warn(`completion judge falls back to the phase model: ${(cause as Error).message}`);
+      return model;
+    });
     const completionJudge = new PiCompletionJudge(() => new RpcPiRunner({
       binary: piBinary,
-      provider: model.provider,
-      model,
+      provider: judgeModel.provider,
+      model: judgeModel,
       cwd: worktreePath,
       tools: [],
       contextFiles: "explicit",
