@@ -33,4 +33,21 @@ describe("planStoryExecution", () => {
 
     expect(result).toEqual({ kind: "dependency_cycle", cycle: ["S-CATALOG-01", "S-CATALOG-02", "S-CATALOG-01"], batches: [] });
   });
+
+  it("S-M2-03-mixed releases only dependency-ready non-conflicting Stories in stable batches", () => {
+    const result = planStoryExecution([
+      story("S-ACCOUNT-01", ["accounts"]),
+      story("S-CHECKOUT-01", ["checkout"], ["S-ACCOUNT-01"]),
+      story("S-DELIVERY-01", ["delivery"]),
+      story("S-CHECKOUT-02", ["checkout/pricing"]),
+    ], []);
+
+    expect(result).toEqual({
+      kind: "planned",
+      batches: [
+        ["S-ACCOUNT-01", "S-DELIVERY-01", "S-CHECKOUT-02"],
+        ["S-CHECKOUT-01"],
+      ],
+    });
+  });
 });
