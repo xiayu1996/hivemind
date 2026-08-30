@@ -116,3 +116,47 @@ describe("PiStoryPhasePort", () => {
     await expect(port.run(phaseInput("CODE"))).rejects.toThrow(/invalid JSON/);
   });
 });
+
+describe("DESIGN acceptance criteria flattening", () => {
+  let temporary: string;
+
+  afterEach(async () => {
+    if (temporary) await rm(temporary, { recursive: true, force: true });
+  });
+
+  it("keeps the text of a nested criterion instead of stringifying the object away", async () => {
+    temporary = await mkdtemp(join(tmpdir(), "hivemind-dod-"));
+    const reply = JSON.stringify({
+      design_summary: "Persist artifacts centrally.",
+      dod_yaml: {
+        story_id: "S-EPIC1-01",
+        acceptance_criteria: [
+          // oxlint-disable-next-line unicorn/no-thenable -- the DoD grammar names this field
+          { given: { customer: "has a coupon" }, then: "the discount is deducted once" },
+        ],
+      },
+    });
+    const model = await resolveModel({ list: async () => [{ provider: "mock", id: "mock-1" }] }, "mock", "mock-1");
+    const port = new PiStoryPhasePort({
+      binary: "pi",
+      model,
+      worktreePath: resolve("."),
+      promptRoot: resolve("prompts"),
+      sessionRoot: join(temporary, "sessions"),
+      evidencePath: join(temporary, "evidence"),
+      auditPath: join(temporary, "audit", "tool-audit.jsonl"),
+      guardExtension: resolve("extensions/hive-guard.ts"),
+      canonicalCaptureExtension: resolve("extensions/canonical-capture.ts"),
+      completionJudge: { complete: async () => JSON.stringify({ done: true, reason: "complete" }) },
+      createRunner: () => fakeRunner(reply, "fresh-design-session"),
+      recordTelemetry: async () => undefined,
+      readProviderPayloads: async () => [{ model: "mock-1", messages: [] }],
+    });
+
+    const result = await port.run(phaseInput("DESIGN"));
+    const dod = result.artifacts.find((item) => item.kind === "dod")?.body ?? "";
+    expect(dod).not.toContain("[object Object]");
+    expect(dod).toContain("has a coupon");
+    expect(dod).toContain("the discount is deducted once");
+  });
+});

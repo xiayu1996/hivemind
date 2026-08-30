@@ -115,12 +115,19 @@ function normalizeDodYaml(raw: unknown): string {
   }
 }
 
+/** Flattens a criterion to the one-line string form the DoD contract requires.
+ * Nesting is descended into: a criterion that collapsed to "[object Object]"
+ * would still satisfy the schema and freeze as the Story's acceptance text. */
 function flattenToString(item: unknown): string {
   if (typeof item === "string") return item;
-  if (item !== null && typeof item === "object" && !Array.isArray(item)) {
-    return Object.entries(item).map(([key, value]) => `${key}: ${String(value)}`).join("; ");
+  if (item === null || item === undefined) return "";
+  if (Array.isArray(item)) return item.map((entry) => flattenToString(entry)).filter(Boolean).join("; ");
+  if (typeof item === "object") {
+    return Object.entries(item)
+      .map(([key, value]) => `${key}: ${flattenToString(value)}`)
+      .join("; ");
   }
-  return stringify(item);
+  return String(item);
 }
 
 /** Compacts observable tool activity out of the session so the completion
