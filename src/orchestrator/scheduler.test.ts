@@ -23,4 +23,14 @@ describe("planStoryExecution", () => {
 
     expect(result).toEqual({ kind: "planned", batches: [["S-CHECKOUT-01"], ["S-CHECKOUT-02"]] });
   });
+
+  it("S-M2-03-cycle reports a circular dependency without releasing a partial batch", () => {
+    const result = planStoryExecution([
+      story("S-CATALOG-01", ["catalog"], ["S-CATALOG-02"]),
+      story("S-CATALOG-02", ["inventory"], ["S-CATALOG-01"]),
+      story("S-DELIVERY-01", ["delivery"]),
+    ], []);
+
+    expect(result).toEqual({ kind: "dependency_cycle", cycle: ["S-CATALOG-01", "S-CATALOG-02", "S-CATALOG-01"], batches: [] });
+  });
 });
