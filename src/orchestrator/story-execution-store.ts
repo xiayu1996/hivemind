@@ -668,10 +668,13 @@ export class StoryExecutionStore {
         args: [cardId],
       }),
       this.client.execute({
+        // Only this phase's rejections: the prompt presents them as reasons an
+        // earlier attempt of this phase was rejected. run_id breaks the tie two
+        // rows written in the same millisecond would otherwise leave to SQLite.
         sql: `SELECT phase, failure FROM phase_runs
-              WHERE card_id = ? AND status = 'failed' AND failure IS NOT NULL
-              ORDER BY ended_at DESC, started_at DESC LIMIT 5`,
-        args: [cardId],
+              WHERE card_id = ? AND phase = ? AND status = 'failed' AND failure IS NOT NULL
+              ORDER BY ended_at DESC, started_at DESC, run_id DESC LIMIT 5`,
+        args: [cardId, phase],
       }),
     ]);
 

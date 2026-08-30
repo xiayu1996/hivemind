@@ -23,6 +23,7 @@ const base: PhaseInput = {
   ],
   previousRejections: [
     { phase: "CODE", reason: "implementation is not wired into the approval path" },
+    { phase: "CODE", reason: "commits are not named after the scenarios they cover" },
   ],
   evidence: [{ scenarioId: "S-EPIC3-02", path: "/e/2.png", note: "round 1" }],
   failedScenarios: ["S-EPIC3-02", "S-EPIC3-01"],
@@ -40,6 +41,7 @@ describe("determinism", () => {
       artifacts: base.artifacts.toReversed(),
       feedback: base.feedback.toReversed(),
       failedScenarios: base.failedScenarios.toReversed(),
+      previousRejections: base.previousRejections.toReversed(),
     };
     expect(assemblePhasePrompt(shuffled)).toBe(assemblePhasePrompt(base));
   });
