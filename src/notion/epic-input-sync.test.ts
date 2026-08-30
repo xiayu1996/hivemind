@@ -1,3 +1,4 @@
+// oxlint-disable unicorn/no-thenable -- Given/When/Then is the external decomposition contract.
 import { createClient, type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PlanApprovalStore } from "../orchestrator/plan-approval.js";

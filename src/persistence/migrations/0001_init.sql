@@ -16,6 +16,9 @@ CREATE TABLE IF NOT EXISTS epics (
   repo              TEXT,
   integration_branch TEXT,
   mr_url            TEXT,
+  notion_status_shadow TEXT,
+  human_wins_until  INTEGER,
+  last_human_action_at INTEGER,
   created_at        INTEGER NOT NULL,
   updated_at        INTEGER NOT NULL
 );

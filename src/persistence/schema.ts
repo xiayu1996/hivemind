@@ -14,6 +14,9 @@ export const epics = sqliteTable("epics", {
   repo: text("repo"),
   integrationBranch: text("integration_branch"),
   mrUrl: text("mr_url"),
+  notionStatusShadow: text("notion_status_shadow"),
+  humanWinsUntil: ms("human_wins_until"),
+  lastHumanActionAt: ms("last_human_action_at"),
   createdAt: ms("created_at").notNull(),
   updatedAt: ms("updated_at").notNull(),
 });

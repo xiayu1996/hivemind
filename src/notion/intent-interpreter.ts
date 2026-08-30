@@ -27,7 +27,7 @@ export type EpicPropertyIntent =
   | { type: "approve_plan"; humanWinsUntil: number }
   | { type: "unsupported_property_change"; observedEpicStatus: string; humanWinsUntil: number };
 
-export type EpicCommentIntent = { type: "approve_plan" } | { type: "feedback" };
+export type EpicCommentIntent = { type: "approve_plan" } | { type: "request_revision" } | { type: "feedback" };
 
 export function interpretPropertyChange(input: PropertyChangeInput): PropertyIntent {
   if (input.observedAiStatus === input.shadowAiStatus) return { type: "none" };
@@ -64,8 +64,10 @@ export function interpretEpicPropertyChange(
 
 export function interpretEpicComment(state: EpicState, body: string): EpicCommentIntent {
   const text = body.trim().toLocaleLowerCase();
-  if (state === "PLAN_APPROVAL" && ["批准", "approve", "approved"].includes(text)) {
-    return { type: "approve_plan" };
+  if (state !== "PLAN_APPROVAL") return { type: "feedback" };
+  if (["批准", "approve", "approved"].includes(text)) return { type: "approve_plan" };
+  if (["修改", "请修改拆解方案", "revise", "request changes"].includes(text)) {
+    return { type: "request_revision" };
   }
   return { type: "feedback" };
 }

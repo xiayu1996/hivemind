@@ -10,6 +10,7 @@ import { AlertRouter } from "../src/alert/index.js";
 import { alertNeedsInput } from "../src/alert/story-alerts.js";
 import { loadSecretsFile, upsertSecretFile } from "../src/config/secrets-file.js";
 import { CommentIngestor } from "../src/notion/comment-ingest.js";
+import { NotionEpicInputSync } from "../src/notion/epic-input-sync.js";
 import { NotionGateway, NotionGatewayError } from "../src/notion/gateway.js";
 import { NotionMediaReconciler } from "../src/notion/media-reconciler.js";
 import { NotionMediaPipeline } from "../src/notion/media.js";
@@ -26,6 +27,7 @@ import { NotionStoryDelivery, NotionStoryPropertyDelivery } from "../src/notion/
 import { NotionStoryProjection } from "../src/notion/story-projection.js";
 import { NotionSyncCoordinator, type NotionSyncPoller } from "../src/notion/sync.js";
 import { registerNotionWebhookRoute } from "../src/notion/webhook-route.js";
+import { PlanApprovalStore } from "../src/orchestrator/plan-approval.js";
 import { StoryExecutionStore } from "../src/orchestrator/story-execution-store.js";
 import { openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
@@ -107,6 +109,12 @@ async function main(): Promise<void> {
     botUserId ? { botUserId } : {},
   );
   const inputSync = new NotionStoryInputSync(handle.client, gateway, storyApi, comments, store);
+  const epicInputSync = new NotionEpicInputSync(
+    handle.client,
+    gateway,
+    comments,
+    new PlanApprovalStore(handle.client),
+  );
   const media = new NotionMediaReconciler(
     handle.client,
     new NotionMediaPipeline(new NotionGatewayMediaPort(gateway)),
@@ -121,6 +129,14 @@ async function main(): Promise<void> {
 
   let coordinator: NotionSyncCoordinator;
   const registerActiveStories = async (): Promise<void> => {
+    const epics = (await handle.client.execute({
+      sql: "SELECT notion_page_id FROM epics WHERE state = 'PLAN_APPROVAL' ORDER BY id",
+    })).rows;
+    for (const epic of epics) {
+      const pageId = String(epic.notion_page_id);
+      await comments.registerPage(pageId, []);
+      coordinator.registerActivePage(pageId);
+    }
     const stories = (await handle.client.execute({
       sql: `SELECT id, notion_page_id FROM stories
             WHERE state NOT IN ('DELIVERED', 'FAILED') ORDER BY id`,
@@ -163,16 +179,34 @@ async function main(): Promise<void> {
       throw error;
     }
   };
+  const isEpicPage = async (pageId: string): Promise<boolean> => {
+    const row = (await handle.client.execute({
+      sql: "SELECT 1 FROM epics WHERE notion_page_id = ?",
+      args: [pageId],
+    })).rows[0];
+    return row !== undefined;
+  };
   const poller: NotionSyncPoller = {
     pollProperties: async (pageId) => {
       await syncIntake();
-      await pollOnce(pageId, () => inputSync.pollProperties(pageId));
+      await pollOnce(pageId, async () => {
+        if (await isEpicPage(pageId)) await epicInputSync.pollProperties(pageId);
+        else await inputSync.pollProperties(pageId);
+      });
     },
     pollContent: async (pageId) => {
       await syncIntake();
-      await pollOnce(pageId, () => inputSync.pollContent(pageId));
+      await pollOnce(pageId, async () => {
+        if (await isEpicPage(pageId)) await epicInputSync.pollContent(pageId);
+        else await inputSync.pollContent(pageId);
+      });
     },
-    pollComments: async (pageId) => { await pollOnce(pageId, () => inputSync.pollComments(pageId)); },
+    pollComments: async (pageId) => {
+      await pollOnce(pageId, async () => {
+        if (await isEpicPage(pageId)) await epicInputSync.pollComments(pageId);
+        else await inputSync.pollComments(pageId);
+      });
+    },
   };
   coordinator = new NotionSyncCoordinator(poller, {
     intervalMs: 60_000,
