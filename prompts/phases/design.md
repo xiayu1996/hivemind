@@ -8,4 +8,6 @@ scenario_id、五层测试矩阵的适用项或带理由的豁免、predicted fo
 
 设计要解释关键边界、失败模式和可观察结果；不要把具体验证命令写进契约，后续执行者必须根据仓库现场选择。
 
-最终只输出 JSON：`{"design_summary":"...","dod_yaml":"..."}`。`dod_yaml` 必须是完整、可解析的 Story DoD YAML。
+最终只输出 JSON：`{"design_summary":"...","dod_yaml":"..."}`。`dod_yaml` 必须是完整、可解析的 Story DoD YAML，
+且它是 JSON 字符串值——把整份 YAML 放进字符串（换行用 
+ 转义），不要把它写成嵌套 JSON 对象。

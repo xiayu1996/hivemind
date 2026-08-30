@@ -1,4 +1,5 @@
 import { mkdir, readFile } from "node:fs/promises";
+import { stringify } from "yaml";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import {
@@ -64,7 +65,13 @@ export interface PiStoryPhasePortOptions {
 function parseArtifacts(input: ManagedPhaseInput, value: unknown): ManagedPhaseResult["artifacts"] {
   switch (input.phase) {
     case "DESIGN": {
-      const parsed = designResult.parse(value);
+      const candidate = value as { design_summary?: unknown; dod_yaml?: unknown };
+      // Models sometimes inline the DoD as a nested object; serialising it
+      // back to YAML keeps the frozen contract a string without changing it.
+      const dodYaml = candidate.dod_yaml !== null && typeof candidate.dod_yaml === "object"
+        ? stringify(candidate.dod_yaml)
+        : candidate.dod_yaml;
+      const parsed = designResult.parse({ ...candidate, dod_yaml: dodYaml });
       return [
         { kind: "design-summary", body: parsed.design_summary },
         { kind: "dod", body: parsed.dod_yaml },
