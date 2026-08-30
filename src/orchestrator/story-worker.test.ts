@@ -300,3 +300,85 @@ describe("SingleStoryWorker DESIGN re-entry after a crash", () => {
     expect(artifacts.rows).toMatchObject([{ kind: "design-summary" }, { kind: "dod" }]);
   });
 });
+
+describe("SingleStoryWorker inside an Epic", () => {
+  let client: ReturnType<typeof createClient>;
+  let store: StoryExecutionStore;
+
+  beforeEach(async () => {
+    client = createClient({ url: ":memory:" });
+    await migrate(client);
+    store = new StoryExecutionStore(client, (() => {
+      let time = 1_000;
+      return () => time++;
+    })());
+    await client.execute(
+      "INSERT INTO epics (id, notion_page_id, title, state, created_at, updated_at) VALUES ('EPIC1','epic-page','Epic','EXECUTING',1,1)",
+    );
+    await store.createStory({
+      id: "S-EPIC1-01",
+      epicId: "EPIC1",
+      notionPageId: "page-1",
+      title: "Run one Story",
+      requirement: "Execute the full Story pipeline without skipping verification.",
+      repo: "xiayu1996/hivemind",
+      branch: "story/epic1-01",
+    });
+  });
+
+  afterEach(() => client.close());
+
+  function ports() {
+    const phases = vi.fn(async (input: ManagedPhaseInput) => {
+      if (input.phase === "DESIGN") {
+        return { sessionId: "session-design", artifacts: [
+          { kind: "design-summary", body: "Design" },
+          { kind: "dod", body: DOD },
+        ] };
+      }
+      if (input.phase === "CODE") {
+        return { sessionId: `session-code-${input.round}`, artifacts: [{ kind: "implementation", body: "done" }] };
+      }
+      return { sessionId: "session-merge", artifacts: [{ kind: "delivery-report", body: "All scenarios passed." }] };
+    });
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => ({
+        sessionId: `session-verify-${input.round}`,
+        verdict: "accepted" as const,
+        failedScenarios: [],
+        artifact: "{}",
+      })),
+    };
+    const delivery = { deliver: vi.fn(async () => ({ mrUrl: null })) };
+    return { phases, verifier, delivery, projection: { enqueue: vi.fn(async () => undefined) } };
+  }
+
+  it("lands the Story on the Epic head before it is delivered", async () => {
+    const { phases, verifier, delivery, projection } = ports();
+    const integration = { integrate: vi.fn(async () => ({ kind: "merged" })) };
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier, delivery, projection, { integration });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
+    expect(integration.integrate).toHaveBeenCalledOnce();
+    expect(delivery.deliver).toHaveBeenCalledOnce();
+  });
+
+  it("does not deliver a Story the Epic head refused", async () => {
+    const { phases, verifier, delivery, projection } = ports();
+    const integration = { integrate: vi.fn(async () => ({ kind: "conflict", reason: "CONFLICT in src/a" })) };
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier, delivery, projection, { integration });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "CODE", mrUrl: null });
+    expect(delivery.deliver).not.toHaveBeenCalled();
+  });
+
+  it("leaves a Story with no Epic to its own delivery path", async () => {
+    await client.execute("UPDATE stories SET epic_id = NULL WHERE id = 'S-EPIC1-01'");
+    const { phases, verifier, delivery, projection } = ports();
+    const integration = { integrate: vi.fn(async () => ({ kind: "merged" })) };
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier, delivery, projection, { integration });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
+    expect(integration.integrate).not.toHaveBeenCalled();
+  });
+});

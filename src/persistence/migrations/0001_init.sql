@@ -112,9 +112,10 @@ CREATE INDEX IF NOT EXISTS idx_epic_approval_events_epic ON epic_approval_events
 CREATE TABLE IF NOT EXISTS execution_dispatches (
   story_id      TEXT PRIMARY KEY REFERENCES stories(id) ON DELETE CASCADE,
   epic_id       TEXT NOT NULL REFERENCES epics(id) ON DELETE CASCADE,
-  state         TEXT NOT NULL CHECK (state IN ('pending','dispatched')),
+  state         TEXT NOT NULL CHECK (state IN ('pending','dispatched','integrated')),
   created_at    INTEGER NOT NULL,
-  dispatched_at INTEGER
+  dispatched_at INTEGER,
+  integrated_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_execution_dispatches_pending ON execution_dispatches(state, created_at);
 

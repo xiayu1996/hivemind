@@ -94,6 +94,7 @@ export const executionDispatches = sqliteTable("execution_dispatches", {
   state: text("state").notNull(),
   createdAt: ms("created_at").notNull(),
   dispatchedAt: ms("dispatched_at"),
+  integratedAt: ms("integrated_at"),
 }, (t) => [index("idx_execution_dispatches_pending").on(t.state, t.createdAt)]);
 
 export const phaseRuns = sqliteTable("phase_runs", {

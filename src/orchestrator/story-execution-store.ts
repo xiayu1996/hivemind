@@ -583,8 +583,19 @@ export class StoryExecutionStore {
 
   /** A rebase conflict remains in the Story worktree for the CODE agent; it is
    * not a delivery and must not be hidden behind an automatic choice. */
-  async recordMergeConflict(cardId: string, runId: string, reason: string): Promise<void> {
-    if (reason.trim() === "") throw new Error("merge conflict reason must not be empty");
+  recordMergeConflict(cardId: string, runId: string, reason: string): Promise<void> {
+    return this.returnMergeToCode(cardId, runId, "merge.conflict", reason);
+  }
+
+  /** Re-verifying the affected scenarios on the Epic head failed. The Story is
+   * not wrong on its own branch, but it is wrong beside what merged before it,
+   * which is the CODE agent's problem to fix. */
+  recordIntegrationRejection(cardId: string, runId: string, reason: string): Promise<void> {
+    return this.returnMergeToCode(cardId, runId, "merge.verification_failed", reason);
+  }
+
+  private async returnMergeToCode(cardId: string, runId: string, type: string, reason: string): Promise<void> {
+    if (reason.trim() === "") throw new Error("merge rejection reason must not be empty");
     const time = this.now();
     const [update] = await this.client.batch([
       {
@@ -592,9 +603,44 @@ export class StoryExecutionStore {
               WHERE id = ? AND state = 'MERGE'`,
         args: [time, cardId],
       },
-      eventStatement(runId, cardId, "MERGE", "merge.conflict", { reason }, time),
+      eventStatement(runId, cardId, "MERGE", type, { reason }, time),
     ], "write");
-    if (update?.rowsAffected !== 1) throw new Error(`cannot record merge conflict unless Story is in MERGE: ${cardId}`);
+    if (update?.rowsAffected !== 1) throw new Error(`cannot return ${cardId} to CODE unless it is in MERGE`);
+  }
+
+  /** The Story is on the Epic head. Recorded so a later Story's subset
+   * re-verification knows what it has to hold beside. */
+  async markIntegrated(cardId: string): Promise<void> {
+    await this.client.execute({
+      sql: `UPDATE execution_dispatches SET state = 'integrated', integrated_at = ?
+            WHERE story_id = ?`,
+      args: [this.now(), cardId],
+    });
+  }
+
+  /** Stories already on this Epic's head, with the scenarios each one owns. */
+  async integratedStories(epicId: string): Promise<Array<{ id: string; branch: string; predictedFootprint: string[]; scenarioIds: string[] }>> {
+    const rows = (await this.client.execute({
+      sql: `SELECT s.id, s.branch, s.predicted_footprint
+              FROM execution_dispatches d JOIN stories s ON s.id = d.story_id
+             WHERE d.epic_id = ? AND d.state = 'integrated'
+             ORDER BY d.integrated_at, s.id`,
+      args: [epicId],
+    })).rows;
+    const stories = [];
+    for (const row of rows) {
+      const specs = (await this.client.execute({
+        sql: "SELECT spec_id FROM story_specs WHERE story_id = ? ORDER BY seq",
+        args: [String(row.id)],
+      })).rows.map((spec) => stringValue(spec.spec_id, "spec id"));
+      stories.push({
+        id: String(row.id),
+        branch: String(row.branch ?? ""),
+        predictedFootprint: parseStringArray(row.predicted_footprint, "predicted footprint"),
+        scenarioIds: specs,
+      });
+    }
+    return stories;
   }
 
   async markDelivered(cardId: string, runId: string, mrUrl: string | null): Promise<void> {

@@ -58,13 +58,20 @@ export interface StoryProjectionPort {
   enqueue(cardId: string): Promise<void>;
 }
 
+export interface StoryIntegrationPort {
+  /** Puts the Story on its Epic head. A result other than "merged" has already
+   * returned the Story to CODE; the run stops without delivering. */
+  integrate(cardId: string, runId: string): Promise<{ kind: string; reason?: string }>;
+}
+
 export interface StoryWorkerOptions {
   maxInnerLoopRounds?: number;
+  integration?: StoryIntegrationPort;
   runId?: (cardId: string, phase: StoryPhase, round: number) => string;
 }
 
 export interface StoryWorkerResult {
-  state: "DELIVERED" | "NEEDS_INPUT";
+  state: "DELIVERED" | "NEEDS_INPUT" | "CODE";
   rounds: number;
   mrUrl: string | null;
   stopReason: "verify_loop_exceeded" | null;
@@ -80,6 +87,7 @@ function artifact(result: ManagedPhaseResult, kind: string): string {
 export class SingleStoryWorker {
   private readonly maxInnerLoopRounds: number;
   private readonly createRunId: (cardId: string, phase: StoryPhase, round: number) => string;
+  private readonly integration: StoryIntegrationPort | undefined;
 
   constructor(
     private readonly store: StoryExecutionStore,
@@ -89,6 +97,7 @@ export class SingleStoryWorker {
     private readonly projection: StoryProjectionPort,
     options: StoryWorkerOptions = {},
   ) {
+    this.integration = options.integration;
     this.maxInnerLoopRounds = options.maxInnerLoopRounds ?? 6;
     if (!Number.isInteger(this.maxInnerLoopRounds) || this.maxInnerLoopRounds < 1) {
       throw new Error("maxInnerLoopRounds must be a positive integer");
@@ -173,6 +182,16 @@ export class SingleStoryWorker {
     const merge = await this.runPhase(cardId, "MERGE", 1, mergeRunId);
     const mergeArtifact = artifact(merge, "delivery-report");
     story = await this.store.getStory(cardId);
+    if (this.integration && story.epicId) {
+      // A Story inside an Epic is delivered by landing on the Epic head, not by
+      // publishing its own branch. Anything but a clean merge is the Story's
+      // problem and it has already been sent back to CODE.
+      const integrated = await this.integration.integrate(cardId, mergeRunId);
+      if (integrated.kind !== "merged") {
+        await this.projection.enqueue(cardId);
+        return { state: "CODE", rounds: totalRounds, mrUrl: null, stopReason: null };
+      }
+    }
     const delivered = await this.delivery.deliver({ story, mergeArtifact });
     await this.store.markDelivered(cardId, mergeRunId, delivered.mrUrl);
     await this.projection.enqueue(cardId);

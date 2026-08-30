@@ -7,7 +7,10 @@ import { CANONICAL_CAPTURE_ENV } from "../src/observability/capture-contract.js"
 import { LibsqlPhaseRecorder } from "../src/observability/phase-recorder.js";
 import { BlindVerifyStoryPort } from "../src/orchestrator/blind-verify-port.js";
 import { PiStoryPhasePort } from "../src/orchestrator/pi-phase-port.js";
+import { EpicIntegrator } from "../src/orchestrator/epic-integration.js";
 import { StoryExecutionStore } from "../src/orchestrator/story-execution-store.js";
+import { EpicMergeFlow } from "../src/vcs/merge-flow.js";
+import { blindSubsetVerifier } from "../src/vcs/subset-verifier.js";
 import { LibsqlActualFootprintStore } from "../src/vcs/actual-footprint.js";
 import { NotionStoryProjection } from "../src/notion/story-projection.js";
 import { SingleStoryWorker } from "../src/orchestrator/story-worker.js";
@@ -23,7 +26,7 @@ import { ModelPolicy } from "../src/runner/model-policy.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
 import { BlindVerifyExecutor } from "../src/verify/executor.js";
 import { discoverMRPort } from "../src/vcs/mr/adapters.js";
-import { GitMrStoryDelivery } from "../src/vcs/story-delivery.js";
+import { GitMrStoryDelivery, processGitCommand } from "../src/vcs/story-delivery.js";
 
 const execFileAsync = promisify(execFile);
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -72,6 +75,11 @@ async function main(): Promise<void> {
   const provider = one("--provider", "openai-codex");
   const modelId = one("--model");
   const targetBranch = one("--target-branch", "main");
+  // Only a Story inside an Epic needs one; a standalone Story publishes its own
+  // branch instead of landing on an integration branch.
+  const integrationWorktree = process.argv.includes("--integration-worktree")
+    ? resolve(one("--integration-worktree"))
+    : null;
   const piBinary = resolve(one("--pi", join(
     homedir(), ".hivemind", "pi", "0.84.3", "pi", process.platform === "win32" ? "pi.exe" : "pi",
   )));
@@ -168,12 +176,34 @@ async function main(): Promise<void> {
       targetBranch,
       actualFootprints: new LibsqlActualFootprintStore(handle.client),
     });
+    const integration = integrationWorktree
+      ? new EpicIntegrator(
+          handle.client,
+          store,
+          new EpicMergeFlow(
+            processGitCommand,
+            blindSubsetVerifier(blindExecutor, {
+              cardId,
+              round: 1,
+              codeSessionId: `integration:${cardId}`,
+              worktreePath: integrationWorktree,
+              evidencePath: join(evidenceRoot, "integration"),
+              auditPath,
+              specification: JSON.stringify(await store.getDefinitionOfDone(cardId)),
+              allowedHosts: ["localhost", "127.0.0.1"],
+              commitMessages: [],
+            }),
+            { storyWorktree: worktreePath, integrationWorktree, mainBranch: targetBranch },
+          ),
+        )
+      : undefined;
     const result = await new SingleStoryWorker(
       store,
       phases,
       verifier,
       delivery,
       new NotionStoryProjection(handle.client),
+      integration ? { integration } : {},
     ).run(cardId);
     console.log(JSON.stringify(result));
   } finally {

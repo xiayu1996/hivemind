@@ -316,6 +316,24 @@ async function main(): Promise<void> {
       } else if (await currentBranch(location.worktreePath) !== branch) {
         throw new Error(`existing worktree for ${cardId} is not on ${branch}`);
       }
+      // A Story inside an Epic lands on the Epic branch, which needs a worktree
+      // of its own: the Story's own worktree is mid-rebase during the merge.
+      const epicId = String(row.epic_id ?? "");
+      let integrationWorktree: string | null = null;
+      if (epicId) {
+        const integrationCard = `epic-${epicId}`;
+        let integration = locateWorktree(repositoryId, integrationCard, layout);
+        if (!(await exists(integration.worktreePath))) {
+          integration = await createWorktree({
+            repositoryPath,
+            repositoryId,
+            cardId: integrationCard,
+            branch: `epic/${epicId}`,
+            startPoint: targetBranch,
+          }, layout);
+        }
+        integrationWorktree = integration.worktreePath;
+      }
       const npm = process.platform === "win32" ? "npm.cmd" : "npm";
       let result;
       try {
@@ -328,6 +346,7 @@ async function main(): Promise<void> {
           "--provider", provider,
           "--model", model,
           "--target-branch", targetBranch,
+          ...(integrationWorktree ? ["--integration-worktree", integrationWorktree] : []),
           "--context", `repository=${join(location.worktreePath, "AGENTS.md")}`,
         ], {
           cwd: ROOT,
@@ -385,7 +404,7 @@ async function main(): Promise<void> {
       await decomposeWaitingEpic();
 
       const rows = (await handle.client.execute({
-        sql: `SELECT id, state, repo, branch, target_branch, depends_on, predicted_footprint
+        sql: `SELECT id, state, epic_id, repo, branch, target_branch, depends_on, predicted_footprint
                 FROM stories WHERE repo = ? ORDER BY priority ASC, created_at ASC`,
         args: [repositorySlug],
       })).rows;
