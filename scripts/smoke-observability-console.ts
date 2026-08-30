@@ -8,6 +8,8 @@ import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { createConsoleServer, listenConsole } from "../src/console/server.js";
+import { ConsoleConfigWriter } from "../src/console/config-writer.js";
+import { ConfigStore } from "../src/config/store.js";
 import { LibsqlConsoleDataSource } from "../src/console/libsql-data-source.js";
 import { CanonicalLogWriter, readCanonicalLog, rebuildModelRequest, validateCoordinates } from "../src/observability/canonical-log.js";
 import { CostLedger } from "../src/observability/cost-ledger.js";
@@ -146,7 +148,10 @@ async function main(): Promise<void> {
       node: process.version,
       pi: "0.84.3",
     }]);
-    app = await createConsoleServer(source, { uiRoot: join(REPO, "console-ui", "dist") });
+    app = await createConsoleServer(source, {
+      uiRoot: join(REPO, "console-ui", "dist"),
+      configWriter: new ConsoleConfigWriter(await ConfigStore.load(client), client),
+    });
     const address = await listenConsole(app, { host: "127.0.0.1", port: CONSOLE_PORT });
     console.log(`PASS: canonical request rebuild is byte-equivalent after JSON normalisation (${canonical.length} events)`);
     console.log(`PASS: cost ledger equals pi self-report (${result.usage.costUsd})`);
