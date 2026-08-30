@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { StoryDeliveryPort } from "../orchestrator/story-worker.js";
 import { normalizeActualFootprint, type ActualFootprintRecorder } from "./actual-footprint.js";
+import type { MRPort } from "./mr/types.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -27,12 +28,16 @@ export interface GitMrDeliveryOptions {
   actualFootprints?: ActualFootprintRecorder;
 }
 
-/** Publishes a clean Story branch for integration; only Epic delivery may create an MR. */
+/**
+ * Publishes a clean Story branch. A Story that belongs to an Epic is delivered
+ * by the Epic MR; a standalone Story opens its own, which is the degenerate
+ * single-Story path every card takes until Epic execution is wired up.
+ */
 export class GitMrStoryDelivery implements StoryDeliveryPort {
   private readonly git: GitCommandPort;
 
   constructor(
-    _mr: unknown,
+    private readonly mr: MRPort,
     private readonly options: GitMrDeliveryOptions,
   ) {
     this.git = options.git ?? processGitCommand;
@@ -53,8 +58,15 @@ export class GitMrStoryDelivery implements StoryDeliveryPort {
     if (status.trim() !== "") throw new Error("worktree has uncommitted changes at delivery");
     await this.git.run(this.options.worktreePath, ["push", "--set-upstream", "origin", story.branch]);
     await this.recordActualFootprint(story.id, story.branch);
-    void input.mergeArtifact;
-    return { mrUrl: null };
+    if (story.epicId) return { mrUrl: null };
+    const result = await this.mr.create({
+      repository: story.repo,
+      sourceBranch: story.branch,
+      targetBranch: this.options.targetBranch ?? story.targetBranch ?? "main",
+      title: `[${story.id}] ${story.title}`,
+      body: input.mergeArtifact,
+    });
+    return { mrUrl: result.url };
   }
 
   /** The published diff is what the Story really touched; DECOMPOSE is scored against it. */

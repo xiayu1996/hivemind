@@ -116,11 +116,12 @@ export class StoryExecutionStore {
     const [insert] = await this.client.batch([
       {
         sql: `INSERT OR IGNORE INTO stories
-                (id, notion_page_id, title, requirement, state, phase, priority, repo, branch,
+                (id, epic_id, notion_page_id, title, requirement, state, phase, priority, repo, branch,
                  target_branch, capabilities, created_at, updated_at)
-              VALUES (?, ?, ?, ?, 'QUEUED', NULL, ?, ?, ?, ?, ?, ?, ?)`,
+              VALUES (?, ?, ?, ?, ?, 'QUEUED', NULL, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           input.id,
+          input.epicId ?? null,
           input.notionPageId,
           input.title,
           input.requirement,

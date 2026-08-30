@@ -127,3 +127,26 @@ describe("StoryExecutionStore merge recovery", () => {
     });
   });
 });
+
+describe("StoryExecutionStore Epic membership", () => {
+  it("persists the Epic a Story was intaken under so delivery knows an Epic MR covers it", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, () => 1_000);
+    await client.execute({
+      sql: "INSERT INTO epics (id, notion_page_id, title, state, created_at, updated_at) VALUES (?, ?, ?, 'INTAKE', 1, 1)",
+      args: ["EPIC1", "epic-page", "Parallel delivery"],
+    });
+    await store.createStory({
+      id: "S-EPIC1-09",
+      epicId: "EPIC1",
+      notionPageId: "page-9",
+      title: "Belongs to an Epic",
+      requirement: "The Story is delivered through its Epic merge request.",
+      branch: "story/epic1-09",
+    });
+
+    await expect(store.getStory("S-EPIC1-09")).resolves.toMatchObject({ epicId: "EPIC1" });
+    client.close();
+  });
+});
