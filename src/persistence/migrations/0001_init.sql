@@ -73,6 +73,45 @@ CREATE TABLE IF NOT EXISTS actual_footprint_captures (
 );
 CREATE INDEX IF NOT EXISTS idx_actual_footprint_captures_pending ON actual_footprint_captures(state, story_id);
 
+-- Which scenarios exist, who owns them, and which pool re-verifies them. The
+-- epic pool runs against the Epic head while its Stories are still landing; a
+-- delivered Story's scenarios move to the main pool and are re-verified there.
+CREATE TABLE IF NOT EXISTS scenario_registry (
+  scenario_id      TEXT PRIMARY KEY,
+  story_id         TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  epic_id          TEXT,
+  pool             TEXT NOT NULL CHECK (pool IN ('epic','main')),
+  last_verified_at INTEGER,
+  created_at       INTEGER NOT NULL,
+  updated_at       INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scenario_registry_pool ON scenario_registry(pool, last_verified_at);
+
+-- Every regression observation, kept per revision so a failure can be judged
+-- against a window instead of on its own.
+CREATE TABLE IF NOT EXISTS regression_runs (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  scenario_id       TEXT NOT NULL,
+  pool              TEXT NOT NULL CHECK (pool IN ('epic','main')),
+  revision          TEXT NOT NULL,
+  outcome           TEXT NOT NULL CHECK (outcome IN ('passed','failed')),
+  failure_signature TEXT,
+  ts                INTEGER NOT NULL,
+  CHECK ((outcome = 'failed' AND failure_signature IS NOT NULL) OR
+         (outcome = 'passed' AND failure_signature IS NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_regression_runs_scenario ON regression_runs(scenario_id, ts);
+
+-- One card per distinct failure, so a deterministic break does not raise a new
+-- card on every sweep.
+CREATE TABLE IF NOT EXISTS regression_cards (
+  scenario_id       TEXT NOT NULL,
+  failure_signature TEXT NOT NULL,
+  attributed_story  TEXT,
+  created_at        INTEGER NOT NULL,
+  PRIMARY KEY (scenario_id, failure_signature)
+);
+
 -- Provider health is central, not per process: one account per vendor means the
 -- usage window and the concurrency limit are shared by every host, so a breaker
 -- one machine opens must be visible to the others.

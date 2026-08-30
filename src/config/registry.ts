@@ -197,6 +197,49 @@ export const CONFIG_KEYS = {
   }),
 
   // --- parallel scheduling ---
+  // --- regression pools (03 doc section 4) ---
+  "regression.windowSize": def({
+    schema: positiveInt.max(200),
+    default: 10,
+    scope: "global",
+    reload: "hot",
+    description: "How many recent runs of one scenario a regression judgement looks at.",
+  }),
+  "regression.failureRateThreshold": def({
+    schema: z.number().gt(0).max(1),
+    default: 0.5,
+    scope: "global",
+    reload: "hot",
+    description: "Failures below this share of the window are treated as flakiness rather than a break.",
+  }),
+  "regression.minFailures": def({
+    schema: positiveInt.max(50),
+    default: 3,
+    scope: "global",
+    reload: "hot",
+    description: "A break needs this many failures of the same signature before it earns a card.",
+  }),
+  "regression.epicPoolIntervalMs": def({
+    schema: positiveInt.max(86_400_000),
+    default: 900_000,
+    scope: "global",
+    reload: "hot",
+    description: "How stale an active Epic's scenario may get before the epic pool re-runs it.",
+  }),
+  "regression.mainPoolIntervalMs": def({
+    schema: positiveInt.max(604_800_000),
+    default: 86_400_000,
+    scope: "global",
+    reload: "hot",
+    description: "How stale a delivered scenario may get before the main pool re-runs it.",
+  }),
+  "regression.batchSize": def({
+    schema: positiveInt.max(100),
+    default: 5,
+    scope: "global",
+    reload: "hot",
+    description: "How many scenarios one regression sweep takes, so a sweep cannot occupy the host indefinitely.",
+  }),
   "schedule.maxConcurrentStories": def({
     schema: positiveInt.max(16),
     default: 2,

@@ -61,6 +61,33 @@ export const actualFootprintCaptures = sqliteTable("actual_footprint_captures", 
   appliedAt: ms("applied_at"),
 }, (t) => [index("idx_actual_footprint_captures_pending").on(t.state, t.storyId)]);
 
+export const scenarioRegistry = sqliteTable("scenario_registry", {
+  scenarioId: text("scenario_id").primaryKey(),
+  storyId: text("story_id").notNull(),
+  epicId: text("epic_id"),
+  pool: text("pool").notNull(),
+  lastVerifiedAt: ms("last_verified_at"),
+  createdAt: ms("created_at").notNull(),
+  updatedAt: ms("updated_at").notNull(),
+}, (t) => [index("idx_scenario_registry_pool").on(t.pool, t.lastVerifiedAt)]);
+
+export const regressionRuns = sqliteTable("regression_runs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  scenarioId: text("scenario_id").notNull(),
+  pool: text("pool").notNull(),
+  revision: text("revision").notNull(),
+  outcome: text("outcome").notNull(),
+  failureSignature: text("failure_signature"),
+  ts: ms("ts").notNull(),
+}, (t) => [index("idx_regression_runs_scenario").on(t.scenarioId, t.ts)]);
+
+export const regressionCards = sqliteTable("regression_cards", {
+  scenarioId: text("scenario_id").notNull(),
+  failureSignature: text("failure_signature").notNull(),
+  attributedStory: text("attributed_story"),
+  createdAt: ms("created_at").notNull(),
+}, (t) => [primaryKey({ columns: [t.scenarioId, t.failureSignature] })]);
+
 export const providerHealth = sqliteTable("provider_health", {
   provider: text("provider").primaryKey(),
   state: text("state").notNull(),
