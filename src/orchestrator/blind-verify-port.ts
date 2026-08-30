@@ -59,8 +59,10 @@ export class BlindVerifyStoryPort implements StoryVerifyPort {
         phase: "VERIFY",
         messages: result.messages,
         result: {
-          settled: true,
-          failure: null,
+          settled: result.runnerFailure === null,
+          failure: result.runnerFailure === null
+            ? null
+            : { errorMessage: result.runnerFailure, willRetry: false },
           events: result.events,
           usage: result.usage,
         },

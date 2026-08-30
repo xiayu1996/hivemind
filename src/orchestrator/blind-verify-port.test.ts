@@ -37,6 +37,7 @@ describe("BlindVerifyStoryPort", () => {
       screenshots: [],
       validationErrors: [],
       treeChanged: false,
+      runnerFailure: null,
       events: [],
       usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, reasoning: 0, costUsd: 0 },
       messages: [{ role: "assistant", content: "accepted" }],

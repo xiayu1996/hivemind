@@ -104,3 +104,20 @@ describe("verify verdict selection", () => {
     expect(result.record.failedScenarios).toEqual(["S-EPIC-01-unit"]);
   });
 });
+
+describe("verify telemetry", () => {
+  it("reports the session as unsettled when the verifier itself failed", async () => {
+    const result = await verdictOf([]);
+
+    expect(result.record.verdict).toBe("inconclusive");
+    expect(result.runnerFailure).toMatch(/no assistant verdict/);
+  });
+
+  it("reports no failure for a settled session", async () => {
+    const passing: RpcEvent = { type: "test_result", scenarioId: "S-EPIC-01-unit", status: "passed" };
+    const result = await verdictOf([passing, claimsPassed]);
+
+    expect(result.record.verdict).toBe("accepted");
+    expect(result.runnerFailure).toBeNull();
+  });
+});

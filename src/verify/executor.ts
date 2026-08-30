@@ -58,6 +58,9 @@ export interface BlindVerifyResult {
   screenshots: Array<{ scenarioId: string; path: string }>;
   validationErrors: string[];
   treeChanged: boolean;
+  /** The verifier's own failure, if it never reached a verdict. Telemetry must
+   * record the session as unsettled rather than as a clean completion. */
+  runnerFailure: string | null;
   events: RpcEvent[];
   usage: TokenUsage;
   messages: unknown[];
@@ -318,6 +321,6 @@ export class BlindVerifyExecutor {
     await this.records.insert(record);
     const screenshots = document?.scenarios.flatMap((scenario) =>
       (scenario.screenshots ?? []).map((path) => ({ scenarioId: scenario.id, path }))) ?? [];
-    return { record, screenshots, validationErrors, treeChanged: !pin.matches, events, usage, messages };
+    return { record, screenshots, validationErrors, treeChanged: !pin.matches, runnerFailure: runnerError, events, usage, messages };
   }
 }
