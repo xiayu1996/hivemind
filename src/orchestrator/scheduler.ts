@@ -63,8 +63,12 @@ function coversHotspot(story: SchedulableStory, hotspot: string): boolean {
   return story.predictedFootprint.some((footprint) => pathsIntersect(footprint, hotspot));
 }
 
+export function storiesShareHotspot(left: SchedulableStory, right: SchedulableStory, hotspots: readonly string[]): boolean {
+  return hotspots.some((hotspot) => coversHotspot(left, hotspot) && coversHotspot(right, hotspot));
+}
+
 function storiesConflict(left: SchedulableStory, right: SchedulableStory, hotspots: readonly string[]): boolean {
-  return footprintsIntersect(left, right) || hotspots.some((hotspot) => coversHotspot(left, hotspot) && coversHotspot(right, hotspot));
+  return footprintsIntersect(left, right) || storiesShareHotspot(left, right, hotspots);
 }
 
 export function planStoryExecution(stories: readonly SchedulableStory[], hotspots: readonly string[]): StoryExecutionPlan {
