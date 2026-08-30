@@ -118,6 +118,15 @@ function toolEvidenceDigest(messages: unknown[]): string[] {
   return results.slice(-20);
 }
 
+/** What each phase owes, so the completion judge does not import its own
+ * assumptions from the phase name. */
+const PHASE_CONTRACTS: Record<ManagedPhaseInput["phase"], string> = {
+  DESIGN: "Read-only analysis: produce the design summary and the frozen DoD as JSON. No code changes.",
+  CODE: "Implement the DoD scenarios in the worktree with tests, run the relevant verification, and report the implementation JSON.",
+  REGRESSION_FIX: "Fix the regressed scenarios in the worktree and report the implementation JSON.",
+  MERGE: "Prepare the delivery report JSON only. Publishing the branch and opening the MR are performed by the orchestrator outside this session; the agent must not merge, push or deploy.",
+};
+
 function sessionId(state: Record<string, unknown>): string {
   const value = state.sessionFile ?? state.sessionId;
   if (typeof value !== "string" || value.length === 0) {
@@ -204,6 +213,7 @@ export class PiStoryPhasePort implements StoryPhasePort {
       const artifacts = parseResult(input, raw);
       const completion = await verifyCompletion(this.options.completionJudge, {
         phase: input.phase,
+        contract: PHASE_CONTRACTS[input.phase],
         claimedArtifact: raw,
         sideEffects: {
           settled: result.settled,

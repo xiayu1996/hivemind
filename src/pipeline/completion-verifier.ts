@@ -11,6 +11,9 @@ export interface CompletionJudge {
 
 export interface CompletionInput {
   phase: string;
+  /** What this phase is supposed to accomplish, so the judge does not import
+   * its own assumptions from the phase name (e.g. that MERGE itself merges). */
+  contract?: string;
   claimedArtifact: string;
   sideEffects: unknown;
 }
@@ -59,6 +62,7 @@ export async function verifyCompletion(
   const prompt = [
     "Judge whether this phase exit is actually complete from its artifact and observable side effects.",
     "Return only JSON with keys done:boolean and reason:string. Fail closed when evidence is missing.",
+    ...(input.contract ? [`Phase contract: ${input.contract}`] : []),
     `Phase: ${input.phase}`,
     `Claimed artifact:\n${input.claimedArtifact}`,
     `Observable side effects:\n${JSON.stringify(input.sideEffects)}`,

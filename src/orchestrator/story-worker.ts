@@ -102,7 +102,12 @@ export class SingleStoryWorker {
   async run(cardId: string): Promise<StoryWorkerResult> {
     let story = await this.store.getStory(cardId);
     let definitionOfDone: DefinitionOfDone;
-    if (story.state === "QUEUED") {
+    // VERIFY already accepted: re-entering at MERGE skips the inner loop and
+    // redoes only the delivery report plus branch publication.
+    const mergeOnly = story.state === "MERGE";
+    if (mergeOnly) {
+      definitionOfDone = await this.store.getDefinitionOfDone(cardId);
+    } else if (story.state === "QUEUED") {
       const designRunId = this.createRunId(cardId, "DESIGN", 1);
       await this.store.transition(cardId, "QUEUED", "DESIGN", "system", designRunId);
       const design = await this.runPhase(cardId, "DESIGN", 1, designRunId);
@@ -125,48 +130,54 @@ export class SingleStoryWorker {
     } else if (story.state === "CODE") {
       definitionOfDone = await this.store.getDefinitionOfDone(cardId);
     } else {
-      throw new Error(`Story ${cardId} must be QUEUED, DESIGN or CODE, not ${story.state}`);
+      throw new Error(`Story ${cardId} must be QUEUED, DESIGN, CODE or MERGE, not ${story.state}`);
     }
 
-    const failureHistory = await this.store.getVerificationFailureHistory(cardId);
     let mergeRunId = "";
-    for (let round = failureHistory.length + 1; round <= this.maxInnerLoopRounds; round++) {
-      const codeRunId = this.createRunId(cardId, "CODE", round);
-      const code = await this.runPhase(cardId, "CODE", round, codeRunId);
-      artifact(code, "implementation");
-      const verifyRunId = this.createRunId(cardId, "VERIFY", round);
-      await this.store.transition(cardId, "CODE", "VERIFY", "system", verifyRunId);
-      const verification = await this.runVerification(
-        cardId,
-        round,
-        verifyRunId,
-        code.sessionId,
-        definitionOfDone,
-      );
-      await this.projection.enqueue(cardId);
-
-      if (verification.verdict === "accepted" && verification.failedScenarios.length === 0) {
-        mergeRunId = this.createRunId(cardId, "MERGE", 1);
-        await this.store.transition(cardId, "VERIFY", "MERGE", "system", mergeRunId);
-        break;
-      }
-
-      failureHistory.push([...new Set(verification.failedScenarios)].toSorted());
-      const convergence = classifyConvergence(failureHistory);
-      if (round === this.maxInnerLoopRounds || !convergence.mayContinue) {
-        await this.store.stopForInput(cardId, "VERIFY", "verify_loop_exceeded", verifyRunId);
+    let totalRounds = mergeOnly ? story.innerLoopRounds : 0;
+    if (!mergeOnly) {
+      const failureHistory = await this.store.getVerificationFailureHistory(cardId);
+      for (let round = failureHistory.length + 1; round <= this.maxInnerLoopRounds; round++) {
+        const codeRunId = this.createRunId(cardId, "CODE", round);
+        const code = await this.runPhase(cardId, "CODE", round, codeRunId);
+        artifact(code, "implementation");
+        const verifyRunId = this.createRunId(cardId, "VERIFY", round);
+        await this.store.transition(cardId, "CODE", "VERIFY", "system", verifyRunId);
+        const verification = await this.runVerification(
+          cardId,
+          round,
+          verifyRunId,
+          code.sessionId,
+          definitionOfDone,
+        );
         await this.projection.enqueue(cardId);
-        return {
-          state: "NEEDS_INPUT",
-          rounds: round,
-          mrUrl: null,
-          stopReason: "verify_loop_exceeded",
-        };
-      }
-      await this.store.transition(cardId, "VERIFY", "CODE", "system", verifyRunId);
-    }
 
-    if (mergeRunId === "") throw new Error("Story left the verification loop without a merge run");
+        if (verification.verdict === "accepted" && verification.failedScenarios.length === 0) {
+          mergeRunId = this.createRunId(cardId, "MERGE", 1);
+          totalRounds = round;
+          await this.store.transition(cardId, "VERIFY", "MERGE", "system", mergeRunId);
+          break;
+        }
+
+        failureHistory.push([...new Set(verification.failedScenarios)].toSorted());
+        const convergence = classifyConvergence(failureHistory);
+        if (round === this.maxInnerLoopRounds || !convergence.mayContinue) {
+          await this.store.stopForInput(cardId, "VERIFY", "verify_loop_exceeded", verifyRunId);
+          await this.projection.enqueue(cardId);
+          return {
+            state: "NEEDS_INPUT",
+            rounds: round,
+            mrUrl: null,
+            stopReason: "verify_loop_exceeded",
+          };
+        }
+        await this.store.transition(cardId, "VERIFY", "CODE", "system", verifyRunId);
+      }
+
+      if (mergeRunId === "") throw new Error("Story left the verification loop without a merge run");
+    } else {
+      mergeRunId = this.createRunId(cardId, "MERGE", 1);
+    }
     const merge = await this.runPhase(cardId, "MERGE", 1, mergeRunId);
     const mergeArtifact = artifact(merge, "delivery-report");
     story = await this.store.getStory(cardId);
@@ -175,7 +186,7 @@ export class SingleStoryWorker {
     await this.projection.enqueue(cardId);
     return {
       state: "DELIVERED",
-      rounds: failureHistory.length + 1,
+      rounds: totalRounds,
       mrUrl: delivered.mrUrl,
       stopReason: null,
     };

@@ -177,7 +177,7 @@ async function main(): Promise<void> {
       await reconcileProjections();
       const queued = (await handle.client.execute({
         sql: `SELECT id, repo, branch, target_branch FROM stories
-              WHERE state IN ('QUEUED', 'DESIGN', 'CODE') ORDER BY priority ASC, created_at ASC LIMIT 1`,
+              WHERE state IN ('QUEUED', 'DESIGN', 'CODE', 'MERGE') ORDER BY priority ASC, created_at ASC LIMIT 1`,
       })).rows[0];
       if (!queued) return;
       const cardId = String(queued.id);
