@@ -39,6 +39,7 @@ function presentationPayload(plan: DecompositionCandidate): string {
     status: "拆解待确认",
     businessGoal: plan.businessGoal,
     stories: plan.stories.map((story) => ({ id: story.id, title: story.title })),
+    ...(plan.stories.length > 8 ? { recommendation: "建议考虑拆分 Epic，便于人工评审。" } : {}),
   });
 }
 
