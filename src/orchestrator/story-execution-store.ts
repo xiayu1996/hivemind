@@ -559,13 +559,26 @@ export class StoryExecutionStore {
 
   /** Marks a completed phase result as unusable so the next attempt regenerates
    * it; used when a consumer rejects the frozen content (e.g. DoD contract). */
+  /** Discarding a completed result is the one mutation that contradicts the
+   * frozen-setpoint rule, so it leaves its own audit record. */
   async invalidateCompletedPhase(cardId: string, phase: StoryPhase, round: number, reason: string): Promise<void> {
-    await this.client.execute({
-      sql: `UPDATE phase_runs
-            SET status = 'failed', failure = ?, ended_at = ?
+    const row = (await this.client.execute({
+      sql: `SELECT run_id FROM phase_runs
             WHERE card_id = ? AND phase = ? AND round = ? AND status = 'completed'`,
-      args: [`invalidated: ${reason}`, this.now(), cardId, phase, round],
-    });
+      args: [cardId, phase, round],
+    })).rows[0];
+    if (!row) return;
+    const runId = stringValue(row.run_id, "run id");
+    const time = this.now();
+    await this.client.batch([
+      {
+        sql: `UPDATE phase_runs
+              SET status = 'failed', failure = ?, ended_at = ?
+              WHERE run_id = ? AND status = 'completed'`,
+        args: [`invalidated: ${reason}`, time, runId],
+      },
+      eventStatement(runId, cardId, phase, "phase.invalidated", { round, reason }, time),
+    ], "write");
   }
 
   /** A rebase conflict remains in the Story worktree for the CODE agent; it is

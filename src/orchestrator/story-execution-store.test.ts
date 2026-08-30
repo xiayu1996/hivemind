@@ -197,3 +197,32 @@ describe("StoryExecutionStore phase slot guard", () => {
     client.close();
   });
 });
+
+describe("StoryExecutionStore invalidation audit", () => {
+  it("records why a completed phase result was thrown away", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, () => 1_000);
+    await store.createStory({
+      id: "S-EPIC1-01",
+      notionPageId: "page-1",
+      title: "Audit invalidation",
+      requirement: "Discarding a completed phase result leaves a trace.",
+      branch: "story/epic1-01",
+    });
+    await store.transition("S-EPIC1-01", "QUEUED", "DESIGN", "system", "run-0");
+    await store.beginPhase({ runId: "run-design", cardId: "S-EPIC1-01", phase: "DESIGN", round: 1, prompt: "design" });
+    await store.completePhase({ runId: "run-design", sessionId: "session-design", artifacts: [{ kind: "dod", body: "story_id: S-EPIC1-01" }] });
+
+    await store.invalidateCompletedPhase("S-EPIC1-01", "DESIGN", 1, "DoD is missing a scenario id");
+
+    const events = (await client.execute(
+      "SELECT run_id, type, data FROM event_log WHERE type = 'phase.invalidated'",
+    )).rows;
+    expect(events).toMatchObject([{
+      run_id: "run-design",
+      data: JSON.stringify({ round: 1, reason: "DoD is missing a scenario id" }),
+    }]);
+    client.close();
+  });
+});
