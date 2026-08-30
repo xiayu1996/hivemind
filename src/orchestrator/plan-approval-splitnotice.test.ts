@@ -12,6 +12,7 @@ function plan(count: number) {
       const id = `S-M${count}-${number}`;
       return {
         id, title: `Customer outcome ${number}`, requirement: `Customers receive outcome ${number}.`,
+        // oxlint-disable-next-line unicorn/no-thenable -- Given/When/Then is the decomposition contract.
         scenarios: [{ id: `${id}-ready`, given: "a customer needs service", when: "the plan is approved", then: "the customer receives the outcome" }],
         dependsOn: [], predictedFootprint: ["service"],
       };

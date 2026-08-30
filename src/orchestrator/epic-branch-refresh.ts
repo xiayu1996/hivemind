@@ -68,7 +68,11 @@ export class EpicBranchFreshness {
       try {
         await this.git.run(cwd, ["merge", "--abort"]);
         const clean = await this.git.run(cwd, ["status", "--porcelain"]);
-        if (clean.trim() !== "") throw new Error("merge abort did not restore a clean integration worktree");
+        if (clean.trim() !== "") {
+          const failure = `${reason}; merge abort did not restore a clean integration worktree`;
+          await this.record(epicId, "failed", sourceRevision, time, failure);
+          return { epicId, outcome: "failed", reason: failure };
+        }
       } catch (abortCause) {
         const abortReason = abortCause instanceof Error ? abortCause.message : String(abortCause);
         await this.record(epicId, "failed", sourceRevision, time, `${reason}; ${abortReason}`);
