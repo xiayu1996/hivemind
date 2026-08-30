@@ -74,6 +74,20 @@ describe("overlay precedence", () => {
   });
 });
 
+describe("per-repository overlays", () => {
+  it("S-M2-04-config keeps a repository hotspot list separate from other repositories", async () => {
+    const checkout = await ConfigStore.load(client, { repository: "acme/checkout" });
+    const catalog = await ConfigStore.load(client, { repository: "acme/catalog" });
+
+    await checkout.set("schedule.hotspotPaths", ["src/routes"], "maintainer");
+    await catalog.set("schedule.hotspotPaths", ["src/schema"], "maintainer");
+    await checkout.reload();
+
+    expect(checkout.get("schedule.hotspotPaths")).toEqual(["src/routes"]);
+    expect(catalog.get("schedule.hotspotPaths")).toEqual(["src/schema"]);
+  });
+});
+
 describe("validation", () => {
   it("rejects a value that violates the schema", async () => {
     const store = await ConfigStore.load(client);
