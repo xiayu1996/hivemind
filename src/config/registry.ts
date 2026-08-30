@@ -24,6 +24,10 @@ export interface ConfigKeyDef<T> {
 const def = <T>(d: ConfigKeyDef<T>): ConfigKeyDef<T> => d;
 
 const positiveInt = z.number().int().positive();
+const repositoryRelativePath = z.string().trim().min(1).refine(
+  (path) => !path.startsWith("/") && !path.split("/").includes(".."),
+  "must be a non-empty repository-relative path",
+);
 
 /**
  * Every dynamically configurable key. Defaults live here, in code, so the system
@@ -131,7 +135,7 @@ export const CONFIG_KEYS = {
 
   // --- parallel scheduling ---
   "schedule.hotspotPaths": def({
-    schema: z.array(z.string()),
+    schema: z.array(repositoryRelativePath),
     default: [],
     scope: "per-repo",
     reload: "hot",

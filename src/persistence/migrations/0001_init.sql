@@ -222,22 +222,25 @@ CREATE INDEX IF NOT EXISTS idx_cost_provider ON cost_entries(provider, ts);
 
 -- Code defaults are the fallback truth; these rows are an overlay on top.
 CREATE TABLE IF NOT EXISTS config_entries (
-  key         TEXT PRIMARY KEY,
+  scope_id    TEXT NOT NULL DEFAULT 'global',
+  key         TEXT NOT NULL,
   value_json  TEXT NOT NULL,
   version     INTEGER NOT NULL DEFAULT 1,
   updated_by  TEXT NOT NULL,
-  updated_at  INTEGER NOT NULL
+  updated_at  INTEGER NOT NULL,
+  PRIMARY KEY (scope_id, key)
 );
 
 CREATE TABLE IF NOT EXISTS config_history (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  scope_id    TEXT NOT NULL DEFAULT 'global',
   key         TEXT NOT NULL,
   version     INTEGER NOT NULL,
   value_json  TEXT NOT NULL,
   updated_by  TEXT NOT NULL,
   ts          INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_config_history_key ON config_history(key, version);
+CREATE INDEX IF NOT EXISTS idx_config_history_key ON config_history(scope_id, key, version);
 
 -- Comment ingest watermark. Block-anchored comments are invisible to a page-level
 -- query, so anchor_block_ids records which blocks must be polled per page.

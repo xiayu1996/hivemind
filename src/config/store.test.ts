@@ -74,6 +74,20 @@ describe("overlay precedence", () => {
   });
 });
 
+describe("per-repository overlays", () => {
+  it("S-M2-04-config keeps a repository hotspot list separate from other repositories", async () => {
+    const checkout = await ConfigStore.load(client, { repository: "acme/checkout" });
+    const catalog = await ConfigStore.load(client, { repository: "acme/catalog" });
+
+    await checkout.set("schedule.hotspotPaths", ["src/routes"], "maintainer");
+    await catalog.set("schedule.hotspotPaths", ["src/schema"], "maintainer");
+    await checkout.reload();
+
+    expect(checkout.get("schedule.hotspotPaths")).toEqual(["src/routes"]);
+    expect(catalog.get("schedule.hotspotPaths")).toEqual(["src/schema"]);
+  });
+});
+
 describe("validation", () => {
   it("rejects a value that violates the schema", async () => {
     const store = await ConfigStore.load(client);
@@ -91,6 +105,15 @@ describe("validation", () => {
     const store = await ConfigStore.load(client);
     await expect(store.set("model.failoverChain", [], "ryan")).rejects.toThrow(ConfigValidationError);
     await expect(store.set("guard.e2eHostAllowlist", "localhost", "ryan")).rejects.toThrow(ConfigValidationError);
+  });
+
+  it("S-M2-04-invalid rejects an absolute hotspot path without replacing the valid repository list", async () => {
+    const store = await ConfigStore.load(client, { repository: "acme/storefront" });
+    await store.set("schedule.hotspotPaths", ["src/routes"], "maintainer");
+
+    await expect(store.set("schedule.hotspotPaths", ["/etc"], "maintainer")).rejects.toThrow(ConfigValidationError);
+
+    expect(store.get("schedule.hotspotPaths")).toEqual(["src/routes"]);
   });
 });
 
