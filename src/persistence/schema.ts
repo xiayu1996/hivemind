@@ -153,6 +153,15 @@ export const eventLog = sqliteTable("event_log", {
   index("idx_event_log_card").on(t.cardId, t.ts),
 ]);
 
+export const epicBranchRefreshEvents = sqliteTable("epic_branch_refresh_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  epicId: text("epic_id").notNull(),
+  outcome: text("outcome").notNull(),
+  sourceRevision: text("source_revision").notNull(),
+  ts: ms("ts").notNull(),
+  failureReason: text("failure_reason"),
+}, (t) => [index("idx_epic_branch_refresh_events_epic").on(t.epicId, t.ts, t.id)]);
+
 export const notionOutbox = sqliteTable("notion_outbox", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   cardId: text("card_id"),

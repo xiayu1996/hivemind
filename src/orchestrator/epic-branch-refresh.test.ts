@@ -31,7 +31,7 @@ describe("@scenario S-M2-06-freshness", () => {
   });
 
   it("records skipped before the daily interval elapses from the durable successful event", async () => {
-    await client.execute("INSERT INTO epic_branch_refresh_events (epic_id, outcome, source_revision, ts) VALUES ('M2', 'succeeded', 'old-main', 50_000_000)");
+    await client.execute("INSERT INTO epic_branch_refresh_events (epic_id, outcome, source_revision, ts) VALUES ('M2', 'succeeded', 'old-main', 50000000)");
     const git = { run: vi.fn(async () => "new-main\n") };
     const refresh = new EpicBranchFreshness(client, { worktreePath: "integration", git, intervalMs: 86_400_000, now: () => 100_000_000 });
 

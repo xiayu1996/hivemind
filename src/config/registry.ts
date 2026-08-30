@@ -72,6 +72,13 @@ export const CONFIG_KEYS = {
     reload: "hot",
     description: "Polling interval for the active card set; the convergence guarantee behind webhooks.",
   }),
+  "schedule.epicBranchFreshnessMs": def({
+    schema: positiveInt.min(60_000),
+    default: 86_400_000,
+    scope: "global",
+    reload: "hot",
+    description: "Minimum interval between successful merges of main into an active Epic integration branch.",
+  }),
   "schedule.workerGraceMs": def({
     schema: positiveInt.min(60_000),
     default: 1_800_000,
