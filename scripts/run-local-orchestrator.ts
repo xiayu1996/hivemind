@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { stat } from "node:fs/promises";
-import { hostname } from "node:os";
+import { homedir, hostname } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,11 @@ import { AlertRouter } from "../src/alert/index.js";
 import { alertNeedsInput } from "../src/alert/story-alerts.js";
 import { loadSecretsFile, upsertSecretFile } from "../src/config/secrets-file.js";
 import { ConfigStore } from "../src/config/store.js";
+import { breakerPolicy, intakeHalted, usableProviders } from "../src/runner/circuit-breaker.js";
+import { assertProviderRetriesDisabled } from "../src/runner/failover.js";
+import { assertModelPolicy, ModelPolicy } from "../src/runner/model-policy.js";
+import { PiModelCatalog } from "../src/runner/model-resolver.js";
+import { LibsqlProviderHealthStore } from "../src/runner/provider-health-store.js";
 import { CommentIngestor } from "../src/notion/comment-ingest.js";
 import { NotionEpicInputSync } from "../src/notion/epic-input-sync.js";
 import { NotionGateway, NotionGatewayError } from "../src/notion/gateway.js";
@@ -88,8 +93,10 @@ async function main(): Promise<void> {
   if (!slugMatch) throw new Error(`cannot derive an owner/name slug from origin remote: ${remoteUrl}`);
   const repositorySlug = `${slugMatch[1]}/${slugMatch[2]}`;
   console.log(`Managing repository ${repositorySlug} (id ${repositoryId})`);
-  const model = required("--model");
-  const provider = optional("--provider") ?? "openai-codex";
+  // The chain and the tier map decide which provider serves a card; the flags
+  // stay as an operator override for a single run.
+  const providerOverride = optional("--provider");
+  const modelOverride = optional("--model");
   const workRoot = resolve(optional("--work-root") ?? join(ROOT, "data", "work"));
   const intervalMs = Number(optional("--interval-ms") ?? "10000");
   const once = process.argv.includes("--once");
@@ -103,6 +110,12 @@ async function main(): Promise<void> {
   });
   const store = new StoryExecutionStore(handle.client);
   const config = await ConfigStore.load(handle.client);
+  const providerHealth = new LibsqlProviderHealthStore(handle.client);
+  const piBinary = process.env.PI_BIN ?? join(homedir(), ".hivemind", "pi", "0.84.3", "pi",
+    process.platform === "win32" ? "pi.exe" : "pi");
+  const modelPolicy = new ModelPolicy(config, new PiModelCatalog({ binary: piBinary }));
+  await assertProviderRetriesDisabled(config);
+  await assertModelPolicy(config, new PiModelCatalog({ binary: piBinary }));
   const storyApi = new NotionGatewayStoryApi(gateway);
   const botUserId = stored.get("NOTION_BOT_USER_ID");
   const comments = new CommentIngestor(
@@ -230,6 +243,23 @@ async function main(): Promise<void> {
       })).rows[0];
       if (!queued) return;
       const cardId = String(queued.id);
+      // One account per vendor: the window and the concurrency limit belong to
+      // the account, so the breaker state that decides this is central.
+      const chain = providerOverride ? [providerOverride] : await modelPolicy.providersFor("code");
+      const healths = await providerHealth.snapshot();
+      const available = usableProviders(chain, healths, Date.now());
+      if (intakeHalted(chain, healths, Date.now())) {
+        const detail = chain.map((name) => `${name}=${healths.get(name)?.lastErrorClass ?? "open"}`).join(", ");
+        console.warn(`intake halted: every provider in the chain is open (${detail})`);
+        await alerts.send({
+          kind: "p0",
+          title: "Every model provider is unavailable",
+          body: `hivemind stopped taking cards: ${detail}`,
+        }).catch((cause: unknown) => console.error("P0 alert failed:", (cause as Error).message));
+        return;
+      }
+      const provider = available[0]!;
+      const model = modelOverride ?? (await modelPolicy.resolve("code", provider)).id;
       if (!queued.branch) throw new Error(`Story ${cardId} does not declare a branch`);
       const branch = String(queued.branch);
       const targetBranch = queued.target_branch ? String(queued.target_branch) : "main";
@@ -269,6 +299,13 @@ async function main(): Promise<void> {
           env: { ...process.env, HIVEMIND_DB_URL: dbUrl },
         });
       } catch (error) {
+        // The provider's own health is separate from the card's: this records
+        // why the attempt died so the breaker can drop that node of the chain.
+        await providerHealth.recordFailure(
+          provider,
+          error instanceof Error ? error.message : String(error),
+          await breakerPolicy(config),
+        );
         // The worker already recorded the phase failure. Bound automatic
         // reentries: DESIGN and CODE re-dispatch until the budget is spent,
         // VERIFY/MERGE failures park immediately for a human resume decision.
@@ -291,6 +328,7 @@ async function main(): Promise<void> {
         }
         throw error;
       }
+      await providerHealth.recordSuccess(provider);
       if (result.stdout.trim()) console.log(result.stdout.trim());
       await reconcileProjections();
       const completed = await store.getStory(cardId);
