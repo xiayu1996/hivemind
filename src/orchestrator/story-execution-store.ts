@@ -552,6 +552,22 @@ export class StoryExecutionStore {
     });
   }
 
+  /** A rebase conflict remains in the Story worktree for the CODE agent; it is
+   * not a delivery and must not be hidden behind an automatic choice. */
+  async recordMergeConflict(cardId: string, runId: string, reason: string): Promise<void> {
+    if (reason.trim() === "") throw new Error("merge conflict reason must not be empty");
+    const time = this.now();
+    const [update] = await this.client.batch([
+      {
+        sql: `UPDATE stories SET state = 'CODE', phase = 'CODE', updated_at = ?
+              WHERE id = ? AND state = 'MERGE'`,
+        args: [time, cardId],
+      },
+      eventStatement(runId, cardId, "MERGE", "merge.conflict", { reason }, time),
+    ], "write");
+    if (update?.rowsAffected !== 1) throw new Error(`cannot record merge conflict unless Story is in MERGE: ${cardId}`);
+  }
+
   async markDelivered(cardId: string, runId: string, mrUrl: string): Promise<void> {
     if (!mrUrl.startsWith("https://")) throw new Error("MR URL must use HTTPS");
     const time = this.now();
