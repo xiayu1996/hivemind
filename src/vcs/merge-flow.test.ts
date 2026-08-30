@@ -55,6 +55,23 @@ describe("EpicMergeFlow", () => {
     expect(calls.some(({ args }) => args[0] === "merge")).toBe(false);
   });
 
+  it("S-M2-05-subset does not reverify or merge from a dirty integration worktree", async () => {
+    const calls: Array<{ cwd: string; args: string[] }> = [];
+    const git = { run: vi.fn(async (cwd: string, args: string[]) => {
+      calls.push({ cwd, args });
+      if (args.join(" ") === "branch --show-current") return cwd === "story" ? story.branch : "epic/E-1";
+      if (args.join(" ") === "status --porcelain" && cwd === "integration") return " M unrelated.txt\n";
+      return "";
+    }) };
+    const verify = vi.fn();
+    const flow = new EpicMergeFlow(git, verify, { storyWorktree: "story", integrationWorktree: "integration" });
+
+    await expect(flow.merge({ epicId: "E-1", story, integratedStories: [] })).rejects.toThrow(/integration worktree has uncommitted changes/);
+    expect(calls).toContainEqual({ cwd: "integration", args: ["status", "--porcelain"] });
+    expect(verify).not.toHaveBeenCalled();
+    expect(calls.some(({ args }) => args[0] === "rebase" || args[0] === "merge")).toBe(false);
+  });
+
   it("S-M2-05-subset blocks integration when the pending Story has no scenario mapping", async () => {
     const calls: Array<{ cwd: string; args: string[] }> = [];
     const git = { run: vi.fn(async (cwd: string, args: string[]) => {
