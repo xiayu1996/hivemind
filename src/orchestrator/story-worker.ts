@@ -111,10 +111,21 @@ export class SingleStoryWorker {
       await this.store.freezeDefinitionOfDone(cardId, definitionOfDone);
       await this.projection.enqueue(cardId);
       await this.store.transition(cardId, "DESIGN", "CODE", "system", designRunId);
+    } else if (story.state === "DESIGN") {
+      // A previous DESIGN attempt failed mid-phase; re-enter the phase and
+      // continue the normal flow. The reentry budget is enforced by the
+      // dispatcher that decides to re-run this card at all.
+      const designRunId = this.createRunId(cardId, "DESIGN", 1);
+      const design = await this.runPhase(cardId, "DESIGN", 1, designRunId);
+      definitionOfDone = parseDoD(artifact(design, "dod"));
+      artifact(design, "design-summary");
+      await this.store.freezeDefinitionOfDone(cardId, definitionOfDone);
+      await this.projection.enqueue(cardId);
+      await this.store.transition(cardId, "DESIGN", "CODE", "system", designRunId);
     } else if (story.state === "CODE") {
       definitionOfDone = await this.store.getDefinitionOfDone(cardId);
     } else {
-      throw new Error(`Story ${cardId} must be QUEUED or CODE, not ${story.state}`);
+      throw new Error(`Story ${cardId} must be QUEUED, DESIGN or CODE, not ${story.state}`);
     }
 
     const failureHistory = await this.store.getVerificationFailureHistory(cardId);

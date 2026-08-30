@@ -90,8 +90,8 @@ async function main(): Promise<void> {
     await migrate(handle.client);
     const store = new StoryExecutionStore(handle.client);
     const story = await store.getStory(cardId);
-    if (story.state !== "QUEUED" && story.state !== "CODE") {
-      throw new Error(`Story ${cardId} must be QUEUED or CODE, not ${story.state}`);
+    if (story.state !== "QUEUED" && story.state !== "DESIGN" && story.state !== "CODE") {
+      throw new Error(`Story ${cardId} must be QUEUED, DESIGN or CODE, not ${story.state}`);
     }
     const recorder = new LibsqlPhaseRecorder(handle.client, {
       evidenceRoot,

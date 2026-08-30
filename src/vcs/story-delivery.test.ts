@@ -13,6 +13,7 @@ const story: StorySnapshot = {
   state: "MERGE",
   phase: "MERGE",
   innerLoopRounds: 1,
+  phaseReentries: 0,
   stopReason: null,
   mrUrl: null,
   resumeState: null,

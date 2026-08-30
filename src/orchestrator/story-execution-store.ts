@@ -26,6 +26,7 @@ export interface StorySnapshot extends StoryIntake {
   state: StoryState;
   phase: StoryPhase | null;
   innerLoopRounds: number;
+  phaseReentries: number;
   stopReason: string | null;
   mrUrl: string | null;
   resumeState: StoryState | null;
@@ -158,7 +159,7 @@ export class StoryExecutionStore {
     const result = await this.client.execute({
       sql: `SELECT id, notion_page_id, title, requirement, state, phase, repo, branch,
                    target_branch, mr_url, resume_state,
-                   inner_loop_rounds, stop_reason
+                   inner_loop_rounds, phase_reentries, stop_reason
             FROM stories WHERE id = ?`,
       args: [cardId],
     });
@@ -172,6 +173,7 @@ export class StoryExecutionStore {
       state: stringValue(row.state, "Story state") as StoryState,
       phase: optionalString(row.phase) as StoryPhase | null,
       innerLoopRounds: numberValue(row.inner_loop_rounds, "inner-loop rounds"),
+      phaseReentries: numberValue(row.phase_reentries, "phase reentries"),
       stopReason: optionalString(row.stop_reason),
       mrUrl: optionalString(row.mr_url),
       resumeState: optionalString(row.resume_state) as StoryState | null,
@@ -484,7 +486,7 @@ export class StoryExecutionStore {
   async stopForInput(
     cardId: string,
     expectedFrom: StoryState,
-    reason: "blocking_question" | "verify_loop_exceeded",
+    reason: "blocking_question" | "verify_loop_exceeded" | "retry_limit_exceeded",
     runId: string,
   ): Promise<void> {
     assertStoryTransition(expectedFrom, "NEEDS_INPUT", "system");
@@ -511,6 +513,15 @@ export class StoryExecutionStore {
     if (update?.rowsAffected !== 1) {
       throw new Error(`Story stop lost a race: ${cardId} is no longer ${expectedFrom}`);
     }
+  }
+
+  /** Counts a failed worker attempt so the dispatcher can bound automatic
+   * phase reentries before parking the card for a human. */
+  async recordPhaseReentry(cardId: string): Promise<void> {
+    await this.client.execute({
+      sql: "UPDATE stories SET phase_reentries = phase_reentries + 1, updated_at = ? WHERE id = ?",
+      args: [this.now(), cardId],
+    });
   }
 
   async markDelivered(cardId: string, runId: string, mrUrl: string): Promise<void> {

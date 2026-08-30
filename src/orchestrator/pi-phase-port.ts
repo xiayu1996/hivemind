@@ -58,13 +58,26 @@ export interface PiStoryPhasePortOptions {
   readProviderPayloads?: (path: string) => Promise<unknown[]>;
 }
 
-function parseResult(input: ManagedPhaseInput, raw: string): ManagedPhaseResult["artifacts"] {
-  let value: unknown;
-  try {
-    value = JSON.parse(raw);
-  } catch (cause) {
-    throw new Error(`${input.phase} returned invalid JSON: ${(cause as Error).message}`, { cause });
-  }
+/** Collects JSON payloads the model may have wrapped in prose or a code fence.
+ * Schema validation below decides whether a candidate is the real phase result. */
+function jsonCandidates(raw: string): unknown[] {
+  const candidates: unknown[] = [];
+  const tryParse = (text: string): void => {
+    try {
+      candidates.push(JSON.parse(text));
+    } catch {
+      // Not JSON; keep looking for a parseable span.
+    }
+  };
+  tryParse(raw);
+  for (const match of raw.matchAll(/```[^\n]*\n([\s\S]*?)```/g)) tryParse(match[1]!.trim());
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start >= 0 && end > start) tryParse(raw.slice(start, end + 1));
+  return candidates;
+}
+
+function parseArtifacts(input: ManagedPhaseInput, value: unknown): ManagedPhaseResult["artifacts"] {
   switch (input.phase) {
     case "DESIGN": {
       const parsed = designResult.parse(value);
@@ -79,6 +92,22 @@ function parseResult(input: ManagedPhaseInput, raw: string): ManagedPhaseResult[
     case "MERGE":
       return [{ kind: "delivery-report", body: mergeResult.parse(value).delivery_report }];
   }
+}
+
+function parseResult(input: ManagedPhaseInput, raw: string): ManagedPhaseResult["artifacts"] {
+  const candidates = jsonCandidates(raw);
+  if (candidates.length === 0) {
+    throw new Error(`${input.phase} returned invalid JSON`);
+  }
+  let lastCause: unknown;
+  for (const candidate of candidates) {
+    try {
+      return parseArtifacts(input, candidate);
+    } catch (cause) {
+      lastCause = cause;
+    }
+  }
+  throw new Error(`${input.phase} response contained no structurally valid payload`, { cause: lastCause });
 }
 
 function sessionId(state: Record<string, unknown>): string {

@@ -163,7 +163,7 @@ async function main(): Promise<void> {
       await reconcileProjections();
       const queued = (await handle.client.execute({
         sql: `SELECT id, repo, branch, target_branch FROM stories
-              WHERE state IN ('QUEUED', 'CODE') ORDER BY priority ASC, created_at ASC LIMIT 1`,
+              WHERE state IN ('QUEUED', 'DESIGN', 'CODE') ORDER BY priority ASC, created_at ASC LIMIT 1`,
       })).rows[0];
       if (!queued) return;
       const cardId = String(queued.id);
@@ -185,24 +185,44 @@ async function main(): Promise<void> {
         throw new Error(`existing worktree for ${cardId} is not on ${branch}`);
       }
       const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-      const result = await execFileAsync(npm, [
-        "run", "story:run", "--",
-        "--card-id", cardId,
-        "--worktree", location.worktreePath,
-        "--evidence-root", location.evidencePath,
-        "--session-root", join(workRoot, "sessions", repositoryId, cardId),
-        "--provider", provider,
-        "--model", model,
-        "--target-branch", targetBranch,
-        "--context", `repository=${join(location.worktreePath, "AGENTS.md")}`,
-      ], {
-        cwd: ROOT,
-        windowsHide: true,
-        // Windows refuses to spawn .cmd shims without a shell (EINVAL).
-        shell: process.platform === "win32",
-        maxBuffer: 10 * 1024 * 1024,
-        env: { ...process.env, HIVEMIND_DB_URL: dbUrl },
-      });
+      let result;
+      try {
+        result = await execFileAsync(npm, [
+          "run", "story:run", "--",
+          "--card-id", cardId,
+          "--worktree", location.worktreePath,
+          "--evidence-root", location.evidencePath,
+          "--session-root", join(workRoot, "sessions", repositoryId, cardId),
+          "--provider", provider,
+          "--model", model,
+          "--target-branch", targetBranch,
+          "--context", `repository=${join(location.worktreePath, "AGENTS.md")}`,
+        ], {
+          cwd: ROOT,
+          windowsHide: true,
+          // Windows refuses to spawn .cmd shims without a shell (EINVAL).
+          shell: process.platform === "win32",
+          maxBuffer: 10 * 1024 * 1024,
+          env: { ...process.env, HIVEMIND_DB_URL: dbUrl },
+        });
+      } catch (error) {
+        // The worker already recorded the phase failure. Bound automatic
+        // reentries: DESIGN and CODE re-dispatch until the budget is spent,
+        // VERIFY/MERGE failures park immediately for a human resume decision.
+        const card = await store.getStory(cardId).catch(() => undefined);
+        if (card && card.state !== "QUEUED" && card.state !== "DELIVERED") {
+          await store.recordPhaseReentry(cardId);
+          const reentries = card.phaseReentries + 1;
+          const reenterable = (card.state === "DESIGN" || card.state === "CODE") && reentries < 3;
+          if (!reenterable) {
+            await store.stopForInput(cardId, card.state, "retry_limit_exceeded", `reentry-${cardId}`);
+            console.warn(`Story ${cardId} parked after ${reentries} failed attempt(s) in ${card.state}`);
+          } else {
+            console.warn(`Story ${cardId} will re-enter ${card.state} (attempt ${reentries}/3)`);
+          }
+        }
+        throw error;
+      }
       if (result.stdout.trim()) console.log(result.stdout.trim());
       await reconcileProjections();
       const completed = await store.getStory(cardId);
@@ -240,12 +260,16 @@ async function main(): Promise<void> {
     }
   };
 
-  await runCycle();
   if (once) {
+    await runCycle();
     await media.waitForIdle();
     handle.close();
     return;
   }
+  // A daemon must survive a failing cycle; only --once propagates the error.
+  await runCycle().catch((error) => {
+    console.error("Initial cycle failed:", (error as Error).message);
+  });
   const app = Fastify({ logger: false });
   await registerNotionWebhookRoute(app, {
     ...(webhookSecret ? { secret: webhookSecret } : {
