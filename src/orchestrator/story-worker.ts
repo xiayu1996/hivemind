@@ -107,26 +107,18 @@ export class SingleStoryWorker {
     const mergeOnly = story.state === "MERGE";
     if (mergeOnly) {
       definitionOfDone = await this.store.getDefinitionOfDone(cardId);
-    } else if (story.state === "QUEUED") {
-      const designRunId = this.createRunId(cardId, "DESIGN", 1);
-      await this.store.transition(cardId, "QUEUED", "DESIGN", "system", designRunId);
-      const design = await this.runPhase(cardId, "DESIGN", 1, designRunId);
-      definitionOfDone = parseDoD(artifact(design, "dod"));
-      artifact(design, "design-summary");
-      await this.store.freezeDefinitionOfDone(cardId, definitionOfDone);
+    } else if (story.state === "QUEUED" || story.state === "DESIGN") {
+      // QUEUED starts the pipeline; a story left in DESIGN re-enters the
+      // phase after a mid-phase failure. The reentry budget is enforced by
+      // the dispatcher that decides to re-run this card at all.
+      if (story.state === "QUEUED") {
+        const startRunId = this.createRunId(cardId, "DESIGN", 1);
+        await this.store.transition(cardId, "QUEUED", "DESIGN", "system", startRunId);
+      }
+      const design = await this.designPhase(cardId);
+      definitionOfDone = design.definitionOfDone;
       await this.projection.enqueue(cardId);
-      await this.store.transition(cardId, "DESIGN", "CODE", "system", designRunId);
-    } else if (story.state === "DESIGN") {
-      // A previous DESIGN attempt failed mid-phase; re-enter the phase and
-      // continue the normal flow. The reentry budget is enforced by the
-      // dispatcher that decides to re-run this card at all.
-      const designRunId = this.createRunId(cardId, "DESIGN", 1);
-      const design = await this.runPhase(cardId, "DESIGN", 1, designRunId);
-      definitionOfDone = parseDoD(artifact(design, "dod"));
-      artifact(design, "design-summary");
-      await this.store.freezeDefinitionOfDone(cardId, definitionOfDone);
-      await this.projection.enqueue(cardId);
-      await this.store.transition(cardId, "DESIGN", "CODE", "system", designRunId);
+      await this.store.transition(cardId, "DESIGN", "CODE", "system", design.runId);
     } else if (story.state === "CODE") {
       definitionOfDone = await this.store.getDefinitionOfDone(cardId);
     } else {
@@ -190,6 +182,26 @@ export class SingleStoryWorker {
       mrUrl: delivered.mrUrl,
       stopReason: null,
     };
+  }
+
+  /** Runs the DESIGN phase and freezes its DoD. A persisted result frozen
+   * before a contract fix would otherwise be reused forever; it is
+   * invalidated once and regenerated from a fresh session. */
+  private async designPhase(cardId: string): Promise<{ definitionOfDone: DefinitionOfDone; runId: string }> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const runId = this.createRunId(cardId, "DESIGN", 1);
+      const design = await this.runPhase(cardId, "DESIGN", 1, runId);
+      artifact(design, "design-summary");
+      try {
+        const definitionOfDone = parseDoD(artifact(design, "dod"));
+        await this.store.freezeDefinitionOfDone(cardId, definitionOfDone);
+        return { definitionOfDone, runId };
+      } catch (cause) {
+        if (attempt > 0) throw cause;
+        await this.store.invalidateCompletedPhase(cardId, "DESIGN", 1, (cause as Error).message);
+      }
+    }
+    throw new Error("DESIGN did not produce a valid DoD");
   }
 
   async runPhase(

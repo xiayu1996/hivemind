@@ -542,6 +542,17 @@ export class StoryExecutionStore {
     });
   }
 
+  /** Marks a completed phase result as unusable so the next attempt regenerates
+   * it; used when a consumer rejects the frozen content (e.g. DoD contract). */
+  async invalidateCompletedPhase(cardId: string, phase: StoryPhase, round: number, reason: string): Promise<void> {
+    await this.client.execute({
+      sql: `UPDATE phase_runs
+            SET status = 'failed', failure = ?, ended_at = ?
+            WHERE card_id = ? AND phase = ? AND round = ? AND status = 'completed'`,
+      args: [`invalidated: ${reason}`, this.now(), cardId, phase, round],
+    });
+  }
+
   async markDelivered(cardId: string, runId: string, mrUrl: string): Promise<void> {
     if (!mrUrl.startsWith("https://")) throw new Error("MR URL must use HTTPS");
     const time = this.now();
