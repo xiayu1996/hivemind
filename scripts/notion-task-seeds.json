@@ -1,5 +1,5 @@
 {
-  "repository": "hivemind",
+  "repository": "xiayu1996/hivemind",
   "deliveryConstraint": "交付约束:本卡独立产出一个 PR,未经人工评审不得合并;禁止直接推送或合并到主分支;若改动会影响 hivemind 自身的守卫、运行器、状态机等地基行为,必须在 PR 描述中单独声明影响面与回滚方式。",
   "epics": [
     {
@@ -178,7 +178,9 @@
           "goal": "vendor 方式接入浏览器自动化服务(懒连接), 工具调用纳入工具守卫。",
           "acceptance": "浏览器 e2e 场景真实跑通; 拦截本地文件导航与非白名单站点用例。",
           "dependsOn": "M1-10, S-M3-08",
-          "capabilities": ["browser-e2e"]
+          "capabilities": [
+            "browser-e2e"
+          ]
         },
         {
           "id": "S-S-M3-10",
@@ -186,7 +188,9 @@
           "goal": "跨机只读探测: 对已推送分支只读检验并回传证据, 不打破主机粘性; 结果契约必须带用量。",
           "acceptance": "跨机浏览器验证完成并回传截图与结论; 工作区仍留在原机。",
           "dependsOn": "S-M3-09",
-          "capabilities": ["browser-e2e"]
+          "capabilities": [
+            "browser-e2e"
+          ]
         },
         {
           "id": "S-S-M3-11",
@@ -346,7 +350,9 @@
           "goal": "Windows 常驻: 登录计划任务 + 看门狗(规避会话隔离)+ 强制 Git Bash 环境; 只接 windows 探针任务。",
           "acceptance": "重启 Windows 后 worker 自动回归; 有头浏览器可启动; 完成一次真实探针任务。",
           "dependsOn": "M0-06, S-M3-10",
-          "capabilities": ["windows"]
+          "capabilities": [
+            "windows"
+          ]
         },
         {
           "id": "S-M5-03",

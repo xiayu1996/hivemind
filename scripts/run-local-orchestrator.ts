@@ -74,6 +74,17 @@ async function main(): Promise<void> {
 
   const repositoryPath = resolve(required("--repository-path"));
   const repositoryId = required("--repository-id");
+  // Cards declare the target repository as an owner/name slug; only cards
+  // matching this checkout's origin are dispatched by this instance.
+  const remoteUrl = (await execFileAsync("git", ["remote", "get-url", "origin"], {
+    cwd: repositoryPath,
+    windowsHide: true,
+  })).stdout.trim();
+  const withoutSuffix = remoteUrl.replace(/\.git$/, "");
+  const slugMatch = /[/:]([^/:]+)\/([^/]+)$/.exec(withoutSuffix);
+  if (!slugMatch) throw new Error(`cannot derive an owner/name slug from origin remote: ${remoteUrl}`);
+  const repositorySlug = `${slugMatch[1]}/${slugMatch[2]}`;
+  console.log(`Managing repository ${repositorySlug} (id ${repositoryId})`);
   const model = required("--model");
   const provider = optional("--provider") ?? "openai-codex";
   const workRoot = resolve(optional("--work-root") ?? join(ROOT, "data", "work"));
@@ -177,7 +188,9 @@ async function main(): Promise<void> {
       await reconcileProjections();
       const queued = (await handle.client.execute({
         sql: `SELECT id, repo, branch, target_branch FROM stories
-              WHERE state IN ('QUEUED', 'DESIGN', 'CODE', 'MERGE') ORDER BY priority ASC, created_at ASC LIMIT 1`,
+              WHERE state IN ('QUEUED', 'DESIGN', 'CODE', 'MERGE') AND repo = ?
+              ORDER BY priority ASC, created_at ASC LIMIT 1`,
+        args: [repositorySlug],
       })).rows[0];
       if (!queued) return;
       const cardId = String(queued.id);
