@@ -198,6 +198,8 @@ async function main(): Promise<void> {
       ], {
         cwd: ROOT,
         windowsHide: true,
+        // Windows refuses to spawn .cmd shims without a shell (EINVAL).
+        shell: process.platform === "win32",
         maxBuffer: 10 * 1024 * 1024,
         env: { ...process.env, HIVEMIND_DB_URL: dbUrl },
       });
