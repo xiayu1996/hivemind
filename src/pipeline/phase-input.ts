@@ -37,8 +37,14 @@ export interface PhaseInput {
   specs: SpecRow[];
   artifacts: PhaseArtifact[];
   feedback: FeedbackItem[];
+  previousRejections: PhaseRejection[];
   evidence: EvidenceRef[];
   failedScenarios: string[];
+}
+
+export interface PhaseRejection {
+  phase: string;
+  reason: string;
 }
 
 const SECTION = "\n\n";
@@ -85,6 +91,13 @@ export function assemblePhasePrompt(input: PhaseInput): string {
     const rows = sortBy(input.feedback, (f) => f.id)
       .map((f) => `- ${f.author}${f.specId ? ` on ${f.specId}` : ""}: ${f.body.trim()}`);
     parts.push(`## Human feedback\n\n${rows.join("\n")}`);
+  }
+
+  if (input.previousRejections.length > 0) {
+    const rows = input.previousRejections.map((r) => `- [${r.phase}] ${r.reason}`);
+    parts.push("## Why earlier attempts of this phase were rejected\n\n" +
+      "Address every reason below in this attempt; do not repeat the rejected approach:\n\n" +
+      rows.join("\n"));
   }
 
   if (input.failedScenarios.length > 0) {

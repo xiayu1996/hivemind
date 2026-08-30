@@ -40,6 +40,7 @@ function phaseInput(phase: ManagedPhaseInput["phase"]): ManagedPhaseInput {
       specs: [],
       artifacts: [],
       feedback: [],
+    previousRejections: [],
       evidence: [],
       failedScenarios: [],
     },

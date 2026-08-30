@@ -21,6 +21,9 @@ const base: PhaseInput = {
     { id: "c-2", author: "ryan", specId: "S-EPIC3-02", body: "  Watch the rounding.  " },
     { id: "c-1", author: "ryan", body: "Do not change the tests." },
   ],
+  previousRejections: [
+    { phase: "CODE", reason: "implementation is not wired into the approval path" },
+  ],
   evidence: [{ scenarioId: "S-EPIC3-02", path: "/e/2.png", note: "round 1" }],
   failedScenarios: ["S-EPIC3-02", "S-EPIC3-01"],
 };
@@ -91,6 +94,7 @@ describe("optional sections", () => {
     specs: [],
     artifacts: [],
     feedback: [],
+    previousRejections: [],
     evidence: [],
     failedScenarios: [],
   };

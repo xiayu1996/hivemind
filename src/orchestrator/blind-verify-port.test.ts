@@ -63,6 +63,7 @@ describe("BlindVerifyStoryPort", () => {
         specs: [],
         artifacts: [],
         feedback: [],
+    previousRejections: [],
         evidence: [],
         failedScenarios: [],
       },

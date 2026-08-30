@@ -626,7 +626,7 @@ export class StoryExecutionStore {
 
   async buildPhaseInput(cardId: string, phase: StoryPhase, round: number): Promise<PhaseInput> {
     const story = await this.getStory(cardId);
-    const [specResult, artifactResult, feedbackResult, verifyResult] = await Promise.all([
+    const [specResult, artifactResult, feedbackResult, verifyResult, rejectionResult] = await Promise.all([
       this.client.execute({
         sql: "SELECT spec_id, status, text FROM story_specs WHERE story_id = ? ORDER BY spec_id",
         args: [cardId],
@@ -646,6 +646,12 @@ export class StoryExecutionStore {
       this.client.execute({
         sql: `SELECT round, failed_scenarios, evidence_dir FROM verify_records
               WHERE card_id = ? ORDER BY round`,
+        args: [cardId],
+      }),
+      this.client.execute({
+        sql: `SELECT phase, failure FROM phase_runs
+              WHERE card_id = ? AND status = 'failed' AND failure IS NOT NULL
+              ORDER BY ended_at DESC, started_at DESC LIMIT 5`,
         args: [cardId],
       }),
     ]);
@@ -688,6 +694,10 @@ export class StoryExecutionStore {
         ? failedScenarios.map((scenarioId) => ({ scenarioId, path: evidenceDir }))
         : [],
       failedScenarios,
+      previousRejections: rejectionResult.rows.map((row) => ({
+        phase: stringValue(row.phase, "rejected phase"),
+        reason: stringValue(row.failure, "rejection reason").slice(0, 800),
+      })),
     };
   }
 }
