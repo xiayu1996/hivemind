@@ -26,4 +26,20 @@ describe("repository scheduling", () => {
       batches: [["S-ROUTES"], ["S-COPY"]],
     });
   });
+
+  it("S-M2-04-clear uses a removed hotspot list on the next scheduling decision", async () => {
+    const maintainerConfig = await ConfigStore.load(client, { repository: "acme/storefront" });
+    await maintainerConfig.set("schedule.hotspotPaths", ["src"], "maintainer");
+    const schedulerConfig = await ConfigStore.load(client, { repository: "acme/storefront" });
+    await expect(planRepositoryStoryExecution(schedulerConfig, stories)).resolves.toMatchObject({
+      batches: [["S-ROUTES"], ["S-COPY"]],
+    });
+
+    await maintainerConfig.set("schedule.hotspotPaths", [], "maintainer");
+
+    await expect(planRepositoryStoryExecution(schedulerConfig, stories)).resolves.toEqual({
+      kind: "planned",
+      batches: [["S-ROUTES", "S-COPY"]],
+    });
+  });
 });
