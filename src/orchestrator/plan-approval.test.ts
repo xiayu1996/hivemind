@@ -81,3 +81,14 @@ describe("@scenario S-M2-02-replay plan approval", () => {
     client.close();
   });
 });
+
+describe("@scenario S-M2-02-revise plan approval", () => {
+  it("returns an unapproved Epic to decomposition without starting its plan", async () => {
+    const { client, approvals } = await presentedPlan();
+    expect(await approvals.requestRevision("M2", "comment-revise")).toBe(true);
+    expect(await approvals.getEpic("M2")).toMatchObject({ state: "DECOMPOSE" });
+    expect((await client.execute("SELECT id FROM stories")).rows).toEqual([]);
+    expect((await client.execute("SELECT story_id FROM execution_dispatches")).rows).toEqual([]);
+    client.close();
+  });
+});
