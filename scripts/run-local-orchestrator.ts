@@ -11,6 +11,8 @@ import { AlertRouter } from "../src/alert/index.js";
 import { alertNeedsInput } from "../src/alert/story-alerts.js";
 import { assertOutOfBandChannel } from "../src/alert/required-channel.js";
 import { diagnoseRetryLimit, renderRetryReport } from "../src/pipeline/retry-limits.js";
+import { ScenarioRegistry } from "../src/regression/scenario-registry.js";
+import { planRegressionSweep } from "../src/regression/scheduler.js";
 import { loadSecretsFile, upsertSecretFile } from "../src/config/secrets-file.js";
 import { ConfigStore } from "../src/config/store.js";
 import { breakerPolicy, intakeHalted, usableProviders } from "../src/runner/circuit-breaker.js";
@@ -107,6 +109,9 @@ async function main(): Promise<void> {
   const providerOverride = optional("--provider");
   const modelOverride = optional("--model");
   const workRoot = resolve(optional("--work-root") ?? join(ROOT, "data", "work"));
+  // The branch the repository integrates into; regression sweeps of the main
+  // pool run against it, and Epic worktrees are cut from it.
+  const targetBranchDefault = optional("--target-branch") ?? "main";
   const intervalMs = Number(optional("--interval-ms") ?? "10000");
   const once = process.argv.includes("--once");
   if (!Number.isInteger(intervalMs) || intervalMs < 1_000) throw new Error("--interval-ms must be at least 1000");
@@ -448,6 +453,68 @@ async function main(): Promise<void> {
     console.log(`Epic ${epicId} review request: ${delivered.mrUrl}`);
   };
 
+  // The resident E2E loop. It only ever polls when this host has no Story in
+  // flight; a merge invalidates its Epic's scenarios, which is what turns an
+  // integration into an immediate sweep rather than an event queue.
+  const registry = new ScenarioRegistry(handle.client);
+  const regressionSweep = async (): Promise<void> => {
+    await config.reload();
+    const plan = planRegressionSweep({
+      now: Date.now(),
+      foregroundBusy: inFlight.size > 0,
+      epicScenarios: await registry.pool("epic"),
+      mainScenarios: await registry.pool("main"),
+      policy: {
+        epicPoolIntervalMs: config.get("regression.epicPoolIntervalMs"),
+        mainPoolIntervalMs: config.get("regression.mainPoolIntervalMs"),
+        batchSize: config.get("regression.batchSize"),
+      },
+    });
+    if (!plan) return;
+
+    const layout = worktreeLayout(workRoot);
+    const epicId = plan.pool === "epic"
+      ? (await registry.pool("epic")).find((scenario) => plan.scenarioIds.includes(scenario.scenarioId))?.epicId ?? null
+      : null;
+    const sweepCard = plan.pool === "epic" && epicId ? `epic-${epicId}` : "regression-main";
+    const branch = plan.pool === "epic" && epicId ? `epic/${epicId}` : targetBranchDefault;
+    let sweepTree = locateWorktree(repositoryId, sweepCard, layout);
+    if (!(await exists(sweepTree.worktreePath))) {
+      sweepTree = await createWorktree({
+        repositoryPath,
+        repositoryId,
+        cardId: sweepCard,
+        branch,
+        startPoint: targetBranchDefault,
+      }, layout);
+    }
+
+    const chain = providerOverride ? [providerOverride] : await modelPolicy.providersFor("verify");
+    const provider = usableProviders(chain, await providerHealth.snapshot(), Date.now())[0];
+    if (!provider) return;
+    const model = modelOverride ?? (await modelPolicy.resolve("verify", provider)).id;
+
+    const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+    const result = await execFileAsync(npm, [
+      "run", "regression:run", "--",
+      "--pool", plan.pool,
+      "--branch", branch,
+      "--worktree", sweepTree.worktreePath,
+      "--scenarios", plan.scenarioIds.join(","),
+      "--evidence-root", join(workRoot, "evidence", repositoryId, sweepCard),
+      "--provider", provider,
+      "--model", model,
+      ...(epicId ? ["--epic", epicId] : []),
+    ], {
+      cwd: ROOT,
+      windowsHide: true,
+      shell: process.platform === "win32",
+      maxBuffer: 10 * 1024 * 1024,
+      env: { ...process.env, HIVEMIND_DB_URL: dbUrl },
+    });
+    if (result.stdout.trim()) console.log(`regression sweep (${plan.reason}): ${result.stdout.trim()}`);
+  };
+
   const cycle = async (): Promise<void> => {
     if (running) return;
     running = true;
@@ -517,6 +584,7 @@ async function main(): Promise<void> {
           .finally(() => inFlight.delete(cardId));
         inFlight.set(cardId, attempt);
       }
+      await regressionSweep();
     } finally {
       running = false;
     }

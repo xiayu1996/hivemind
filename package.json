@@ -15,6 +15,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "db:migrate": "tsx src/persistence/migrate.ts",
+    "regression:run": "tsx scripts/run-regression.ts",
     "story:run": "tsx scripts/run-story.ts",
     "orchestrator:run": "tsx scripts/run-local-orchestrator.ts"
   },

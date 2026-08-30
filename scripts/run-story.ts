@@ -24,6 +24,7 @@ import { PiModelCatalog, resolveModel } from "../src/runner/model-resolver.js";
 import { ConfigStore } from "../src/config/store.js";
 import { ModelPolicy } from "../src/runner/model-policy.js";
 import { retryLimits } from "../src/pipeline/retry-limits.js";
+import { ScenarioRegistry } from "../src/regression/scenario-registry.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
 import { BlindVerifyExecutor } from "../src/verify/executor.js";
 import { discoverMRPort } from "../src/vcs/mr/adapters.js";
@@ -211,6 +212,13 @@ async function main(): Promise<void> {
         maxInnerLoopRounds: limits.maxInnerLoopRounds,
       },
     ).run(cardId);
+    // The scenarios a Story declares become the regression pools' problem the
+    // moment they exist, and everyone's problem once the Story is delivered.
+    const registry = new ScenarioRegistry(handle.client);
+    await registry.registerStory(cardId).catch((cause: unknown) => {
+      console.warn(`scenario registration skipped: ${(cause as Error).message}`);
+    });
+    if (result.state === "DELIVERED") await registry.promoteToMain(cardId);
     console.log(JSON.stringify(result));
   } finally {
     handle.close();

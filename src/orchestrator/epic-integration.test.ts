@@ -130,3 +130,27 @@ describe("EpicIntegrator branch bookkeeping", () => {
     client.close();
   });
 });
+
+describe("EpicIntegrator regression trigger", () => {
+  it("invalidates the Epic's verified scenarios so the next sweep re-runs them", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, () => 100);
+    await client.batch([
+      "INSERT INTO epics (id, notion_page_id, title, state, created_at, updated_at) VALUES ('M2','epic-page','M2','EXECUTING',1,1)",
+      `INSERT INTO stories (id, epic_id, notion_page_id, title, requirement, state, phase, branch, predicted_footprint, created_at, updated_at)
+         VALUES ('S-M2-01','M2','p1','one','requirement','MERGE','MERGE','story/s-m2-01','[]',1,1)`,
+      "INSERT INTO execution_dispatches (story_id, epic_id, state, created_at) VALUES ('S-M2-01','M2','dispatched',1)",
+      "INSERT INTO story_specs (spec_id, story_id, seq, text, status) VALUES ('S-M2-01-a','S-M2-01',1,'t','pending')",
+      `INSERT INTO scenario_registry (scenario_id, story_id, epic_id, pool, last_verified_at, created_at, updated_at)
+         VALUES ('S-M2-00-a','S-M2-01','M2','epic',50,1,1)`,
+    ], "write");
+    const flow = { merge: vi.fn(async () => ({ kind: "merged" as const, integrationBranch: "epic/M2", scenarioIds: ["S-M2-01-a"] })) };
+
+    await new EpicIntegrator(client, store, flow).integrate("S-M2-01", "merge-run");
+
+    expect((await client.execute("SELECT last_verified_at FROM scenario_registry")).rows[0]?.last_verified_at)
+      .toBeNull();
+    client.close();
+  });
+});

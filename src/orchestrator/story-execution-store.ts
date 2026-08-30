@@ -624,6 +624,13 @@ export class StoryExecutionStore {
               WHERE id = (SELECT epic_id FROM stories WHERE id = ?) AND integration_branch IS NULL`,
         args: [integrationBranch, time, cardId],
       },
+      {
+        // A new head invalidates what was verified against the old one, which
+        // is what makes a merge trigger the Epic's next regression sweep.
+        sql: `UPDATE scenario_registry SET last_verified_at = NULL, updated_at = ?
+               WHERE epic_id = (SELECT epic_id FROM stories WHERE id = ?)`,
+        args: [time, cardId],
+      },
     ], "write");
   }
 
