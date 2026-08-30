@@ -28,14 +28,14 @@ export class EpicBranchFreshness {
 
   async tick(): Promise<FreshnessResult[]> {
     const epics = (await this.client.execute(
-      "SELECT id FROM epics WHERE state = 'EXECUTING' AND integration_branch IS NOT NULL ORDER BY created_at, id",
+      "SELECT id, integration_branch FROM epics WHERE state = 'EXECUTING' AND integration_branch IS NOT NULL ORDER BY created_at, id",
     )).rows;
     const results: FreshnessResult[] = [];
-    for (const epic of epics) results.push(await this.refresh(String(epic.id)));
+    for (const epic of epics) results.push(await this.refresh(String(epic.id), String(epic.integration_branch)));
     return results;
   }
 
-  private async refresh(epicId: string): Promise<FreshnessResult> {
+  private async refresh(epicId: string, integrationBranch: string): Promise<FreshnessResult> {
     const cwd = typeof this.options.worktreePath === "function" ? this.options.worktreePath(epicId) : this.options.worktreePath;
     const sourceRevision = (await this.git.run(cwd, ["rev-parse", "main"])).trim();
     const time = this.now();
@@ -49,6 +49,12 @@ export class EpicBranchFreshness {
       return { epicId, outcome: "skipped" };
     }
     await this.record(epicId, "attempted", sourceRevision, time);
+    const currentBranch = (await this.git.run(cwd, ["branch", "--show-current"])).trim();
+    if (currentBranch !== integrationBranch) {
+      const reason = `integration worktree branch mismatch: expected ${integrationBranch}, got ${currentBranch || "detached HEAD"}`;
+      await this.record(epicId, "failed", sourceRevision, time, reason);
+      return { epicId, outcome: "failed", reason };
+    }
     const status = await this.git.run(cwd, ["status", "--porcelain"]);
     if (status.trim() !== "") {
       const reason = "integration worktree has uncommitted changes";
