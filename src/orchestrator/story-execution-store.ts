@@ -294,20 +294,36 @@ export class StoryExecutionStore {
     }
     const time = this.now();
     const promptSha256 = createHash("sha256").update(input.prompt).digest("hex");
-    const [insert] = await this.client.batch([
+    const results = await this.client.batch([
+      // Supersedes a previous attempt in the same phase slot when it failed or
+      // was left running by a crash. Its history survives in event_log; only
+      // completed runs are immutable and reused through getCompletedPhase.
+      {
+        sql: `UPDATE phase_runs
+              SET run_id = ?, prompt_sha256 = ?, status = 'running', session_id = NULL,
+                  failure = NULL, started_at = ?, ended_at = NULL
+              WHERE card_id = ? AND phase = ? AND round = ? AND status <> 'completed'`,
+        args: [input.runId, promptSha256, time, input.cardId, input.phase, input.round],
+      },
       {
         sql: `INSERT INTO phase_runs
                 (run_id, card_id, phase, round, prompt_sha256, status, started_at)
               SELECT ?, id, ?, ?, ?, 'running', ? FROM stories
-              WHERE id = ? AND state = ?`,
-        args: [input.runId, input.phase, input.round, promptSha256, time, input.cardId, input.phase],
+              WHERE id = ? AND state = ?
+                AND NOT EXISTS (
+                  SELECT 1 FROM phase_runs WHERE card_id = id AND phase = ? AND round = ?
+                )`,
+        args: [input.runId, input.phase, input.round, promptSha256, time, input.cardId, input.phase,
+          input.phase, input.round],
       },
       eventStatement(input.runId, input.cardId, input.phase, "phase.enter", {
         round: input.round,
         promptSha256,
       }, time),
     ], "write");
-    if (insert?.rowsAffected !== 1) {
+    const superseded = Number(results[0]?.rowsAffected ?? 0);
+    const inserted = Number(results[1]?.rowsAffected ?? 0);
+    if (superseded + inserted !== 1) {
       throw new Error(`cannot start ${input.phase} while Story is not in that phase`);
     }
   }
@@ -395,9 +411,11 @@ export class StoryExecutionStore {
             WHERE card_id = ? AND phase = ? AND round = ?`,
       args: [cardId, phase, round],
     })).rows[0];
-    if (!run) return null;
-    if (run.status !== "completed" || typeof run.session_id !== "string") {
-      throw new Error(`persisted ${phase} round ${round} is ${String(run.status)} and cannot be reused`);
+    // A failed or crash-orphaned running slot has no reusable result; the
+    // caller re-runs the phase and beginPhase supersedes the stale attempt.
+    if (!run || run.status !== "completed") return null;
+    if (typeof run.session_id !== "string") {
+      throw new Error(`completed ${phase} round ${round} has no session id`);
     }
     const artifacts = (await this.client.execute({
       sql: "SELECT kind, body FROM phase_artifacts WHERE run_id = ? ORDER BY kind",
