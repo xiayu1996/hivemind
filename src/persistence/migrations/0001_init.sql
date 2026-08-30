@@ -44,6 +44,11 @@ CREATE TABLE IF NOT EXISTS stories (
   regression_reopens INTEGER NOT NULL DEFAULT 0,
   stop_reason       TEXT CHECK (stop_reason IS NULL OR stop_reason IN (
                       'blocking_question','verify_loop_exceeded','retry_limit_exceeded')),
+  resume_state      TEXT CHECK (resume_state IS NULL OR resume_state IN (
+                      'QUEUED','DESIGN','CODE','VERIFY','MERGE','REGRESSION_FIX','NEEDS_INPUT')),
+  notion_ai_status_shadow TEXT,
+  human_wins_until  INTEGER,
+  last_human_action_at INTEGER,
   created_at        INTEGER NOT NULL,
   updated_at        INTEGER NOT NULL
 );
@@ -232,6 +237,7 @@ CREATE TABLE IF NOT EXISTS human_feedback (
   round       INTEGER,
   channel     TEXT NOT NULL CHECK (channel IN ('answer','rework','defect','preference','unclassified')),
   body        TEXT NOT NULL,
+  applied_at  INTEGER,
   created_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_channel ON human_feedback(channel, created_at);
@@ -247,8 +253,27 @@ CREATE TABLE IF NOT EXISTS verify_records (
   verdict           TEXT NOT NULL CHECK (verdict IN ('accepted','rejected','inconclusive')),
   failed_scenarios  TEXT NOT NULL DEFAULT '[]',
   evidence_dir      TEXT,
+  screenshots       TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(screenshots)),
   created_at        INTEGER NOT NULL,
   UNIQUE (card_id, round),
   CHECK (verify_session_id <> code_session_id)
 );
 CREATE INDEX IF NOT EXISTS idx_verify_card ON verify_records(card_id, round);
+
+CREATE TABLE IF NOT EXISTS notion_media_delivery (
+  evidence_id       TEXT PRIMARY KEY,
+  card_id           TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  round             INTEGER NOT NULL CHECK (round >= 1),
+  scenario_id       TEXT NOT NULL,
+  local_path        TEXT NOT NULL,
+  target_block_id   TEXT NOT NULL,
+  status            TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','uploaded','placeholder')),
+  upload_id         TEXT,
+  failure           TEXT,
+  created_at        INTEGER NOT NULL,
+  updated_at        INTEGER NOT NULL,
+  CHECK ((status = 'uploaded' AND upload_id IS NOT NULL AND failure IS NULL) OR
+         (status = 'placeholder' AND upload_id IS NULL AND failure IS NOT NULL) OR
+         (status = 'pending' AND upload_id IS NULL AND failure IS NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_notion_media_pending ON notion_media_delivery(status, created_at);

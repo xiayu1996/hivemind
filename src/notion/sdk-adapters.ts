@@ -24,14 +24,20 @@ export function createNotionHttpTransport(options: NotionHttpTransportOptions): 
   const baseUrl = (options.baseUrl ?? "https://api.notion.com").replace(/\/$/, "");
   const notionVersion = options.notionVersion ?? "2025-09-03";
   return async (input) => {
+    const multipart = typeof FormData !== "undefined" && input.body instanceof FormData;
+    const body: FormData | string | undefined = input.body === undefined
+      ? undefined
+      : multipart
+        ? input.body as FormData
+        : JSON.stringify(input.body);
     const response = await request(`${baseUrl}${input.path}`, {
       method: input.method,
       headers: {
         authorization: `Bearer ${options.token}`,
-        "content-type": "application/json",
+        ...(multipart ? {} : { "content-type": "application/json" }),
         "notion-version": notionVersion,
       },
-      ...(input.body === undefined ? {} : { body: JSON.stringify(input.body) }),
+      ...(body === undefined ? {} : { body }),
       signal: AbortSignal.timeout(30_000),
     });
     const raw = await response.text();
@@ -169,6 +175,83 @@ export class NotionSdkMediaPort implements NotionMediaPort {
           caption: caption(label),
         },
       }],
+    });
+  }
+
+  async attachPlaceholder(targetBlockId: string, text: string): Promise<void> {
+    await this.client.blocks.children.append({
+      block_id: targetBlockId,
+      children: [{
+        object: "block",
+        type: "paragraph",
+        paragraph: { rich_text: caption(text) },
+      }],
+    });
+  }
+}
+
+const uploadResponseSchema = z.object({ id: z.string().min(1) }).passthrough();
+
+/** Performs File Upload and attachment through the gateway's shared rate budget. */
+export class NotionGatewayMediaPort implements NotionMediaPort {
+  constructor(private readonly gateway: NotionGateway) {}
+
+  async upload(input: { path: string; size: number; contentType: string }): Promise<{ uploadId: string }> {
+    const created = await this.gateway.request({
+      method: "POST",
+      path: "/v1/file_uploads",
+      priority: "report",
+      body: {
+        mode: "single_part",
+        filename: basename(input.path),
+        content_type: input.contentType,
+      },
+    });
+    const uploadId = uploadResponseSchema.parse(created.data).id;
+    const bytes = await readFile(input.path);
+    if (bytes.byteLength !== input.size) throw new Error("evidence file changed while it was being uploaded");
+    const form = new FormData();
+    form.append("file", new Blob([bytes], { type: input.contentType }), basename(input.path));
+    await this.gateway.request({
+      method: "POST",
+      path: `/v1/file_uploads/${encodeURIComponent(uploadId)}/send`,
+      priority: "report",
+      body: form,
+    });
+    return { uploadId };
+  }
+
+  async attach(targetBlockId: string, uploadId: string, label: string): Promise<void> {
+    await this.gateway.request({
+      method: "PATCH",
+      path: `/v1/blocks/${encodeURIComponent(targetBlockId)}/children`,
+      priority: "report",
+      body: {
+        children: [{
+          object: "block",
+          type: "image",
+          image: {
+            type: "file_upload",
+            file_upload: { id: uploadId },
+            caption: caption(label),
+          },
+        }],
+      },
+    });
+  }
+
+  async attachPlaceholder(targetBlockId: string, text: string): Promise<void> {
+    await this.gateway.request({
+      method: "PATCH",
+      path: `/v1/blocks/${encodeURIComponent(targetBlockId)}/children`,
+      priority: "report",
+      body: {
+        children: [{
+          object: "block",
+          type: "paragraph",
+          paragraph: { rich_text: caption(text) },
+        }],
+      },
     });
   }
 }

@@ -39,6 +39,10 @@ export const stories = sqliteTable("stories", {
   phaseReentries: integer("phase_reentries").notNull().default(0),
   regressionReopens: integer("regression_reopens").notNull().default(0),
   stopReason: text("stop_reason"),
+  resumeState: text("resume_state"),
+  notionAiStatusShadow: text("notion_ai_status_shadow"),
+  humanWinsUntil: ms("human_wins_until"),
+  lastHumanActionAt: ms("last_human_action_at"),
   createdAt: ms("created_at").notNull(),
   updatedAt: ms("updated_at").notNull(),
 }, (t) => [index("idx_stories_state").on(t.state), index("idx_stories_epic").on(t.epicId)]);
@@ -206,6 +210,7 @@ export const humanFeedback = sqliteTable("human_feedback", {
   round: integer("round"),
   channel: text("channel").notNull(),
   body: text("body").notNull(),
+  appliedAt: ms("applied_at"),
   createdAt: ms("created_at").notNull(),
 }, (t) => [index("idx_feedback_channel").on(t.channel, t.createdAt)]);
 
@@ -218,11 +223,26 @@ export const verifyRecords = sqliteTable("verify_records", {
   verdict: text("verdict").notNull(),
   failedScenarios: text("failed_scenarios").notNull().default("[]"),
   evidenceDir: text("evidence_dir"),
+  screenshots: text("screenshots").notNull().default("[]"),
   createdAt: ms("created_at").notNull(),
 }, (t) => [
   uniqueIndex("verify_records_card_id_round_unique").on(t.cardId, t.round),
   index("idx_verify_card").on(t.cardId, t.round),
 ]);
+
+export const notionMediaDelivery = sqliteTable("notion_media_delivery", {
+  evidenceId: text("evidence_id").primaryKey(),
+  cardId: text("card_id").notNull().references(() => stories.id, { onDelete: "cascade" }),
+  round: integer("round").notNull(),
+  scenarioId: text("scenario_id").notNull(),
+  localPath: text("local_path").notNull(),
+  targetBlockId: text("target_block_id").notNull(),
+  status: text("status").notNull().default("pending"),
+  uploadId: text("upload_id"),
+  failure: text("failure"),
+  createdAt: ms("created_at").notNull(),
+  updatedAt: ms("updated_at").notNull(),
+}, (t) => [index("idx_notion_media_pending").on(t.status, t.createdAt)]);
 
 export const schemaMigrations = sqliteTable("schema_migrations", {
   name: text("name").primaryKey(),

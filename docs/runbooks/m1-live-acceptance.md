@@ -2,6 +2,8 @@
 
 This runbook executes only after all credentials are available together. Never put token values in commands, repository files, screenshots, terminal transcripts or chat.
 
+Complete `authorization-sop-windows.md` first. It defines credential storage, minimum account permissions, browser and external-write authorization, revocation, and the single non-secret readiness reply.
+
 ## Required local configuration
 
 Store credentials in `~/.hivemind/secrets.env`, readable only by the current Windows user:
@@ -17,7 +19,7 @@ Provider authentication remains in `~/.pi/agent/auth.json`. GitHub CLI authentic
 ## Notion bootstrap
 
 1. Run `npx tsx scripts/notion-bootstrap.ts --parent <parent-page-id>`.
-2. Persist the returned Stories data-source ID as `HIVEMIND_NOTION_STORIES_DATA_SOURCE_ID`.
+2. Confirm the command persisted the Stories data-source ID and bot user ID in the local secrets file without printing either credential value.
 3. Complete the board-view steps in `notion-bootstrap.md`.
 
 ## Webhook bootstrap

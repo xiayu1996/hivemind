@@ -5,12 +5,22 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
+import { alertChannelsFromConfig } from "../src/alert/config.js";
+import { AlertRouter } from "../src/alert/index.js";
+import { alertNeedsInput } from "../src/alert/story-alerts.js";
 import { loadSecretsFile, upsertSecretFile } from "../src/config/secrets-file.js";
 import { CommentIngestor } from "../src/notion/comment-ingest.js";
 import { NotionGateway } from "../src/notion/gateway.js";
+import { NotionMediaReconciler } from "../src/notion/media-reconciler.js";
+import { NotionMediaPipeline } from "../src/notion/media.js";
 import { NotionOutbox } from "../src/notion/outbox.js";
-import { NotionGatewayCommentSource, createNotionHttpTransport } from "../src/notion/sdk-adapters.js";
+import {
+  NotionGatewayCommentSource,
+  NotionGatewayMediaPort,
+  createNotionHttpTransport,
+} from "../src/notion/sdk-adapters.js";
 import { NotionGatewayStoryApi, ingestReadyStories } from "../src/notion/story-intake.js";
+import { NotionStoryInputSync } from "../src/notion/story-input-sync.js";
 import { NotionStoryPageDelivery } from "../src/notion/story-page-delivery.js";
 import { NotionStoryDelivery, NotionStoryPropertyDelivery } from "../src/notion/story-property-delivery.js";
 import { NotionStoryProjection } from "../src/notion/story-projection.js";
@@ -53,6 +63,11 @@ async function main(): Promise<void> {
     stored.get("HIVEMIND_NOTION_WEBHOOK_SECRET");
   if (!token) throw new Error("NOTION_TOKEN is missing from ~/.hivemind/secrets.env");
   if (!dataSourceId) throw new Error("HIVEMIND_NOTION_STORIES_DATA_SOURCE_ID is missing");
+  const alertChannels = alertChannelsFromConfig(stored);
+  if (alertChannels.length === 0) {
+    throw new Error("configure FEISHU_WEBHOOK_URL or SMTP settings for out-of-band alerts");
+  }
+  const alerts = new AlertRouter(alertChannels);
 
   const repositoryPath = resolve(required("--repository-path"));
   const repositoryId = required("--repository-id");
@@ -77,11 +92,17 @@ async function main(): Promise<void> {
     new NotionGatewayCommentSource(gateway),
     botUserId ? { botUserId } : {},
   );
+  const inputSync = new NotionStoryInputSync(handle.client, gateway, storyApi, comments, store);
+  const media = new NotionMediaReconciler(
+    handle.client,
+    new NotionMediaPipeline(new NotionGatewayMediaPort(gateway)),
+    { onError: (error) => console.error("Notion media delivery failed:", (error as Error).message) },
+  );
   const outbox = new NotionOutbox(handle.client);
   const projection = new NotionStoryProjection(handle.client);
   const delivery = new NotionStoryDelivery(
     new NotionStoryPageDelivery(handle.client, gateway),
-    new NotionStoryPropertyDelivery(gateway),
+    new NotionStoryPropertyDelivery(gateway, handle.client),
   );
 
   let coordinator: NotionSyncCoordinator;
@@ -111,12 +132,19 @@ async function main(): Promise<void> {
     const stories = (await handle.client.execute("SELECT id FROM stories ORDER BY id")).rows;
     for (const story of stories) await projection.enqueue(String(story.id));
     await outbox.replay(delivery);
+    await media.reconcile();
     await registerActiveStories();
   };
   const poller: NotionSyncPoller = {
-    pollProperties: async () => syncIntake(),
-    pollContent: async () => syncIntake(),
-    pollComments: async (pageId) => { await comments.pollPage(pageId); },
+    pollProperties: async (pageId) => {
+      await syncIntake();
+      await inputSync.pollProperties(pageId);
+    },
+    pollContent: async (pageId) => {
+      await syncIntake();
+      await inputSync.pollContent(pageId);
+    },
+    pollComments: async (pageId) => { await inputSync.pollComments(pageId); },
   };
   coordinator = new NotionSyncCoordinator(poller, {
     intervalMs: 60_000,
@@ -132,7 +160,7 @@ async function main(): Promise<void> {
       await reconcileProjections();
       const queued = (await handle.client.execute({
         sql: `SELECT id, repo, branch, target_branch FROM stories
-              WHERE state = 'QUEUED' ORDER BY priority ASC, created_at ASC LIMIT 1`,
+              WHERE state IN ('QUEUED', 'CODE') ORDER BY priority ASC, created_at ASC LIMIT 1`,
       })).rows[0];
       if (!queued) return;
       const cardId = String(queued.id);
@@ -172,13 +200,40 @@ async function main(): Promise<void> {
       });
       if (result.stdout.trim()) console.log(result.stdout.trim());
       await reconcileProjections();
+      const completed = await store.getStory(cardId);
+      await alertNeedsInput(alerts, completed);
     } finally {
       running = false;
     }
   };
 
-  await cycle();
+  let lastP0 = "";
+  let lastP0At = 0;
+  const runCycle = async (): Promise<void> => {
+    try {
+      await cycle();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "local orchestrator cycle failed";
+      const time = Date.now();
+      if (message !== lastP0 || time - lastP0At >= 10 * 60_000) {
+        lastP0 = message;
+        lastP0At = time;
+        const deliveryResult = await alerts.send({
+          kind: "p0",
+          title: "Local orchestrator cycle failed",
+          body: message,
+        });
+        if (deliveryResult.delivered.length === 0) {
+          console.error("P0 alert failed on every channel:", JSON.stringify(deliveryResult.failed));
+        }
+      }
+      throw error;
+    }
+  };
+
+  await runCycle();
   if (once) {
+    await media.waitForIdle();
     handle.close();
     return;
   }
@@ -196,7 +251,7 @@ async function main(): Promise<void> {
   const port = Number(optional("--port") ?? "3212");
   await app.listen({ host, port });
   coordinator.start();
-  const timer = setInterval(() => void cycle().catch((error) => {
+  const timer = setInterval(() => void runCycle().catch((error) => {
     console.error("Local orchestrator cycle failed:", (error as Error).message);
   }), intervalMs);
   console.log(`Local orchestrator ${hostname()} listening on http://${host}:${port}`);
@@ -205,6 +260,7 @@ async function main(): Promise<void> {
     clearInterval(timer);
     coordinator.stop();
     await coordinator.waitForIdle();
+    await media.waitForIdle();
     await app.close();
     handle.close();
   };

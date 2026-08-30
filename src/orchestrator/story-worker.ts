@@ -39,6 +39,7 @@ export interface ManagedVerifyResult {
   verdict: "accepted" | "rejected" | "inconclusive";
   failedScenarios: string[];
   evidenceDir?: string;
+  screenshots?: Array<{ scenarioId: string; path: string }>;
   artifact: string;
 }
 
@@ -100,20 +101,25 @@ export class SingleStoryWorker {
 
   async run(cardId: string): Promise<StoryWorkerResult> {
     let story = await this.store.getStory(cardId);
-    if (story.state !== "QUEUED") throw new Error(`Story ${cardId} must be QUEUED, not ${story.state}`);
+    let definitionOfDone: DefinitionOfDone;
+    if (story.state === "QUEUED") {
+      const designRunId = this.createRunId(cardId, "DESIGN", 1);
+      await this.store.transition(cardId, "QUEUED", "DESIGN", "system", designRunId);
+      const design = await this.runPhase(cardId, "DESIGN", 1, designRunId);
+      definitionOfDone = parseDoD(artifact(design, "dod"));
+      artifact(design, "design-summary");
+      await this.store.freezeDefinitionOfDone(cardId, definitionOfDone);
+      await this.projection.enqueue(cardId);
+      await this.store.transition(cardId, "DESIGN", "CODE", "system", designRunId);
+    } else if (story.state === "CODE") {
+      definitionOfDone = await this.store.getDefinitionOfDone(cardId);
+    } else {
+      throw new Error(`Story ${cardId} must be QUEUED or CODE, not ${story.state}`);
+    }
 
-    const designRunId = this.createRunId(cardId, "DESIGN", 1);
-    await this.store.transition(cardId, "QUEUED", "DESIGN", "system", designRunId);
-    const design = await this.runPhase(cardId, "DESIGN", 1, designRunId);
-    const definitionOfDone = parseDoD(artifact(design, "dod"));
-    artifact(design, "design-summary");
-    await this.store.freezeDefinitionOfDone(cardId, definitionOfDone);
-    await this.projection.enqueue(cardId);
-    await this.store.transition(cardId, "DESIGN", "CODE", "system", designRunId);
-
-    const failureHistory: string[][] = [];
+    const failureHistory = await this.store.getVerificationFailureHistory(cardId);
     let mergeRunId = "";
-    for (let round = 1; round <= this.maxInnerLoopRounds; round++) {
+    for (let round = failureHistory.length + 1; round <= this.maxInnerLoopRounds; round++) {
       const codeRunId = this.createRunId(cardId, "CODE", round);
       const code = await this.runPhase(cardId, "CODE", round, codeRunId);
       artifact(code, "implementation");
@@ -170,6 +176,8 @@ export class SingleStoryWorker {
     round: number,
     runId: string,
   ): Promise<ManagedPhaseResult> {
+    const persisted = await this.store.getCompletedPhase(cardId, phase, round);
+    if (persisted) return persisted;
     const context = await this.store.buildPhaseInput(cardId, phase, round);
     const prompt = assemblePhasePrompt(context);
     await this.store.beginPhase({ runId, cardId, phase, round, prompt });
@@ -219,6 +227,7 @@ export class SingleStoryWorker {
         verdict: result.verdict,
         failedScenarios: result.failedScenarios,
         ...(result.evidenceDir ? { evidenceDir: result.evidenceDir } : {}),
+        ...(result.screenshots ? { screenshots: result.screenshots } : {}),
       });
       return result;
     } catch (cause) {

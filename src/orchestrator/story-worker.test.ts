@@ -165,4 +165,75 @@ describe("SingleStoryWorker", () => {
       stopReason: "verify_loop_exceeded",
     });
   });
+
+  it("resumes a reopened CODE state from central DoD and verification history", async () => {
+    const initialPhases = {
+      run: async (input: ManagedPhaseInput) => input.phase === "DESIGN"
+        ? {
+            sessionId: "session-design",
+            artifacts: [
+              { kind: "design-summary", body: "Design" },
+              { kind: "dod", body: DOD },
+            ],
+          }
+        : {
+            sessionId: "session-code-1",
+            artifacts: [{ kind: "implementation", body: "First implementation" }],
+          },
+    };
+    const rejected: StoryVerifyPort = {
+      run: async () => ({
+        sessionId: "session-verify-1",
+        verdict: "rejected",
+        failedScenarios: ["S-EPIC1-01-a"],
+        artifact: "One scenario failed",
+      }),
+    };
+    const first = new SingleStoryWorker(
+      store,
+      initialPhases,
+      rejected,
+      { deliver: async () => { throw new Error("delivery must not run"); } },
+      { enqueue: async () => undefined },
+      { maxInnerLoopRounds: 1, runId: (_cardId, phase, round) => `first-${phase}-${round}` },
+    );
+    await expect(first.run("S-EPIC1-01")).resolves.toMatchObject({ state: "NEEDS_INPUT", rounds: 1 });
+    await store.transition("S-EPIC1-01", "NEEDS_INPUT", "CODE", "human", "human-reopen");
+
+    const resumedPhases = vi.fn(async (input: ManagedPhaseInput) => input.phase === "CODE"
+      ? {
+          sessionId: "session-code-2",
+          artifacts: [{ kind: "implementation", body: "Second implementation" }],
+        }
+      : {
+          sessionId: "session-merge",
+          artifacts: [{ kind: "delivery-report", body: "Accepted after feedback" }],
+        });
+    const resumed = new SingleStoryWorker(
+      store,
+      { run: resumedPhases },
+      {
+        run: async () => ({
+          sessionId: "session-verify-2",
+          verdict: "accepted",
+          failedScenarios: [],
+          artifact: "All scenarios passed",
+        }),
+      },
+      { deliver: async () => ({ mrUrl: "https://github.com/example/repo/pull/2" }) },
+      { enqueue: async () => undefined },
+      { runId: (_cardId, phase, round) => `resumed-${phase}-${round}` },
+    );
+
+    await expect(resumed.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED", rounds: 2 });
+    expect(resumedPhases.mock.calls.map(([input]) => `${input.phase}:${input.round}`)).toEqual([
+      "CODE:2",
+      "MERGE:1",
+    ]);
+    const records = await client.execute("SELECT round, verdict FROM verify_records ORDER BY round");
+    expect(records.rows).toMatchObject([
+      { round: 1, verdict: "rejected" },
+      { round: 2, verdict: "accepted" },
+    ]);
+  });
 });

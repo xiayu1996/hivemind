@@ -26,6 +26,7 @@ function verificationArtifact(result: BlindVerifyResult): string {
     validationErrors: result.validationErrors,
     treeChanged: result.treeChanged,
     evidenceDir: result.record.evidenceDir,
+    screenshots: result.screenshots,
   });
 }
 
@@ -71,6 +72,7 @@ export class BlindVerifyStoryPort implements StoryVerifyPort {
       verdict: result.record.verdict,
       failedScenarios: result.record.failedScenarios,
       evidenceDir: result.record.evidenceDir,
+      screenshots: result.screenshots,
       artifact: verificationArtifact(result),
     };
   }

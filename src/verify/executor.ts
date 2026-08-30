@@ -54,6 +54,7 @@ export interface TreePinPort {
 
 export interface BlindVerifyResult {
   record: VerifyRecord;
+  screenshots: Array<{ scenarioId: string; path: string }>;
   validationErrors: string[];
   treeChanged: boolean;
   events: RpcEvent[];
@@ -252,6 +253,8 @@ export class BlindVerifyExecutor {
       createdAt: endedAt,
     };
     await this.records.insert(record);
-    return { record, validationErrors, treeChanged: !pin.matches, events, usage, messages };
+    const screenshots = document?.scenarios.flatMap((scenario) =>
+      (scenario.screenshots ?? []).map((path) => ({ scenarioId: scenario.id, path }))) ?? [];
+    return { record, screenshots, validationErrors, treeChanged: !pin.matches, events, usage, messages };
   }
 }

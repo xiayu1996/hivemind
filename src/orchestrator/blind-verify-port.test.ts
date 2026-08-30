@@ -34,6 +34,7 @@ describe("BlindVerifyStoryPort", () => {
         evidenceDir: input.evidencePath,
         createdAt: 1,
       },
+      screenshots: [],
       validationErrors: [],
       treeChanged: false,
       events: [],

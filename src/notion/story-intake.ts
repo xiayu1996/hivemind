@@ -180,7 +180,7 @@ async function allChildren(api: NotionStoryApi, pageId: string): Promise<Array<z
   return blocks;
 }
 
-async function pageContent(api: NotionStoryApi, pageId: string): Promise<{
+export async function readStoryContent(api: NotionStoryApi, pageId: string): Promise<{
   requirement: string;
   sections: Partial<Record<StorySection, string>>;
 }> {
@@ -224,7 +224,7 @@ export async function listReadyStories(api: NotionStoryApi, dataSourceId: string
       if (!taskId) throw new IncompleteNotionStoryError(page.data.id, "task id is empty");
       const repository = select(page.data.properties, names.repository);
       if (!repository) throw new IncompleteNotionStoryError(page.data.id, "target repository is empty");
-      const content = await pageContent(api, page.data.id);
+      const content = await readStoryContent(api, page.data.id);
       stories.push({
         id: taskId,
         notionPageId: page.data.id,

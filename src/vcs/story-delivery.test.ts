@@ -15,6 +15,7 @@ const story: StorySnapshot = {
   innerLoopRounds: 1,
   stopReason: null,
   mrUrl: null,
+  resumeState: null,
 };
 
 describe("GitMrStoryDelivery", () => {

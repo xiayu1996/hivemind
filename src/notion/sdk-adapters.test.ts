@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { NotionGateway } from "./gateway.js";
 import {
   NotionGatewayCommentSource,
+  NotionGatewayMediaPort,
   NotionSdkCommentSource,
   NotionSdkMediaPort,
   createNotionHttpTransport,
@@ -25,6 +26,20 @@ describe("Notion HTTP transport", () => {
       .resolves.toMatchObject({ status: 429, retryAfterSeconds: 2, data: { code: "rate_limited" } });
     expect(observed?.url).toBe("https://api.notion.com/v1/pages/page-1");
     expect(observed?.init?.headers).toMatchObject({ "notion-version": "2025-09-03" });
+  });
+
+  it("lets the runtime set the multipart boundary instead of forcing JSON content type", async () => {
+    let observed: RequestInit | undefined;
+    const request = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      observed = init;
+      return new Response("{}", { status: 200 });
+    });
+    const form = new FormData();
+    form.append("file", new Blob([Buffer.from([1])]), "image.png");
+    const transport = createNotionHttpTransport({ token: "test-token", request });
+    await transport({ method: "POST", path: "/v1/file_uploads/upload-1/send", priority: "report", body: form });
+    expect(observed?.body).toBe(form);
+    expect(observed?.headers).not.toHaveProperty("content-type");
   });
 });
 
@@ -99,5 +114,30 @@ describe("Notion SDK media port", () => {
     await port.attach("block-1", "upload-1", "Evidence");
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ file_upload_id: "upload-1" }));
     expect(append).toHaveBeenCalledWith(expect.objectContaining({ block_id: "block-1" }));
+  });
+});
+
+describe("Notion gateway media port", () => {
+  it("keeps create, multipart send and attachment inside the gateway", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "hm-notion-gateway-media-"));
+    const path = join(directory, "image.png");
+    await writeFile(path, Buffer.from([1, 2, 3]));
+    const requests: Array<{ path: string; body: unknown }> = [];
+    const gateway = new NotionGateway({
+      ratePerSecond: 1_000_000,
+      transport: async (request) => {
+        requests.push({ path: request.path, body: request.body });
+        return { status: 200, data: request.path === "/v1/file_uploads" ? { id: "upload-1" } : {} };
+      },
+    });
+    const port = new NotionGatewayMediaPort(gateway);
+    await expect(port.upload({ path, size: 3, contentType: "image/png" })).resolves.toEqual({ uploadId: "upload-1" });
+    await port.attach("block-1", "upload-1", "Evidence");
+    expect(requests.map((request) => request.path)).toEqual([
+      "/v1/file_uploads",
+      "/v1/file_uploads/upload-1/send",
+      "/v1/blocks/block-1/children",
+    ]);
+    expect(requests[1]?.body).toBeInstanceOf(FormData);
   });
 });

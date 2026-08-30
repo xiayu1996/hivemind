@@ -137,7 +137,7 @@ describe("NotionStoryPageDelivery", () => {
     const gateway = new NotionGateway({ transport: fake.transport, ratePerSecond: 1_000_000, mergeWindowMs: 0 });
     const delivery = new NotionStoryDelivery(
       new NotionStoryPageDelivery(client, gateway, () => 20),
-      new NotionStoryPropertyDelivery(gateway),
+      new NotionStoryPropertyDelivery(gateway, client, () => 20),
     );
     const projection = new NotionStoryProjection(client, () => 20);
     const outbox = new NotionOutbox(client, () => 20);

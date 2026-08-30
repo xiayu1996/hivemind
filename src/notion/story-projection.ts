@@ -12,7 +12,7 @@ function richText(content: string): Record<string, unknown> {
   return { rich_text: [{ type: "text", text: { content } }] };
 }
 
-function aiStatus(state: string): string {
+export function notionAiStatusForState(state: string): string {
   const options = schema.options.aiStatus;
   if (state === "NEEDS_INPUT") return options[2]!;
   if (state === "HUMAN_PARKED") return options[4]!;
@@ -36,14 +36,15 @@ export class NotionStoryProjection implements StoryProjectionPort {
 
   constructor(
     private readonly client: Client,
-    now: () => number = Date.now,
+    private readonly now: () => number = Date.now,
   ) {
-    this.outbox = new NotionOutbox(client, now);
+    this.outbox = new NotionOutbox(client, this.now);
   }
 
   async enqueue(cardId: string): Promise<void> {
     const storyResult = await this.client.execute({
-      sql: `SELECT notion_page_id, state, phase, inner_loop_rounds, stop_reason, mr_url
+      sql: `SELECT notion_page_id, state, phase, inner_loop_rounds, stop_reason, mr_url,
+                   human_wins_until
             FROM stories WHERE id = ?`,
       args: [cardId],
     });
@@ -107,7 +108,7 @@ export class NotionStoryProjection implements StoryProjectionPort {
     });
     const names = schema.propertyNames;
     const properties: Record<string, unknown> = {
-      [names.aiStatus]: { select: { name: aiStatus(String(story.state)) } },
+      [names.aiStatus]: { select: { name: notionAiStatusForState(String(story.state)) } },
       [names.phase]: { select: { name: phase(String(story.state)) } },
       [names.cost]: { number: Number(cost.rows[0]?.total ?? 0) },
       [names.rounds]: { number: Number(story.inner_loop_rounds) },
@@ -115,17 +116,19 @@ export class NotionStoryProjection implements StoryProjectionPort {
     };
     const fingerprint = payloadHash(properties).hash;
     properties[names.syncFingerprint] = richText(fingerprint);
-    await this.outbox.enqueue({
-      cardId,
-      priority: 1,
-      operation: "sync_story_properties",
-      target: `story-properties:${String(story.notion_page_id)}`,
-      payload: {
+    if (Number(story.human_wins_until ?? 0) <= this.now()) {
+      await this.outbox.enqueue({
         cardId,
-        pageId: String(story.notion_page_id),
-        fingerprint,
-        properties,
-      },
-    });
+        priority: 1,
+        operation: "sync_story_properties",
+        target: `story-properties:${String(story.notion_page_id)}`,
+        payload: {
+          cardId,
+          pageId: String(story.notion_page_id),
+          fingerprint,
+          properties,
+        },
+      });
+    }
   }
 }

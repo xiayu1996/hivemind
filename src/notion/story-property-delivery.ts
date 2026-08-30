@@ -1,3 +1,4 @@
+import type { Client } from "@libsql/client";
 import { z } from "zod";
 import type { NotionGateway } from "./gateway.js";
 import type { NotionOutboxDelivery, NotionOutboxRecord } from "./outbox.js";
@@ -23,15 +24,23 @@ function currentFingerprint(properties: Record<string, unknown>): string | undef
 
 /** Applies card-level properties only when their central-truth fingerprint changed. */
 export class NotionStoryPropertyDelivery implements NotionOutboxDelivery {
-  constructor(private readonly gateway: NotionGateway) {}
+  constructor(
+    private readonly gateway: NotionGateway,
+    private readonly client: Client,
+    private readonly now: () => number = Date.now,
+  ) {}
 
   async isApplied(record: NotionOutboxRecord): Promise<boolean> {
     const payload = this.payload(record);
-    return await this.observed(payload.pageId) === payload.fingerprint;
+    if (await this.isSuppressed(payload.cardId)) return true;
+    const applied = await this.observed(payload.pageId) === payload.fingerprint;
+    if (applied) await this.remember(payload);
+    return applied;
   }
 
   async send(record: NotionOutboxRecord): Promise<void> {
     const payload = this.payload(record);
+    if (await this.isSuppressed(payload.cardId)) return;
     const observed = await this.observed(payload.pageId);
     await this.gateway.updatePageProperties({
       pageId: payload.pageId,
@@ -39,6 +48,7 @@ export class NotionStoryPropertyDelivery implements NotionOutboxDelivery {
       fingerprint: payload.fingerprint,
       ...(observed ? { currentFingerprint: observed } : {}),
     });
+    await this.remember(payload);
   }
 
   private payload(record: NotionOutboxRecord): z.infer<typeof payloadSchema> {
@@ -55,6 +65,26 @@ export class NotionStoryPropertyDelivery implements NotionOutboxDelivery {
       priority: "status",
     });
     return currentFingerprint(pageSchema.parse(response.data).properties);
+  }
+
+  private async isSuppressed(cardId: string): Promise<boolean> {
+    const row = (await this.client.execute({
+      sql: "SELECT human_wins_until FROM stories WHERE id = ?",
+      args: [cardId],
+    })).rows[0];
+    if (!row) throw new Error(`Story does not exist for Notion projection: ${cardId}`);
+    return Number(row.human_wins_until ?? 0) > this.now();
+  }
+
+  private async remember(payload: z.infer<typeof payloadSchema>): Promise<void> {
+    const status = z.object({ select: z.object({ name: z.string() }) }).safeParse(
+      payload.properties[schema.propertyNames.aiStatus],
+    );
+    if (!status.success) throw new Error("Notion property projection has no AI status");
+    await this.client.execute({
+      sql: `UPDATE stories SET notion_ai_status_shadow = ? WHERE id = ?`,
+      args: [status.data.select.name, payload.cardId],
+    });
   }
 }
 

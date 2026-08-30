@@ -14,11 +14,12 @@ export interface MediaRequest {
 export interface NotionMediaPort {
   upload(input: { path: string; size: number; contentType: string }): Promise<{ uploadId: string }>;
   attach(targetBlockId: string, uploadId: string, caption: string): Promise<void>;
+  attachPlaceholder(targetBlockId: string, text: string): Promise<void>;
 }
 
 export type MediaResult =
   | { kind: "image"; uploadId: string }
-  | { kind: "placeholder"; text: string; reason?: string };
+  | { kind: "placeholder"; text: string; attached: boolean; reason?: string };
 
 export interface QueuedMedia {
   placeholder: MediaResult;
@@ -35,10 +36,15 @@ function contentType(path: string): string {
   }
 }
 
-function unavailable(evidenceId: string, reason?: string): MediaResult {
+function unavailable(
+  evidenceId: string,
+  reason?: string,
+  attached = false,
+): Extract<MediaResult, { kind: "placeholder" }> {
   return {
     kind: "placeholder",
     text: `Image unavailable; see evidence ${evidenceId}`,
+    attached,
     ...(reason ? { reason } : {}),
   };
 }
@@ -70,7 +76,14 @@ export class NotionMediaPipeline {
       return { kind: "image", uploadId: uploaded.uploadId };
     } catch (cause) {
       const safe = redactForExport({ message: (cause as Error).message }).message;
-      return unavailable(request.evidenceId, safe);
+      const placeholder = unavailable(request.evidenceId, safe);
+      try {
+        await this.port.attachPlaceholder(request.targetBlockId, placeholder.text);
+      } catch (placeholderCause) {
+        const secondary = redactForExport({ message: (placeholderCause as Error).message }).message;
+        return unavailable(request.evidenceId, `${safe}; placeholder delivery failed: ${secondary}`);
+      }
+      return unavailable(request.evidenceId, safe, true);
     }
   }
 }

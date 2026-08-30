@@ -6,7 +6,7 @@ import {
   type TransitionActor,
 } from "./state-machine.js";
 import type { Phase, PhaseInput } from "../pipeline/phase-input.js";
-import type { DefinitionOfDone } from "../pipeline/dod.js";
+import { parseDoD, type DefinitionOfDone } from "../pipeline/dod.js";
 
 export type StoryPhase = Exclude<Phase, "DECOMPOSE">;
 
@@ -28,6 +28,17 @@ export interface StorySnapshot extends StoryIntake {
   innerLoopRounds: number;
   stopReason: string | null;
   mrUrl: string | null;
+  resumeState: StoryState | null;
+}
+
+export interface HumanStoryTransitionInput {
+  cardId: string;
+  expectedFrom: StoryState;
+  to: StoryState;
+  observedAiStatus: string;
+  humanWinsUntil: number;
+  runId: string;
+  parkedResumeState?: StoryState;
 }
 
 export interface BeginPhaseInput {
@@ -52,6 +63,12 @@ export interface VerificationRecordInput {
   verdict: "accepted" | "rejected" | "inconclusive";
   failedScenarios: string[];
   evidenceDir?: string;
+  screenshots?: Array<{ scenarioId: string; path: string }>;
+}
+
+export interface PersistedPhaseResult {
+  sessionId: string;
+  artifacts: Array<{ kind: string; body: string }>;
 }
 
 function stringValue(value: unknown, label: string): string {
@@ -140,7 +157,7 @@ export class StoryExecutionStore {
   async getStory(cardId: string): Promise<StorySnapshot> {
     const result = await this.client.execute({
       sql: `SELECT id, notion_page_id, title, requirement, state, phase, repo, branch,
-                   target_branch, mr_url,
+                   target_branch, mr_url, resume_state,
                    inner_loop_rounds, stop_reason
             FROM stories WHERE id = ?`,
       args: [cardId],
@@ -157,6 +174,7 @@ export class StoryExecutionStore {
       innerLoopRounds: numberValue(row.inner_loop_rounds, "inner-loop rounds"),
       stopReason: optionalString(row.stop_reason),
       mrUrl: optionalString(row.mr_url),
+      resumeState: optionalString(row.resume_state) as StoryState | null,
       ...(optionalString(row.repo) ? { repo: optionalString(row.repo)! } : {}),
       ...(optionalString(row.branch) ? { branch: optionalString(row.branch)! } : {}),
       ...(optionalString(row.target_branch) ? { targetBranch: optionalString(row.target_branch)! } : {}),
@@ -176,7 +194,7 @@ export class StoryExecutionStore {
     const [update] = await this.client.batch([
       {
         sql: `UPDATE stories
-              SET state = ?, phase = ?, stop_reason = NULL, updated_at = ?
+              SET state = ?, phase = ?, stop_reason = NULL, resume_state = NULL, updated_at = ?
               WHERE id = ? AND state = ?`,
         args: [to, phaseForState(to), time, cardId, expectedFrom],
       },
@@ -202,6 +220,67 @@ export class StoryExecutionStore {
     ], "write");
     if (update?.rowsAffected !== 1) {
       throw new Error(`Story transition lost a race: ${cardId} is no longer ${expectedFrom}`);
+    }
+  }
+
+  async applyHumanTransition(input: HumanStoryTransitionInput): Promise<void> {
+    assertStoryTransition(
+      input.expectedFrom,
+      input.to,
+      "human",
+      input.parkedResumeState,
+    );
+    const time = this.now();
+    if (!Number.isFinite(input.humanWinsUntil) || input.humanWinsUntil < time) {
+      throw new Error("human-wins deadline must not be in the past");
+    }
+    const resumeState = input.to === "HUMAN_PARKED"
+      ? input.expectedFrom
+      : null;
+    const [update] = await this.client.batch([
+      {
+        sql: `UPDATE stories
+              SET state = ?, phase = ?, stop_reason = NULL, resume_state = ?,
+                  notion_ai_status_shadow = ?, human_wins_until = ?,
+                  last_human_action_at = ?, updated_at = ?
+              WHERE id = ? AND state = ?`,
+        args: [
+          input.to,
+          phaseForState(input.to),
+          resumeState,
+          input.observedAiStatus,
+          input.humanWinsUntil,
+          time,
+          time,
+          input.cardId,
+          input.expectedFrom,
+        ],
+      },
+      {
+        sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
+              SELECT ?, 0, ?, ?, 'story.human_transition', ?, ?
+              WHERE EXISTS (
+                SELECT 1 FROM stories WHERE id = ? AND state = ? AND updated_at = ?
+              )`,
+        args: [
+          input.runId,
+          input.cardId,
+          phaseForState(input.to),
+          time,
+          JSON.stringify({
+            from: input.expectedFrom,
+            to: input.to,
+            observedAiStatus: input.observedAiStatus,
+            humanWinsUntil: input.humanWinsUntil,
+          }),
+          input.cardId,
+          input.to,
+          time,
+        ],
+      },
+    ], "write");
+    if (update?.rowsAffected !== 1) {
+      throw new Error(`Human Story transition lost a race: ${input.cardId} is no longer ${input.expectedFrom}`);
     }
   }
 
@@ -304,6 +383,50 @@ export class StoryExecutionStore {
     if (update?.rowsAffected !== 1) throw new Error(`phase run is no longer running: ${runId}`);
   }
 
+  async getCompletedPhase(
+    cardId: string,
+    phase: StoryPhase,
+    round: number,
+  ): Promise<PersistedPhaseResult | null> {
+    const run = (await this.client.execute({
+      sql: `SELECT run_id, session_id, status FROM phase_runs
+            WHERE card_id = ? AND phase = ? AND round = ?`,
+      args: [cardId, phase, round],
+    })).rows[0];
+    if (!run) return null;
+    if (run.status !== "completed" || typeof run.session_id !== "string") {
+      throw new Error(`persisted ${phase} round ${round} is ${String(run.status)} and cannot be reused`);
+    }
+    const artifacts = (await this.client.execute({
+      sql: "SELECT kind, body FROM phase_artifacts WHERE run_id = ? ORDER BY kind",
+      args: [String(run.run_id)],
+    })).rows.map((row) => ({
+      kind: stringValue(row.kind, "artifact kind"),
+      body: stringValue(row.body, "artifact body"),
+    }));
+    if (artifacts.length === 0) throw new Error(`completed ${phase} round ${round} has no artifacts`);
+    return { sessionId: run.session_id, artifacts };
+  }
+
+  async getVerificationFailureHistory(cardId: string): Promise<string[][]> {
+    const rows = (await this.client.execute({
+      sql: "SELECT failed_scenarios FROM verify_records WHERE card_id = ? ORDER BY round",
+      args: [cardId],
+    })).rows;
+    return rows.map((row) => parseStringArray(row.failed_scenarios, "failed scenarios"));
+  }
+
+  async getDefinitionOfDone(cardId: string): Promise<DefinitionOfDone> {
+    const row = (await this.client.execute({
+      sql: `SELECT body FROM phase_artifacts
+            WHERE card_id = ? AND phase = 'DESIGN' AND kind = 'dod'
+            ORDER BY round DESC, id DESC LIMIT 1`,
+      args: [cardId],
+    })).rows[0];
+    if (!row) throw new Error(`Story has no persisted Definition of Done: ${cardId}`);
+    return parseDoD(stringValue(row.body, "Definition of Done"));
+  }
+
   async recordVerification(runId: string, input: VerificationRecordInput): Promise<void> {
     const time = this.now();
     const declared = new Set((await this.client.execute({
@@ -330,8 +453,8 @@ export class StoryExecutionStore {
       {
         sql: `INSERT INTO verify_records
                 (card_id, round, code_session_id, verify_session_id, verdict,
-                 failed_scenarios, evidence_dir, created_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                 failed_scenarios, evidence_dir, screenshots, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           input.cardId,
           input.round,
@@ -340,6 +463,7 @@ export class StoryExecutionStore {
           input.verdict,
           JSON.stringify(failed),
           input.evidenceDir ?? null,
+          JSON.stringify(input.screenshots ?? []),
           time,
         ],
       },
@@ -368,9 +492,9 @@ export class StoryExecutionStore {
     const [update] = await this.client.batch([
       {
         sql: `UPDATE stories
-              SET state = 'NEEDS_INPUT', phase = NULL, stop_reason = ?, updated_at = ?
+              SET state = 'NEEDS_INPUT', phase = NULL, stop_reason = ?, resume_state = ?, updated_at = ?
               WHERE id = ? AND state = ?`,
-        args: [reason, time, cardId, expectedFrom],
+        args: [reason, expectedFrom, time, cardId, expectedFrom],
       },
       {
         sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
@@ -395,7 +519,8 @@ export class StoryExecutionStore {
     const [update] = await this.client.batch([
       {
         sql: `UPDATE stories
-              SET state = 'DELIVERED', phase = NULL, mr_url = ?, stop_reason = NULL, updated_at = ?
+              SET state = 'DELIVERED', phase = NULL, mr_url = ?, stop_reason = NULL,
+                  resume_state = NULL, updated_at = ?
               WHERE id = ? AND state = 'MERGE'`,
         args: [mrUrl, time, cardId],
       },
