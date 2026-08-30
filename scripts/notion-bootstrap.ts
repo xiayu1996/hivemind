@@ -19,6 +19,7 @@ async function main(): Promise<void> {
   const result = await bootstrapNotion(client, parentPageId);
   const bot = await client.users.me({});
   await upsertSecretFile("HIVEMIND_NOTION_STORIES_DATA_SOURCE_ID", result.storiesDataSourceId);
+  await upsertSecretFile("HIVEMIND_NOTION_EPICS_DATA_SOURCE_ID", result.epicsDataSourceId);
   await upsertSecretFile("NOTION_BOT_USER_ID", bot.id);
   console.log(JSON.stringify(result, null, 2));
   console.log("Database schemas created and the bot identity was stored locally. Complete the board view steps in docs/runbooks/notion-bootstrap.md.");

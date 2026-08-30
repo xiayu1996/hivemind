@@ -34,6 +34,9 @@ import { NotionStoryInputSync } from "../src/notion/story-input-sync.js";
 import { NotionStoryPageDelivery } from "../src/notion/story-page-delivery.js";
 import { NotionStoryDelivery, NotionStoryPropertyDelivery } from "../src/notion/story-property-delivery.js";
 import { NotionEpicPlanDelivery } from "../src/notion/epic-plan-delivery.js";
+import { ingestEpicsForDecomposition } from "../src/notion/epic-intake.js";
+import { EpicDecomposer } from "../src/orchestrator/decompose-runner.js";
+import { PiDecomposePort } from "../src/orchestrator/pi-decompose-port.js";
 import { NotionStoryProjection } from "../src/notion/story-projection.js";
 import { NotionSyncCoordinator, type NotionSyncPoller } from "../src/notion/sync.js";
 import { registerNotionWebhookRoute } from "../src/notion/webhook-route.js";
@@ -73,6 +76,8 @@ async function main(): Promise<void> {
     stored.get("HIVEMIND_NOTION_STORIES_DATA_SOURCE_ID");
   const webhookSecret = process.env.HIVEMIND_NOTION_WEBHOOK_SECRET ??
     stored.get("HIVEMIND_NOTION_WEBHOOK_SECRET");
+  const epicsDataSourceId = process.env.HIVEMIND_NOTION_EPICS_DATA_SOURCE_ID ??
+    stored.get("HIVEMIND_NOTION_EPICS_DATA_SOURCE_ID");
   if (!token) throw new Error("NOTION_TOKEN is missing from ~/.hivemind/secrets.env");
   if (!dataSourceId) throw new Error("HIVEMIND_NOTION_STORIES_DATA_SOURCE_ID is missing");
   const alertChannels = alertChannelsFromConfig(stored);
@@ -229,12 +234,53 @@ async function main(): Promise<void> {
   });
 
   let running = false;
+  // Epics waiting to be split are the only source of new Stories; without this
+  // the approval gate has nothing to gate and the board's Epics never move.
+  const decomposeWaitingEpic = async (): Promise<void> => {
+    if (!epicsDataSourceId) return;
+    const waiting = await ingestEpicsForDecomposition(handle.client, gateway, epicsDataSourceId);
+    const pending = (await handle.client.execute(
+      "SELECT id FROM epics WHERE state IN ('INTAKE', 'DECOMPOSE') ORDER BY updated_at LIMIT 1",
+    )).rows[0];
+    if (!pending) return;
+    const epic = waiting.find((candidate) => candidate.id === String(pending.id));
+    if (!epic) return;
+
+    const chain = providerOverride ? [providerOverride] : await modelPolicy.providersFor("decompose");
+    const healths = await providerHealth.snapshot();
+    const provider = usableProviders(chain, healths, Date.now())[0];
+    if (!provider) {
+      console.warn(`no provider can decompose ${epic.id} right now`);
+      return;
+    }
+    const decomposer = new EpicDecomposer(
+      handle.client,
+      new PlanApprovalStore(handle.client),
+      new PiDecomposePort({
+        binary: piBinary,
+        model: await modelPolicy.resolve("decompose", provider),
+        promptRoot: join(ROOT, "prompts"),
+        cwd: repositoryPath,
+      }),
+    );
+    const outcome = await decomposer.decompose(epic);
+    console.log(`Epic ${epic.id} decomposition: ${outcome.kind}`);
+    if (outcome.kind !== "presented") {
+      await alerts.send({
+        kind: "needs_input",
+        title: `Epic ${epic.id} cannot be decomposed`,
+        body: outcome.kind === "blocking_question" ? outcome.question : outcome.reasons.join("; "),
+      }).catch((cause: unknown) => console.error("alert failed:", (cause as Error).message));
+    }
+  };
+
   const cycle = async (): Promise<void> => {
     if (running) return;
     running = true;
     try {
       await syncIntake();
       await reconcileProjections();
+      await decomposeWaitingEpic();
       const queued = (await handle.client.execute({
         sql: `SELECT id, repo, branch, target_branch FROM stories
               WHERE state IN ('QUEUED', 'DESIGN', 'CODE', 'MERGE') AND repo = ?
