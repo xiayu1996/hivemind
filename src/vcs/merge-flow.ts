@@ -52,6 +52,7 @@ export class EpicMergeFlow {
   async merge(input: { epicId: string; story: MergeStory; integratedStories: readonly MergeStory[] }): Promise<MergeResult> {
     const target = integrationBranch(input.epicId);
     await this.ensureIntegrationBranch(target);
+    await this.requireCleanIntegrationBranch();
     await this.requireCleanStoryBranch(input.story.branch);
     try {
       await this.git.run(this.options.storyWorktree, ["rebase", target]);
@@ -97,6 +98,11 @@ export class EpicMergeFlow {
     } catch {
       await this.git.run(this.options.integrationWorktree, ["switch", "-c", target, this.mainBranch]);
     }
+  }
+
+  private async requireCleanIntegrationBranch(): Promise<void> {
+    const status = await this.git.run(this.options.integrationWorktree, ["status", "--porcelain"]);
+    if (status.trim() !== "") throw new Error("integration worktree has uncommitted changes at integration");
   }
 
   private async requireCleanStoryBranch(branch: string): Promise<void> {
