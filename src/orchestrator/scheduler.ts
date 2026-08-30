@@ -1,3 +1,5 @@
+import type { ConfigStore } from "../config/store.js";
+
 export interface SchedulableStory {
   id: string;
   dependsOn: readonly string[];
@@ -69,6 +71,13 @@ export function storiesShareHotspot(left: SchedulableStory, right: SchedulableSt
 
 function storiesConflict(left: SchedulableStory, right: SchedulableStory, hotspots: readonly string[]): boolean {
   return footprintsIntersect(left, right) || storiesShareHotspot(left, right, hotspots);
+}
+
+export async function planRepositoryStoryExecution(
+  config: ConfigStore,
+  stories: readonly SchedulableStory[],
+): Promise<StoryExecutionPlan> {
+  return planStoryExecution(stories, config.get("schedule.hotspotPaths"));
 }
 
 export function planStoryExecution(stories: readonly SchedulableStory[], hotspots: readonly string[]): StoryExecutionPlan {
