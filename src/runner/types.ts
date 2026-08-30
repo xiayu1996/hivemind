@@ -1,3 +1,5 @@
+import type { ResolvedModel } from "./model-resolver.js";
+
 /** Envelope of everything pi emits on stdout in RPC mode. */
 export interface RpcEvent {
   type: string;
@@ -15,7 +17,9 @@ export interface RpcResponse {
 
 export interface RunnerSpawnOptions {
   provider: string;
-  model: string;
+  /** Only `resolveModel` can produce this, so no unchecked id reaches a spawn:
+   * pi treats an unknown id as a custom model and invents pricing for it. */
+  model: ResolvedModel;
   cwd: string;
   sessionDir?: string;
   sessionFile?: string;

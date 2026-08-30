@@ -10,6 +10,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
+import { resolveModel, staticCatalog } from "../src/runner/model-resolver.js";
+
+const MODEL = await resolveModel(staticCatalog([{ provider: "mock", id: "mock-1" }]), "mock", "mock-1");
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const PI_BIN = process.env.PI_BIN ?? join(homedir(), ".hivemind", "pi", "0.84.3", "pi", "pi.exe");
@@ -44,7 +47,7 @@ async function runIteration(iteration: number): Promise<void> {
   const runner = new RpcPiRunner({
     binary: PI_BIN,
     provider: "mock",
-    model: "mock-1",
+    model: MODEL,
     cwd: REPO,
     tools: ["bash"],
     extensions: [join(REPO, "poc", "rpc-context", "mock-provider-extension.mjs")],

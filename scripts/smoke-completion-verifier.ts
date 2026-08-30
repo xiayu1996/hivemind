@@ -4,6 +4,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PiCompletionJudge, verifyCompletion } from "../src/pipeline/completion-verifier.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
+import { resolveModel, staticCatalog } from "../src/runner/model-resolver.js";
+
+const MODEL = await resolveModel(staticCatalog([{ provider: "mock", id: "mock-1" }]), "mock", "mock-1");
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const PI_BIN = process.env.PI_BIN ?? join(
@@ -36,7 +39,7 @@ async function main(): Promise<void> {
     const judge = new PiCompletionJudge(() => new RpcPiRunner({
       binary: PI_BIN,
       provider: "mock",
-      model: "mock-1",
+      model: MODEL,
       cwd: REPO,
       tools: [],
       contextFiles: "explicit",

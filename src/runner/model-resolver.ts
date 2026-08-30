@@ -55,6 +55,13 @@ export function parseModelTable(output: string): ModelDescriptor[] {
   return models;
 }
 
+/** A catalogue that answers from a fixed list. The mock provider used by the
+ * smoke scripts has no `--list-models` command of its own, and a test double
+ * must still pass through the same boundary a real spawn does. */
+export function staticCatalog(models: readonly ModelDescriptor[]): ModelCatalog {
+  return { list: async (provider) => models.filter((model) => model.provider === provider) };
+}
+
 /** The sole boundary that turns an untrusted model id into a spawnable model. */
 export async function resolveModel(
   catalog: ModelCatalog,

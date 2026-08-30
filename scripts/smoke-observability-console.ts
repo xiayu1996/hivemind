@@ -13,6 +13,9 @@ import { CanonicalLogWriter, readCanonicalLog, rebuildModelRequest, validateCoor
 import { CostLedger } from "../src/observability/cost-ledger.js";
 import { migrate } from "../src/persistence/migrate.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
+import { resolveModel, staticCatalog } from "../src/runner/model-resolver.js";
+
+const MODEL = await resolveModel(staticCatalog([{ provider: "mock", id: "mock-1" }]), "mock", "mock-1");
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const PI_BIN = process.env.PI_BIN ?? join(
@@ -65,7 +68,7 @@ async function main(): Promise<void> {
     const runner = new RpcPiRunner({
       binary: PI_BIN,
       provider: "mock",
-      model: "mock-1",
+      model: MODEL,
       cwd: REPO,
       tools: [],
       contextFiles: "explicit",

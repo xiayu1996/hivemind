@@ -97,7 +97,7 @@ async function main(): Promise<void> {
     const completionJudge = new PiCompletionJudge(() => new RpcPiRunner({
       binary: PI_BIN,
       provider: model.provider,
-      model: model.id,
+      model,
       cwd: worktree,
       tools: [],
       extensions: [MOCK_EXTENSION],
@@ -130,7 +130,7 @@ async function main(): Promise<void> {
         create: (policy: GuardPolicy) => new RpcPiRunner({
           binary: PI_BIN,
           provider: model.provider,
-          model: model.id,
+          model,
           cwd: worktree,
           sessionDir: join(sessions, "verify"),
           tools: ["read", "bash"],

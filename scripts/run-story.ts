@@ -103,7 +103,7 @@ async function main(): Promise<void> {
     const completionJudge = new PiCompletionJudge(() => new RpcPiRunner({
       binary: piBinary,
       provider: model.provider,
-      model: model.id,
+      model,
       cwd: worktreePath,
       tools: [],
       contextFiles: "explicit",
@@ -127,7 +127,7 @@ async function main(): Promise<void> {
         create: (policy: GuardPolicy) => new RpcPiRunner({
           binary: piBinary,
           provider: model.provider,
-          model: model.id,
+          model,
           cwd: worktreePath,
           sessionDir: join(sessionRoot, "verify"),
           tools: ["read", "bash", "grep", "find", "ls"],

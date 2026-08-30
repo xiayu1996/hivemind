@@ -1,9 +1,13 @@
+import { PiModelCatalog, resolveModel } from "../src/runner/model-resolver.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
 
+const binary = `${process.env.HOME}/.hivemind/pi/0.84.3/pi/pi`;
+const model = await resolveModel(new PiModelCatalog({ binary }), "openai-codex", "gpt-5.4-mini");
+
 const runner = new RpcPiRunner({
-  binary: `${process.env.HOME}/.hivemind/pi/0.84.3/pi/pi`,
+  binary,
   provider: "openai-codex",
-  model: "gpt-5.4-mini",
+  model,
   cwd: "/tmp",
   tools: [],
   contextFiles: "explicit",

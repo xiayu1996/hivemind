@@ -6,6 +6,9 @@ import { fileURLToPath } from "node:url";
 import { POLICY_ENV_VAR, serializeGuardPolicy, type GuardPolicy } from "../src/guard/policy.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
 import { BlindVerifyExecutor, type VerifyRecord } from "../src/verify/executor.js";
+import { resolveModel, staticCatalog } from "../src/runner/model-resolver.js";
+
+const MODEL = await resolveModel(staticCatalog([{ provider: "mock", id: "mock-1" }]), "mock", "mock-1");
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const PI_BIN = process.env.PI_BIN ?? join(
@@ -43,7 +46,7 @@ async function main(): Promise<void> {
         create: (policy: GuardPolicy) => new RpcPiRunner({
           binary: PI_BIN,
           provider: "mock",
-          model: "mock-1",
+          model: MODEL,
           cwd: REPO,
           sessionDir: join(evidence, "sessions"),
           tools: ["bash"],

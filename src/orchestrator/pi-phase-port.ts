@@ -216,7 +216,7 @@ export class PiStoryPhasePort implements StoryPhasePort {
     const runner = this.createRunner({
       binary: this.options.binary,
       provider: this.options.model.provider,
-      model: this.options.model.id,
+      model: this.options.model,
       cwd: this.options.worktreePath,
       sessionDir,
       tools,

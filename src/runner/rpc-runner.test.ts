@@ -3,6 +3,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RpcPiRunner } from "./rpc-runner.js";
 import { RunnerDeadError, RunnerHandshakeError } from "./types.js";
+import { resolveModel, staticCatalog } from "./model-resolver.js";
+
+const FAKE_MODEL = await resolveModel(staticCatalog([{ provider: "fake", id: "fake-1" }]), "fake", "fake-1");
 
 const FAKE_PI = fileURLToPath(new URL("./testing/fake-pi.mjs", import.meta.url));
 const FIXTURES = join(process.cwd(), "fixtures/rpc-errors");
@@ -15,7 +18,7 @@ function makeNodeRunner(mode = "normal", extraEnv: Record<string, string> = {}) 
     binary: process.execPath,
     binaryArgs: [FAKE_PI],
     provider: "fake",
-    model: "fake-1",
+    model: FAKE_MODEL,
     cwd: process.cwd(),
     tools: [],
     env: { FAKE_PI_MODE: mode, ...extraEnv },
@@ -39,7 +42,7 @@ describe("handshake", () => {
     const runner = new RpcPiRunner({
       binary: process.execPath,
       binaryArgs: [FAKE_PI],
-      provider: "fake", model: "fake-1", cwd: process.cwd(),
+      provider: "fake", model: FAKE_MODEL, cwd: process.cwd(),
       env: { FAKE_PI_MODE: "silent" },
       handshakeTimeoutMs: 1_500,
     });

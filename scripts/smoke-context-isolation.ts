@@ -8,6 +8,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadExplicitContextBundle } from "../src/runner/context-files.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
+import { resolveModel, staticCatalog } from "../src/runner/model-resolver.js";
+
+const MODEL = await resolveModel(staticCatalog([{ provider: "mock", id: "mock-1" }]), "mock", "mock-1");
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const PI_BIN = process.env.PI_BIN ?? join(
@@ -49,7 +52,7 @@ async function run(
   const runner = new RpcPiRunner({
     binary: PI_BIN,
     provider: "mock",
-    model: "mock-1",
+    model: MODEL,
     cwd,
     tools: [],
     extensions: [join(REPO, "poc", "rpc-context", "mock-provider-extension.mjs")],

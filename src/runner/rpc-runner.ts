@@ -237,7 +237,7 @@ export class RpcPiRunner implements PiRunner {
 }
 
 function buildArgs(config: RpcRunnerConfig): string[] {
-  const args = ["--provider", config.provider, "--model", config.model];
+  const args = ["--provider", config.provider, "--model", config.model.id];
 
   if (config.thinking) args.push("--thinking", config.thinking);
   if (config.sessionDir) args.push("--session-dir", config.sessionDir);
