@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { planStoryExecution, type SchedulableStory } from "./scheduler.js";
+import { planStoryExecution, storiesShareHotspot, type SchedulableStory } from "./scheduler.js";
 
 function story(id: string, predictedFootprint: readonly string[], dependsOn: readonly string[] = []): SchedulableStory {
   return { id, dependsOn, predictedFootprint };
@@ -32,6 +32,14 @@ describe("planStoryExecution", () => {
     ], []);
 
     expect(result).toEqual({ kind: "dependency_cycle", cycle: ["S-CATALOG-01", "S-CATALOG-02", "S-CATALOG-01"], batches: [] });
+  });
+
+  it("S-M2-03-hotspot detects that two different business areas cover the same configured conflict hotspot", () => {
+    expect(storiesShareHotspot(
+      story("S-CHECKOUT-01", ["checkout/pricing"]),
+      story("S-CHECKOUT-02", ["checkout/receipts"]),
+      ["checkout"],
+    )).toBe(true);
   });
 
   it("S-M2-03-mixed releases only dependency-ready non-conflicting Stories in stable batches", () => {
