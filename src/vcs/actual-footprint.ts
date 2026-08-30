@@ -47,30 +47,43 @@ export function normalizeActualFootprint(nameStatus: string): string[] {
 }
 
 export class LibsqlActualFootprintStore implements ActualFootprintStore {
-  constructor(private readonly client: Client) {}
+  constructor(
+    private readonly client: Client,
+    private readonly now: () => number = Date.now,
+  ) {}
 
+  /** A re-merge supersedes an earlier capture: the newer revision pair is the accurate one. */
   async capture(capture: ActualFootprintCapture): Promise<void> {
+    const footprint = JSON.stringify([...capture.actualFootprint]);
     await this.client.execute({
       sql: `INSERT INTO actual_footprint_captures
               (story_id, integration_branch, base_revision, story_revision, actual_footprint, state, created_at)
-            VALUES (?, ?, ?, ?, ?, 'pending', unixepoch() * 1000)
-            ON CONFLICT(story_id) DO NOTHING`,
-      args: [capture.storyId, capture.integrationBranch, capture.baseRevision, capture.storyRevision, JSON.stringify(capture.actualFootprint)],
+            VALUES (?, ?, ?, ?, ?, 'pending', ?)
+            ON CONFLICT(story_id) DO UPDATE SET
+              integration_branch = excluded.integration_branch,
+              base_revision = excluded.base_revision,
+              story_revision = excluded.story_revision,
+              actual_footprint = excluded.actual_footprint,
+              state = 'pending',
+              created_at = excluded.created_at,
+              applied_at = NULL`,
+      args: [capture.storyId, capture.integrationBranch, capture.baseRevision, capture.storyRevision, footprint, this.now()],
     });
   }
 
   async apply(storyId: string): Promise<void> {
+    const time = this.now();
     await this.client.batch([
       {
         sql: `UPDATE stories
                 SET actual_footprint = (SELECT actual_footprint FROM actual_footprint_captures WHERE story_id = ?),
-                    updated_at = unixepoch() * 1000
-              WHERE id = ? AND actual_footprint IS NULL`,
-        args: [storyId, storyId],
+                    updated_at = ?
+              WHERE id = ? AND EXISTS (SELECT 1 FROM actual_footprint_captures WHERE story_id = ?)`,
+        args: [storyId, time, storyId, storyId],
       },
       {
-        sql: "UPDATE actual_footprint_captures SET state = 'applied', applied_at = unixepoch() * 1000 WHERE story_id = ? AND state = 'pending'",
-        args: [storyId],
+        sql: "UPDATE actual_footprint_captures SET state = 'applied', applied_at = ? WHERE story_id = ? AND state = 'pending'",
+        args: [time, storyId],
       },
     ], "write");
   }
