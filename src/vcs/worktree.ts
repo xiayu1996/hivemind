@@ -63,7 +63,9 @@ async function exists(path: string): Promise<boolean> {
   return stat(path).then(() => true, () => false);
 }
 
-/** Creates a branch worktree without relying on a process-local ownership lock. */
+/** Creates a branch worktree without relying on a process-local ownership lock.
+ * Reuses an existing story branch when a previous worktree was removed without
+ * merging, so a re-dispatch never stalls on its own stale branch. */
 export async function createWorktree(
   input: CreateWorktreeInput,
   layout = worktreeLayout(),
@@ -72,11 +74,15 @@ export async function createWorktree(
   if (await exists(location.worktreePath)) throw new Error(`worktree already exists: ${location.worktreePath}`);
   await mkdir(resolve(location.worktreePath, ".."), { recursive: true });
   await mkdir(location.evidencePath, { recursive: true });
-  await execFileAsync(
+  const branchExists = await execFileAsync(
     "git",
-    ["worktree", "add", "-b", input.branch, location.worktreePath, input.startPoint],
+    ["rev-parse", "--verify", "--quiet", `refs/heads/${input.branch}`],
     { cwd: resolve(input.repositoryPath), windowsHide: true },
-  );
+  ).then(() => true, () => false);
+  const args = branchExists
+    ? ["worktree", "add", location.worktreePath, input.branch]
+    : ["worktree", "add", "-b", input.branch, location.worktreePath, input.startPoint];
+  await execFileAsync("git", args, { cwd: resolve(input.repositoryPath), windowsHide: true });
   return location;
 }
 
