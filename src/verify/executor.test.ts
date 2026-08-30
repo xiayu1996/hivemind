@@ -140,6 +140,30 @@ describe("BlindVerifyExecutor", () => {
     expect(result.record.verdict).toBe("accepted");
   });
 
+  it("extracts scenario ids from ANSI-colored test runner output", async () => {
+    // vitest wraps glyphs and separators in color codes; the code before the
+    // id used to break the word boundary and hide every scenario id.
+    const events = [
+      {
+        type: "message_end",
+        message: {
+          role: "toolResult",
+          content: [{
+            type: "text",
+            text: " \u001b[32m\u2713\u001b[39m src/util/format.test.ts\u001b[2m > \u001b[22mformatUsd\u001b[2m > \u001b[22mS-EPIC-01-unit rounds correctly 1ms\nTests  1 passed (1)",
+          }],
+        },
+      },
+      assistant(JSON.stringify({ scenarios: [{ id: "S-EPIC-01-unit", status: "passed" }] })),
+    ];
+    const result = await new BlindVerifyExecutor(
+      { create: () => runner({ events }) },
+      { insert: async () => undefined },
+      pins(),
+    ).run(input());
+    expect(result.record.verdict).toBe("accepted");
+  });
+
   it("extracts observed scenario results from real pi tool execution events", async () => {
     const events = [
       {

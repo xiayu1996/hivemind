@@ -91,6 +91,11 @@ function sessionId(state: Record<string, unknown>): string {
   return value;
 }
 
+// ANSI color codes glue word characters to the ids they decorate
+// (e.g. "[22mS-VAL-01-a"), so strip them before matching anything.
+// eslint-disable-next-line eslint/no-control-regex -- ESC is the literal byte being stripped
+const ANSI_PATTERN = /\u001b\[[0-9;]*[A-Za-z]/g;
+
 function trajectory(events: readonly RpcEvent[]): TrajectoryEvidence[] {
   const evidence: TrajectoryEvidence[] = [];
   for (const event of events) {
@@ -102,7 +107,7 @@ function trajectory(events: readonly RpcEvent[]): TrajectoryEvidence[] {
       });
     }
   }
-  for (const output of collectToolOutputs(events)) {
+  for (const output of collectToolOutputs(events).map((raw) => raw.replace(ANSI_PATTERN, ""))) {
     for (const match of output.matchAll(/\bHIVEMIND_TEST_RESULT\s+(\S+)\s+(passed|failed|inconclusive)\b/g)) {
       evidence.push({ type: "test_result", scenarioId: match[1]!, status: match[2]! });
       continue;
