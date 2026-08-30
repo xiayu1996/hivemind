@@ -1,5 +1,6 @@
 import { createClient } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { interpretEpicPropertyChange } from "../notion/intent-interpreter.js";
 import { migrate } from "../persistence/migrate.js";
 import { PlanApprovalStore } from "./plan-approval.js";
 
@@ -38,5 +39,25 @@ describe("@scenario S-M2-02-wait plan approval", () => {
     expect((await client.execute("SELECT payload FROM notion_outbox")).rows).toContainEqual(expect.objectContaining({
       payload: expect.stringContaining("拆解待确认"),
     }));
+  });
+});
+
+describe("@scenario S-M2-02-drag plan approval", () => {
+  it("records a drag to 进行中 as approval and creates one eligible Story dispatch", async () => {
+    expect(interpretEpicPropertyChange("拆解待确认", "进行中", "PLAN_APPROVAL", 1_000)).toEqual({
+      type: "approve_plan", humanWinsUntil: 121_000,
+    });
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const approvals = new PlanApprovalStore(client, () => 1_000);
+    await approvals.present({ epicId: "M2", notionPageId: "epic-page", title: "Plan approval", plan });
+
+    expect(await approvals.approve({ epicId: "M2", eventId: "drag-1", source: "drag" })).toBe(true);
+    expect(await approvals.getEpic("M2")).toMatchObject({ state: "EXECUTING" });
+    expect((await client.execute("SELECT id, state FROM stories")).rows).toEqual([{ id: "S-M2-02", state: "QUEUED" }]);
+    expect((await client.execute("SELECT story_id, state FROM execution_dispatches")).rows).toEqual([
+      { story_id: "S-M2-02", state: "pending" },
+    ]);
+    client.close();
   });
 });
