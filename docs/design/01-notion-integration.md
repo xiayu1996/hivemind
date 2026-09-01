@@ -185,3 +185,35 @@ Notion 评论/拖列/改文字
 | R8 | File Upload 1h attach 窗口 + 存储配额 | 低 | 批量截图上传实测；确认降级文案链路 |
 | R9 | workspace 级共享限流被其他 integration 挤占 | 低 | 监控 429 率，网关预算可配置 |
 | R10 | 假设"人不需要 Spec 的跨 Story 过滤视图" | 假设 | 上线后观察；被推翻则从 libsql 低成本追加投影一个 Specs DB，不动真相源 |
+
+## 8. 增补（2026-09-01）：Requirements DB 与产品经理交互面
+
+> 决策见 00-overview §2「产品经理层」。顶层结构从 2 核心 DB 扩为 3：Requirements 承载模糊大需求的完整生命周期。它与 Epic 的生命周期、属性集、视图形态均不同，且一个需求可拆出多个 Epic——符合 §2.1 自己的分库判据。Epic/Story 的结构与读写协议不变。
+
+### 8.1 Requirements DB 属性 schema
+
+| 属性 | 类型 | Owner | 说明 |
+|---|---|---|---|
+| 标题 | title | 人 | |
+| 需求状态 | select（看板列） | 双通道（同 §4） | 待澄清/澄清中/PRD 待确认/拆解执行中/待验收/已验收/人工停靠——7 列，人可拖 |
+| 优先级 | select P0–P3 | 人 | |
+| Epics | relation → Epics | 系统（拆解时） | 一个需求 1..N 个 Epic |
+| 成本(USD) | number | 系统 | 关联 Epic 成本汇总之和，由 orchestrator 写入 |
+| 创建人 | created_by | — | 澄清问答与验收 @ 的对象 |
+| 任务 ID / 同步指纹 | rich_text ×2 | 系统 | 同 Stories |
+
+> 更正（2026-09-01，MP-01 实现时）：成本原设计为 rollup(sum of Epic 成本汇总)，但 Epic 成本汇总本身是 rollup，Notion 不支持 rollup 聚合 rollup，故改为系统写入的 number。
+
+### 8.2 需求页面区段（复用 story-page builder 的锚定区段机制）
+
+```
+├─ 原始需求          （人 owner；系统永不改写，只读进 ingest——十句话级模糊描述即可建卡）
+├─ 澄清记录          （系统 owner；按轮次只追加；问题以块锚点评论发出，回答按评论水位 ingest）
+├─ PRD               （系统 owner；PM 重写直至人确认，确认后冻结，再改走需求变更）
+├─ 场景化验收清单     （系统 owner 生成；人勾选/评论是输入，被 ingest 判定验收）
+└─ 元信息 callout     （状态/澄清轮次/成本/关联 Epic）
+```
+
+### 8.3 澄清通道 port（为飞书等旁路预留）
+
+人机澄清交互收敛为 ClarificationChannelPort，day1 唯一实现 = Notion 需求页评论（复用评论水位 + 块锚点 + 意图解释器，零新设施）。不变量：**Notion 是唯一信息源**——任何旁路通道（飞书对话等）的问答结论必须由 orchestrator 回写到需求页「澄清记录」后才对状态机生效；旁路通道只加速人机往返，不构成第二真相源。

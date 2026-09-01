@@ -1,3 +1,4 @@
+import type { RequirementState } from "../orchestrator/requirement-machine.js";
 import type { EpicState, StoryState } from "../orchestrator/state-machine.js";
 import schema from "./notion-schema.json" with { type: "json" };
 
@@ -70,6 +71,68 @@ export function interpretEpicComment(state: EpicState, body: string): EpicCommen
     return { type: "request_revision" };
   }
   return { type: "feedback" };
+}
+
+export type RequirementPropertyIntent =
+  | { type: "none" }
+  | { type: "park"; previousState: RequirementState; humanWinsUntil: number }
+  | { type: "resume"; state: RequirementState; humanWinsUntil: number }
+  | { type: "approve_prd"; humanWinsUntil: number }
+  | { type: "accept"; humanWinsUntil: number }
+  | { type: "unsupported_property_change"; observedRequirementStatus: string; humanWinsUntil: number };
+
+export type RequirementCommentIntent =
+  | { type: "answer"; body: string }
+  | { type: "approve_prd" }
+  | { type: "request_revision"; body: string }
+  | { type: "feedback"; body: string };
+
+export function interpretRequirementPropertyChange(
+  shadowRequirementStatus: string,
+  observedRequirementStatus: string,
+  internalState: RequirementState,
+  parkedResumeState: RequirementState | undefined,
+  now: number,
+): RequirementPropertyIntent {
+  if (shadowRequirementStatus === observedRequirementStatus) return { type: "none" };
+  const humanWinsUntil = now + HUMAN_WINS_MS;
+  const parkedColumn = schema.options.requirementStatus[6]!;
+  const decomposingColumn = schema.options.requirementStatus[3]!;
+  const acceptedColumn = schema.options.requirementStatus[5]!;
+
+  if (observedRequirementStatus === parkedColumn && internalState !== "HUMAN_PARKED") {
+    return { type: "park", previousState: internalState, humanWinsUntil };
+  }
+  if (internalState === "HUMAN_PARKED" && observedRequirementStatus !== parkedColumn) {
+    if (!parkedResumeState || parkedResumeState === "HUMAN_PARKED") {
+      throw new Error("a parked requirement has no valid previous state to restore");
+    }
+    return { type: "resume", state: parkedResumeState, humanWinsUntil };
+  }
+  if (internalState === "PRD_CONFIRM" && observedRequirementStatus === decomposingColumn) {
+    return { type: "approve_prd", humanWinsUntil };
+  }
+  if (internalState === "ACCEPTANCE" && observedRequirementStatus === acceptedColumn) {
+    return { type: "accept", humanWinsUntil };
+  }
+  return { type: "unsupported_property_change", observedRequirementStatus, humanWinsUntil };
+}
+
+/**
+ * While a PRD waits for approval, anything a person writes that is not the
+ * approval itself is revision feedback: they are reading the PRD, and a
+ * comment left there is about the PRD, not idle conversation.
+ */
+export function interpretRequirementComment(state: RequirementState, body: string): RequirementCommentIntent {
+  const text = body.trim();
+  if (text === "") throw new Error("a Notion comment cannot be interpreted without text");
+  if (state === "CLARIFY") return { type: "answer", body: text };
+  if (state === "PRD_CONFIRM") {
+    return ["批准", "确认", "approve", "approved"].includes(text.toLocaleLowerCase())
+      ? { type: "approve_prd" }
+      : { type: "request_revision", body: text };
+  }
+  return { type: "feedback", body: text };
 }
 
 export function interpretComment(state: StoryState, body: string): CommentIntent {

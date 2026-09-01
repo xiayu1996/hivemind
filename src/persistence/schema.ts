@@ -6,11 +6,72 @@ import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from
 
 const ms = (name: string) => integer(name, { mode: "number" });
 
+export const requirements = sqliteTable("requirements", {
+  id: text("id").primaryKey(),
+  notionPageId: text("notion_page_id").notNull().unique(),
+  title: text("title").notNull(),
+  state: text("state").notNull(),
+  originalRequest: text("original_request").notNull(),
+  clarifyRounds: integer("clarify_rounds").notNull().default(0),
+  stopReason: text("stop_reason"),
+  resumeState: text("resume_state"),
+  repo: text("repo"),
+  notionStatusShadow: text("notion_status_shadow"),
+  humanWinsUntil: ms("human_wins_until"),
+  lastHumanActionAt: ms("last_human_action_at"),
+  createdAt: ms("created_at").notNull(),
+  updatedAt: ms("updated_at").notNull(),
+}, (t) => [index("idx_requirements_state").on(t.state)]);
+
+export const requirementClarifyRounds = sqliteTable("requirement_clarify_rounds", {
+  requirementId: text("requirement_id").notNull(),
+  round: integer("round").notNull(),
+  questions: text("questions").notNull(),
+  askedAt: ms("asked_at").notNull(),
+  answeredAt: ms("answered_at"),
+  answers: text("answers"),
+}, (t) => [primaryKey({ columns: [t.requirementId, t.round] })]);
+
+export const requirementPrds = sqliteTable("requirement_prds", {
+  requirementId: text("requirement_id").notNull(),
+  revision: integer("revision").notNull(),
+  body: text("body").notNull(),
+  status: text("status").notNull(),
+  createdAt: ms("created_at").notNull(),
+  confirmedAt: ms("confirmed_at"),
+}, (t) => [primaryKey({ columns: [t.requirementId, t.revision] })]);
+
+export const requirementAcceptanceItems = sqliteTable("requirement_acceptance_items", {
+  requirementId: text("requirement_id").notNull(),
+  itemId: text("item_id").notNull(),
+  prdScenarioId: text("prd_scenario_id").notNull(),
+  text: text("text").notNull(),
+  status: text("status").notNull().default("open"),
+  notionBlockId: text("notion_block_id").unique(),
+  decidedAt: ms("decided_at"),
+  createdAt: ms("created_at").notNull(),
+}, (t) => [primaryKey({ columns: [t.requirementId, t.itemId] })]);
+
+export const requirementApprovalEvents = sqliteTable("requirement_approval_events", {
+  eventId: text("event_id").primaryKey(),
+  requirementId: text("requirement_id").notNull(),
+  kind: text("kind").notNull(),
+  source: text("source").notNull(),
+  createdAt: ms("created_at").notNull(),
+}, (t) => [index("idx_requirement_approval_events").on(t.requirementId)]);
+
+export const requirementNotionSections = sqliteTable("requirement_notion_sections", {
+  requirementId: text("requirement_id").notNull(),
+  section: text("section").notNull(),
+  anchorBlockId: text("anchor_block_id").notNull().unique(),
+}, (t) => [primaryKey({ columns: [t.requirementId, t.section] })]);
+
 export const epics = sqliteTable("epics", {
   id: text("id").primaryKey(),
   notionPageId: text("notion_page_id").notNull().unique(),
   title: text("title").notNull(),
   state: text("state").notNull(),
+  requirementId: text("requirement_id"),
   repo: text("repo"),
   integrationBranch: text("integration_branch"),
   mrUrl: text("mr_url"),

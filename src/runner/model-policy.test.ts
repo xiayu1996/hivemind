@@ -64,8 +64,9 @@ describe("ModelPolicy", () => {
     // The key is exhaustive on purpose: an overlay replaces the whole value, so
     // a partial map would silently leave a call site with no tier at all.
     await config.set("model.purposeTiers", {
-      decompose: "brain", design: "cheap", code: "standard", verify: "standard", merge: "standard",
-      completion_judge: "cheap", capacity_probe: "cheap", triage: "cheap", distiller: "cheap",
+      product_manager: "brain", decompose: "brain", design: "cheap", code: "standard",
+      verify: "standard", merge: "standard", completion_judge: "cheap", capacity_probe: "cheap",
+      triage: "cheap", distiller: "cheap",
     }, "test");
     const policy = new ModelPolicy(config, catalog);
     await expect(policy.resolve("design", "openai-codex")).resolves.toMatchObject({ id: "gpt-5.4-mini" });

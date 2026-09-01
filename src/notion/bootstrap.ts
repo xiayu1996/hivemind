@@ -6,11 +6,16 @@ type InitialDataSource = NonNullable<CreateDatabaseParameters["initial_data_sour
 type Properties = NonNullable<InitialDataSource["properties"]>;
 type UpdateProperties = NonNullable<UpdateDataSourceParameters["properties"]>;
 
-export interface NotionBootstrapResult {
+export interface NotionBootstrapResult extends RequirementsBootstrapResult {
   epicsDatabaseId: string;
   epicsDataSourceId: string;
   storiesDatabaseId: string;
   storiesDataSourceId: string;
+}
+
+export interface RequirementsBootstrapResult {
+  requirementsDatabaseId: string;
+  requirementsDataSourceId: string;
 }
 
 function title(content: string) {
@@ -28,6 +33,27 @@ function epicProperties(): Properties {
     [names.epicStatus]: { select: { options: selectOptions(schema.options.epicStatus) } },
     [names.targetDate]: { date: {} },
     [names.creator]: { created_by: {} },
+  };
+}
+
+function requirementProperties(epicsDataSourceId: string): Properties {
+  const names = schema.propertyNames;
+  return {
+    [names.title]: { title: {} },
+    [names.requirementStatus]: { select: { options: selectOptions(schema.options.requirementStatus) } },
+    [names.priority]: { select: { options: selectOptions(schema.options.priority) } },
+    [names.epicRelation]: {
+      relation: {
+        data_source_id: epicsDataSourceId,
+        dual_property: { synced_property_name: names.requirementRelation },
+      },
+    },
+    // Written by the orchestrator, not rolled up: the Epic total is itself a
+    // rollup, and Notion cannot roll up a rollup property.
+    [names.cost]: { number: { format: "dollar" } },
+    [names.creator]: { created_by: {} },
+    [names.taskId]: { rich_text: {} },
+    [names.syncFingerprint]: { rich_text: {} },
   };
 }
 
@@ -99,7 +125,28 @@ async function dataSourceId(
   return complete.data_sources[0]!.id;
 }
 
-/** Creates the two code-managed databases; board view setup remains manual. */
+/**
+ * Adds the Requirements database beside an existing board. Separate from the
+ * full bootstrap so a workspace that already runs Epics and Stories gains the
+ * product-manager layer without a second copy of everything else.
+ */
+export async function bootstrapRequirements(
+  client: BootstrapClient,
+  parentPageId: string,
+  epicsDataSourceId: string,
+): Promise<RequirementsBootstrapResult> {
+  const requirements = await client.databases.create({
+    parent: { type: "page_id", page_id: parentPageId },
+    title: title(schema.databaseTitles.requirements),
+    initial_data_source: { properties: requirementProperties(epicsDataSourceId) },
+  });
+  return {
+    requirementsDatabaseId: requirements.id,
+    requirementsDataSourceId: await dataSourceId(client, requirements.id, requirements),
+  };
+}
+
+/** Creates the three code-managed databases; board view setup remains manual. */
 export async function bootstrapNotion(
   client: BootstrapClient,
   parentPageId: string,
@@ -118,6 +165,8 @@ export async function bootstrapNotion(
   });
   const storiesDataSourceId = await dataSourceId(client, stories.id, stories);
 
+  const requirements = await bootstrapRequirements(client, parentPageId, epicsDataSourceId);
+
   await client.dataSources.update({
     data_source_id: epicsDataSourceId,
     properties: epicRollups(),
@@ -128,5 +177,6 @@ export async function bootstrapNotion(
     epicsDataSourceId,
     storiesDatabaseId: stories.id,
     storiesDataSourceId,
+    ...requirements,
   };
 }

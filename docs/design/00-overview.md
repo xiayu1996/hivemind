@@ -24,6 +24,8 @@ hivemind 以 pi（earendil-works/pi，provider 无关）为执行底座、Notion
 | 成本策略 | 软护栏（日/月阈值告警不阻断）+ 全量成本账本；可观测性重点设计（借鉴 deepseek-harness） |
 | Web 控制台（08-25 增补） | day1 提供内网运维面：节点健康（IP/机器指标）、动态配置、Prompt 工作台、成本/统计。Notion=业务面，控制台=运维面 |
 | 重试上限族（08-25 增补） | 收敛判据提前停 + 可配置硬上限最终停（上限设在离散重试轮次，不设在单次运行时长/token）；到限即失败 + 诊断报告 @人（需求侧 vs 系统侧两分法） |
+| 单节点全能力（09-01 增补） | Linux worker day1 具备完整开发 + headless 浏览器 e2e 能力（Playwright MCP）；Mac mini 仅为 Apple 生态（Safari/iOS）验证保留。浏览器自动化（原 M3-09）前移至 MP 里程碑、脱离 Mac mini 依赖 |
+| 产品经理层（09-01 增补） | 新增 Requirements DB + PM agent（大脑档）：模糊大需求 → 多轮业务澄清（需求页评论；通道抽象为 port，Notion 是唯一信息源，旁路通道结论必须回写才生效）→ PRD 人批 → 拆解为 Epic → 场景化验收清单。人与 PM 只谈业务方向与场景，与技术面只谈少量实现细节；代码质量由自动化流程 + 定期优化单（M4-18）管控，不进人的验收面。详见 01 §8、03 §7 |
 
 ## 3. 调研结论摘要
 
@@ -77,6 +79,7 @@ hivemind 以 pi（earendil-works/pi，provider 无关）为执行底座、Notion
 | **M3 多机化** | capability 队列 + 派单信封 + 心跳失联 + 中央租约 + Mac mini（浏览器 e2e worker）接入 |
 | **M4 供应商矩阵与反馈闭环** | per-provider 熔断 + failover + 模型策略双 chokepoint + 成本账本 + 反馈 triage/friction/反思提案 + memory 投影；**Prompt 工作台完整版（灰度 + 行为回归对比）+ 供应商健康页** |
 | **M5 收口** | Windows 探针 worker + 三平台 self-update 滚动升级 + 行为回归统计基线 + 运行周报 |
+| **MP 产品经理层 + 单机全能力**（09-01 增补，**排期在 M2 之后、M3 之前**） | Requirements DB + PM 澄清/PRD/拆解/场景化验收闭环；Linux headless 浏览器 e2e（原 M3-09 前移）；任务见 tasks.md MP 段 |
 
 ## 6. 风险与 PoC 清单
 
