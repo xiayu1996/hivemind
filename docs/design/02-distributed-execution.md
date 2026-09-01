@@ -153,7 +153,19 @@ RPC 下 pi 进程活着 session 就在内存：检测到流中断类终态错误
 
 生态已核实有现成件：pi-mcp-extension（pi.dev 官方包索引）、nicobailon/pi-mcp-adapter（单一 proxy tool ~200 token、server 懒连接）、guwidoe/pi-playwright。
 
-**推荐：vendor pi-mcp-adapter + 微软官方 Playwright MCP**——token 面干净、MCP 是通用接缝（未来 iOS 自动化的 appium/XCUITest MCP server 走同一通道）、Playwright MCP 微软维护省长期负担。社区 extension 存续性不可赌 → fork 进仓 pin 死并审计其工具面。备胎：defineTool 手写 5 个最小 Playwright 工具（navigate/snapshot/click/fill/screenshot，~2 天）。iOS e2e 不走 MCP：XCUITest/simctl 走 bash + skills。
+~~**推荐：vendor pi-mcp-adapter + 微软官方 Playwright MCP**~~ iOS e2e 不走 MCP：XCUITest/simctl 走 bash + skills。
+
+> **改选（2026-09-01，MP-09 实施时）：双车道，全部走 bash，不引入 MCP。**
+> 原推荐（vendor pi-mcp-adapter + Playwright MCP）作废，理由是选型时点之后生态出现了更合适的件：
+>
+> - **车道 1｜验证与回归 = `@playwright/test`**：规约文件 + 测试运行器，产物是 trace/screenshot/video。社区共识是 MCP 不适合大规模回归套件（CPU/内存/token 三重开销），确定性运行器才是回归主力。
+> - **车道 2｜探索、写用例、自愈 = `@playwright/cli`**（Playwright 核心团队 2026-01 发布，Apache-2.0，2 个依赖）：agent 经 bash 调 `open/goto/snapshot/click/screenshot`，快照与截图落盘、agent 自取，实测 token 约为 MCP 的 1/4（27k vs 114k / 任务）。`playwright-cli install --skills` 把用法装进 worktree，正好落在 4.2 的显式 context 装载规矩里。
+>
+> 放弃 MCP 的代价与理由：pi 无原生 MCP，走 MCP 要同时押注 pi 侧社区 adapter 与 MCP server 两条外部生命线，而换来的通用接缝本设计并不需要——iOS 本就走 XCUITest/simctl + bash。**若将来某能力只有 MCP server 形态，再按本节原方案单独接，不影响两条车道。**
+>
+> **浏览器侧红线三层同源**（同一份 `guard.e2eHostAllowlist`）：① `src/guard/tool-decision.ts` 对 bash 命令行里的导航目标过闸，`file://` 一律拒（一个从磁盘加载的页面不是被交付的系统），非白名单 host 拒，非 VERIFY/E2E 阶段一律不许开浏览器；② `src/verify/browser-config.ts` 生成 `.playwright/cli.config.json`，`network.allowedOrigins` 让浏览器自己 abort 掉名单外请求，`outputDir` 指向该 run 的证据目录；③ 既有 `validateVerdict(allowedHosts)` 事后校验判据。第一层挡命令，第二层挡请求，第三层挡声称。
+>
+> **已知风险**：`@playwright/cli` 仍是 0.1.x 且依赖 pin 在 `playwright@1.63.0-alpha`（`@playwright/mcp` 同样如此）。兜底是纯 `@playwright/test` 稳定版——车道 2 只是加速器，坏了不阻断验收。
 
 ## 5. 模型分层与跨供应商 failover
 

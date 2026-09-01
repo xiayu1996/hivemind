@@ -13,6 +13,7 @@ const policy: GuardPolicy = {
   fencedPatterns: [],
   bannedBash: [],
   auditPath: "/audit/tool-audit.jsonl",
+  e2eHostAllowlist: [],
 };
 
 const fenced = DEFAULT_FENCED_PATTERNS;
@@ -146,5 +147,134 @@ describe("unknown tools", () => {
   it("allows a tool whose target it cannot see, leaving disallowedTools as the lever", () => {
     const decision = decideToolCall(call("mcp__web__search", { query: "x" }), policy, fenced);
     expect(decision.block).toBe(false);
+  });
+});
+
+describe("browser navigation", () => {
+  const browsing: GuardPolicy = {
+    ...policy,
+    phase: "E2E",
+    e2eHostAllowlist: ["localhost", "127.0.0.1", ".staging.example"],
+  };
+
+  it("lets an allowlisted host through, whatever the MCP server named the tool", () => {
+    const decision = decideToolCall(
+      call("mcp__playwright__browser_navigate", { url: "http://localhost:5173/board" }),
+      browsing,
+      fenced,
+    );
+    expect(decision).toEqual({ block: false, target: "http://localhost:5173/board" });
+  });
+
+  it("blocks a page loaded off the disk, which is how a browser run fakes a pass", () => {
+    const decision = decideToolCall(
+      call("mcp__playwright__browser_navigate", { url: "file:///wt/task-1/dist/index.html" }),
+      browsing,
+      fenced,
+    );
+    expect(decision.block).toBe(true);
+    expect(decision.reason).toContain("file://");
+  });
+
+  it("blocks a host nobody put on the list", () => {
+    const decision = decideToolCall(
+      call("mcp__playwright__browser_navigate", { url: "https://example.com/" }),
+      browsing,
+      fenced,
+    );
+    expect(decision.block).toBe(true);
+    expect(decision.reason).toContain("example.com");
+  });
+
+  it("matches a leading-dot entry as a suffix and nothing else", () => {
+    expect(decideToolCall(call("browser", { url: "https://app.staging.example/" }), browsing, fenced).block)
+      .toBe(false);
+    expect(decideToolCall(call("browser", { url: "https://staging.example.evil/" }), browsing, fenced).block)
+      .toBe(true);
+  });
+
+  it("refuses navigation from a phase that has no business driving a browser", () => {
+    const decision = decideToolCall(call("browser", { url: "http://localhost:5173/" }), policy, fenced);
+    expect(decision.block).toBe(true);
+    expect(decision.reason).toContain("CODE");
+  });
+
+  it("refuses a navigation target that is not a URL at all", () => {
+    expect(decideToolCall(call("browser", { url: "board" }), browsing, fenced).block).toBe(true);
+  });
+});
+
+describe("browser driven from the shell", () => {
+  const browsing: GuardPolicy = {
+    ...policy,
+    phase: "E2E",
+    e2eHostAllowlist: ["localhost", "127.0.0.1"],
+  };
+
+  it("lets a run against an allowlisted host through", () => {
+    expect(decideToolCall(
+      call("bash", { command: "npx playwright-cli goto http://localhost:5173/board" }),
+      browsing,
+      fenced,
+    ).block).toBe(false);
+    expect(decideToolCall(
+      call("bash", { command: "npx playwright test --reporter=line" }),
+      browsing,
+      fenced,
+    ).block).toBe(false);
+  });
+
+  it("blocks a page opened off the disk even when the shell hides it", () => {
+    const decision = decideToolCall(
+      call("bash", { command: "playwright-cli open file:///wt/task-1/dist/index.html" }),
+      browsing,
+      fenced,
+    );
+    expect(decision.block).toBe(true);
+    expect(decision.reason).toContain("file://");
+  });
+
+  it("blocks a host nobody put on the list, with or without a scheme", () => {
+    expect(decideToolCall(
+      call("bash", { command: "playwright-cli goto https://example.com/" }),
+      browsing,
+      fenced,
+    ).block).toBe(true);
+    expect(decideToolCall(
+      call("bash", { command: "playwright-cli open example.com" }),
+      browsing,
+      fenced,
+    ).block).toBe(true);
+  });
+
+  it("leaves shell commands that are not driving a browser alone", () => {
+    expect(decideToolCall(
+      call("bash", { command: "git remote get-url origin" }),
+      browsing,
+      fenced,
+    ).block).toBe(false);
+    expect(decideToolCall(
+      call("bash", { command: "curl -s https://registry.npmjs.org/playwright" }),
+      browsing,
+      fenced,
+    ).block).toBe(false);
+  });
+
+  it("does not mistake a screenshot filename for a navigation", () => {
+    expect(decideToolCall(
+      call("bash", { command: "playwright-cli screenshot --filename evidence/home.png" }),
+      browsing,
+      fenced,
+    ).block).toBe(false);
+  });
+
+  it("refuses a browser run from a phase that has no business driving one", () => {
+    const decision = decideToolCall(
+      call("bash", { command: "playwright-cli goto http://localhost:5173/" }),
+      policy,
+      fenced,
+    );
+    expect(decision.block).toBe(true);
+    expect(decision.reason).toContain("CODE");
   });
 });

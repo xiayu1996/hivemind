@@ -4,6 +4,7 @@ import { captureTreePin, evaluateTreePin, type TreePin } from "../guard/tree-pin
 import { validateVerdict, type TrajectoryEvidence, type VerdictDocument } from "../pipeline/verdict.js";
 import type { PiRunner, RpcEvent, TokenUsage } from "../runner/types.js";
 import { jsonPayloadCandidates } from "../util/json-payload.js";
+import { writePlaywrightCliConfig } from "./browser-config.js";
 
 const scenarioSchema = z.object({
   id: z.string().min(1),
@@ -221,7 +222,19 @@ export class BlindVerifyExecutor {
       worktreePath: input.worktreePath,
       evidencePath: input.evidencePath,
       auditPath: input.auditPath,
+      // The same list the verdict is validated against, applied at the tool
+      // face as well: the check after the fact catches a forged claim, this
+      // stops the navigation that would produce it.
+      e2eHostAllowlist: input.allowedHosts,
     });
+    // The browser's own copy of the same list, so a request off the allowlist
+    // is refused inside the page rather than only judged afterwards.
+    if (input.allowedHosts.length > 0) {
+      await writePlaywrightCliConfig(input.worktreePath, {
+        allowedHosts: input.allowedHosts,
+        outputDir: input.evidencePath,
+      });
+    }
     const runner = this.runners.create(policy);
     let events: RpcEvent[] = [];
     let verifySessionId = "";

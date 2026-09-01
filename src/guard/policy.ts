@@ -25,6 +25,11 @@ export interface GuardPolicy {
   bannedBash: string[];
   /** Absolute path of the local append-only tool audit. */
   auditPath: string;
+  /**
+   * Hosts a browser-driving tool may navigate to. Empty means this phase is not
+   * expected to drive a browser at all, and any navigation is refused.
+   */
+  e2eHostAllowlist: string[];
 }
 
 export type GuardPhase =
@@ -46,6 +51,8 @@ export interface GuardPolicyInput {
   evidencePath?: string;
   auditPath: string;
   fencedPatterns?: string[];
+  /** Hosts the E2E evidence may come from; ignored by phases that do not browse. */
+  e2eHostAllowlist?: string[];
 }
 
 const READ_ONLY_PHASES = new Set<GuardPhase>([
@@ -57,6 +64,13 @@ const READ_ONLY_PHASES = new Set<GuardPhase>([
   "DISTILL",
   "REPORT",
 ]);
+
+/**
+ * Phases that may drive a browser: VERIFY produces the evidence a person will
+ * be shown, and E2E exists for nothing else. Any other phase navigating a
+ * browser is doing something nobody asked it to do.
+ */
+const BROWSING_PHASES = new Set<GuardPhase>(["VERIFY", "E2E"]);
 
 /** Built-in write-capable tools that must not exist in a read-only phase. */
 export const WRITE_TOOLS = ["apply_patch", "edit", "notebook_edit", "powershell", "write"] as const;
@@ -90,6 +104,7 @@ export function assembleGuardPolicy(input: GuardPolicyInput): GuardPolicy {
     fencedPatterns: sortedUnique(input.fencedPatterns ?? []),
     bannedBash: readOnly ? [...READ_ONLY_BASH_PATTERNS] : [],
     auditPath: input.auditPath,
+    e2eHostAllowlist: BROWSING_PHASES.has(input.phase) ? sortedUnique(input.e2eHostAllowlist ?? []) : [],
   };
 }
 
@@ -144,6 +159,7 @@ export function parseGuardPolicy(raw: string): GuardPolicy {
     disallowedTools: requireStringArray(source, "disallowedTools"),
     fencedPatterns: requireStringArray(source, "fencedPatterns"),
     bannedBash: requireStringArray(source, "bannedBash"),
+    e2eHostAllowlist: requireStringArray(source, "e2eHostAllowlist"),
   };
 }
 

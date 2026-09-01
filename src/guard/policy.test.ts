@@ -19,6 +19,7 @@ const policy: GuardPolicy = {
   fencedPatterns: ["(^|/)secrets/"],
   bannedBash: ["\\bgit\\s+commit\\b"],
   auditPath: "/audit/tool-audit.jsonl",
+  e2eHostAllowlist: ["localhost"],
 };
 
 describe("round trip", () => {
@@ -55,14 +56,21 @@ describe("rejection", () => {
   });
 
   it("rejects a list field that is not a list of strings", () => {
-    for (const key of ["extraWriteRoots", "disallowedTools", "fencedPatterns", "bannedBash"]) {
+    for (const key of ["extraWriteRoots", "disallowedTools", "fencedPatterns", "bannedBash", "e2eHostAllowlist"]) {
       expect(() => parseGuardPolicy(JSON.stringify({ ...policy, [key]: "x" }))).toThrow(GuardPolicyError);
       expect(() => parseGuardPolicy(JSON.stringify({ ...policy, [key]: [1] }))).toThrow(GuardPolicyError);
     }
   });
 
   it("accepts empty lists", () => {
-    const bare = { ...policy, extraWriteRoots: [], disallowedTools: [], fencedPatterns: [], bannedBash: [] };
+    const bare = {
+      ...policy,
+      extraWriteRoots: [],
+      disallowedTools: [],
+      fencedPatterns: [],
+      bannedBash: [],
+      e2eHostAllowlist: [],
+    };
     expect(parseGuardPolicy(JSON.stringify(bare))).toEqual(bare);
   });
 });

@@ -6,3 +6,7 @@ dist/
 secrets.env
 data/
 .sessions/
+# playwright-cli drops snapshots and screenshots here when a run has no
+# configured output directory of its own.
+.playwright-cli/
+.playwright/
