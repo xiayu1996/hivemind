@@ -34,6 +34,13 @@ if [ -z "$REPOSITORY_SLUG" ]; then
   REMOTE="$(git -C "$REPOSITORY_PATH" remote get-url origin)"
   REPOSITORY_SLUG="$(echo "${REMOTE%.git}" | sed -E 's#.*[/:]([^/:]+/[^/]+)$#\1#')"
 fi
+case "$REPOSITORY_SLUG" in
+  */*) ;;
+  *)
+    echo "cannot read an owner/name slug from the origin remote; pass --repository-slug owner/name" >&2
+    echo "(cards on the board name the repository by that slug, and only matching cards are dispatched here)" >&2
+    exit 1 ;;
+esac
 REPOSITORY_ID="${REPOSITORY_ID:-${REPOSITORY_SLUG##*/}}"
 
 step() { echo; echo "== $*"; }

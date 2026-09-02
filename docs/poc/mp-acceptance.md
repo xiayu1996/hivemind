@@ -16,6 +16,7 @@
 | 2026-09-01 | 同上 | PM 第二轮 5 个问题；回答归档署名为真名「雨 夏」（此前只有 user id，见「披露」） | ① |
 | 2026-09-02 | 同上 | PM 第三轮 4 个确认型问题（首页图表范围、详情页历史深度、失败记录字段、按模型费用口径），等待回答 | — |
 | 2026-09-02 | 同上 | `npm run preflight` 24 PASS / 1 WARN（无带外告警通道）；需求循环一轮通过，需求状态影子初始化为「澄清中」 | 单机就绪（Linux 待跑） |
+| 2026-09-02 | 本机 colima 虚拟机内干净 Ubuntu 24.04 arm64 容器（无凭据） | `deploy/linux/install.sh` 全程跑通；`npx vitest run` 726 全绿；`smoke-browser-e2e` 9/9（无沙箱模式，容器内核限制见下）；preflight 12 PASS，FAIL 全为无凭据预期项，并正确报出 AppArmor 用户命名空间限制 | Linux 部署机制成立；③ 的浏览器车道在 Linux 上可用 |
 
 ## 活体接线时发现并修复的闭环缺口
 
@@ -29,6 +30,15 @@
 | 需求循环与 orchestrator 共用 outbox，互相把对方的行判为不支持 | attempts 虚增；一侧积压超过 100 行时另一侧饿死 | `replay(delivery, { operations })` 按操作过滤 |
 | Story worker 浏览器白名单硬编码 `localhost/127.0.0.1` | 三层红线不再同源 | 读 `guard.e2eHostAllowlist`（worker 与回归 sweep 两处） |
 | VERIFY 会话既不知道也拿不到 `playwright-cli`；`prompts/phases/verify.md` 从未装载 | 判据 ③ 无从产生：盲审只会跑单测，不会打开页面 | 白名单非空时 prompt 注入浏览器车道说明（session 名=卡 id、只列 host）；hivemind 的 `node_modules/.bin` 进 VERIFY/回归会话 PATH（不往 worktree 装任何东西，保住 tree-pin）；VERIFY 系统提示装载基线+verify.md |
+
+## Linux 实跑发现的部署缺陷（已修）
+
+| 缺陷 | 修复 |
+|---|---|
+| `install-pi.sh` 用 `gh release download`，而首装时 `gh` 尚未登录 | 直连公开 release 资产 + SHA256 校验，`gh` 仅兜底 |
+| arm64 Ubuntu 的 Node 26 缺 `libatomic1` | runbook 前置 |
+| Ubuntu 23.10+ AppArmor 限制非特权用户命名空间，Chromium 报 `No usable sandbox!` | preflight 新增内核检查并给出 sysctl 修法（首选）；`verify.chromiumSandbox` 显式开关（默认开、标 dangerous）供容器等无法改内核的主机使用；容器内冒烟即以该开关通过 |
+| `install.sh` 从本地路径 origin 推不出 `owner/name` slug 却继续 | 无 `/` 的 slug 直接报错要求 `--repository-slug` |
 
 ## 披露（判据 ② 相关）
 
