@@ -29,9 +29,16 @@ fi
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+# Release assets are public, so a fresh host needs no GitHub login to install
+# pi; gh is only the fallback for networks that block the direct download.
+RELEASE="https://github.com/earendil-works/pi/releases/download/v$PIN"
 echo "downloading pi $PIN ($ASSET)"
-gh release download "v$PIN" --repo earendil-works/pi \
-  --pattern "$ASSET" --pattern SHA256SUMS --dir "$WORK" --clobber
+if ! (curl -fsSL --retry 3 -o "$WORK/$ASSET" "$RELEASE/$ASSET" \
+      && curl -fsSL --retry 3 -o "$WORK/SHA256SUMS" "$RELEASE/SHA256SUMS"); then
+  echo "direct download failed; trying gh"
+  gh release download "v$PIN" --repo earendil-works/pi \
+    --pattern "$ASSET" --pattern SHA256SUMS --dir "$WORK" --clobber
+fi
 
 echo "verifying checksum"
 EXPECTED="$(grep " $ASSET\$" "$WORK/SHA256SUMS" | awk '{print $1}')"
