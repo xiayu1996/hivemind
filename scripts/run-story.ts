@@ -26,7 +26,9 @@ import { ModelPolicy } from "../src/runner/model-policy.js";
 import { retryLimits } from "../src/pipeline/retry-limits.js";
 import { ScenarioRegistry } from "../src/regression/scenario-registry.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
+import { browserLanePath } from "../src/verify/browser-config.js";
 import { BlindVerifyExecutor } from "../src/verify/executor.js";
+import { loadPromptLayers } from "../src/pipeline/prompt-loader.js";
 import { discoverMRPort } from "../src/vcs/mr/adapters.js";
 import { GitMrStoryDelivery, processGitCommand } from "../src/vcs/story-delivery.js";
 
@@ -151,6 +153,9 @@ async function main(): Promise<void> {
       recordTelemetry: (input) => recorder.record(input),
       maxContinueRetries: limits.maxContinueRetries,
     });
+    // The verifier runs under its own phase contract, and with the browser
+    // lane's CLI on its PATH; nothing is installed into the worktree for it.
+    const verifyLayers = await loadPromptLayers(join(ROOT, "prompts"), "VERIFY");
     const blindExecutor = new BlindVerifyExecutor(
       {
         create: (policy: GuardPolicy) => new RpcPiRunner({
@@ -162,7 +167,9 @@ async function main(): Promise<void> {
           tools: ["read", "bash", "grep", "find", "ls"],
           extensions: [guardExtension, canonicalExtension],
           contextFiles: "explicit",
+          systemPrompt: { mode: "replace", text: verifyLayers.combined },
           env: {
+            PATH: browserLanePath(ROOT),
             [POLICY_ENV_VAR]: serializeGuardPolicy(policy),
             [CANONICAL_CAPTURE_ENV]: join(policy.extraWriteRoots[0]!, "provider-requests.jsonl"),
           },

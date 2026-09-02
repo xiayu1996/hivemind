@@ -18,6 +18,8 @@ import { RegressionStore, regressionPolicy } from "../src/regression/store.js";
 import { RegressionSweeper } from "../src/regression/sweeper.js";
 import { PiModelCatalog, resolveModel } from "../src/runner/model-resolver.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
+import { browserLanePath } from "../src/verify/browser-config.js";
+import { loadPromptLayers } from "../src/pipeline/prompt-loader.js";
 import { BlindVerifyExecutor } from "../src/verify/executor.js";
 import { processGitCommand } from "../src/vcs/story-delivery.js";
 
@@ -56,6 +58,8 @@ async function main(): Promise<void> {
     const registry = new ScenarioRegistry(handle.client);
     const store = new RegressionStore(handle.client);
     const policy = await regressionPolicy(config);
+    const allowedHosts = config.get("guard.e2eHostAllowlist");
+    const verifyLayers = await loadPromptLayers(join(ROOT, "prompts"), "VERIFY");
 
     const executor = new BlindVerifyExecutor(
       {
@@ -68,7 +72,9 @@ async function main(): Promise<void> {
           tools: ["read", "bash", "grep", "find", "ls"],
           extensions: [join(ROOT, "extensions", "hive-guard.ts"), join(ROOT, "extensions", "canonical-capture.ts")],
           contextFiles: "explicit",
+          systemPrompt: { mode: "replace", text: verifyLayers.combined },
           env: {
+            PATH: browserLanePath(ROOT),
             [POLICY_ENV_VAR]: serializeGuardPolicy(guard),
             [CANONICAL_CAPTURE_ENV]: join(guard.extraWriteRoots[0] ?? evidenceRoot, "provider-requests.jsonl"),
           },
@@ -87,7 +93,7 @@ async function main(): Promise<void> {
       git: processGitCommand,
       evidenceRoot,
       auditPath,
-      allowedHosts: ["localhost", "127.0.0.1"],
+      allowedHosts,
     });
     const result = await new RegressionSweeper(registry, store, sweepPort).sweep({ pool, branch, scenarioIds }, policy);
 
@@ -101,7 +107,7 @@ async function main(): Promise<void> {
         git: processGitCommand,
         evidenceRoot: join(evidenceRoot, "probe"),
         auditPath,
-        allowedHosts: ["localhost", "127.0.0.1"],
+        allowedHosts,
       });
       for (const raised of result.raised) {
         const card = { scenarioId: raised.scenarioId, failureSignature: raised.signature };

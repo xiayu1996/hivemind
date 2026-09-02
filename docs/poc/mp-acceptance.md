@@ -27,7 +27,8 @@
 | 看板 `Epic 状态` 从未被系统投影 | Epic 永远停在「待拆解」；退回重拆时也无法回到 intake 过滤条件 | outbox `sync_epic_status`，投影同时写 `notion_status_shadow`（01 §2.2 带日期补记） |
 | 需求页人类输入解释器只在测试里被调用 | PRD 批准/修改意见、验收勾选与缺口留言、停靠/恢复在活体上无人读取 | `NotionRequirementInputSync` 接进需求循环，每个决定按评论/勾选 id 只认领一次 |
 | 需求循环与 orchestrator 共用 outbox，互相把对方的行判为不支持 | attempts 虚增；一侧积压超过 100 行时另一侧饿死 | `replay(delivery, { operations })` 按操作过滤 |
-| Story worker 浏览器白名单硬编码 `localhost/127.0.0.1` | 三层红线不再同源 | 读 `guard.e2eHostAllowlist` |
+| Story worker 浏览器白名单硬编码 `localhost/127.0.0.1` | 三层红线不再同源 | 读 `guard.e2eHostAllowlist`（worker 与回归 sweep 两处） |
+| VERIFY 会话既不知道也拿不到 `playwright-cli`；`prompts/phases/verify.md` 从未装载 | 判据 ③ 无从产生：盲审只会跑单测，不会打开页面 | 白名单非空时 prompt 注入浏览器车道说明（session 名=卡 id、只列 host）；hivemind 的 `node_modules/.bin` 进 VERIFY/回归会话 PATH（不往 worktree 装任何东西，保住 tree-pin）；VERIFY 系统提示装载基线+verify.md |
 
 ## 披露（判据 ② 相关）
 

@@ -83,6 +83,19 @@ describe("BlindVerifyExecutor", () => {
     expect(stored).toHaveLength(1);
   });
 
+  it("tells the verifier about the browser only when there is a host it may open", async () => {
+    const withHosts = runner();
+    await new BlindVerifyExecutor({ create: () => withHosts }, { insert: async () => undefined }, pins()).run(input());
+    expect(withHosts.prompts[0]).toContain("playwright-cli");
+    expect(withHosts.prompts[0]).toContain("-s=story-1");
+    expect(withHosts.prompts[0]).toContain("these hosts: localhost;");
+
+    const withoutHosts = runner();
+    await new BlindVerifyExecutor({ create: () => withoutHosts }, { insert: async () => undefined }, pins())
+      .run({ ...input(), allowedHosts: [] });
+    expect(withoutHosts.prompts[0]).not.toContain("playwright-cli");
+  });
+
   it("refuses a runner that reuses the CODE session", async () => {
     const instance = runner({ session: "code.jsonl" });
     const records: VerifyRecord[] = [];

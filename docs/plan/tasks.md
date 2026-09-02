@@ -207,7 +207,7 @@
 > 状态列：✅ 输出物与本机可执行判据均通过 · ⚠️ 实现与离线验证完成但外部活体判据待跑。
 >
 > **执行状态追记（2026-09-02，macOS 本机接真实 Notion 看板）**：凭据到位后 Requirements 库在既有看板旁建成（MP-01 活体探针通过）；一条真实十句话需求 `R-ae22432dbaaf` 已走完三轮 PM 业务澄清的前两轮（问题贴评论、回答逐字归档并署真名，MP-04 活体通过），第三轮等待回答。
-> 活体接线暴露并已修的闭环缺口（`npx vitest run` 122 文件 724 测试全绿）：① EPIC_ACCEPT→DONE 无人触发、Epic 状态列从未投影（需求永远进不了 ACCEPTANCE）→ `EpicCompletion` + `sync_epic_status`（03 §7.2 / 01 §2.2 带日期补记）；② 需求页人类输入（PRD 批准/修改意见、验收勾选与缺口留言、停靠/恢复）的解释器只在测试里被调用 → `NotionRequirementInputSync` 接进需求循环；③ 两常驻进程共用 outbox 互相吞行 → 回放按操作过滤；④ worker 浏览器白名单硬编码 → 读 `guard.e2eHostAllowlist`。
+> 活体接线暴露并已修的闭环缺口（`npx vitest run` 122 文件 724 测试全绿）：① EPIC_ACCEPT→DONE 无人触发、Epic 状态列从未投影（需求永远进不了 ACCEPTANCE）→ `EpicCompletion` + `sync_epic_status`（03 §7.2 / 01 §2.2 带日期补记）；② 需求页人类输入（PRD 批准/修改意见、验收勾选与缺口留言、停靠/恢复）的解释器只在测试里被调用 → `NotionRequirementInputSync` 接进需求循环；③ 两常驻进程共用 outbox 互相吞行 → 回放按操作过滤；④ worker 浏览器白名单硬编码 → 读 `guard.e2eHostAllowlist`；⑤ VERIFY 会话既不知道也拿不到 `playwright-cli`（prompt 无浏览器车道、PATH 无 CLI、`prompts/phases/verify.md` 从未装载）→ 白名单非空时 prompt 注入浏览器车道说明（只含 host 列表与卡 id，跨机逐字节相同）、hivemind 自己的 `node_modules/.bin` 进 VERIFY/回归会话 PATH、VERIFY 系统提示装载基线+verify.md。
 > Linux 单节点部署件就位（MP-11），`npm run preflight` 在本机 24 项通过、1 项 WARN（未配带外告警通道）。
 
 | ID | 任务 | 输出物 | 验证方式 | 前置 |

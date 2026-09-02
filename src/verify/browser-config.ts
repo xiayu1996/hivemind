@@ -1,5 +1,5 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 
 export interface BrowserConfigInput {
   /** The same list the guard and the verdict validation use. */
@@ -71,4 +71,14 @@ export async function writePlaywrightCliConfig(
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(buildPlaywrightCliConfig(input), null, 2)}\n`, "utf8");
   return path;
+}
+
+/**
+ * The PATH a browser-driving session runs with. The CLI is hivemind's own
+ * dependency, not the target repository's, so the verifier finds it here
+ * rather than by installing anything into the worktree it must not change.
+ */
+export function browserLanePath(hivemindRoot: string, currentPath = process.env.PATH ?? ""): string {
+  const bin = join(hivemindRoot, "node_modules", ".bin");
+  return currentPath ? `${bin}${delimiter}${currentPath}` : bin;
 }

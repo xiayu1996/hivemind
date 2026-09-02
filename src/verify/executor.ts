@@ -181,6 +181,25 @@ function toVerdictDocument(value: z.infer<typeof verifierReplySchema>): VerdictD
   };
 }
 
+/**
+ * What the verifier is told about the browser it may drive. Only the host list
+ * and the card id enter the text, so the same round produces the same prompt
+ * on any machine; the paths the browser writes to are already fixed in the
+ * worktree's Playwright configuration.
+ */
+export function browserLaneInstructions(cardId: string, allowedHosts: readonly string[]): string {
+  const hosts = [...allowedHosts].toSorted().join(", ");
+  return [
+    "Browser lane: a headless Chromium is available through the `playwright-cli` command; always pass the session flag",
+    `\`-s=${cardId}\`. Its configuration is already written into this worktree: the browser loads only these hosts: ${hosts};`,
+    "every other request is refused by the browser itself, and pages loaded from local files are not allowed.",
+    "Snapshots and screenshots are saved into this round's evidence directory automatically; refer to them by file name.",
+    `Typical use: \`playwright-cli -s=${cardId} open <url>\`, then \`snapshot\`, \`click <ref>\`, \`fill <ref> <text>\`, \`screenshot\`, and \`close\`.`,
+    "A scenario whose layer is ui or e2e must be exercised in the browser: report the page you judged in `url` and the",
+    "screenshot file names in `screenshots`. Close the browser before returning the verdict.",
+  ].join(" ");
+}
+
 function promptFor(input: BlindVerifyInput): string {
   return [
     "Perform an independent blind verification of the current worktree.",
@@ -188,6 +207,7 @@ function promptFor(input: BlindVerifyInput): string {
     "Choose and run the relevant tests from the repository and the specification.",
     "Run tests in a mode that reports each individual test name, so every scenario's outcome is observable in the transcript.",
     "Evidence protocol (mandatory): after observing the outcome of each scenario, print a line exactly of the form HIVEMIND_TEST_RESULT <scenario_id> <passed|failed|inconclusive>, once per declared scenario id. A verdict whose scenarios have no observable evidence in this session is rejected.",
+    ...(input.allowedHosts.length > 0 ? [browserLaneInstructions(input.cardId, input.allowedHosts)] : []),
     "Return only JSON: {\"scenarios\":[{\"id\":string,\"status\":\"passed\"|\"failed\"|\"inconclusive\",\"url\"?:string,\"screenshots\"?:string[]}]}",
     "Specification:",
     input.specification,
