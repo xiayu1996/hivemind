@@ -77,7 +77,11 @@ async function main(): Promise<void> {
     decideToolCall({ toolName: "bash", toolCallId: "tc", input: { command } }, policy, DEFAULT_FENCED_PATTERNS);
 
   try {
-    await writePlaywrightCliConfig(workspace, { allowedHosts: ["127.0.0.1"], outputDir: evidence });
+    // A container or a locked-down kernel cannot build Chromium's sandbox; the
+    // smoke can be told so, the same way a host is through verify.chromiumSandbox.
+    const chromiumSandbox = process.env.HIVEMIND_CHROMIUM_SANDBOX !== "0";
+    if (!chromiumSandbox) console.log("running Chromium without its sandbox (HIVEMIND_CHROMIUM_SANDBOX=0)");
+    await writePlaywrightCliConfig(workspace, { allowedHosts: ["127.0.0.1"], outputDir: evidence, chromiumSandbox });
 
     check("guard allows the run against the allowlisted host",
       !decide(`playwright-cli goto ${origin}/`).block);

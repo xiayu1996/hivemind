@@ -27,6 +27,8 @@ export interface BlindVerifyInput {
   specification: string;
   declaredScenarioIds: string[];
   allowedHosts: string[];
+  /** From verify.chromiumSandbox; undefined keeps the sandbox. */
+  chromiumSandbox?: boolean;
   commitMessages: string[];
 }
 
@@ -253,6 +255,7 @@ export class BlindVerifyExecutor {
       await writePlaywrightCliConfig(input.worktreePath, {
         allowedHosts: input.allowedHosts,
         outputDir: input.evidencePath,
+        ...(input.chromiumSandbox === undefined ? {} : { chromiumSandbox: input.chromiumSandbox }),
       });
     }
     const runner = this.runners.create(policy);

@@ -7,13 +7,19 @@ export interface BrowserConfigInput {
   /** Where snapshots, screenshots, traces and video land. */
   outputDir: string;
   headed?: boolean;
+  /**
+   * Chromium's own process sandbox. Leave it on; a host that cannot build the
+   * sandbox (a container, or Ubuntu's user-namespace restriction) should be
+   * fixed at the kernel first, and only then run without one.
+   */
+  chromiumSandbox?: boolean;
 }
 
 export interface PlaywrightCliConfig {
   browser: {
     browserName: "chromium";
     isolated: boolean;
-    launchOptions: { headless: boolean };
+    launchOptions: { headless: boolean; chromiumSandbox?: boolean };
   };
   outputDir: string;
   snapshot: { mode: "full" };
@@ -50,7 +56,10 @@ export function buildPlaywrightCliConfig(input: BrowserConfigInput): PlaywrightC
       // No profile on disk: a run must not inherit a session an earlier card
       // left behind, and evidence has to come from a cold start.
       isolated: true,
-      launchOptions: { headless: input.headed !== true },
+      launchOptions: {
+        headless: input.headed !== true,
+        ...(input.chromiumSandbox === false ? { chromiumSandbox: false } : {}),
+      },
     },
     outputDir: input.outputDir,
     snapshot: { mode: "full" },

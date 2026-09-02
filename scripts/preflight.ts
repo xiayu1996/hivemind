@@ -191,6 +191,16 @@ async function main(): Promise<void> {
     return `${repositoryPath} -> ${remote}`;
   });
 
+  if (process.platform === "linux") {
+    await attempt("kernel lets Chromium build its sandbox", async () => {
+      const restricted = await readFile("/proc/sys/kernel/apparmor_restrict_unprivileged_userns", "utf8")
+        .then((value) => value.trim() === "1", () => false);
+      if (restricted) {
+        throw new Error("AppArmor restricts unprivileged user namespaces; run sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 (see docs/runbooks/linux-single-node.md)");
+      }
+    });
+  }
+
   await attempt("headless Chromium for the browser lane", async () => {
     const cli = join(ROOT, "node_modules", ".bin", process.platform === "win32" ? "playwright-cli.cmd" : "playwright-cli");
     const wanted = JSON.parse(await readFile(join(ROOT, "node_modules", "playwright", "package.json"), "utf8")) as { version: string };

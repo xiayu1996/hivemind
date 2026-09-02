@@ -183,6 +183,7 @@ async function main(): Promise<void> {
       evidenceRoot,
       auditPath,
       allowedHosts,
+      chromiumSandbox: config.get("verify.chromiumSandbox"),
       commitMessages: () => gitMessages(worktreePath, targetBranch),
       recordTelemetry: (input) => recorder.record(input),
     });

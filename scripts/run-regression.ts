@@ -94,6 +94,7 @@ async function main(): Promise<void> {
       evidenceRoot,
       auditPath,
       allowedHosts,
+      chromiumSandbox: config.get("verify.chromiumSandbox"),
     });
     const result = await new RegressionSweeper(registry, store, sweepPort).sweep({ pool, branch, scenarioIds }, policy);
 
@@ -108,6 +109,7 @@ async function main(): Promise<void> {
         evidenceRoot: join(evidenceRoot, "probe"),
         auditPath,
         allowedHosts,
+      chromiumSandbox: config.get("verify.chromiumSandbox"),
       });
       for (const raised of result.raised) {
         const card = { scenarioId: raised.scenarioId, failureSignature: raised.signature };

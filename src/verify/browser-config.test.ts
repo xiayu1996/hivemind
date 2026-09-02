@@ -28,6 +28,14 @@ describe("buildPlaywrightCliConfig", () => {
     ]);
   });
 
+  it("keeps Chromium's sandbox unless a host is explicitly configured without one", () => {
+    const base = { allowedHosts: ["localhost"], outputDir: "/ev/card-12/browser" };
+    expect(buildPlaywrightCliConfig(base).browser.launchOptions).toEqual({ headless: true });
+    expect(buildPlaywrightCliConfig({ ...base, chromiumSandbox: true }).browser.launchOptions).toEqual({ headless: true });
+    expect(buildPlaywrightCliConfig({ ...base, chromiumSandbox: false }).browser.launchOptions)
+      .toEqual({ headless: true, chromiumSandbox: false });
+  });
+
   it("reads a leading dot as a domain and everything under it", () => {
     const config = buildPlaywrightCliConfig({
       allowedHosts: [".staging.example"],

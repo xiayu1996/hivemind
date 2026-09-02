@@ -281,6 +281,14 @@ export const CONFIG_KEYS = {
     reload: "next-spawn",
     description: "Additional directories an agent may write to, beyond its worktree.",
   }),
+  "verify.chromiumSandbox": def({
+    schema: z.boolean(),
+    default: true,
+    scope: "per-host",
+    reload: "next-spawn",
+    description: "Run the browser lane's Chromium with its process sandbox. Turn off only on a host that cannot build one (a container, or Ubuntu's user-namespace restriction that preflight reports) after the kernel fix is ruled out.",
+    dangerous: true,
+  }),
   "guard.e2eHostAllowlist": def({
     schema: z.array(z.string()),
     default: ["localhost", "127.0.0.1"],

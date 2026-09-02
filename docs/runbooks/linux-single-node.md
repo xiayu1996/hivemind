@@ -13,7 +13,16 @@
 
 ## 1. 安装
 
-前置：Node ≥ 26（nvm/fnm 均可）、git、`gh`（GitHub）或 `glab`（GitLab）。
+前置：Node ≥ 26（nvm/fnm 均可；arm64 Ubuntu 还需 `apt install libatomic1`，否则 node 起不来）、git、`gh`（GitHub）或 `glab`（GitLab）。
+
+Ubuntu 23.10+ 默认用 AppArmor 限制非特权用户命名空间，Chromium 的沙箱会以 `No usable sandbox!` 失败。首选在主机放开（同时写入 `/etc/sysctl.d/` 使重启后仍生效）：
+
+```sh
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+echo 'kernel.apparmor_restrict_unprivileged_userns = 0' | sudo tee /etc/sysctl.d/60-hivemind-chromium.conf
+```
+
+`npm run preflight` 会检查这一项。不要用 `--no-sandbox` 绕过：浏览器加载的是被测系统，但沙箱仍是 worker 与被测代码之间的一层。
 
 ```sh
 git clone <hivemind> ~/hivemind
