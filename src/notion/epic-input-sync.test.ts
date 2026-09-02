@@ -88,3 +88,28 @@ describe("@scenario S-M2-02-revise Notion sync approval", () => {
     expect((await client.execute("SELECT story_id FROM execution_dispatches")).rows).toEqual([]);
   });
 });
+
+describe("blocked Epic", () => {
+  it("reads the person's comment on a blocked Epic as the answer and sends it back to decomposition", async () => {
+    await client.execute({
+      sql: "INSERT INTO epics (id, notion_page_id, title, state, created_at, updated_at) VALUES ('M2', 'epic-page', 'M2 Plan', 'BLOCKED', 1, 1)",
+    });
+    await client.execute({
+      sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
+            VALUES ('epic:M2', 0, NULL, 'DECOMPOSE', 'epic.transition', 500, ?)`,
+      args: [JSON.stringify({ from: "DECOMPOSE", to: "BLOCKED", reason: "blocking question: 面向哪个客户群？" })],
+    });
+    const comments = new CommentIngestor(client, {
+      listComments: async () => [{
+        id: "comment-answer", pageId: "epic-page", blockId: null, discussionId: "discussion-1",
+        authorId: "human-1", body: "面向已付费的企业客户", createdTime: 1_000,
+      }],
+    }, { now: () => 1_000 });
+    await comments.registerPage("epic-page", []);
+    const sync = new NotionEpicInputSync(client, gateway("待拆解"), comments, new PlanApprovalStore(client), () => 1_000);
+
+    await expect(sync.pollComments("epic-page")).resolves.toMatchObject({ answered: 1 });
+    expect((await client.execute("SELECT state FROM epics WHERE id = 'M2'")).rows[0]?.state).toBe("DECOMPOSE");
+    await expect(sync.pollComments("epic-page")).resolves.toMatchObject({ answered: 0 });
+  });
+});

@@ -47,6 +47,7 @@ import { ingestEpicsForDecomposition } from "../src/notion/epic-intake.js";
 import { EpicDecomposer } from "../src/orchestrator/decompose-runner.js";
 import { PiDecomposePort } from "../src/orchestrator/pi-decompose-port.js";
 import { EpicBranchFreshness } from "../src/orchestrator/epic-branch-refresh.js";
+import { surfaceBlockedEpics } from "../src/orchestrator/epic-blocker.js";
 import { EpicCompletion } from "../src/orchestrator/epic-completion.js";
 import { EpicMrDelivery } from "../src/vcs/epic-delivery.js";
 import { discoverMRPort } from "../src/vcs/mr/adapters.js";
@@ -170,8 +171,9 @@ async function main(): Promise<void> {
 
   let coordinator: NotionSyncCoordinator;
   const registerActiveStories = async (): Promise<void> => {
+    // Approval and blocking-question answers both arrive as Epic-page comments.
     const epics = (await handle.client.execute({
-      sql: "SELECT notion_page_id FROM epics WHERE state = 'PLAN_APPROVAL' ORDER BY id",
+      sql: "SELECT notion_page_id FROM epics WHERE state IN ('PLAN_APPROVAL', 'BLOCKED') ORDER BY id",
     })).rows;
     for (const epic of epics) {
       const pageId = String(epic.notion_page_id);
@@ -200,6 +202,7 @@ async function main(): Promise<void> {
     await registerActiveStories();
   };
   const reconcileProjections = async (): Promise<void> => {
+    await surfaceBlockedEpics(handle.client);
     const stories = (await handle.client.execute("SELECT id FROM stories ORDER BY id")).rows;
     for (const story of stories) await projection.enqueue(String(story.id));
     // The requirement loop shares this outbox; each side replays only its own rows.

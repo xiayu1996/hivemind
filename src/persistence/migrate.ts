@@ -26,6 +26,11 @@ function stripComments(sql: string): string {
  * string literals and avoids pulling in a SQL parser.
  */
 export async function migrate(client: Client): Promise<string[]> {
+  // Two resident processes share one file on a single node, and a reader
+  // hitting a writer's transaction must wait rather than fail the cycle.
+  // Both pragmas are harmless on an in-memory database.
+  await client.execute("PRAGMA busy_timeout = 5000");
+  await client.execute("PRAGMA journal_mode = WAL");
   await client.execute(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       name       TEXT PRIMARY KEY,

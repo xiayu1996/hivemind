@@ -185,4 +185,35 @@ describe("NotionEpicPlanDelivery", () => {
       expect(requests).toEqual([]);
     });
   });
+
+  describe("comment_epic_page", () => {
+    const payload = { epicId: "M2", body: "[拆解阻塞问题] 面向哪个客户群？" };
+    async function blockedEpic(): Promise<void> {
+      await client.execute("INSERT INTO epics (id, notion_page_id, title, state, created_at, updated_at) VALUES ('M2', 'epic-page', 'M2', 'BLOCKED', 1, 1)");
+    }
+    function pageWithComments(bodies: string[]): NotionGateway {
+      return {
+        request: vi.fn(async (request: { method: string; path: string; body?: unknown }) => {
+          requests.push(request);
+          if (request.method === "GET") {
+            return { status: 200, data: { results: bodies.map((body) => ({ rich_text: [{ plain_text: body }] })), has_more: false } };
+          }
+          return { status: 200, data: { id: "comment-1" } };
+        }),
+      } as unknown as NotionGateway;
+    }
+
+    it("asks the question on the Epic page exactly once", async () => {
+      await blockedEpic();
+      const delivery = new NotionEpicPlanDelivery(pageWithComments([]), client, "stories-ds");
+      expect(await delivery.isApplied(record("comment_epic_page", payload))).toBe(false);
+      await delivery.send(record("comment_epic_page", payload));
+      const post = requests.find((request) => request.method === "POST");
+      expect(post?.path).toBe("/v1/comments");
+      expect(JSON.stringify(post?.body)).toContain("面向哪个客户群？");
+
+      const again = new NotionEpicPlanDelivery(pageWithComments([payload.body]), client, "stories-ds");
+      expect(await again.isApplied(record("comment_epic_page", payload))).toBe(true);
+    });
+  });
 });

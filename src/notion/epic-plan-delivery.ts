@@ -2,6 +2,7 @@ import type { Client } from "@libsql/client";
 import { z } from "zod";
 import type { NotionGateway } from "./gateway.js";
 import type { NotionOutboxDelivery, NotionOutboxRecord } from "./outbox.js";
+import { COMMENT_EPIC_PAGE } from "../orchestrator/epic-blocker.js";
 import { SYNC_EPIC_STATUS } from "../orchestrator/epic-status-projection.js";
 import schema from "./notion-schema.json" with { type: "json" };
 
@@ -23,8 +24,15 @@ const statusSchema = z.object({
   at: z.number().int(),
 });
 
+const commentSchema = z.object({
+  epicId: z.string().min(1),
+  body: z.string().min(1),
+});
+
 /** Every outbox operation this delivery owns, for the replay filter. */
-export const EPIC_OUTBOX_OPERATIONS = ["present_epic_plan", "create_story_page", SYNC_EPIC_STATUS] as const;
+export const EPIC_OUTBOX_OPERATIONS = [
+  "present_epic_plan", "create_story_page", SYNC_EPIC_STATUS, COMMENT_EPIC_PAGE,
+] as const;
 
 const MARKER_PREFIX = "hivemind-plan:";
 
@@ -72,6 +80,7 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
       return this.planMarkerPresent(record.target, record.payloadHash);
     }
     if (record.operation === SYNC_EPIC_STATUS) return this.statusApplied(statusSchema.parse(record.payload));
+    if (record.operation === COMMENT_EPIC_PAGE) return this.commentPresent(commentSchema.parse(record.payload));
     if (record.operation === "create_story_page") {
       const payload = storyPageSchema.parse(record.payload);
       const existing = await this.findStoryPage(payload.storyId);
@@ -86,7 +95,43 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
     if (record.operation === "present_epic_plan") return this.presentPlan(record);
     if (record.operation === "create_story_page") return this.createStoryPage(record);
     if (record.operation === SYNC_EPIC_STATUS) return this.syncStatus(statusSchema.parse(record.payload));
+    if (record.operation === COMMENT_EPIC_PAGE) return this.comment(commentSchema.parse(record.payload));
     throw new Error(`unsupported Epic plan operation: ${record.operation}`);
+  }
+
+  /** The comment's own text is the replay marker: the page either carries it or it does not. */
+  private async commentPresent(payload: z.infer<typeof commentSchema>): Promise<boolean> {
+    const pageId = String((await this.epicRow(payload.epicId)).notion_page_id);
+    let cursor: string | undefined;
+    do {
+      const query = new URLSearchParams({ block_id: pageId, page_size: "100" });
+      if (cursor) query.set("start_cursor", cursor);
+      const response = await this.gateway.request({
+        method: "GET",
+        path: `/v1/comments?${query.toString()}`,
+        priority: "projection",
+      });
+      const page = z.object({
+        results: z.array(z.object({ rich_text: z.array(z.object({ plain_text: z.string() }).passthrough()) }).passthrough()),
+        has_more: z.boolean().optional(),
+        next_cursor: z.string().nullable().optional(),
+      }).parse(response.data);
+      for (const item of page.results) {
+        if (item.rich_text.map((part) => part.plain_text).join("") === payload.body) return true;
+      }
+      cursor = page.has_more ? page.next_cursor ?? undefined : undefined;
+    } while (cursor);
+    return false;
+  }
+
+  private async comment(payload: z.infer<typeof commentSchema>): Promise<void> {
+    const pageId = String((await this.epicRow(payload.epicId)).notion_page_id);
+    await this.gateway.request({
+      method: "POST",
+      path: "/v1/comments",
+      priority: "interaction",
+      body: { parent: { page_id: pageId }, rich_text: [text(payload.body)] },
+    });
   }
 
   /**

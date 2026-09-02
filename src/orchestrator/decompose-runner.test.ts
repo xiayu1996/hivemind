@@ -2,7 +2,8 @@
 import { createClient } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { migrate } from "../persistence/migrate.js";
-import { EpicDecomposer } from "./decompose-runner.js";
+import { EpicDecomposer, type DecomposeRequest } from "./decompose-runner.js";
+import { answerBlocker } from "./epic-blocker.js";
 import { PlanApprovalStore } from "./plan-approval.js";
 import type { DecompositionCandidate } from "./decompose.js";
 
@@ -91,6 +92,26 @@ describe("EpicDecomposer", () => {
     expect(port.run).toHaveBeenCalledTimes(1);
     expect(await state()).toBe("BLOCKED");
     expect((await client.execute("SELECT COUNT(*) AS count FROM stories")).rows[0]?.count).toBe(0);
+    // The question goes to the Epic page, where the person will read it.
+    const comment = (await client.execute("SELECT payload FROM notion_outbox WHERE operation = 'comment_epic_page'")).rows[0];
+    expect(String(comment?.payload)).toContain("这批 Story 面向哪个客户群？");
+  });
+
+  it("decomposes again with the person's answer once they reply on the page", async () => {
+    const asking = { run: vi.fn(async () => ({ ...plan, stories: [], blockingQuestion: "这批 Story 面向哪个客户群？" })) };
+    await new EpicDecomposer(client, approvals, asking, () => 1_000).decompose(epic());
+    expect(await answerBlocker(client, "M2", "comment-1", "面向已付费的企业客户", () => 2_000)).toBe(true);
+    expect(await state()).toBe("DECOMPOSE");
+    // The same comment delivered twice is one answer.
+    expect(await answerBlocker(client, "M2", "comment-1", "面向已付费的企业客户", () => 2_100)).toBe(false);
+
+    const planning = { run: vi.fn(async (_input: DecomposeRequest) => plan) };
+    await expect(new EpicDecomposer(client, approvals, planning, () => 3_000).decompose(epic()))
+      .resolves.toMatchObject({ kind: "presented" });
+    const request = planning.run.mock.calls[0]![0];
+    expect(request.requirement).toContain("多个 Story 并行推进并合成一次评审。");
+    expect(request.requirement).toContain("问：这批 Story 面向哪个客户群？");
+    expect(request.requirement).toContain("答：面向已付费的企业客户");
   });
 
   it("refuses an Epic that is not waiting to be decomposed", async () => {

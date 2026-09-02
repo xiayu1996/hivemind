@@ -1,5 +1,6 @@
 import type { Client } from "@libsql/client";
 import { evaluateDecomposition, type DecompositionCandidate } from "./decompose.js";
+import { blockerAnswers, blockingQuestionStatement, withBlockerAnswers } from "./epic-blocker.js";
 import type { PlanApprovalStore } from "./plan-approval.js";
 import { assertEpicTransition, type EpicState } from "./state-machine.js";
 
@@ -44,12 +45,15 @@ export class EpicDecomposer {
   async decompose(epic: EpicIntake): Promise<DecomposeOutcome> {
     await this.enterDecompose(epic.id);
     const rejections: string[] = [];
+    // A question asked on an earlier pass and answered since is part of the
+    // requirement now; without it the same question would stop this pass too.
+    const requirement = withBlockerAnswers(epic.requirement, await blockerAnswers(this.client, epic.id));
 
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       const candidate = await this.port.run({
         epicId: epic.id,
         title: epic.title,
-        requirement: epic.requirement,
+        requirement,
         previousRejections: [...rejections],
       });
       const evaluated = evaluateDecomposition(candidate);
@@ -59,6 +63,9 @@ export class EpicDecomposer {
         // would change the split. Guessing past it produces plausible Stories
         // for the wrong requirement.
         await this.block(epic.id, `blocking question: ${evaluated.question}`);
+        // The board is where the person will read it; a stop only in the log
+        // is a stop nobody answers.
+        await this.client.execute(blockingQuestionStatement(epic.id, evaluated.question, this.now()));
         return { kind: "blocking_question", question: evaluated.question };
       }
       if (evaluated.kind === "accepted") {
