@@ -17,6 +17,7 @@
 | 2026-09-02 | 同上 | PM 第三轮 4 个确认型问题（首页图表范围、详情页历史深度、失败记录字段、按模型费用口径），等待回答 | — |
 | 2026-09-02 | 同上 | `npm run preflight` 24 PASS / 1 WARN（无带外告警通道）；需求循环一轮通过，需求状态影子初始化为「澄清中」 | 单机就绪（Linux 待跑） |
 | 2026-09-02 | macOS 本机 + 真实 Notion | 第三轮回答归档；PM 判充分 → PRD（1 个目标、4 条不做、11 个场景）写入需求页；人拖卡到「拆解执行中」批准 → PRD 冻结 → PM 拆成 3 个 Epic（E1ACTION / E2RESULTS / E3OVERVIEW）写入 Epics 库并关联需求 → 需求 EXECUTING。产品经理循环与 orchestrator 均以常驻进程运行 | ①④（PRD 与后续验收清单同源） |
+| 2026-09-02 | macOS 本机 + 真实 Notion | orchestrator 常驻后接入 3 个 Epic：E3OVERVIEW 拆成 3 个 Story、E1ACTION 拆成 6 个 Story，方案写到 Epic 页、状态置「拆解待确认」等人批准；E2RESULTS 以阻塞问题停下（设计内停点），问题已投到 Epic 页等人回答 | ①② |
 | 2026-09-02 | 本机 colima 虚拟机内干净 Ubuntu 24.04 arm64 容器（无凭据） | `deploy/linux/install.sh` 全程跑通；`npx vitest run` 726 全绿；`smoke-browser-e2e` 9/9（无沙箱模式，容器内核限制见下）；preflight 12 PASS，FAIL 全为无凭据预期项，并正确报出 AppArmor 用户命名空间限制 | Linux 部署机制成立；③ 的浏览器车道在 Linux 上可用 |
 
 ## 活体接线时发现并修复的闭环缺口
@@ -30,6 +31,8 @@
 | 需求页人类输入解释器只在测试里被调用 | PRD 批准/修改意见、验收勾选与缺口留言、停靠/恢复在活体上无人读取 | `NotionRequirementInputSync` 接进需求循环，每个决定按评论/勾选 id 只认领一次 |
 | 需求循环与 orchestrator 共用 outbox，互相把对方的行判为不支持 | attempts 虚增；一侧积压超过 100 行时另一侧饿死 | `replay(delivery, { operations })` 按操作过滤 |
 | Story worker 浏览器白名单硬编码 `localhost/127.0.0.1` | 三层红线不再同源 | 读 `guard.e2eHostAllowlist`（worker 与回归 sweep 两处） |
+| Epic 拆解遇阻塞问题后是死路：问题只在 event_log 与控制台，看板不显示，BLOCKED 也没有任何出口 | E2RESULTS 拆解时问「失败记录的『已恢复』如何判定」，无人能看到、也无法回答 | 问题以评论写到 Epic 页（按正文幂等、每轮为所有 BLOCKED Epic 补发）；人在该 Epic 页的评论即回答，按评论 id 只认领一次，Epic 回到 DECOMPOSE 并把问答附进拆解输入 |
+| 两个常驻进程共用一个 libsql 文件时读到 `SQLITE_BUSY`，整轮失败 | 单节点两进程必然并发 | 每个连接设 `busy_timeout=5000` 与 WAL |
 | VERIFY 会话既不知道也拿不到 `playwright-cli`；`prompts/phases/verify.md` 从未装载 | 判据 ③ 无从产生：盲审只会跑单测，不会打开页面 | 白名单非空时 prompt 注入浏览器车道说明（session 名=卡 id、只列 host）；hivemind 的 `node_modules/.bin` 进 VERIFY/回归会话 PATH（不往 worktree 装任何东西，保住 tree-pin）；VERIFY 系统提示装载基线+verify.md |
 
 ## Linux 实跑发现的部署缺陷（已修）
