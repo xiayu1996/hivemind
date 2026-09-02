@@ -16,6 +16,7 @@
 | 2026-09-01 | 同上 | PM 第二轮 5 个问题；回答归档署名为真名「雨 夏」（此前只有 user id，见「披露」） | ① |
 | 2026-09-02 | 同上 | PM 第三轮 4 个确认型问题（首页图表范围、详情页历史深度、失败记录字段、按模型费用口径），等待回答 | — |
 | 2026-09-02 | 同上 | `npm run preflight` 24 PASS / 1 WARN（无带外告警通道）；需求循环一轮通过，需求状态影子初始化为「澄清中」 | 单机就绪（Linux 待跑） |
+| 2026-09-02 | macOS 本机 + 真实 Notion | 第三轮回答归档；PM 判充分 → PRD（1 个目标、4 条不做、11 个场景）写入需求页；人拖卡到「拆解执行中」批准 → PRD 冻结 → PM 拆成 3 个 Epic（E1ACTION / E2RESULTS / E3OVERVIEW）写入 Epics 库并关联需求 → 需求 EXECUTING。产品经理循环与 orchestrator 均以常驻进程运行 | ①④（PRD 与后续验收清单同源） |
 | 2026-09-02 | 本机 colima 虚拟机内干净 Ubuntu 24.04 arm64 容器（无凭据） | `deploy/linux/install.sh` 全程跑通；`npx vitest run` 726 全绿；`smoke-browser-e2e` 9/9（无沙箱模式，容器内核限制见下）；preflight 12 PASS，FAIL 全为无凭据预期项，并正确报出 AppArmor 用户命名空间限制 | Linux 部署机制成立；③ 的浏览器车道在 Linux 上可用 |
 
 ## 活体接线时发现并修复的闭环缺口
@@ -41,6 +42,8 @@
 | `install.sh` 从本地路径 origin 推不出 `owner/name` slug 却继续 | 无 `/` 的 slug 直接报错要求 `--repository-slug` |
 
 ## 披露（判据 ② 相关）
+
+- **带外告警门禁关闭**：2026-09-02 由 Ryan 决定「可以关掉 alert.requireOutOfBandChannel，下次再配置」，以 `config.set` 写入本机库（version 1，updated_by 记录了决定人与日期），orchestrator 以 WARNING 启动。这不是人工修复，是设计内的配置项；但在该通道配好之前，`needs_input` 停点只能靠人看看板发现。
 
 - **澄清记录第一轮两行署名为 user id 而非人名**：人名解析在第二轮之前才上线。澄清记录按设计只追加，未回头改写这两行；它们是当时真实发生的样子。
 - **本机库手工建表**：`data/hivemind-mp.db` 建于 `notion_users` 表加入 `0001_init.sql` 之前；预发布立场不加 `0002+` 迁移，故用同一份 DDL 手工建了该表，未删库重建（删库会丢掉这条需求的澄清历史）。全新环境不受影响。Linux 验收环境将从零建库，不带此痕迹。
