@@ -205,6 +205,10 @@
 > `npx tsx scripts/smoke-browser-e2e.ts` 在真实 headless Chromium 上 9/9 通过，含浏览器自身以 `net::ERR_BLOCKED_BY_CLIENT` 拒掉名单外请求。
 > 仍开放：一切需要真实 Notion 看板的活体判据（本机 `~/.hivemind/secrets.env` 未配置凭据），以及 MP-10 全程验收。
 > 状态列：✅ 输出物与本机可执行判据均通过 · ⚠️ 实现与离线验证完成但外部活体判据待跑。
+>
+> **执行状态追记（2026-09-02，macOS 本机接真实 Notion 看板）**：凭据到位后 Requirements 库在既有看板旁建成（MP-01 活体探针通过）；一条真实十句话需求 `R-ae22432dbaaf` 已走完三轮 PM 业务澄清的前两轮（问题贴评论、回答逐字归档并署真名，MP-04 活体通过），第三轮等待回答。
+> 活体接线暴露并已修的闭环缺口（`npx vitest run` 122 文件 724 测试全绿）：① EPIC_ACCEPT→DONE 无人触发、Epic 状态列从未投影（需求永远进不了 ACCEPTANCE）→ `EpicCompletion` + `sync_epic_status`（03 §7.2 / 01 §2.2 带日期补记）；② 需求页人类输入（PRD 批准/修改意见、验收勾选与缺口留言、停靠/恢复）的解释器只在测试里被调用 → `NotionRequirementInputSync` 接进需求循环；③ 两常驻进程共用 outbox 互相吞行 → 回放按操作过滤；④ worker 浏览器白名单硬编码 → 读 `guard.e2eHostAllowlist`。
+> Linux 单节点部署件就位（MP-11），`npm run preflight` 在本机 24 项通过、1 项 WARN（未配带外告警通道）。
 
 | ID | 任务 | 输出物 | 验证方式 | 前置 |
 |---|---|---|---|---|
@@ -217,6 +221,7 @@
 | MP-07 | ⚠️ 场景化验收清单：按 PRD 场景生成业务语言 checklist 贴「验收」区段；人勾选/评论被 ingest 判定；全勾 → 已验收，缺口 → PM 立增量 Epic/Story 回 EXECUTING | `src/orchestrator/acceptance-checklist.ts` | 6 条单测：清单与 PRD 场景一比一且 id 稳定；勾选=判定、取消勾选=没有判定；同一事件二次投递不重复判定；全部通过 → DONE；缺口 → 立增量 Epic（正文带验收人原话）+ 只重开缺口项 + 回 EXECUTING；Epic 未全 DONE 时开清单被拒。仍开放：真实页面勾选的 ingest 活体 | MP-06 |
 | MP-08 | ✅ 澄清通道 port：ClarificationChannelPort 抽象，day1 唯一实现 = Notion 评论；旁路通道（飞书等）结论必须回写需求页后才对状态机生效——Notion 单一信息源不变量由契约测试锁死 | `src/orchestrator/clarification-channel.ts` | 契约测试 4 条：集合必须恰好一个真相源且它必须能回写；问题广播到全部通道、回答只从 Notion 读；旁路回答经 `mirrorToRecord` 回写后才可见。day1 实现 `NotionClarificationChannel` 3 条：按轮次贴评论、只读发问之后的人类评论、回写同时落页面与 ingest 记录 | MP-04 |
 | MP-09 | ⚠️ 单机全能力 worker：headless 浏览器自动化落地本机（原 M3-09 前移）。**选型改为双车道（2026-09-01，见 02 §4.3 更正）**：验证/回归 = `@playwright/test`，探索与自愈 = `@playwright/cli`（Playwright 核心团队维护，经 bash，token 约为 MCP 的 1/4），不引入 MCP 与任何社区 pi adapter；浏览器红线三层同源（bash 命令行导航过闸 / 浏览器 allowedOrigins / 判据校验） | `src/verify/browser-config.ts` + `src/guard/tool-decision.ts` 导航拦截 + `scripts/smoke-browser-e2e.ts` | 真实 headless Chromium 冒烟 9/9：allowlist 内可开、`file://` 与非白名单 host 被 guard 拒、名单外请求被浏览器以 `net::ERR_BLOCKED_BY_CLIENT` 拒、截图落进证据目录；guard 拦截单测 12 条。仍开放：Linux 机器上重跑同一冒烟；一个真实 Story 的浏览器 e2e 证据（并入 MP-10） | M1-10 |
+| MP-11 | ✅ Linux 单节点部署件：幂等安装脚本（Node 26 检查、`npm ci`、pinned pi、Playwright headless shell + 系统库、`~/.hivemind` 与 secrets 模板 600、systemd 服务环境）、两个 systemd 用户单元（orchestrator / requirements 分 unit，共用一库一 outbox）、就绪探针 `scripts/preflight.ts`（pi/凭据/Notion 三库共享/配置断言/provider 凭据/四档位 provider/gh 或 glab/git 身份/headless Chromium，不打印凭据）、runbook | `deploy/linux/` + `scripts/preflight.ts` + `docs/runbooks/linux-single-node.md` | 本机 `npm run preflight` 24 PASS / 1 WARN；`bash -n` 通过。仍开放：在真实 Linux 主机执行 `install.sh` 并跑 `smoke-browser-e2e`（并入 MP-10） | MP-09 |
 | MP-10 | **MP 验收**：一条真实模糊需求（首个候选：本项目 web 客户端）在 Linux 单机走完 澄清→PRD 确认→拆解（≥1 Epic ≥2 Story）→开发交付→场景化验收 全程 | `docs/poc/mp-acceptance.md` | ① 全程 Notion 单一信息源可追溯；② 除四类设计内人工 gate（澄清回答/PRD 批准/PLAN_APPROVAL/验收勾选）外无人干预——含不打临时修复、不写人工恢复脚本（M1-37 教训）；③ 至少一个 Story 的验证含真实浏览器 e2e 证据；④ 验收清单逐条对应 PRD 场景 | MP-01..09, M2-14 |
 
 ---

@@ -17,7 +17,9 @@
     "db:migrate": "tsx src/persistence/migrate.ts",
     "regression:run": "tsx scripts/run-regression.ts",
     "story:run": "tsx scripts/run-story.ts",
-    "orchestrator:run": "tsx scripts/run-local-orchestrator.ts"
+    "orchestrator:run": "tsx scripts/run-local-orchestrator.ts",
+    "requirements:run": "tsx scripts/run-requirement-loop.ts",
+    "preflight": "tsx scripts/preflight.ts"
   },
   "dependencies": {
     "@bull-board/api": "^9.5.0",

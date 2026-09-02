@@ -12,6 +12,7 @@ import {
   REQUIREMENT_OUTBOX_OPERATIONS,
 } from "../src/notion/requirement-page-delivery.js";
 import { RequirementPageProjector } from "../src/notion/requirement-projection.js";
+import { NotionRequirementInputSync } from "../src/notion/requirement-input-sync.js";
 import { ingestRequirements } from "../src/notion/requirement-intake.js";
 import { NotionGatewayCommentSource, createNotionHttpTransport } from "../src/notion/sdk-adapters.js";
 import { NotionUserDirectory } from "../src/notion/user-directory.js";
@@ -98,6 +99,34 @@ async function main(): Promise<void> {
   const prd = new PrdRunner(store, pm, projector);
   const decomposer = new RequirementDecomposer(handle.client, store, pm, projector);
   const acceptance = new AcceptanceChecklist(handle.client, store, projector);
+  const humanInput = new NotionRequirementInputSync(handle.client, gateway, comments, store, acceptance);
+
+  // What a person did on the page since the last pass: a verdict on the PRD,
+  // ticks and notes on the acceptance list, parking. Read before the
+  // requirement is advanced so the step acts on the latest word.
+  const readHumanInput = async (): Promise<void> => {
+    const active = (await handle.client.execute(
+      "SELECT id, state FROM requirements WHERE state NOT IN ('DONE', 'FAILED') ORDER BY id",
+    )).rows;
+    for (const row of active) {
+      const requirementId = String(row.id);
+      const property = await humanInput.pollProperties(requirementId);
+      if (property.intent !== "none" && property.intent !== "initialized") {
+        console.log(`${requirementId} status drag: ${property.intent}${property.applied ? "" : " (not applied)"}`);
+      }
+      const state = String(row.state);
+      if (state === "PRD_CONFIRM" || state === "ACCEPTANCE") {
+        const commented = await humanInput.pollComments(requirementId);
+        if (commented.prdConfirmed) console.log(`${requirementId} PRD confirmed by comment`);
+        if (commented.revisionRequested) console.log(`${requirementId} PRD revision requested by comment`);
+        if (commented.gapsRecorded > 0) console.log(`${requirementId} acceptance gaps noted: ${commented.gapsRecorded}`);
+      }
+      if (state === "ACCEPTANCE") {
+        const ticked = await humanInput.pollContent(requirementId);
+        if (ticked.ticked > 0) console.log(`${requirementId} scenarios accepted by tick: ${ticked.ticked}`);
+      }
+    }
+  };
 
   const pass = async (): Promise<void> => {
     await config.reload();
@@ -109,6 +138,7 @@ async function main(): Promise<void> {
     )) {
       console.log(`took in requirement ${intake.id}: ${intake.title}`);
     }
+    await readHumanInput();
 
     for (const requirement of await store.listActionable("CLARIFY")) {
       const outcome = await clarify.advance(requirement.id);
