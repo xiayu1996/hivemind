@@ -7,7 +7,10 @@ import { CommentIngestor } from "../src/notion/comment-ingest.js";
 import { NotionGateway } from "../src/notion/gateway.js";
 import { NotionClarificationChannel } from "../src/notion/notion-clarification-channel.js";
 import { NotionOutbox } from "../src/notion/outbox.js";
-import { NotionRequirementPageDelivery } from "../src/notion/requirement-page-delivery.js";
+import {
+  NotionRequirementPageDelivery,
+  REQUIREMENT_OUTBOX_OPERATIONS,
+} from "../src/notion/requirement-page-delivery.js";
 import { RequirementPageProjector } from "../src/notion/requirement-projection.js";
 import { ingestRequirements } from "../src/notion/requirement-intake.js";
 import { NotionGatewayCommentSource, createNotionHttpTransport } from "../src/notion/sdk-adapters.js";
@@ -129,7 +132,8 @@ async function main(): Promise<void> {
       console.log(`${requirement.id} acceptance: ${outcome.kind}`);
     }
 
-    const replayed = await outbox.replay(delivery);
+    // The orchestrator shares this outbox; each side replays only its own rows.
+    const replayed = await outbox.replay(delivery, { operations: REQUIREMENT_OUTBOX_OPERATIONS });
     if (replayed.sent > 0 || replayed.failed > 0) {
       console.log(`Notion outbox: ${replayed.sent} sent, ${replayed.failed} failed`);
     }

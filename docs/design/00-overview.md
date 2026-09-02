@@ -24,7 +24,7 @@ hivemind 以 pi（earendil-works/pi，provider 无关）为执行底座、Notion
 | 成本策略 | 软护栏（日/月阈值告警不阻断）+ 全量成本账本；可观测性重点设计（借鉴 deepseek-harness） |
 | Web 控制台（08-25 增补） | day1 提供内网运维面：节点健康（IP/机器指标）、动态配置、Prompt 工作台、成本/统计。Notion=业务面，控制台=运维面 |
 | 重试上限族（08-25 增补） | 收敛判据提前停 + 可配置硬上限最终停（上限设在离散重试轮次，不设在单次运行时长/token）；到限即失败 + 诊断报告 @人（需求侧 vs 系统侧两分法） |
-| 单节点全能力（09-01 增补） | Linux worker day1 具备完整开发 + headless 浏览器 e2e 能力（Playwright MCP）；Mac mini 仅为 Apple 生态（Safari/iOS）验证保留。浏览器自动化（原 M3-09）前移至 MP 里程碑、脱离 Mac mini 依赖 |
+| 单节点全能力（09-01 增补） | Linux worker day1 具备完整开发 + headless 浏览器 e2e 能力（~~Playwright MCP~~ **09-01 改选双车道：`@playwright/test` 验证/回归 + `@playwright/cli` 探索/自愈，全部经 bash，见 02 §4.3**）；Mac mini 仅为 Apple 生态（Safari/iOS）验证保留。浏览器自动化（原 M3-09）前移至 MP 里程碑、脱离 Mac mini 依赖 |
 | 产品经理层（09-01 增补） | 新增 Requirements DB + PM agent（大脑档）：模糊大需求 → 多轮业务澄清（需求页评论；通道抽象为 port，Notion 是唯一信息源，旁路通道结论必须回写才生效）→ PRD 人批 → 拆解为 Epic → 场景化验收清单。人与 PM 只谈业务方向与场景，与技术面只谈少量实现细节；代码质量由自动化流程 + 定期优化单（M4-18）管控，不进人的验收面。详见 01 §8、03 §7 |
 
 ## 3. 调研结论摘要

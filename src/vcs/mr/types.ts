@@ -16,6 +16,11 @@ export interface MRPort {
   create(input: MergeRequestInput): Promise<MergeRequestResult>;
 }
 
+/** Answers whether the review request at a URL has landed on its target. */
+export interface MergeRequestStatePort {
+  isMerged(url: string): Promise<boolean>;
+}
+
 export interface CliResult {
   stdout: string;
   stderr: string;

@@ -9,7 +9,7 @@ import schema from "./notion-schema.json" with { type: "json" };
 
 export interface EpicPropertyPollResult {
   epicId: string;
-  intent: "initialized" | "none" | "approve_plan" | "unsupported_property_change";
+  intent: "initialized" | "none" | "approve_plan" | "accept_epic" | "unsupported_property_change";
   approved: boolean;
 }
 
@@ -79,7 +79,9 @@ export class NotionEpicInputSync {
       await this.rememberHumanObservation(epicId, observed, intent.humanWinsUntil);
       return { epicId, intent: "approve_plan", approved };
     }
-    if (intent.type === "unsupported_property_change") {
+    // Acceptance is only recorded here; the transition waits for the merge,
+    // which EpicCompletion reads together with this observation.
+    if (intent.type === "accept_epic" || intent.type === "unsupported_property_change") {
       await this.rememberHumanObservation(epicId, observed, intent.humanWinsUntil);
     }
     return { epicId, intent: intent.type, approved: false };

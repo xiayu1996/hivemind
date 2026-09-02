@@ -90,6 +90,9 @@ function textOf(item: NotionBlock): string {
   return parsed.success ? parsed.data.rich_text.map((part) => part.plain_text).join("") : "";
 }
 
+/** Every outbox operation this delivery owns, for the replay filter. */
+export const REQUIREMENT_OUTBOX_OPERATIONS = ["sync_requirement_page", "create_epic_page"] as const;
+
 /**
  * The requirement page is the whole human interface of the product manager
  * layer: what was asked, what was asked back, what was agreed, and what is

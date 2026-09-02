@@ -138,4 +138,51 @@ describe("NotionEpicPlanDelivery", () => {
     const delivery = new NotionEpicPlanDelivery(gateway(), client, "stories-ds");
     await expect(delivery.send(record("sync_story_page", {}))).rejects.toThrow(/unsupported/);
   });
+
+  describe("sync_epic_status", () => {
+    async function epic(shadow: string | null = null, humanWinsUntil = 0): Promise<void> {
+      await client.execute({
+        sql: `INSERT INTO epics (id, notion_page_id, title, state, notion_status_shadow, human_wins_until, created_at, updated_at)
+              VALUES ('M2', 'epic-page', 'M2 Plan', 'PLAN_APPROVAL', ?, ?, 1, 1)`,
+        args: [shadow, humanWinsUntil],
+      });
+    }
+    function boardShowing(status: string | null): NotionGateway {
+      return {
+        request: vi.fn(async (request: { method: string; path: string; body?: unknown }) => {
+          requests.push(request);
+          return { status: 200, data: { properties: { "Epic 状态": { select: status ? { name: status } : null } } } };
+        }),
+      } as unknown as NotionGateway;
+    }
+    const payload = { epicId: "M2", status: "拆解待确认", at: 5 };
+
+    it("moves the card on the board and remembers that the move was its own", async () => {
+      await epic();
+      const delivery = new NotionEpicPlanDelivery(boardShowing("待拆解"), client, "stories-ds", () => 10);
+
+      expect(await delivery.isApplied(record("sync_epic_status", payload))).toBe(false);
+      await delivery.send(record("sync_epic_status", payload));
+
+      const patch = requests.find((request) => request.method === "PATCH");
+      expect(patch?.path).toBe("/v1/pages/epic-page");
+      expect(JSON.stringify(patch?.body)).toContain("拆解待确认");
+      const row = (await client.execute("SELECT notion_status_shadow FROM epics WHERE id = 'M2'")).rows[0];
+      expect(row?.notion_status_shadow).toBe("拆解待确认");
+    });
+
+    it("writes nothing when the board already shows the status", async () => {
+      await epic();
+      const delivery = new NotionEpicPlanDelivery(boardShowing("拆解待确认"), client, "stories-ds", () => 10);
+      expect(await delivery.isApplied(record("sync_epic_status", payload))).toBe(true);
+      expect(requests.filter((request) => request.method === "PATCH")).toEqual([]);
+    });
+
+    it("does not overwrite a column a person just changed", async () => {
+      await epic("进行中", 1_000);
+      const delivery = new NotionEpicPlanDelivery(boardShowing("进行中"), client, "stories-ds", () => 10);
+      expect(await delivery.isApplied(record("sync_epic_status", payload))).toBe(true);
+      expect(requests).toEqual([]);
+    });
+  });
 });

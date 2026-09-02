@@ -113,8 +113,8 @@ describe("M2 acceptance: one Epic from decomposition to review request", () => {
 
     expect((await client.execute("SELECT state FROM epics WHERE id = 'M2'")).rows[0]?.state).toBe("PLAN_APPROVAL");
     expect((await client.execute("SELECT COUNT(*) AS count FROM stories")).rows[0]?.count).toBe(0);
-    expect((await client.execute("SELECT operation FROM notion_outbox")).rows)
-      .toMatchObject([{ operation: "present_epic_plan" }]);
+    expect((await client.execute("SELECT operation FROM notion_outbox ORDER BY id")).rows)
+      .toMatchObject([{ operation: "present_epic_plan" }, { operation: "sync_epic_status" }]);
 
     // 2. A human approves; the Stories appear, still unstarted.
     await expect(approvals.approve({ epicId: "M2", eventId: "drag-1", source: "drag" })).resolves.toBe(true);

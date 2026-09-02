@@ -2,6 +2,7 @@ import type { Client } from "@libsql/client";
 import { z } from "zod";
 import type { NotionGateway } from "./gateway.js";
 import type { NotionOutboxDelivery, NotionOutboxRecord } from "./outbox.js";
+import { SYNC_EPIC_STATUS } from "../orchestrator/epic-status-projection.js";
 import schema from "./notion-schema.json" with { type: "json" };
 
 const planSchema = z.object({
@@ -15,6 +16,15 @@ const storyPageSchema = z.object({
   epicId: z.string().min(1),
   storyId: z.string().min(1),
 });
+
+const statusSchema = z.object({
+  epicId: z.string().min(1),
+  status: z.enum(schema.options.epicStatus),
+  at: z.number().int(),
+});
+
+/** Every outbox operation this delivery owns, for the replay filter. */
+export const EPIC_OUTBOX_OPERATIONS = ["present_epic_plan", "create_story_page", SYNC_EPIC_STATUS] as const;
 
 const MARKER_PREFIX = "hivemind-plan:";
 
@@ -54,12 +64,14 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
     private readonly gateway: NotionGateway,
     private readonly client: Client,
     private readonly storiesDataSourceId: string,
+    private readonly now: () => number = Date.now,
   ) {}
 
   async isApplied(record: NotionOutboxRecord): Promise<boolean> {
     if (record.operation === "present_epic_plan") {
       return this.planMarkerPresent(record.target, record.payloadHash);
     }
+    if (record.operation === SYNC_EPIC_STATUS) return this.statusApplied(statusSchema.parse(record.payload));
     if (record.operation === "create_story_page") {
       const payload = storyPageSchema.parse(record.payload);
       const existing = await this.findStoryPage(payload.storyId);
@@ -73,7 +85,64 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
   async send(record: NotionOutboxRecord): Promise<void> {
     if (record.operation === "present_epic_plan") return this.presentPlan(record);
     if (record.operation === "create_story_page") return this.createStoryPage(record);
+    if (record.operation === SYNC_EPIC_STATUS) return this.syncStatus(statusSchema.parse(record.payload));
     throw new Error(`unsupported Epic plan operation: ${record.operation}`);
+  }
+
+  /**
+   * A status the board already shows, or one a human just changed, counts as
+   * applied: the first needs no write, and the second must not be overwritten
+   * while the human's own change is still what the column means.
+   */
+  private async statusApplied(payload: z.infer<typeof statusSchema>): Promise<boolean> {
+    const epic = await this.epicRow(payload.epicId);
+    if (Number(epic.human_wins_until ?? 0) > this.now()) return true;
+    const observed = await this.observedStatus(String(epic.notion_page_id));
+    if (observed !== payload.status) return false;
+    await this.rememberStatus(payload.epicId, payload.status);
+    return true;
+  }
+
+  private async syncStatus(payload: z.infer<typeof statusSchema>): Promise<void> {
+    const epic = await this.epicRow(payload.epicId);
+    await this.gateway.request({
+      method: "PATCH",
+      path: `/v1/pages/${encoded(String(epic.notion_page_id))}`,
+      priority: "projection",
+      body: { properties: { [schema.propertyNames.epicStatus]: { select: { name: payload.status } } } },
+    });
+    await this.rememberStatus(payload.epicId, payload.status);
+  }
+
+  private async epicRow(epicId: string): Promise<Record<string, unknown>> {
+    const row = (await this.client.execute({
+      sql: "SELECT notion_page_id, human_wins_until FROM epics WHERE id = ?",
+      args: [epicId],
+    })).rows[0];
+    if (!row) throw new Error(`Epic ${epicId} is not in the central database`);
+    return row as Record<string, unknown>;
+  }
+
+  private async observedStatus(pageId: string): Promise<string | null> {
+    const response = await this.gateway.request({
+      method: "GET",
+      path: `/v1/pages/${encoded(pageId)}`,
+      priority: "projection",
+    });
+    const parsed = z.object({ properties: z.record(z.string(), z.unknown()) }).passthrough().safeParse(response.data);
+    if (!parsed.success) return null;
+    const select = z.object({ select: z.object({ name: z.string() }).nullable() })
+      .safeParse(parsed.data.properties[schema.propertyNames.epicStatus]);
+    return select.success ? select.data.select?.name ?? null : null;
+  }
+
+  /** The shadow is what tells a later poll that this change was ours, not a
+   * human's; without it every projection would read back as a drag. */
+  private async rememberStatus(epicId: string, status: string): Promise<void> {
+    await this.client.execute({
+      sql: "UPDATE epics SET notion_status_shadow = ? WHERE id = ?",
+      args: [status, epicId],
+    });
   }
 
   private async presentPlan(record: NotionOutboxRecord): Promise<void> {

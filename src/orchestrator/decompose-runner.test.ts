@@ -49,8 +49,9 @@ describe("EpicDecomposer", () => {
 
     await expect(decomposer.decompose(epic())).resolves.toMatchObject({ kind: "presented" });
     expect(await state()).toBe("PLAN_APPROVAL");
-    const outbox = (await client.execute("SELECT operation FROM notion_outbox")).rows;
-    expect(outbox).toMatchObject([{ operation: "present_epic_plan" }]);
+    // The plan goes to the page and the card moves to the waiting-for-approval column together.
+    const outbox = (await client.execute("SELECT operation FROM notion_outbox ORDER BY id")).rows;
+    expect(outbox).toMatchObject([{ operation: "present_epic_plan" }, { operation: "sync_epic_status" }]);
   });
 
   it("feeds the rejection reasons back and tries once more before giving up", async () => {

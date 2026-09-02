@@ -51,6 +51,8 @@ Agent Delivery Hub                    ← workspace 顶层页
 
 Epics DB：标题、Epic 状态（待拆解/拆解待确认/进行中/已完成）、Story rollup（总数/完成数）、成本 rollup（sum）、目标日期、创建人。
 
+> **补记（2026-09-02，MP 活体接线时）**：`Epic 状态` 是系统 owner 字段，由 orchestrator 经 outbox `sync_epic_status` 投影（呈现拆解方案→拆解待确认；批准→进行中；MR 合并→已完成；退回重拆→待拆解），并同步 `notion_status_shadow` 使后续轮询不把系统写入误读为人的拖动。人只在两处拖动作为输入被 ingest：`拆解待确认→进行中` = 批准拆解方案；`EPIC_ACCEPT` 期间拖到 `已完成` = 独立 Epic 的人工验收（隶属需求的 Epic 不需要此拖动，其验收在需求页按场景勾选，见 03 §7）。此前实现未投影该列，看板上 Epic 长期停在「待拆解」。
+
 ### 2.3 Story 页面模板（人类视角）
 
 ```

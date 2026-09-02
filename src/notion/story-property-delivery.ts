@@ -2,7 +2,11 @@ import type { Client } from "@libsql/client";
 import { z } from "zod";
 import type { NotionGateway } from "./gateway.js";
 import type { NotionOutboxDelivery, NotionOutboxRecord } from "./outbox.js";
+import { EPIC_OUTBOX_OPERATIONS } from "./epic-plan-delivery.js";
 import schema from "./notion-schema.json" with { type: "json" };
+
+/** Every outbox operation the Story and Epic deliveries own between them, for the replay filter. */
+export const STORY_OUTBOX_OPERATIONS = ["sync_story_page", "sync_story_properties", ...EPIC_OUTBOX_OPERATIONS] as const;
 
 const payloadSchema = z.object({
   cardId: z.string().min(1),
@@ -107,7 +111,7 @@ export class NotionStoryDelivery implements NotionOutboxDelivery {
   private delivery(record: NotionOutboxRecord): NotionOutboxDelivery {
     if (record.operation === "sync_story_page") return this.page;
     if (record.operation === "sync_story_properties") return this.properties;
-    if (this.epicPlan && (record.operation === "present_epic_plan" || record.operation === "create_story_page")) {
+    if (this.epicPlan && (EPIC_OUTBOX_OPERATIONS as readonly string[]).includes(record.operation)) {
       return this.epicPlan;
     }
     // An operation with no delivery would sit pending forever, retried on every

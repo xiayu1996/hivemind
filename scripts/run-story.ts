@@ -114,9 +114,13 @@ async function main(): Promise<void> {
     });
     // The judge answers one yes/no question per phase exit; running it on the
     // phase's own tier is what made it the pipeline's quietest cost line.
-    const limits = await retryLimits(await ConfigStore.load(handle.client));
+    const config = await ConfigStore.load(handle.client);
+    const limits = await retryLimits(config);
+    // The same list feeds the guard, the browser and the verdict check; it is
+    // read here once so no layer can drift from the others.
+    const allowedHosts = config.get("guard.e2eHostAllowlist");
     const judgeModel = await new ModelPolicy(
-      await ConfigStore.load(handle.client),
+      config,
       new PiModelCatalog({ binary: piBinary, cwd: worktreePath }),
     ).resolve("completion_judge", model.provider).catch((cause: unknown) => {
       // A provider with no cheap tier still gets a judge, but never silently:
@@ -171,7 +175,7 @@ async function main(): Promise<void> {
       worktreePath,
       evidenceRoot,
       auditPath,
-      allowedHosts: ["localhost", "127.0.0.1"],
+      allowedHosts,
       commitMessages: () => gitMessages(worktreePath, targetBranch),
       recordTelemetry: (input) => recorder.record(input),
     });
@@ -194,7 +198,7 @@ async function main(): Promise<void> {
               evidencePath: join(evidenceRoot, "integration"),
               auditPath,
               specification: JSON.stringify(await store.getDefinitionOfDone(cardId)),
-              allowedHosts: ["localhost", "127.0.0.1"],
+              allowedHosts,
               commitMessages: [],
             }),
             { storyWorktree: worktreePath, integrationWorktree, mainBranch: targetBranch },

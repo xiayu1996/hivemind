@@ -26,6 +26,7 @@ export type CommentIntent =
 export type EpicPropertyIntent =
   | { type: "none" }
   | { type: "approve_plan"; humanWinsUntil: number }
+  | { type: "accept_epic"; humanWinsUntil: number }
   | { type: "unsupported_property_change"; observedEpicStatus: string; humanWinsUntil: number };
 
 export type EpicCommentIntent = { type: "approve_plan" } | { type: "request_revision" } | { type: "feedback" };
@@ -59,6 +60,11 @@ export function interpretEpicPropertyChange(
   const humanWinsUntil = now + HUMAN_WINS_MS;
   if (internalState === "PLAN_APPROVAL" && observedEpicStatus === schema.options.epicStatus[2]!) {
     return { type: "approve_plan", humanWinsUntil };
+  }
+  // An Epic with its review request open is accepted by dragging it to the
+  // finished column; the merge itself is observed separately.
+  if (internalState === "EPIC_ACCEPT" && observedEpicStatus === schema.options.epicStatus[3]!) {
+    return { type: "accept_epic", humanWinsUntil };
   }
   return { type: "unsupported_property_change", observedEpicStatus, humanWinsUntil };
 }

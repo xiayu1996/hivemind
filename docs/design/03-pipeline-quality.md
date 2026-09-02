@@ -244,6 +244,7 @@ stateDiagram-v2
 - **业务语言约束扩展**：PM 的提问与 PRD 全文适用业务语言 lint（不得含实现词汇）。用户在需求层只谈方向与场景；实现细节问题只允许在 Story 层以 blocking_question 出现且应少量。
 - **字段所有权不变**：原始需求区段人 owner；澄清记录/PRD/验收清单系统 owner，人的勾选与评论作为输入被 ingest——同一字段仍永不双向合并。
 - **验收关注行为不关注代码**：验收清单逐条对应 PRD 场景（业务语言）；代码质量由既有自动化（盲审/completion verifier/回归 loop）+ 定期优化单（tasks.md M4-18）管控，不进入人的验收面。
+- **Epic 完成判定的归属（2026-09-02 补记）**：§1.1 的 `EPIC_ACCEPT → DONE : MR 合并 + 人验收` 中，「人验收」对隶属需求的 Epic 上移到需求层——MR 合并（`EpicCompletion` 经平台 CLI 读回 merged 状态，代码判定）即 DONE，人的验收只在需求页按场景勾选做一次；独立 Epic（无 requirement）仍需人在看板拖到「已完成」+ MR 合并两者齐备。此前无任何代码执行该迁移，需求永远到不了 ACCEPTANCE。
 
 ### 7.3 角色与模型分配表扩展（§3 增补行）
 

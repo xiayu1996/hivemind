@@ -28,6 +28,25 @@ describe("enqueue", () => {
 });
 
 describe("replay", () => {
+  it("leaves rows for other deliveries alone when told which operations it owns", async () => {
+    const outbox = new NotionOutbox(client);
+    await outbox.enqueue({ target: "epic-1", operation: "present_epic_plan", payload: { n: 1 }, priority: 1 });
+    await outbox.enqueue({ target: "req-1", operation: "sync_requirement_page", payload: { n: 2 }, priority: 1 });
+    const seen: string[] = [];
+    const delivery: NotionOutboxDelivery = {
+      isApplied: async () => false,
+      send: async (record) => { seen.push(record.operation); },
+    };
+
+    expect(await outbox.replay(delivery, { operations: ["sync_requirement_page"] })).toEqual({ sent: 1, failed: 0 });
+    expect(seen).toEqual(["sync_requirement_page"]);
+    const untouched = (await client.execute(
+      "SELECT state, attempts FROM notion_outbox WHERE operation = 'present_epic_plan'",
+    )).rows[0];
+    expect(untouched).toMatchObject({ state: "pending", attempts: 0 });
+    await expect(outbox.replay(delivery, { operations: [] })).rejects.toThrow(/at least one operation/);
+  });
+
   it("does not duplicate a remote effect when the sender crashes before marking sent", async () => {
     const outbox = new NotionOutbox(client);
     await outbox.enqueue({

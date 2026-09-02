@@ -37,12 +37,17 @@ import {
 import { NotionGatewayStoryApi, ingestReadyStories } from "../src/notion/story-intake.js";
 import { NotionStoryInputSync } from "../src/notion/story-input-sync.js";
 import { NotionStoryPageDelivery } from "../src/notion/story-page-delivery.js";
-import { NotionStoryDelivery, NotionStoryPropertyDelivery } from "../src/notion/story-property-delivery.js";
+import {
+  NotionStoryDelivery,
+  NotionStoryPropertyDelivery,
+  STORY_OUTBOX_OPERATIONS,
+} from "../src/notion/story-property-delivery.js";
 import { NotionEpicPlanDelivery } from "../src/notion/epic-plan-delivery.js";
 import { ingestEpicsForDecomposition } from "../src/notion/epic-intake.js";
 import { EpicDecomposer } from "../src/orchestrator/decompose-runner.js";
 import { PiDecomposePort } from "../src/orchestrator/pi-decompose-port.js";
 import { EpicBranchFreshness } from "../src/orchestrator/epic-branch-refresh.js";
+import { EpicCompletion } from "../src/orchestrator/epic-completion.js";
 import { EpicMrDelivery } from "../src/vcs/epic-delivery.js";
 import { discoverMRPort } from "../src/vcs/mr/adapters.js";
 import { NotionStoryProjection } from "../src/notion/story-projection.js";
@@ -197,7 +202,8 @@ async function main(): Promise<void> {
   const reconcileProjections = async (): Promise<void> => {
     const stories = (await handle.client.execute("SELECT id FROM stories ORDER BY id")).rows;
     for (const story of stories) await projection.enqueue(String(story.id));
-    await outbox.replay(delivery);
+    // The requirement loop shares this outbox; each side replays only its own rows.
+    await outbox.replay(delivery, { operations: STORY_OUTBOX_OPERATIONS });
     await media.reconcile();
     await registerActiveStories();
   };
@@ -435,8 +441,14 @@ async function main(): Promise<void> {
       }
   };
 
-  // An Epic that is fully integrated has one review request to open, and an
-  // Epic that is still executing has to keep up with main.
+  // The platform CLI is looked up once; an Epic that reaches review with no
+  // CLI on the host is a deployment defect, reported by the cycle's P0 path.
+  let mrPort: Awaited<ReturnType<typeof discoverMRPort>> | undefined;
+  const mergeRequests = async () => (mrPort ??= await discoverMRPort());
+
+  // An Epic that is fully integrated has one review request to open, an Epic
+  // whose review request has landed is finished, and an Epic that is still
+  // executing has to keep up with main.
   const maintainEpics = async (): Promise<void> => {
     const layout = worktreeLayout(workRoot);
     await config.reload();
@@ -448,6 +460,11 @@ async function main(): Promise<void> {
       if (result.outcome === "failed") {
         console.warn(`Epic ${result.epicId} branch refresh failed: ${result.reason}`);
       }
+    }
+
+    for (const outcome of await new EpicCompletion(handle.client, await mergeRequests()).tick()) {
+      if (outcome.kind === "done") console.log(`Epic ${outcome.epicId} is done: its review request landed`);
+      if (outcome.kind === "unreadable") console.warn(`Epic ${outcome.epicId} review state unreadable: ${outcome.reason}`);
     }
 
     const finished = (await handle.client.execute({
@@ -465,7 +482,7 @@ async function main(): Promise<void> {
     if (!finished) return;
     const epicId = String(finished.id);
     const worktreePath = locateWorktree(repositoryId, `epic-${epicId}`, layout).worktreePath;
-    const delivered = await new EpicMrDelivery(handle.client, await discoverMRPort(), { worktreePath })
+    const delivered = await new EpicMrDelivery(handle.client, await mergeRequests(), { worktreePath })
       .deliver(epicId);
     await handle.client.execute({
       sql: "UPDATE epics SET state = 'EPIC_ACCEPT', mr_url = ?, updated_at = ? WHERE id = ? AND state = 'EXECUTING'",
