@@ -351,6 +351,12 @@ export const ingestedComments = sqliteTable("ingested_comments", {
   ingestedAt: ms("ingested_at").notNull(),
 }, (t) => [index("idx_ingested_page").on(t.pageId, t.createdTime)]);
 
+export const notionUsers = sqliteTable("notion_users", {
+  userId: text("user_id").primaryKey(),
+  displayName: text("display_name").notNull(),
+  fetchedAt: ms("fetched_at").notNull(),
+});
+
 export const humanFeedback = sqliteTable("human_feedback", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   commentId: text("comment_id").notNull().unique(),

@@ -435,6 +435,15 @@ CREATE TABLE IF NOT EXISTS ingested_comments (
 );
 CREATE INDEX IF NOT EXISTS idx_ingested_page ON ingested_comments(page_id, created_time);
 
+-- Names for the people Notion only ever names by id. Cached because every
+-- ingested comment would otherwise cost a lookup, and a name a person reads on
+-- their own requirement page must not depend on that lookup succeeding.
+CREATE TABLE IF NOT EXISTS notion_users (
+  user_id      TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  fetched_at   INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS human_feedback (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   comment_id  TEXT NOT NULL UNIQUE REFERENCES ingested_comments(comment_id),

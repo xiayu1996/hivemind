@@ -28,6 +28,7 @@ import { NotionGateway, NotionGatewayError } from "../src/notion/gateway.js";
 import { NotionMediaReconciler } from "../src/notion/media-reconciler.js";
 import { NotionMediaPipeline } from "../src/notion/media.js";
 import { NotionOutbox } from "../src/notion/outbox.js";
+import { NotionUserDirectory } from "../src/notion/user-directory.js";
 import {
   NotionGatewayCommentSource,
   NotionGatewayMediaPort,
@@ -137,7 +138,10 @@ async function main(): Promise<void> {
   const comments = new CommentIngestor(
     handle.client,
     new NotionGatewayCommentSource(gateway),
-    botUserId ? { botUserId } : {},
+    {
+      users: new NotionUserDirectory(handle.client, gateway),
+      ...(botUserId ? { botUserId } : {}),
+    },
   );
   const inputSync = new NotionStoryInputSync(handle.client, gateway, storyApi, comments, store);
   const epicInputSync = new NotionEpicInputSync(

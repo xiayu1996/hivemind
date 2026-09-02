@@ -11,6 +11,7 @@ import { NotionRequirementPageDelivery } from "../src/notion/requirement-page-de
 import { RequirementPageProjector } from "../src/notion/requirement-projection.js";
 import { ingestRequirements } from "../src/notion/requirement-intake.js";
 import { NotionGatewayCommentSource, createNotionHttpTransport } from "../src/notion/sdk-adapters.js";
+import { NotionUserDirectory } from "../src/notion/user-directory.js";
 import { AcceptanceChecklist } from "../src/orchestrator/acceptance-checklist.js";
 import { ClarificationChannelSet } from "../src/orchestrator/clarification-channel.js";
 import { ClarifyLoop } from "../src/orchestrator/clarify-loop.js";
@@ -64,7 +65,10 @@ async function main(): Promise<void> {
   const comments = new CommentIngestor(
     handle.client,
     new NotionGatewayCommentSource(gateway),
-    botUserId ? { botUserId } : {},
+    {
+      users: new NotionUserDirectory(handle.client, gateway),
+      ...(botUserId ? { botUserId } : {}),
+    },
   );
   const channels = new ClarificationChannelSet([
     new NotionClarificationChannel(handle.client, gateway, comments),
