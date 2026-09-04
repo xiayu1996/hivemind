@@ -217,3 +217,37 @@ depends_on: [story_id]
 | 契约测试 | Notion client、PiRunner port | 罐头回放 adapter（busybee finalText 回放模式）；DoD schema 校验测试 |
 | 行为回归 | prompt/规则变更后的 agent 行为 | **样本级统计**：每关键行为 N trials，比较通过率置信区间，nightly 报表，**不 gate PR**；prompt 改动前后 A/B 对照 |
 | 闭环观测 | 防静默断流 | 指标见 04-observability §9.3；任一归零超窗即告警 |
+
+## 7. 增补（2026-09-01）：需求层（产品经理）状态机与场景化验收
+
+> 决策见 00-overview §2「产品经理层」；Notion 侧信息架构见 01 §8。在 §1.1 的 Epic 级之上增加 Requirement 级状态机；PM 是新角色（大脑档），是用户唯一的业务对话面。
+
+### 7.1 Requirement 级状态机
+
+```mermaid
+stateDiagram-v2
+    [*] --> CLARIFY : Requirements 卡建卡（十句话级模糊需求即可）
+    CLARIFY --> CLARIFY : PM 按主题分批提问（只谈业务场景，不谈实现）⇄ 人回评
+    CLARIFY --> PRD_CONFIRM : PM 判信息充分，PRD 写入需求页
+    PRD_CONFIRM --> CLARIFY : 人提修改意见（回灌重写）
+    PRD_CONFIRM --> DECOMPOSING : 人批准 PRD（人工 gate，与 PLAN_APPROVAL 同构）
+    DECOMPOSING --> EXECUTING : 拆出 1..N Epic，每个 Epic 正文自足、直接过既有 INTAKE
+    EXECUTING --> ACCEPTANCE : 全部 Epic DONE
+    ACCEPTANCE --> DONE : 场景化验收清单全部勾选
+    ACCEPTANCE --> DECOMPOSING : 验收缺口 → 增量 Epic/Story
+    DONE --> [*]
+```
+
+### 7.2 原则（继承既有不变量，不新增例外）
+
+- **不新增真停点类别**：澄清等待人回答复用 blocking_question 语义（needs_input 呈现）；PRD 确认与验收勾选是状态机人工 gate（同 PLAN_APPROVAL），不是停点。澄清轮次上限 config 化，超限 → blocking_question @人。
+- **业务语言约束扩展**：PM 的提问与 PRD 全文适用业务语言 lint（不得含实现词汇）。用户在需求层只谈方向与场景；实现细节问题只允许在 Story 层以 blocking_question 出现且应少量。
+- **字段所有权不变**：原始需求区段人 owner；澄清记录/PRD/验收清单系统 owner，人的勾选与评论作为输入被 ingest——同一字段仍永不双向合并。
+- **验收关注行为不关注代码**：验收清单逐条对应 PRD 场景（业务语言）；代码质量由既有自动化（盲审/completion verifier/回归 loop）+ 定期优化单（tasks.md M4-18）管控，不进入人的验收面。
+- **Epic 完成判定的归属（2026-09-02 补记）**：§1.1 的 `EPIC_ACCEPT → DONE : MR 合并 + 人验收` 中，「人验收」对隶属需求的 Epic 上移到需求层——MR 合并（`EpicCompletion` 经平台 CLI 读回 merged 状态，代码判定）即 DONE，人的验收只在需求页按场景勾选做一次；独立 Epic（无 requirement）仍需人在看板拖到「已完成」+ MR 合并两者齐备。此前无任何代码执行该迁移，需求永远到不了 ACCEPTANCE。
+
+### 7.3 角色与模型分配表扩展（§3 增补行）
+
+| 角色 | 档位 | 说明 |
+|---|---|---|
+| PM（澄清/PRD/需求拆解/验收清单生成） | 大脑 | 面向用户的唯一业务对话面；prompt 独立于开发线（prompts/pm/），经 resolveModel 取模型 |

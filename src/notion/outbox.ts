@@ -37,6 +37,16 @@ export interface ReplayResult {
   failed: number;
 }
 
+export interface ReplayOptions {
+  limit?: number;
+  /**
+   * The operations this delivery understands. Several processes share one
+   * outbox; without the filter each would take the others' rows, fail them,
+   * and could hold the head of the queue so its own rows never came up.
+   */
+  operations?: readonly string[];
+}
+
 function canonicalValue(value: unknown, seen: Set<object>): unknown {
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
   if (typeof value === "number") {
@@ -109,14 +119,20 @@ export class NotionOutbox {
     return { id: Number(id), inserted: false, payloadHash: encoded.hash };
   }
 
-  async replay(delivery: NotionOutboxDelivery, limit = 100): Promise<ReplayResult> {
+  async replay(delivery: NotionOutboxDelivery, options: ReplayOptions = {}): Promise<ReplayResult> {
+    const limit = options.limit ?? 100;
+    const operations = options.operations ?? [];
+    if (options.operations !== undefined && operations.length === 0) {
+      throw new Error("an outbox replay must name at least one operation or none");
+    }
+    const filter = operations.length > 0 ? ` AND operation IN (${operations.map(() => "?").join(", ")})` : "";
     const rows = (await this.client.execute({
       sql: `SELECT id, card_id, priority, operation, target, payload, payload_hash, attempts
             FROM notion_outbox
-            WHERE state = 'pending'
+            WHERE state = 'pending'${filter}
             ORDER BY priority ASC, id ASC
             LIMIT ?`,
-      args: [limit],
+      args: [...operations, limit],
     })).rows;
     let sent = 0;
     let failed = 0;

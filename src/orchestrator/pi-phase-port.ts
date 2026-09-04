@@ -52,6 +52,8 @@ export interface PiStoryPhasePortOptions {
   canonicalCaptureExtension: string;
   completionJudge: CompletionJudge;
   contextFiles?: ExplicitContextFile[];
+  /** Hosts a browser-driving phase may navigate to; from guard.e2eHostAllowlist. */
+  e2eHostAllowlist?: string[];
   extensions?: string[];
   env?: Record<string, string>;
   maxContinueRetries?: number;
@@ -212,6 +214,7 @@ export class PiStoryPhasePort implements StoryPhasePort {
       worktreePath: this.options.worktreePath,
       evidencePath: this.options.evidencePath,
       auditPath: this.options.auditPath,
+      ...(this.options.e2eHostAllowlist ? { e2eHostAllowlist: this.options.e2eHostAllowlist } : {}),
     });
     const runner = this.createRunner({
       binary: this.options.binary,

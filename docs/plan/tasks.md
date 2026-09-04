@@ -21,6 +21,7 @@
 | M3 | 多机化：capability 队列 + Mac mini 接入 | 12 | M3-12 双机 Epic + 失联恢复演练 |
 | M4 | 反馈闭环与成本完整版 | 12 | M4-17 断供演练 + 完整反馈自迭代一轮 |
 | M5 | 收口：Windows worker + self-update + GA | 8 | M5-08 连续两周 7×24 无人干预 |
+| MP | （2026-09-01 增补，**排期在 M2 之后、M3 之前**）产品经理层 + 单机全能力：模糊需求→澄清→PRD→拆解→场景验收 + Linux browser-e2e | 10 | MP-10 单机需求级端到端验收 |
 
 ---
 
@@ -195,6 +196,37 @@
 
 ---
 
+## MP 产品经理层与单机全能力（2026-09-01 增补，排期在 M2 之后、M3 之前）
+
+目标：单机 Linux 上，用户建一条十句话级模糊需求 → PM 多轮业务澄清 → PRD 人批 → 拆解 Epic/Story → 开发交付 → 场景化验收，全程 Notion 单一信息源；同机具备 headless 浏览器 e2e 能力（原 M3-09 前移、脱离 Mac mini 依赖，Mac mini 仅为 Apple 生态保留）。设计见 00-overview §2 增补行、01 §8、03 §7。
+
+> **执行状态（2026-09-01，macOS 本机，离线判据全过 + 真实浏览器冒烟）**：MP-01..09 的代码与本机可执行判据完成，`npx vitest run` 118 文件 701 测试全绿。
+> 浏览器选型于本日改选（02 §4.3 带日期更正）：**放弃 vendor MCP，改双车道**——验证/回归走 `@playwright/test`，探索/自愈走 `@playwright/cli`，全部经 bash。
+> `npx tsx scripts/smoke-browser-e2e.ts` 在真实 headless Chromium 上 9/9 通过，含浏览器自身以 `net::ERR_BLOCKED_BY_CLIENT` 拒掉名单外请求。
+> 仍开放：一切需要真实 Notion 看板的活体判据（本机 `~/.hivemind/secrets.env` 未配置凭据），以及 MP-10 全程验收。
+> 状态列：✅ 输出物与本机可执行判据均通过 · ⚠️ 实现与离线验证完成但外部活体判据待跑。
+>
+> **执行状态追记（2026-09-02，macOS 本机接真实 Notion 看板）**：凭据到位后 Requirements 库在既有看板旁建成（MP-01 活体探针通过）；一条真实十句话需求 `R-ae22432dbaaf` 已走完三轮 PM 业务澄清的前两轮（问题贴评论、回答逐字归档并署真名，MP-04 活体通过），第三轮等待回答。
+> 活体接线暴露并已修的闭环缺口（`npx vitest run` 122 文件 724 测试全绿）：① EPIC_ACCEPT→DONE 无人触发、Epic 状态列从未投影（需求永远进不了 ACCEPTANCE）→ `EpicCompletion` + `sync_epic_status`（03 §7.2 / 01 §2.2 带日期补记）；② 需求页人类输入（PRD 批准/修改意见、验收勾选与缺口留言、停靠/恢复）的解释器只在测试里被调用 → `NotionRequirementInputSync` 接进需求循环；③ 两常驻进程共用 outbox 互相吞行 → 回放按操作过滤；④ worker 浏览器白名单硬编码 → 读 `guard.e2eHostAllowlist`；⑤ VERIFY 会话既不知道也拿不到 `playwright-cli`（prompt 无浏览器车道、PATH 无 CLI、`prompts/phases/verify.md` 从未装载）→ 白名单非空时 prompt 注入浏览器车道说明（只含 host 列表与卡 id，跨机逐字节相同）、hivemind 自己的 `node_modules/.bin` 进 VERIFY/回归会话 PATH、VERIFY 系统提示装载基线+verify.md；⑥ Epic 拆解的阻塞问题不上看板、BLOCKED 无出口 → 问题以评论投到 Epic 页，人的评论即回答并回到 DECOMPOSE；⑦ 两常驻进程共用库文件读到 `SQLITE_BUSY` → 连接级 `busy_timeout` + WAL。活体进度：PRD 已人批冻结，拆出 3 个 Epic，其中 2 个已呈现 Story 拆解方案等人批准，1 个在等阻塞问题的回答。
+> Linux 单节点部署件就位（MP-11），`npm run preflight` 在本机 24 项通过、1 项 WARN（未配带外告警通道）。
+> **Linux 实跑（2026-09-02，本机 colima 虚拟机内干净 Ubuntu 24.04 arm64 容器，不放任何凭据）**：`deploy/linux/install.sh` 全程跑通（npm ci、pinned pi 直连下载并校验、headless shell + 系统库、目录权限、service.env、单元渲染）；`npx vitest run` 121 文件 726 测试全绿；`smoke-browser-e2e` **9/9 通过**（MP-09 的 Linux 判据关闭）；preflight 12 PASS，其余 FAIL 全为容器内无凭据的预期项。实跑暴露并修掉三处部署缺陷：`install-pi.sh` 依赖已登录的 `gh`（首装时尚未登录）→ 直连公开 release；arm64 Node 缺 `libatomic1` → runbook 前置；Ubuntu 23.10+ AppArmor 限制用户命名空间使 Chromium 沙箱起不来 → preflight 检查 + runbook 首选 sysctl 修法 + `verify.chromiumSandbox` 显式开关（默认开、标 dangerous）。
+
+| ID | 任务 | 输出物 | 验证方式 | 前置 |
+|---|---|---|---|---|
+| MP-01 | ⚠️ Requirements DB bootstrap：第三 DB 全属性（select 方案同 M1-17）+ Epics 增加 relation → Requirement；bootstrap 脚本与活体探针扩展 | `scripts/notion-bootstrap.ts` 扩展 + 01 §8.1 schema | schema 契约单测过（`bootstrapRequirements` 单独可对已有看板加库、不重建 Epics/Stories）；`--requirements-only` 入口与 `HIVEMIND_NOTION_REQUIREMENTS_DATA_SOURCE_ID` 落地。**更正**：成本原设计为 rollup(sum of Epic 成本汇总)，Notion 不支持 rollup 聚合 rollup，改为系统写入的 number（01 §8.1 已带日期更正）。仍开放：活体探针（本机无凭据） | M1-17 |
+| MP-02 | ✅ Requirement 级状态机 + 需求 intake：requirements 表迁移（状态枚举 DB CHECK）+ 轮询把新建需求卡接进中央 DB；HUMAN_PARKED 最高优先级与 120s human-wins 语义沿用 | `src/orchestrator/requirement-machine.ts` + 迁移 | 全迁移表 + HUMAN_PARKED park/resume + 非法迁移 8 条单测；漂移检测通过（6 张新表进 `0001_init.sql` 与 drizzle）；`RequirementStore` CAS 迁移 + event_log 原子性 10 条；罐头 intake e2e：建卡 → CLARIFY 入库、改名不改 id、重复轮询不重复接单 | M1-23, MP-01 |
+| MP-03 | ✅ PM prompt 资产：`prompts/pm/` 基线 + 澄清/PRD/拆解三个 phase prompt；提问与 PRD 适用业务语言 lint；档位=大脑经 resolveModel | `prompts/pm/` + 装载器扩展 | `loadPmPromptLayers` 单测（PM 自带基线、三个 phase 资产各自独立、无硬编码验证命令）；`evaluateClarification`/`evaluatePrd` 业务语言 lint 9 条，含「前端组件用哪个？」被拒；档位经 `model.purposeTiers.product_manager = brain` 走 `resolveModel` | M1-13, M2-15 |
+| MP-04 | ✅ 澄清问答循环：PM 按主题分批把问题贴需求页评论（块锚点）→ 评论水位 ingest 回答 → PM 判充分性或追问；轮次上限 config 化，超限走 blocking_question（不新增停点类别）；问答逐字归档「澄清记录」区段 | `src/orchestrator/clarify-loop.ts` | 罐头对话 e2e 5 条：两轮追问后收敛进 PRD_CONFIRM；轮次超限进 blocking_question 且不再发问；回答逐字归档并署名；产出被 lint 拒两次后停给人。归档只追加由 `planRequirementPageUpdate` 与真实假 Notion 的 delivery 用例双向锁死 | MP-02, MP-03, M1-19 |
+| MP-05 | ⚠️ PRD 产出与人批 gate：PRD 写入需求页 + 置「PRD 待确认」；人批准（拖列/评论）进拆解，修改意见回灌重写；确认后 PRD 区段冻结，再改走需求变更 | `src/notion/requirement-page-delivery.ts` | 进程内 e2e（假 Notion）全过：未批只停在 awaiting；修改意见回灌重写为 revision 2 且旧版转 superseded；确认后 `saveDraftPrd` 直接抛错、页面投影 `prdFrozen` 停止改写。仍开放：真实看板上的人批活体演练 | MP-04 |
+| MP-06 | ⚠️ 需求→Epic 拆解：PM 按确认后的 PRD 拆 1..N 个 Epic 写入 Epics DB（relation 回需求卡），每个 Epic 正文自足、直接过既有 INTAKE→DECOMPOSE；全部 Epic DONE 才允许进 ACCEPTANCE | `src/orchestrator/requirement-decompose.ts` | 6 条单测：场景漏覆盖/重复覆盖被拒并回灌理由；Epic id 撞车被拒；产出 `EpicIntake` 直接喂 `EpicDecomposer` 走到 PLAN_APPROVAL（无翻译层）；未全 DONE 时 `canEnterAcceptance` 为假。仍开放：`create_epic_page` 在真实看板建页 | MP-05, M2-01 |
+| MP-07 | ⚠️ 场景化验收清单：按 PRD 场景生成业务语言 checklist 贴「验收」区段；人勾选/评论被 ingest 判定；全勾 → 已验收，缺口 → PM 立增量 Epic/Story 回 EXECUTING | `src/orchestrator/acceptance-checklist.ts` | 6 条单测：清单与 PRD 场景一比一且 id 稳定；勾选=判定、取消勾选=没有判定；同一事件二次投递不重复判定；全部通过 → DONE；缺口 → 立增量 Epic（正文带验收人原话）+ 只重开缺口项 + 回 EXECUTING；Epic 未全 DONE 时开清单被拒。仍开放：真实页面勾选的 ingest 活体 | MP-06 |
+| MP-08 | ✅ 澄清通道 port：ClarificationChannelPort 抽象，day1 唯一实现 = Notion 评论；旁路通道（飞书等）结论必须回写需求页后才对状态机生效——Notion 单一信息源不变量由契约测试锁死 | `src/orchestrator/clarification-channel.ts` | 契约测试 4 条：集合必须恰好一个真相源且它必须能回写；问题广播到全部通道、回答只从 Notion 读；旁路回答经 `mirrorToRecord` 回写后才可见。day1 实现 `NotionClarificationChannel` 3 条：按轮次贴评论、只读发问之后的人类评论、回写同时落页面与 ingest 记录 | MP-04 |
+| MP-09 | ⚠️ 单机全能力 worker：headless 浏览器自动化落地本机（原 M3-09 前移）。**选型改为双车道（2026-09-01，见 02 §4.3 更正）**：验证/回归 = `@playwright/test`，探索与自愈 = `@playwright/cli`（Playwright 核心团队维护，经 bash，token 约为 MCP 的 1/4），不引入 MCP 与任何社区 pi adapter；浏览器红线三层同源（bash 命令行导航过闸 / 浏览器 allowedOrigins / 判据校验） | `src/verify/browser-config.ts` + `src/guard/tool-decision.ts` 导航拦截 + `scripts/smoke-browser-e2e.ts` | 真实 headless Chromium 冒烟 9/9：allowlist 内可开、`file://` 与非白名单 host 被 guard 拒、名单外请求被浏览器以 `net::ERR_BLOCKED_BY_CLIENT` 拒、截图落进证据目录；guard 拦截单测 12 条。Linux 判据已关（2026-09-02 干净 Ubuntu 24.04 arm64 容器 9/9）。仍开放：一个真实 Story 的浏览器 e2e 证据（并入 MP-10） | M1-10 |
+| MP-11 | ✅ Linux 单节点部署件：幂等安装脚本（Node 26 检查、`npm ci`、pinned pi、Playwright headless shell + 系统库、`~/.hivemind` 与 secrets 模板 600、systemd 服务环境）、两个 systemd 用户单元（orchestrator / requirements 分 unit，共用一库一 outbox）、就绪探针 `scripts/preflight.ts`（pi/凭据/Notion 三库共享/配置断言/provider 凭据/四档位 provider/gh 或 glab/git 身份/headless Chromium，不打印凭据）、runbook | `deploy/linux/` + `scripts/preflight.ts` + `docs/runbooks/linux-single-node.md` | 本机 `npm run preflight` 24 PASS / 1 WARN；干净 Ubuntu 24.04 arm64 容器内 `install.sh` 全程跑通、单测 726 全绿、浏览器冒烟 9/9、preflight 正确报出内核沙箱限制。仍开放：带凭据的真实 Linux 主机上起两个 systemd 单元（并入 MP-10） | MP-09 |
+| MP-10 | **MP 验收**：一条真实模糊需求（首个候选：本项目 web 客户端）在 Linux 单机走完 澄清→PRD 确认→拆解（≥1 Epic ≥2 Story）→开发交付→场景化验收 全程 | `docs/poc/mp-acceptance.md` | ① 全程 Notion 单一信息源可追溯；② 除四类设计内人工 gate（澄清回答/PRD 批准/PLAN_APPROVAL/验收勾选）外无人干预——含不打临时修复、不写人工恢复脚本（M1-37 教训）；③ 至少一个 Story 的验证含真实浏览器 e2e 证据；④ 验收清单逐条对应 PRD 场景 | MP-01..09, M2-14 |
+
+---
+
 ## M3 多机化
 
 目标：capability 队列 + 派单信封 + 心跳失联两段式 + Mac mini 浏览器 e2e worker 接入。
@@ -239,6 +271,7 @@
 | M4-15 | repeat-tool 循环检测 + invariants 注册表：链 key=(工具名, canonical 参数) 阈值 [3,5,8] 递进提醒纯建议不否决；per-module invariant companion（turn/step 配对、tool call/result 配对、状态机迁移合法、outbox 单调、lease 唯一） | `src/observability/guards.ts` + `invariants.ts` | 循环模拟触发递进提醒且 tool/result 保持原样；每条 invariant 有违反构造用例抛带包名的 InvariantError | M1-31 |
 | M4-16 | 供应商健康页 + 运行统计页完整版：熔断三态/探针历史/错误分类分布/failover 事件流 + 闭环流速指标面板（memory 蒸馏量/footprint 偏差率/triage 流量/双 outbox 深度/429 率/turn_end.reason 比率，断流告警可视化） | 控制台两页 | M4-04/05/06 演练的全部事件在页面可见；任一流速指标注入归零触发告警并在面板标红 | M4-04, M4-08 |
 | M4-17 | **M4 验收**：断供演练 + 完整反馈自迭代一轮 | `docs/poc/m4-acceptance.md` | ① 撤 Codex 凭据 24h，GLM/Grok 接管全部档位继续交付，恢复后自动回切，成本账本无缺账；② 一轮完整闭环：人评论 → friction 累计 → 提案卡 → 人批 → 灰度 → 行为回归对比 → 发布，全程留痕 | M4-01..16 |
+| M4-18 | （2026-09-01 增补，列于验收行之后、不改变 M4-17 出口判据）定期代码优化单：周期扫描 friction 累计/footprint 偏差率/回归失败率/lint 静态债，超阈值自动立「优化卡」进看板走标准 Story 流水线（无特殊路径）；频率与阈值 config 化；同源问题按签名去重不重复立卡——支撑「代码质量由自动化管控、人只做场景验收」（03 §7.2） | `src/orchestrator/optimization-cards.ts` + config 键 | 注入超阈值数据触发立卡；同一签名不重复立卡；优化卡与普通 Story 走完全相同流水线（代码评审确认无旁路） | M4-10, M2-07 |
 
 ---
 

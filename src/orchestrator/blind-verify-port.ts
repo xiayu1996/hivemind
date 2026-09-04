@@ -14,6 +14,7 @@ export interface BlindVerifyStoryPortOptions {
   evidenceRoot: string;
   auditPath: string;
   allowedHosts: string[];
+  chromiumSandbox?: boolean;
   commitMessages: () => Promise<string[]>;
   recordTelemetry?: (input: PhaseTelemetryInput) => Promise<void>;
   readProviderPayloads?: (path: string) => Promise<unknown[]>;
@@ -47,6 +48,7 @@ export class BlindVerifyStoryPort implements StoryVerifyPort {
       specification: JSON.stringify(input.definitionOfDone),
       declaredScenarioIds: input.definitionOfDone.scenarios.map((scenario) => scenario.id),
       allowedHosts: this.options.allowedHosts,
+      ...(this.options.chromiumSandbox === undefined ? {} : { chromiumSandbox: this.options.chromiumSandbox }),
       commitMessages: await this.options.commitMessages(),
     });
     if (this.options.recordTelemetry) {

@@ -2,12 +2,14 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { PromptLoadError, loadPromptLayers } from "./prompt-loader.js";
+import { PromptLoadError, loadPmPromptLayers, loadPromptLayers } from "./prompt-loader.js";
+import type { PmPhase } from "./prompt-loader.js";
 import type { Phase } from "./phase-input.js";
 
 const tempDirs: string[] = [];
 const PROMPTS = join(process.cwd(), "prompts");
 const PHASES: Phase[] = ["DECOMPOSE", "DESIGN", "CODE", "VERIFY", "MERGE", "REGRESSION_FIX"];
+const PM_PHASES: PmPhase[] = ["CLARIFY", "PRD", "REQUIREMENT_DECOMPOSE"];
 
 afterEach(() => {
   for (const path of tempDirs.splice(0)) rmSync(path, { recursive: true, force: true });
@@ -36,6 +38,16 @@ describe("loadPromptLayers", () => {
     for (const phase of PHASES) {
       const { combined } = await loadPromptLayers(PROMPTS, phase);
       expect(combined, phase).not.toMatch(/(?:npm|pnpm|yarn|mvn|gradle|pytest|cargo)\s+(?:run\s+)?test/i);
+    }
+  });
+
+  it("keeps the product manager on its own baseline, not the delivery one", async () => {
+    const delivery = await loadPromptLayers(PROMPTS, "CODE");
+    for (const phase of PM_PHASES) {
+      const layers = await loadPmPromptLayers(PROMPTS, phase);
+      expect(layers.phase.length, phase).toBeGreaterThan(100);
+      expect(layers.baseline, phase).not.toBe(delivery.baseline);
+      expect(layers.combined, phase).not.toMatch(/(?:npm|pnpm|yarn|mvn|gradle|pytest|cargo)\s+(?:run\s+)?test/i);
     }
   });
 

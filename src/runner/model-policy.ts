@@ -4,6 +4,7 @@ import { resolveModel, type ModelCatalog, type ResolvedModel } from "./model-res
 /** Every call site that spends tokens. A new one must be declared here and
  * given a tier in config; there is no default tier for an unknown purpose. */
 export const MODEL_PURPOSES = [
+  "product_manager",
   "decompose",
   "design",
   "code",

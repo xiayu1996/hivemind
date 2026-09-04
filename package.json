@@ -17,7 +17,9 @@
     "db:migrate": "tsx src/persistence/migrate.ts",
     "regression:run": "tsx scripts/run-regression.ts",
     "story:run": "tsx scripts/run-story.ts",
-    "orchestrator:run": "tsx scripts/run-local-orchestrator.ts"
+    "orchestrator:run": "tsx scripts/run-local-orchestrator.ts",
+    "requirements:run": "tsx scripts/run-requirement-loop.ts",
+    "preflight": "tsx scripts/preflight.ts"
   },
   "dependencies": {
     "@bull-board/api": "^9.5.0",
@@ -35,6 +37,7 @@
     "zod": "^4.1.13"
   },
   "devDependencies": {
+    "@playwright/cli": "0.1.18",
     "@types/node": "^24.10.1",
     "@types/nodemailer": "^8.0.1",
     "@vitejs/plugin-vue": "^6.0.8",

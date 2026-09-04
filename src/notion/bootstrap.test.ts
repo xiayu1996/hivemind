@@ -1,19 +1,19 @@
 import { describe, expect, it } from "vitest";
 import type { Client } from "@notionhq/client";
 import schema from "./notion-schema.json" with { type: "json" };
-import { bootstrapNotion } from "./bootstrap.js";
+import { bootstrapNotion, bootstrapRequirements } from "./bootstrap.js";
 
 describe("bootstrapNotion", () => {
-  it("creates Epics before Stories, wires the relation, then adds rollups", async () => {
+  it("creates Epics before the databases that relate to it, then adds rollups", async () => {
     const creates: Array<Record<string, unknown>> = [];
     const updates: Array<Record<string, unknown>> = [];
+    const names = ["epics", "stories", "requirements"];
     const client = {
       databases: {
         create: async (args: Record<string, unknown>) => {
           creates.push(args);
-          const id = creates.length === 1 ? "epics-db" : "stories-db";
-          const dataSourceId = creates.length === 1 ? "epics-ds" : "stories-ds";
-          return { object: "database", id, data_sources: [{ id: dataSourceId, name: id }] };
+          const name = names[creates.length - 1];
+          return { object: "database", id: `${name}-db`, data_sources: [{ id: `${name}-ds`, name }] };
         },
         retrieve: async () => { throw new Error("full create response should avoid retrieve"); },
       },
@@ -28,14 +28,47 @@ describe("bootstrapNotion", () => {
       epicsDataSourceId: "epics-ds",
       storiesDatabaseId: "stories-db",
       storiesDataSourceId: "stories-ds",
+      requirementsDatabaseId: "requirements-db",
+      requirementsDataSourceId: "requirements-ds",
     });
-    expect(creates).toHaveLength(2);
+    expect(creates).toHaveLength(3);
     const stories = creates[1] as { initial_data_source: { properties: Record<string, unknown> } };
     expect(stories.initial_data_source.properties[schema.propertyNames.epic]).toMatchObject({
       relation: { data_source_id: "epics-ds" },
     });
     expect(updates).toHaveLength(1);
     expect((updates[0]!.properties as Record<string, unknown>)[schema.propertyNames.storyCount]).toBeDefined();
+  });
+
+  it("adds Requirements to a board that already runs Epics and Stories", async () => {
+    const creates: Array<Record<string, unknown>> = [];
+    const client = {
+      databases: {
+        create: async (args: Record<string, unknown>) => {
+          creates.push(args);
+          return { object: "database", id: "requirements-db", data_sources: [{ id: "requirements-ds", name: "r" }] };
+        },
+        retrieve: async () => { throw new Error("unexpected"); },
+      },
+      dataSources: { update: async () => { throw new Error("adding Requirements must not touch other schemas"); } },
+    } as unknown as Pick<Client, "databases" | "dataSources">;
+
+    await expect(bootstrapRequirements(client, "hub-page", "existing-epics-ds")).resolves.toEqual({
+      requirementsDatabaseId: "requirements-db",
+      requirementsDataSourceId: "requirements-ds",
+    });
+    const properties = (creates[0]!.initial_data_source as { properties: Record<string, any> }).properties;
+    expect(properties[schema.propertyNames.epicRelation]).toMatchObject({
+      relation: {
+        data_source_id: "existing-epics-ds",
+        dual_property: { synced_property_name: schema.propertyNames.requirementRelation },
+      },
+    });
+    const statusOptions = properties[schema.propertyNames.requirementStatus].select.options
+      .map((option: any) => option.name);
+    expect(statusOptions).toEqual(schema.options.requirementStatus);
+    // The Epic total is a rollup, and Notion cannot roll up a rollup.
+    expect(properties[schema.propertyNames.cost]).toMatchObject({ number: { format: "dollar" } });
   });
 
   it("declares the seven board columns and every required Story property", async () => {

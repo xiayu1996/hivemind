@@ -11,6 +11,16 @@ const PHASE_FILES: Record<Phase, string> = {
   REGRESSION_FIX: "regression-fix.md",
 };
 
+/** The product manager's phases run above the Epic pipeline and share none of
+ * its phase prompts, so they carry their own layer pair. */
+export type PmPhase = "CLARIFY" | "PRD" | "REQUIREMENT_DECOMPOSE";
+
+const PM_FILES: Record<PmPhase, string> = {
+  CLARIFY: "clarify.md",
+  PRD: "prd.md",
+  REQUIREMENT_DECOMPOSE: "decompose.md",
+};
+
 export interface PromptLayers {
   baseline: string;
   phase: string;
@@ -39,6 +49,16 @@ export async function loadPromptLayers(promptRoot: string, phase: Phase): Promis
   const [baseline, phaseText] = await Promise.all([
     loadFile(join(promptRoot, "baseline.md")),
     loadFile(join(promptRoot, "phases", PHASE_FILES[phase])),
+  ]);
+  const combined = `${baseline.trim()}\n\n${phaseText.trim()}\n`;
+  return { baseline, phase: phaseText, combined };
+}
+
+/** Loads the product manager's own discipline, then the phase contract. */
+export async function loadPmPromptLayers(promptRoot: string, phase: PmPhase): Promise<PromptLayers> {
+  const [baseline, phaseText] = await Promise.all([
+    loadFile(join(promptRoot, "pm", "baseline.md")),
+    loadFile(join(promptRoot, "pm", PM_FILES[phase])),
   ]);
   const combined = `${baseline.trim()}\n\n${phaseText.trim()}\n`;
   return { baseline, phase: phaseText, combined };

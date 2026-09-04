@@ -27,7 +27,7 @@ src/
   regression/     RegressionScheduler + 场景注册表 + 归因二分 + 失败签名
   vcs/ verify/ report/ memory/ observability/ alert/ console/ util/
 prompts/          基线层 + per-phase prompt，各自独立文件
-extensions/       pi extension：hive-guard / model-policy 兜底 / mcp-adapter vendor
+extensions/       pi extension：hive-guard / model-policy 兜底（浏览器不走 MCP，见 02 §4.3）
 poc/              M0 PoC 脚本（可丢弃）；scripts/ 为长期保留脚本
 fixtures/         真实采集的契约 fixture（rpc-errors/ 来自 M0-05 实测，非手写）
 docs/design/      冻结设计 00–06；docs/poc/ 为 M0 执行记录与逐项 go/no-go
@@ -43,13 +43,17 @@ npm run lint      # oxlint src poc scripts
 npm run typecheck # tsc --noEmit，strict
 npm run build     # tsc 产出 dist/
 npm run db:migrate
+npm run preflight -- --repository-path <repo>   # 部署前就绪探针：pi/凭据/Notion/CLI/浏览器，不打印任何凭据
+npm run orchestrator:run -- --repository-path <repo> --repository-id <id>   # Epic/Story 执行常驻
+npm run requirements:run -- --repository-slug <owner/name>                  # 产品经理常驻（与上者共用一库一 outbox）
 
 npx tsx scripts/smoke-runner.ts            # 真实 pi 子进程冒烟
 npx tsx scripts/smoke-context-isolation.ts # 验证 context 文件不泄漏
 npx tsx scripts/smoke-crash-recovery.ts    # SIGKILL 后从 checkpoint 续跑
+npx tsx scripts/smoke-browser-e2e.ts       # 真实 headless 浏览器 + 三层红线
 ```
 
-Node `>=26`，ESM，包管理用 npm。
+Node `>=26`，ESM，包管理用 npm。Linux 单节点部署走 `deploy/linux/install.sh` + systemd 用户单元，步骤见 [docs/runbooks/linux-single-node.md](docs/runbooks/linux-single-node.md)。
 
 ### 本地验证顺序
 

@@ -1,0 +1,18 @@
+[Unit]
+Description=hivemind requirement loop: the product manager that clarifies, writes the PRD, decomposes and runs acceptance
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.hivemind/service.env
+# @REPO@ is replaced by deploy/linux/install.sh; systemd does not expand variables here.
+WorkingDirectory=@REPO@
+ExecStart=/usr/bin/env npx tsx scripts/run-requirement-loop.ts --repository-slug ${HIVEMIND_REPOSITORY_SLUG} --repository-path ${HIVEMIND_REPOSITORY_PATH}
+Restart=always
+RestartSec=10
+KillMode=mixed
+TimeoutStopSec=120
+
+[Install]
+WantedBy=default.target

@@ -7,12 +7,100 @@
 --   * every table that a worker writes goes through the orchestrator API, so there
 --     is exactly one writer process per row
 
+-- A fuzzy requirement's whole lifecycle, from the ten-sentence card a human
+-- creates to scenario-level acceptance. Epics born from it link back through
+-- epics.requirement_id; acceptance is gated on every linked Epic being DONE.
+CREATE TABLE IF NOT EXISTS requirements (
+  id                TEXT PRIMARY KEY,
+  notion_page_id    TEXT NOT NULL UNIQUE,
+  title             TEXT NOT NULL,
+  state             TEXT NOT NULL CHECK (state IN (
+                      'CLARIFY','PRD_CONFIRM','DECOMPOSING','EXECUTING','ACCEPTANCE','DONE','HUMAN_PARKED','FAILED')),
+  original_request  TEXT NOT NULL,
+  clarify_rounds    INTEGER NOT NULL DEFAULT 0,
+  stop_reason       TEXT CHECK (stop_reason IS NULL OR stop_reason = 'blocking_question'),
+  resume_state      TEXT CHECK (resume_state IS NULL OR resume_state IN (
+                      'CLARIFY','PRD_CONFIRM','DECOMPOSING','EXECUTING','ACCEPTANCE')),
+  repo              TEXT,
+  notion_status_shadow TEXT,
+  human_wins_until  INTEGER,
+  last_human_action_at INTEGER,
+  created_at        INTEGER NOT NULL,
+  updated_at        INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_requirements_state ON requirements(state);
+
+-- One row per question batch the PM posted. Answers arrive as page comments;
+-- the loop marks the round answered only after it has read them back, so a
+-- crash between posting and reading replays the read, never the questions.
+CREATE TABLE IF NOT EXISTS requirement_clarify_rounds (
+  requirement_id  TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+  round           INTEGER NOT NULL CHECK (round > 0),
+  questions       TEXT NOT NULL CHECK (json_valid(questions)),
+  asked_at        INTEGER NOT NULL,
+  answered_at     INTEGER,
+  answers         TEXT CHECK (answers IS NULL OR json_valid(answers)),
+  PRIMARY KEY (requirement_id, round),
+  CHECK ((answered_at IS NULL) = (answers IS NULL))
+);
+
+-- The PRD freezes on confirmation. A rewrite after human feedback supersedes
+-- the old revision instead of editing it, so what the human approved is always
+-- reconstructible.
+CREATE TABLE IF NOT EXISTS requirement_prds (
+  requirement_id  TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+  revision        INTEGER NOT NULL CHECK (revision > 0),
+  body            TEXT NOT NULL CHECK (json_valid(body)),
+  status          TEXT NOT NULL CHECK (status IN ('draft','confirmed','superseded')),
+  created_at      INTEGER NOT NULL,
+  confirmed_at    INTEGER,
+  PRIMARY KEY (requirement_id, revision),
+  CHECK (status <> 'confirmed' OR confirmed_at IS NOT NULL),
+  CHECK (status <> 'draft' OR confirmed_at IS NULL)
+);
+
+-- Scenario-level acceptance: one row per PRD scenario, judged by the human in
+-- business language. A gap spawns incremental work instead of reopening code.
+CREATE TABLE IF NOT EXISTS requirement_acceptance_items (
+  requirement_id  TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+  item_id         TEXT NOT NULL,
+  prd_scenario_id TEXT NOT NULL,
+  text            TEXT NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','accepted','gap')),
+  notion_block_id TEXT UNIQUE,
+  decided_at      INTEGER,
+  created_at      INTEGER NOT NULL,
+  PRIMARY KEY (requirement_id, item_id),
+  CHECK ((status = 'open') = (decided_at IS NULL))
+);
+
+-- Webhook and polling deliveries name the same event id, so only the first
+-- delivery of a PRD confirmation or acceptance decision can act.
+CREATE TABLE IF NOT EXISTS requirement_approval_events (
+  event_id       TEXT PRIMARY KEY,
+  requirement_id TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+  kind           TEXT NOT NULL CHECK (kind IN ('prd_confirm','prd_revision','acceptance')),
+  source         TEXT NOT NULL CHECK (source IN ('comment','drag')),
+  created_at     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_requirement_approval_events ON requirement_approval_events(requirement_id);
+
+-- Anchor blocks for the requirement page's owned sections, so a redelivery
+-- updates in place instead of appending a second copy.
+CREATE TABLE IF NOT EXISTS requirement_notion_sections (
+  requirement_id  TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+  section         TEXT NOT NULL CHECK (section IN ('metadata','original','clarify','prd','acceptance')),
+  anchor_block_id TEXT NOT NULL UNIQUE,
+  PRIMARY KEY (requirement_id, section)
+);
+
 CREATE TABLE IF NOT EXISTS epics (
   id                TEXT PRIMARY KEY,
   notion_page_id    TEXT NOT NULL UNIQUE,
   title             TEXT NOT NULL,
   state             TEXT NOT NULL CHECK (state IN (
                       'INTAKE','DECOMPOSE','PLAN_APPROVAL','EXECUTING','EPIC_ACCEPT','DONE','BLOCKED','FAILED')),
+  requirement_id    TEXT REFERENCES requirements(id),
   repo              TEXT,
   integration_branch TEXT,
   mr_url            TEXT,
@@ -346,6 +434,15 @@ CREATE TABLE IF NOT EXISTS ingested_comments (
   ingested_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_ingested_page ON ingested_comments(page_id, created_time);
+
+-- Names for the people Notion only ever names by id. Cached because every
+-- ingested comment would otherwise cost a lookup, and a name a person reads on
+-- their own requirement page must not depend on that lookup succeeding.
+CREATE TABLE IF NOT EXISTS notion_users (
+  user_id      TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  fetched_at   INTEGER NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS human_feedback (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,

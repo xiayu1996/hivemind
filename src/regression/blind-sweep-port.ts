@@ -11,6 +11,7 @@ export interface BlindSweepPortOptions {
   evidenceRoot: string;
   auditPath: string;
   allowedHosts: readonly string[];
+  chromiumSandbox?: boolean;
 }
 
 /**
@@ -40,6 +41,7 @@ export class BlindSweepPort implements SweepPort {
       specification: `Re-verify these scenarios on ${input.branch}: ${declaredScenarioIds.join(", ")}`,
       declaredScenarioIds,
       allowedHosts: [...this.options.allowedHosts],
+      ...(this.options.chromiumSandbox === undefined ? {} : { chromiumSandbox: this.options.chromiumSandbox }),
       commitMessages: [],
     });
 

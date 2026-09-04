@@ -1,0 +1,19 @@
+[Unit]
+Description=hivemind orchestrator: takes Epics and Stories from the Notion board to review requests
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.hivemind/service.env
+# @REPO@ is replaced by deploy/linux/install.sh; systemd does not expand variables here.
+WorkingDirectory=@REPO@
+ExecStart=/usr/bin/env npx tsx scripts/run-local-orchestrator.ts --repository-path ${HIVEMIND_REPOSITORY_PATH} --repository-id ${HIVEMIND_REPOSITORY_ID}
+Restart=always
+RestartSec=10
+# pi sessions and worktrees live under data/; the unit must not be cleaned up by tmpfiles.
+KillMode=mixed
+TimeoutStopSec=120
+
+[Install]
+WantedBy=default.target

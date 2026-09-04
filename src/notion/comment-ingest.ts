@@ -1,4 +1,5 @@
 import type { Client, InStatement } from "@libsql/client";
+import type { UserDirectory } from "./user-directory.js";
 
 const OVERLAP_MS = 2 * 60 * 1_000;
 
@@ -20,6 +21,8 @@ export interface NotionCommentSource {
 export interface CommentIngestOptions {
   now?: () => number;
   botUserId?: string;
+  /** Resolves author ids to names, because the stored author is read by people. */
+  users?: UserDirectory;
 }
 
 export interface CommentPollResult {
@@ -30,6 +33,7 @@ export interface CommentPollResult {
 export class CommentIngestor {
   readonly #now: () => number;
   readonly #botUserId: string | undefined;
+  readonly #users: UserDirectory | undefined;
 
   constructor(
     private readonly client: Client,
@@ -38,6 +42,7 @@ export class CommentIngestor {
   ) {
     this.#now = options.now ?? Date.now;
     this.#botUserId = options.botUserId;
+    this.#users = options.users;
   }
 
   async registerPage(pageId: string, anchorBlockIds: readonly string[]): Promise<void> {
@@ -78,6 +83,11 @@ export class CommentIngestor {
       (item) => item.createdTime >= cutoff && item.authorId !== this.#botUserId,
     );
 
+    const authors = new Map<string, string>();
+    for (const item of eligible) {
+      if (authors.has(item.authorId)) continue;
+      authors.set(item.authorId, this.#users ? await this.#users.displayName(item.authorId) : item.authorId);
+    }
     const statements: InStatement[] = eligible.map((item) => ({
       sql: `INSERT INTO ingested_comments
               (comment_id, page_id, block_id, discussion_id, author, body, created_time, ingested_at)
@@ -88,7 +98,7 @@ export class CommentIngestor {
         item.pageId,
         item.blockId,
         item.discussionId,
-        item.authorId,
+        authors.get(item.authorId) ?? item.authorId,
         item.body,
         item.createdTime,
         this.#now(),

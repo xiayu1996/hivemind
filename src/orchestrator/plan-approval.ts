@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { Client, InStatement } from "@libsql/client";
 import type { DecompositionCandidate, DecompositionStory } from "./decompose.js";
 import { evaluateDecomposition } from "./decompose.js";
+import { EPIC_BOARD_STATUS, epicStatusStatement } from "./epic-status-projection.js";
 import { assertEpicTransition, type EpicState } from "./state-machine.js";
 
 export type ApprovalSource = "comment" | "drag";
@@ -76,6 +77,7 @@ export class PlanApprovalStore {
               ON CONFLICT(target, payload_hash) DO NOTHING`,
         args: [input.epicId, input.notionPageId, body, hash(body), time],
       },
+      epicStatusStatement(input.epicId, EPIC_BOARD_STATUS.planned, time),
     ], "write");
   }
 
@@ -95,11 +97,14 @@ export class PlanApprovalStore {
       args: [this.now(), epicId],
     });
     if (result.rowsAffected === 1) {
-      await this.client.execute({
+      await this.client.batch([{
         sql: `INSERT OR IGNORE INTO epic_approval_events (event_id, epic_id, source, created_at)
               VALUES (?, ?, 'comment', ?)`,
         args: [eventId, epicId, this.now()],
-      });
+      },
+      // The board's intake filter is what feeds the next decomposition, so a
+      // revised Epic has to be visibly waiting again.
+      epicStatusStatement(epicId, EPIC_BOARD_STATUS.waiting, this.now())], "write");
     }
     return result.rowsAffected === 1;
   }
@@ -152,7 +157,8 @@ export class PlanApprovalStore {
               AND EXISTS (SELECT 1 FROM epic_approval_events WHERE event_id = ?)`,
       args: [time, input.epicId, input.eventId],
     });
+    statements.push(epicStatusStatement(input.epicId, EPIC_BOARD_STATUS.executing, time, "EXECUTING"));
     const result = await this.client.batch(statements, "write");
-    return result.at(-1)?.rowsAffected === 1;
+    return result.at(-2)?.rowsAffected === 1;
   }
 }

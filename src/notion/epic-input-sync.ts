@@ -3,13 +3,14 @@ import type { Client } from "@libsql/client";
 import { CommentIngestor } from "./comment-ingest.js";
 import type { NotionGateway } from "./gateway.js";
 import { interpretEpicComment, interpretEpicPropertyChange } from "./intent-interpreter.js";
+import { answerBlocker } from "../orchestrator/epic-blocker.js";
 import type { PlanApprovalStore } from "../orchestrator/plan-approval.js";
 import type { EpicState } from "../orchestrator/state-machine.js";
 import schema from "./notion-schema.json" with { type: "json" };
 
 export interface EpicPropertyPollResult {
   epicId: string;
-  intent: "initialized" | "none" | "approve_plan" | "unsupported_property_change";
+  intent: "initialized" | "none" | "approve_plan" | "accept_epic" | "unsupported_property_change";
   approved: boolean;
 }
 
@@ -17,6 +18,8 @@ export interface EpicCommentPollResult {
   ingested: number;
   approved: number;
   revised: number;
+  /** Blocking questions a person answered, sending the Epic back to decomposition. */
+  answered: number;
 }
 
 function epicState(value: unknown): EpicState {
@@ -79,7 +82,9 @@ export class NotionEpicInputSync {
       await this.rememberHumanObservation(epicId, observed, intent.humanWinsUntil);
       return { epicId, intent: "approve_plan", approved };
     }
-    if (intent.type === "unsupported_property_change") {
+    // Acceptance is only recorded here; the transition waits for the merge,
+    // which EpicCompletion reads together with this observation.
+    if (intent.type === "accept_epic" || intent.type === "unsupported_property_change") {
       await this.rememberHumanObservation(epicId, observed, intent.humanWinsUntil);
     }
     return { epicId, intent: intent.type, approved: false };
@@ -98,17 +103,25 @@ export class NotionEpicInputSync {
     })).rows;
     let approved = 0;
     let revised = 0;
+    let answered = 0;
     for (const comment of comments) {
-      const intent = interpretEpicComment(epicState(comment.state), String(comment.body));
+      const state = epicState(comment.state);
       const epicId = String(comment.epic_id);
       const eventId = String(comment.comment_id);
+      // On a blocked Epic the person's next words are the answer; nothing else
+      // is being asked of them there.
+      if (state === "BLOCKED") {
+        if (await answerBlocker(this.client, epicId, eventId, String(comment.body), this.now)) answered++;
+        continue;
+      }
+      const intent = interpretEpicComment(state, String(comment.body));
       if (intent.type === "approve_plan") {
         if (await this.approvals.approve({ epicId, eventId, source: "comment" })) approved++;
       } else if (intent.type === "request_revision") {
         if (await this.approvals.requestRevision(epicId, eventId)) revised++;
       }
     }
-    return { ingested: polled.inserted, approved, revised };
+    return { ingested: polled.inserted, approved, revised, answered };
   }
 
   async pollContent(_pageId: string): Promise<void> {

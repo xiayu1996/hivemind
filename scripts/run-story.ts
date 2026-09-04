@@ -26,7 +26,9 @@ import { ModelPolicy } from "../src/runner/model-policy.js";
 import { retryLimits } from "../src/pipeline/retry-limits.js";
 import { ScenarioRegistry } from "../src/regression/scenario-registry.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
+import { browserLanePath } from "../src/verify/browser-config.js";
 import { BlindVerifyExecutor } from "../src/verify/executor.js";
+import { loadPromptLayers } from "../src/pipeline/prompt-loader.js";
 import { discoverMRPort } from "../src/vcs/mr/adapters.js";
 import { GitMrStoryDelivery, processGitCommand } from "../src/vcs/story-delivery.js";
 
@@ -114,9 +116,13 @@ async function main(): Promise<void> {
     });
     // The judge answers one yes/no question per phase exit; running it on the
     // phase's own tier is what made it the pipeline's quietest cost line.
-    const limits = await retryLimits(await ConfigStore.load(handle.client));
+    const config = await ConfigStore.load(handle.client);
+    const limits = await retryLimits(config);
+    // The same list feeds the guard, the browser and the verdict check; it is
+    // read here once so no layer can drift from the others.
+    const allowedHosts = config.get("guard.e2eHostAllowlist");
     const judgeModel = await new ModelPolicy(
-      await ConfigStore.load(handle.client),
+      config,
       new PiModelCatalog({ binary: piBinary, cwd: worktreePath }),
     ).resolve("completion_judge", model.provider).catch((cause: unknown) => {
       // A provider with no cheap tier still gets a judge, but never silently:
@@ -147,6 +153,9 @@ async function main(): Promise<void> {
       recordTelemetry: (input) => recorder.record(input),
       maxContinueRetries: limits.maxContinueRetries,
     });
+    // The verifier runs under its own phase contract, and with the browser
+    // lane's CLI on its PATH; nothing is installed into the worktree for it.
+    const verifyLayers = await loadPromptLayers(join(ROOT, "prompts"), "VERIFY");
     const blindExecutor = new BlindVerifyExecutor(
       {
         create: (policy: GuardPolicy) => new RpcPiRunner({
@@ -158,7 +167,9 @@ async function main(): Promise<void> {
           tools: ["read", "bash", "grep", "find", "ls"],
           extensions: [guardExtension, canonicalExtension],
           contextFiles: "explicit",
+          systemPrompt: { mode: "replace", text: verifyLayers.combined },
           env: {
+            PATH: browserLanePath(ROOT),
             [POLICY_ENV_VAR]: serializeGuardPolicy(policy),
             [CANONICAL_CAPTURE_ENV]: join(policy.extraWriteRoots[0]!, "provider-requests.jsonl"),
           },
@@ -171,7 +182,8 @@ async function main(): Promise<void> {
       worktreePath,
       evidenceRoot,
       auditPath,
-      allowedHosts: ["localhost", "127.0.0.1"],
+      allowedHosts,
+      chromiumSandbox: config.get("verify.chromiumSandbox"),
       commitMessages: () => gitMessages(worktreePath, targetBranch),
       recordTelemetry: (input) => recorder.record(input),
     });
@@ -194,7 +206,7 @@ async function main(): Promise<void> {
               evidencePath: join(evidenceRoot, "integration"),
               auditPath,
               specification: JSON.stringify(await store.getDefinitionOfDone(cardId)),
-              allowedHosts: ["localhost", "127.0.0.1"],
+              allowedHosts,
               commitMessages: [],
             }),
             { storyWorktree: worktreePath, integrationWorktree, mainBranch: targetBranch },

@@ -63,6 +63,20 @@ export const CONFIG_KEYS = {
     reload: "hot",
     description: "Maximum times the E2E regression loop may reopen the same story.",
   }),
+  "requirement.maxClarifyRounds": def({
+    schema: positiveInt.max(20),
+    default: 5,
+    scope: "global",
+    reload: "hot",
+    description: "Question batches the product manager may put to a person before the requirement stops for a human decision.",
+  }),
+  "requirement.maxQuestionsPerRound": def({
+    schema: positiveInt.max(20),
+    default: 6,
+    scope: "global",
+    reload: "hot",
+    description: "Questions in one batch; a longer list reads as an interrogation and gets answered carelessly.",
+  }),
 
   // --- scheduling ---
   "schedule.activeSetPollMs": def({
@@ -111,10 +125,14 @@ export const CONFIG_KEYS = {
   }),
   "model.purposeTiers": def({
     schema: z.record(
-      z.enum(["decompose", "design", "code", "verify", "merge", "completion_judge", "capacity_probe", "triage", "distiller"]),
+      z.enum([
+        "product_manager", "decompose", "design", "code", "verify", "merge",
+        "completion_judge", "capacity_probe", "triage", "distiller",
+      ]),
       z.enum(["brain", "standard", "cheap"]),
     ),
     default: {
+      product_manager: "brain",
       decompose: "brain",
       design: "brain",
       code: "standard",
@@ -262,6 +280,14 @@ export const CONFIG_KEYS = {
     scope: "per-host",
     reload: "next-spawn",
     description: "Additional directories an agent may write to, beyond its worktree.",
+  }),
+  "verify.chromiumSandbox": def({
+    schema: z.boolean(),
+    default: true,
+    scope: "per-host",
+    reload: "next-spawn",
+    description: "Run the browser lane's Chromium with its process sandbox. Turn off only on a host that cannot build one (a container, or Ubuntu's user-namespace restriction that preflight reports) after the kernel fix is ruled out.",
+    dangerous: true,
   }),
   "guard.e2eHostAllowlist": def({
     schema: z.array(z.string()),

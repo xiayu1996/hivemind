@@ -80,3 +80,40 @@ describe("CommentIngestor", () => {
     expect(await ingestor.pollPage("page-1")).toEqual({ inserted: 1, maxCreatedTime: 390_000 });
   });
 });
+
+describe("author names", () => {
+  it("stores the name a person will read, not the id Notion gave them", async () => {
+    const source: NotionCommentSource = {
+      listComments: async (targetId) => (targetId === "page-1" ? [comment("c1", 1_000)] : []),
+    };
+    const asked: string[] = [];
+    const ingestor = new CommentIngestor(client, source, {
+      now: () => 2_000,
+      users: {
+        displayName: async (userId) => {
+          asked.push(userId);
+          return "雨 夏";
+        },
+      },
+    });
+    await ingestor.registerPage("page-1", []);
+
+    await ingestor.pollPage("page-1");
+
+    const rows = (await client.execute("SELECT author FROM ingested_comments")).rows;
+    expect(rows).toMatchObject([{ author: "雨 夏" }]);
+    expect(asked).toEqual(["human-1"]);
+  });
+
+  it("keeps the id when no directory is wired in, so ingest never depends on it", async () => {
+    const source: NotionCommentSource = {
+      listComments: async (targetId) => (targetId === "page-1" ? [comment("c1", 1_000)] : []),
+    };
+    const ingestor = new CommentIngestor(client, source, { now: () => 2_000 });
+    await ingestor.registerPage("page-1", []);
+
+    await ingestor.pollPage("page-1");
+
+    expect((await client.execute("SELECT author FROM ingested_comments")).rows).toMatchObject([{ author: "human-1" }]);
+  });
+});

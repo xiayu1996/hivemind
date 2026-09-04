@@ -44,6 +44,18 @@ describe("MR CLI adapters", () => {
     ]);
   });
 
+  it("reads whether a review request has landed, from either CLI", async () => {
+    const gh = fake('{"state":"MERGED"}\n');
+    await expect(new GhMRAdapter(gh).isMerged("https://github.com/owner/repo/pull/7")).resolves.toBe(true);
+    expect(gh.run).toHaveBeenCalledWith("gh", ["pr", "view", "https://github.com/owner/repo/pull/7", "--json", "state"]);
+    await expect(new GhMRAdapter(fake('{"state":"OPEN"}')).isMerged("u")).resolves.toBe(false);
+
+    const glab = fake('{"state":"merged"}');
+    await expect(new GlabMRAdapter(glab).isMerged("https://gitlab.com/o/r/-/merge_requests/3")).resolves.toBe(true);
+    expect(glab.run).toHaveBeenCalledWith("glab", ["mr", "view", "https://gitlab.com/o/r/-/merge_requests/3", "--output", "json"]);
+    await expect(new GlabMRAdapter(fake("not json")).isMerged("u")).rejects.toThrow(/did not return JSON/);
+  });
+
   it("prefers gh and falls back to glab", async () => {
     const cli = fake("");
     cli.available.mockImplementation(async (binary: string) => binary === "glab");
