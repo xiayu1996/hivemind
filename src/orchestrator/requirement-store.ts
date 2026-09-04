@@ -1,4 +1,5 @@
 import type { Client } from "@libsql/client";
+import { normalizeQuestion, parseQuestions, type HumanQuestion, type HumanQuestionInput } from "./human-question.js";
 import {
   assertRequirementTransition,
   type RequirementState,
@@ -22,7 +23,7 @@ export interface RequirementSnapshot extends RequirementIntake {
 
 export interface ClarifyRound {
   round: number;
-  questions: string[];
+  questions: HumanQuestion[];
   askedAt: number;
   answers: string[] | null;
 }
@@ -235,7 +236,8 @@ export class RequirementStore {
    * read back, so a crash between posting and reading replays the read rather
    * than asking the person the same questions twice.
    */
-  async openClarifyRound(id: string, questions: string[], runId: string): Promise<number> {
+  async openClarifyRound(id: string, asked: readonly HumanQuestionInput[], runId: string): Promise<number> {
+    const questions = asked.map(normalizeQuestion);
     if (questions.length === 0) throw new Error("a clarification round must ask at least one question");
     const requirement = await this.getRequirement(id);
     const open = await this.latestClarifyRound(id);
@@ -282,7 +284,7 @@ export class RequirementStore {
     })).rows;
     return rows.map((row) => ({
       round: Number(row.round),
-      questions: parseStringArray(row.questions, "clarification questions"),
+      questions: parseQuestions(row.questions, "clarification questions"),
       askedAt: Number(row.asked_at),
       answers: row.answers === null ? null : parseStringArray(row.answers, "clarification answers"),
     }));

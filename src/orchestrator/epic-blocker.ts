@@ -1,5 +1,13 @@
 import type { Client, InStatement } from "@libsql/client";
 import { payloadHash } from "../notion/outbox.js";
+import {
+  annotateReply,
+  humanQuestionInputSchema,
+  normalizeQuestion,
+  questionText,
+  replyHint,
+  type HumanQuestion,
+} from "./human-question.js";
 import { assertEpicTransition } from "./state-machine.js";
 
 export const COMMENT_EPIC_PAGE = "comment_epic_page";
@@ -12,20 +20,25 @@ export interface BlockerAnswer {
 }
 
 /** What the person reads on the Epic page when decomposition had to stop. */
-export function blockingQuestionBody(question: string): string {
-  return `[拆解阻塞问题] ${question}\n\n直接回复这条评论即可，拆解会带着你的回答重新进行。`;
+export function blockingQuestionBody(question: HumanQuestion): string {
+  return `[拆解阻塞问题] ${questionText(question)}\n\n${replyHint([question])}拆解会带着你的回答重新进行。`;
 }
 
-/** The question the last block raised, read back from the transition that recorded it. */
-export async function latestBlockingQuestion(client: Client, epicId: string): Promise<string | null> {
+/** The question the last block raised, read back from the transition that
+ * recorded it. Transitions written before questions were structured carry
+ * only the reason line, which is the question itself. */
+export async function latestBlockingQuestion(client: Client, epicId: string): Promise<HumanQuestion | null> {
   const rows = (await client.execute({
     sql: "SELECT data FROM event_log WHERE run_id = ? AND type = 'epic.transition' ORDER BY seq DESC",
     args: [`epic:${epicId}`],
   })).rows;
   for (const row of rows) {
-    const data = JSON.parse(String(row.data)) as { to?: string; reason?: string };
+    const data = JSON.parse(String(row.data)) as { to?: string; reason?: string; question?: unknown };
     if (data.to !== "BLOCKED") continue;
-    return data.reason?.startsWith(QUESTION_PREFIX) ? data.reason.slice(QUESTION_PREFIX.length) : data.reason ?? null;
+    const structured = humanQuestionInputSchema.safeParse(data.question);
+    if (structured.success) return normalizeQuestion(structured.data);
+    if (data.reason === undefined) return null;
+    return normalizeQuestion(data.reason.startsWith(QUESTION_PREFIX) ? data.reason.slice(QUESTION_PREFIX.length) : data.reason);
   }
   return null;
 }
@@ -35,7 +48,7 @@ export async function latestBlockingQuestion(client: Client, epicId: string): Pr
  * board never shows is a stop nobody answers; the payload is constant per
  * question so re-running this after a restart adds nothing.
  */
-export function blockingQuestionStatement(epicId: string, question: string, time: number): InStatement {
+export function blockingQuestionStatement(epicId: string, question: HumanQuestion, time: number): InStatement {
   const encoded = payloadHash({ epicId, body: blockingQuestionBody(question) });
   return {
     sql: `INSERT INTO notion_outbox (card_id, priority, operation, target, payload, payload_hash, created_at)
@@ -92,8 +105,12 @@ export async function answerBlocker(
   now: () => number = Date.now,
 ): Promise<boolean> {
   if (answer.trim() === "") return false;
-  const question = await latestBlockingQuestion(client, epicId);
-  if (question === null) return false;
+  const asked = await latestBlockingQuestion(client, epicId);
+  if (asked === null) return false;
+  // The letters a person typed are expanded next to their words so the
+  // decomposer reads what was chosen, not which key was pressed.
+  const question = questionText(asked);
+  const resolved = annotateReply([asked], answer.trim());
   assertEpicTransition("BLOCKED", "DECOMPOSE");
   const time = now();
   const runId = `epic:${epicId}`;
@@ -112,7 +129,7 @@ export async function answerBlocker(
             SELECT ?, (SELECT COALESCE(MAX(seq), -1) + 1 FROM event_log WHERE run_id = ?),
                    NULL, 'DECOMPOSE', 'epic.blocker_answered', ?, ?
             WHERE EXISTS (SELECT 1 FROM epics WHERE id = ? AND state = 'DECOMPOSE')`,
-      args: [runId, runId, time, JSON.stringify({ question, answer: answer.trim(), commentId }), epicId],
+      args: [runId, runId, time, JSON.stringify({ question, answer: resolved, commentId }), epicId],
     },
   ], "write");
   return results[1]?.rowsAffected === 1;

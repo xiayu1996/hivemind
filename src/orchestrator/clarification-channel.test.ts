@@ -44,7 +44,7 @@ describe("ClarificationChannelSet", () => {
     const chat = new RecordingChannel("chat", false);
     const set = new ClarificationChannelSet([notion, chat]);
 
-    await set.ask({ requirementId: "R-1", round: 1, questions: ["谁会用？"] });
+    await set.ask({ requirementId: "R-1", round: 1, questions: [{ question: "谁会用？", options: [] }] });
     expect(notion.asked).toHaveLength(1);
     expect(chat.asked).toHaveLength(1);
 

@@ -1,14 +1,15 @@
 import { inspectBusinessLanguage } from "./decompose.js";
+import { inspectQuestion, normalizeQuestion, type HumanQuestion, type HumanQuestionInput } from "./human-question.js";
 
 export interface ClarificationCandidate {
   status: "ask" | "ready";
-  questions?: readonly string[];
+  questions?: readonly HumanQuestionInput[];
   summary?: string;
 }
 
 export interface AskedClarification {
   kind: "ask";
-  questions: readonly string[];
+  questions: readonly HumanQuestion[];
 }
 
 export interface ReadyClarification {
@@ -85,7 +86,7 @@ export function evaluateClarification(
   maxQuestions: number,
 ): ClarificationResult {
   const reasons: string[] = [];
-  const questions = (candidate.questions ?? []).map((question) => question.trim()).filter((question) => question !== "");
+  const questions = (candidate.questions ?? []).map(normalizeQuestion).filter((question) => question.question !== "");
   const summary = candidate.summary?.trim() ?? "";
 
   if (candidate.status === "ready") {
@@ -102,10 +103,11 @@ export function evaluateClarification(
   }
   if (summary !== "") reasons.push("an asking round must not also declare the requirement understood");
   for (const [index, question] of questions.entries()) {
-    reasons.push(...languageReasons(`question ${index + 1}`, question));
+    reasons.push(...inspectQuestion(`question ${index + 1}`, question));
   }
-  for (const question of new Set(questions)) {
-    if (questions.filter((value) => value === question).length > 1) {
+  const texts = questions.map((question) => question.question);
+  for (const question of new Set(texts)) {
+    if (texts.filter((value) => value === question).length > 1) {
       reasons.push(`duplicate question: ${question}`);
     }
   }

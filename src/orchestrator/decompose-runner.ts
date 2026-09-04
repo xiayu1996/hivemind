@@ -1,6 +1,7 @@
 import type { Client } from "@libsql/client";
 import { evaluateDecomposition, type DecompositionCandidate } from "./decompose.js";
 import { blockerAnswers, blockingQuestionStatement, withBlockerAnswers } from "./epic-blocker.js";
+import type { HumanQuestion } from "./human-question.js";
 import type { PlanApprovalStore } from "./plan-approval.js";
 import { assertEpicTransition, type EpicState } from "./state-machine.js";
 
@@ -26,7 +27,7 @@ export interface EpicIntake {
 export type DecomposeOutcome =
   | { kind: "presented"; stories: number }
   | { kind: "rejected"; reasons: readonly string[] }
-  | { kind: "blocking_question"; question: string };
+  | { kind: "blocking_question"; question: HumanQuestion };
 
 const MAX_ATTEMPTS = 2;
 
@@ -62,7 +63,7 @@ export class EpicDecomposer {
         // The one stop the decomposition is allowed to take: a missing fact that
         // would change the split. Guessing past it produces plausible Stories
         // for the wrong requirement.
-        await this.block(epic.id, `blocking question: ${evaluated.question}`);
+        await this.block(epic.id, `blocking question: ${evaluated.question.question}`, evaluated.question);
         // The board is where the person will read it; a stop only in the log
         // is a stop nobody answers.
         await this.client.execute(blockingQuestionStatement(epic.id, evaluated.question, this.now()));
@@ -91,10 +92,10 @@ export class EpicDecomposer {
     await this.transition(epicId, state, "DECOMPOSE");
   }
 
-  private async block(epicId: string, reason: string): Promise<void> {
+  private async block(epicId: string, reason: string, question?: HumanQuestion): Promise<void> {
     const state = await this.stateOf(epicId);
     assertEpicTransition(state, "BLOCKED");
-    await this.transition(epicId, state, "BLOCKED", reason);
+    await this.transition(epicId, state, "BLOCKED", reason, question);
   }
 
   private async stateOf(epicId: string): Promise<EpicState> {
@@ -106,7 +107,13 @@ export class EpicDecomposer {
     return String(row.state) as EpicState;
   }
 
-  private async transition(epicId: string, from: EpicState, to: EpicState, reason?: string): Promise<void> {
+  private async transition(
+    epicId: string,
+    from: EpicState,
+    to: EpicState,
+    reason?: string,
+    question?: HumanQuestion,
+  ): Promise<void> {
     const time = this.now();
     const runId = `epic:${epicId}`;
     const [update] = await this.client.batch([
@@ -118,7 +125,7 @@ export class EpicDecomposer {
         sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
               VALUES (?, (SELECT COALESCE(MAX(seq), -1) + 1 FROM event_log WHERE run_id = ?),
                       NULL, 'DECOMPOSE', 'epic.transition', ?, ?)`,
-        args: [runId, runId, time, JSON.stringify({ from, to, ...(reason ? { reason } : {}) })],
+        args: [runId, runId, time, JSON.stringify({ from, to, ...(reason ? { reason } : {}), ...(question ? { question } : {}) })],
       },
     ], "write");
     if (update?.rowsAffected !== 1) {

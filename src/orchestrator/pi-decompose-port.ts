@@ -7,6 +7,7 @@ import type { PiRunner } from "../runner/types.js";
 import { jsonPayloadCandidates } from "../util/json-payload.js";
 import type { DecomposePort, DecomposeRequest } from "./decompose-runner.js";
 import type { DecompositionCandidate } from "./decompose.js";
+import { humanQuestionInputSchema } from "./human-question.js";
 
 const scenarioSchema = z.object({
   id: z.string().min(1),
@@ -29,7 +30,7 @@ const candidateSchema = z.object({
   epicId: z.string().min(1),
   businessGoal: z.string().min(1),
   stories: z.array(storySchema),
-  blockingQuestion: z.string().optional(),
+  blockingQuestion: humanQuestionInputSchema.optional(),
 }).strict();
 
 export interface PiDecomposePortOptions {
@@ -96,6 +97,8 @@ function promptFor(input: DecomposeRequest): string {
     "只输出一个 JSON 对象，不要附加解释。字段:",
     "epicId, businessGoal, stories[{id, title, requirement, scenarios[{id, given, when, then}], dependsOn, predictedFootprint}]",
     "信息不足时只输出 {epicId, businessGoal, stories: [], blockingQuestion}。",
+    "blockingQuestion 是对象 {question, context, options[{label, recommended}]}：question 一句话；context 一句话说明它为什么决定拆解；",
+    "options 给 2 到 6 个业务语言写的可选答案，最多一个 recommended: true；实在给不出选项才只写 question。",
   ].join("\n"));
   return `${parts.join("\n\n")}\n`;
 }

@@ -121,6 +121,28 @@ describe("ClarifyLoop", () => {
     ]);
   });
 
+  it("sends the options out with the question and records what the chosen letter meant", async () => {
+    const clarify = loop(new ScriptedPort([{
+      status: "ask",
+      questions: [
+        { question: "谁会用它？", options: [{ label: "值班的人", recommended: true }, { label: "交付经理" }] },
+        "现在这件事是怎么解决的？",
+      ],
+    }]));
+    await clarify.advance(REQUIREMENT_ID);
+    expect(channel.asked[0]?.questions).toEqual([
+      { question: "谁会用它？", options: [{ label: "值班的人", recommended: true }, { label: "交付经理" }] },
+      { question: "现在这件事是怎么解决的？", options: [] },
+    ]);
+
+    await channel.record(REQUIREMENT_ID, 1, [{ id: "c1", author: "提需求的人", body: "1B，2 靠人工翻群消息", receivedAt: 10 }]);
+    await clarify.advance(REQUIREMENT_ID);
+
+    await expect(store.clarifyHistory(REQUIREMENT_ID)).resolves.toMatchObject([
+      { round: 1, answers: ["提需求的人: 1B，2 靠人工翻群消息\n（系统解读：问 1 选 B = 交付经理）"] },
+    ]);
+  });
+
   it("hands the requirement to a person when the question budget runs out", async () => {
     const port = new ScriptedPort([
       { status: "ask", questions: ["第一个问题？"] },

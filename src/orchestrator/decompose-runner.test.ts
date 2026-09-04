@@ -87,7 +87,7 @@ describe("EpicDecomposer", () => {
 
     await expect(decomposer.decompose(epic())).resolves.toMatchObject({
       kind: "blocking_question",
-      question: "这批 Story 面向哪个客户群？",
+      question: { question: "这批 Story 面向哪个客户群？" },
     });
     expect(port.run).toHaveBeenCalledTimes(1);
     expect(await state()).toBe("BLOCKED");
@@ -112,6 +112,28 @@ describe("EpicDecomposer", () => {
     expect(request.requirement).toContain("多个 Story 并行推进并合成一次评审。");
     expect(request.requirement).toContain("问：这批 Story 面向哪个客户群？");
     expect(request.requirement).toContain("答：面向已付费的企业客户");
+  });
+
+  it("puts the options on the Epic page and expands the letter the person answers with", async () => {
+    const question = {
+      question: "这批 Story 面向哪个客户群？",
+      context: "两类客户的验收场景不同。",
+      options: [{ label: "已付费的企业客户", recommended: true }, { label: "所有注册客户" }],
+    };
+    const asking = { run: vi.fn(async () => ({ ...plan, stories: [], blockingQuestion: question })) };
+    await new EpicDecomposer(client, approvals, asking, () => 1_000).decompose(epic());
+    const comment = (await client.execute("SELECT payload FROM notion_outbox WHERE operation = 'comment_epic_page'")).rows[0];
+    const body = (JSON.parse(String(comment?.payload)) as { body: string }).body;
+    expect(body).toContain("A. 已付费的企业客户（推荐）");
+    expect(body).toContain("B. 所有注册客户");
+    expect(body).toContain("其他：");
+
+    expect(await answerBlocker(client, "M2", "comment-1", "B", () => 2_000)).toBe(true);
+    const planning = { run: vi.fn(async (_input: DecomposeRequest) => plan) };
+    await new EpicDecomposer(client, approvals, planning, () => 3_000).decompose(epic());
+    const request = planning.run.mock.calls[0]![0];
+    expect(request.requirement).toContain("A. 已付费的企业客户（推荐）");
+    expect(request.requirement).toContain("答：B\n（系统解读：选 B = 所有注册客户）");
   });
 
   it("refuses an Epic that is not waiting to be decomposed", async () => {

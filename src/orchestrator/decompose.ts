@@ -1,3 +1,5 @@
+import { inspectQuestion, normalizeQuestion, type HumanQuestion, type HumanQuestionInput } from "./human-question.js";
+
 export interface DecompositionScenario {
   id: string;
   given: string;
@@ -18,7 +20,7 @@ export interface DecompositionCandidate {
   epicId: string;
   businessGoal: string;
   stories: readonly DecompositionStory[];
-  blockingQuestion?: string;
+  blockingQuestion?: HumanQuestionInput;
 }
 
 export interface LanguageIssue {
@@ -43,7 +45,7 @@ export interface RejectedDecomposition {
 export interface BlockingQuestion {
   kind: "blocking_question";
   epicId: string;
-  question: string;
+  question: HumanQuestion;
 }
 
 export type DecompositionResult = AcceptedDecomposition | RejectedDecomposition | BlockingQuestion;
@@ -116,11 +118,14 @@ function validateStory(story: DecompositionStory, index: number, allStoryIds: Re
  * it is the approved dependency order; only set-like fields are canonicalized.
  */
 export function evaluateDecomposition(candidate: DecompositionCandidate): DecompositionResult {
-  if (candidate.blockingQuestion?.trim()) {
+  const question = candidate.blockingQuestion === undefined ? null : normalizeQuestion(candidate.blockingQuestion);
+  if (question && question.question !== "") {
     if (candidate.stories.length > 0) {
       return { kind: "rejected", epicId: candidate.epicId, reasons: ["blocking question cannot include partial Stories"] };
     }
-    return { kind: "blocking_question", epicId: candidate.epicId, question: candidate.blockingQuestion.trim() };
+    const reasons = inspectQuestion("blocking question", question);
+    if (reasons.length > 0) return { kind: "rejected", epicId: candidate.epicId, reasons: [...new Set(reasons)] };
+    return { kind: "blocking_question", epicId: candidate.epicId, question };
   }
 
   const reasons: string[] = [];

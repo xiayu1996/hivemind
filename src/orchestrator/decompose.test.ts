@@ -97,7 +97,7 @@ describe("evaluateDecomposition", () => {
     expect(result).toEqual({
       kind: "blocking_question",
       epicId: "E-DELIVERY",
-      question: "Do customers need live delivery updates, or only updates when the delivery status changes?",
+      question: { question: "Do customers need live delivery updates, or only updates when the delivery status changes?", options: [] },
     });
 
     expect(evaluateDecomposition({

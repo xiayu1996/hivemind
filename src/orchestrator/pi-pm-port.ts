@@ -6,6 +6,7 @@ import { RpcPiRunner, type RpcRunnerConfig } from "../runner/rpc-runner.js";
 import type { PiRunner } from "../runner/types.js";
 import { jsonPayloadCandidates } from "../util/json-payload.js";
 import type { ClarifyPort, ClarifyRequest, ClarifyRound } from "./clarify-loop.js";
+import { humanQuestionInputSchema, questionLines } from "./human-question.js";
 import type { PrdPort, PrdRequest } from "./prd-runner.js";
 import type { RequirementDecomposePort, RequirementDecomposeRequest } from "./requirement-decompose.js";
 import type {
@@ -16,7 +17,7 @@ import type {
 
 const clarificationSchema = z.object({
   status: z.enum(["ask", "ready"]),
-  questions: z.array(z.string()).optional(),
+  questions: z.array(humanQuestionInputSchema).optional(),
   summary: z.string().optional(),
 }).strict();
 
@@ -105,7 +106,10 @@ function conversation(history: readonly ClarifyRound[]): string {
   const lines: string[] = ["## 已有问答"];
   for (const round of history) {
     lines.push(`\n第 ${round.round} 轮:`);
-    for (const [index, question] of round.questions.entries()) lines.push(`- 问 ${index + 1}: ${question}`);
+    for (const [index, question] of round.questions.entries()) {
+      const [first, ...rest] = questionLines(question);
+      lines.push(`- 问 ${index + 1}: ${first}`, ...rest.map((line) => `  ${line}`));
+    }
     if (round.answers === null) {
       lines.push("- 这一轮还没有收到回答");
       continue;
@@ -131,7 +135,9 @@ function clarifyPrompt(input: ClarifyRequest): string {
     ...rejections(input.previousRejections),
     [
       `一批最多 ${input.maxQuestions} 个问题。只输出一个 JSON 对象，不要附加解释:`,
-      `{"status":"ask","questions":["…"]} 或 {"status":"ready","summary":"…"}`,
+      `{"status":"ask","questions":[{"question":"…","context":"…","options":[{"label":"…","recommended":true},{"label":"…"}]}]}`,
+      `或 {"status":"ready","summary":"…"}`,
+      "每个问题给 2 到 6 个业务语言写的可选答案，最多一个 recommended: true；context 一句话说明这个问题为什么影响产出；实在给不出选项时该问题只写 question。",
     ].join("\n"),
   ].join("\n\n") + "\n";
 }
