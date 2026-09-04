@@ -1,10 +1,11 @@
 import type { ClarificationChannelSet } from "./clarification-channel.js";
+import { annotateReply, type HumanQuestion } from "./human-question.js";
 import { evaluateClarification, type ClarificationCandidate } from "./requirement-artifacts.js";
 import type { RequirementStore } from "./requirement-store.js";
 
 export interface ClarifyRound {
   round: number;
-  questions: readonly string[];
+  questions: readonly HumanQuestion[];
   answers: readonly string[] | null;
 }
 
@@ -28,7 +29,7 @@ export interface RequirementPagePublisher {
 }
 
 export type ClarifyOutcome =
-  | { kind: "asked"; round: number; questions: readonly string[] }
+  | { kind: "asked"; round: number; questions: readonly HumanQuestion[] }
   | { kind: "waiting"; round: number }
   | { kind: "answered"; round: number }
   | { kind: "ready"; summary: string }
@@ -71,10 +72,11 @@ export class ClarifyLoop {
       if (answers.length === 0) return { kind: "waiting", round: open.round };
       // Answers are archived verbatim: a paraphrase would quietly become the
       // requirement, and nobody would be able to tell it apart from what the
-      // person actually wrote.
+      // person actually wrote. Option letters get their meaning appended, not
+      // substituted.
       const bodies = answers
         .toSorted((a, b) => a.receivedAt - b.receivedAt || a.id.localeCompare(b.id, "en"))
-        .map((answer) => `${answer.author}: ${answer.body}`);
+        .map((answer) => `${answer.author}: ${annotateReply(open.questions, answer.body)}`);
       await this.store.recordClarifyAnswers(requirementId, open.round, bodies, runId(requirementId));
       await this.publisher.publish(requirementId);
       return { kind: "answered", round: open.round };
@@ -107,7 +109,7 @@ export class ClarifyLoop {
           // Asking forever is worse than handing the requirement to a person.
           return this.stop(
             requirementId,
-            `clarification did not converge in ${this.options.maxRounds} rounds; still asking: ${evaluated.questions.join(" / ")}`,
+            `clarification did not converge in ${this.options.maxRounds} rounds; still asking: ${evaluated.questions.map((question) => question.question).join(" / ")}`,
           );
         }
         const round = await this.store.openClarifyRound(requirementId, [...evaluated.questions], runId(requirementId));

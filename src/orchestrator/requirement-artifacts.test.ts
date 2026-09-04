@@ -16,7 +16,7 @@ function scenario(id: string) {
 describe("evaluateClarification", () => {
   it("accepts a batch of business questions", () => {
     expect(evaluateClarification({ status: "ask", questions: ["谁会用这个看板？", "他多久看一次？"] }, 6))
-      .toEqual({ kind: "ask", questions: ["谁会用这个看板？", "他多久看一次？"] });
+      .toEqual({ kind: "ask", questions: [{ question: "谁会用这个看板？", options: [] }, { question: "他多久看一次？", options: [] }] });
   });
 
   it("bounces a question that asks the person to make an implementation decision", () => {

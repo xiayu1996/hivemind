@@ -59,19 +59,43 @@ describe("NotionClarificationChannel", () => {
 
   it("posts the batch as one readable comment naming its round", async () => {
     const round = await store.openClarifyRound(REQUIREMENT_ID, ["谁会用它？", "多久看一次？"], "run-ask");
-    await channel.ask({ requirementId: REQUIREMENT_ID, round, questions: ["谁会用它？", "多久看一次？"] });
+    await channel.ask({ requirementId: REQUIREMENT_ID, round, questions: [{ question: "谁会用它？", options: [] }, { question: "多久看一次？", options: [] }] });
 
     expect(posted).toHaveLength(1);
     expect(posted[0]?.pageId).toBe(PAGE_ID);
     expect(posted[0]?.body).toContain("[澄清 第 1 轮]");
     expect(posted[0]?.body).toContain("1. 谁会用它？");
     expect(posted[0]?.body).toContain("2. 多久看一次？");
+    expect(posted[0]?.body).toContain("按序号回答");
+  });
+
+  it("lists each question's options under it and explains the letter reply", async () => {
+    const questions = [
+      { question: "谁会用它？", options: [{ label: "值班的人", recommended: true }, { label: "交付经理" }] },
+      { question: "多久看一次？", options: [{ label: "实时" }, { label: "每天一次" }] },
+    ];
+    const round = await store.openClarifyRound(REQUIREMENT_ID, questions, "run-ask");
+    await channel.ask({ requirementId: REQUIREMENT_ID, round, questions });
+
+    expect(posted[0]?.body.split("\n")).toEqual([
+      "[澄清 第 1 轮]",
+      "1. 谁会用它？",
+      "   A. 值班的人（推荐）",
+      "   B. 交付经理",
+      "   其他：以上都不合适，直接写你的答案",
+      "2. 多久看一次？",
+      "   A. 实时",
+      "   B. 每天一次",
+      "   其他：以上都不合适，直接写你的答案",
+      "",
+      expect.stringContaining("1A 2B"),
+    ]);
   });
 
   it("reads back only what a person wrote after the questions went out", async () => {
     const round = await store.openClarifyRound(REQUIREMENT_ID, ["谁会用它？"], "run-ask");
     const askedAt = (await store.clarifyHistory(REQUIREMENT_ID))[0]!.askedAt;
-    await channel.ask({ requirementId: REQUIREMENT_ID, round, questions: ["谁会用它？"] });
+    await channel.ask({ requirementId: REQUIREMENT_ID, round, questions: [{ question: "谁会用它？", options: [] }] });
     source.comments.push(
       { id: "old", pageId: PAGE_ID, blockId: null, discussionId: null, authorId: "person", body: "早先的闲聊", createdTime: askedAt - 1 },
       { id: "bot-echo", pageId: PAGE_ID, blockId: null, discussionId: null, authorId: "bot", body: "[澄清 第 1 轮]", createdTime: askedAt + 1 },
@@ -85,7 +109,7 @@ describe("NotionClarificationChannel", () => {
 
   it("makes a side-channel answer real by writing it onto the page and into the record", async () => {
     const round = await store.openClarifyRound(REQUIREMENT_ID, ["谁会用它？"], "run-ask");
-    await channel.ask({ requirementId: REQUIREMENT_ID, round, questions: ["谁会用它？"] });
+    await channel.ask({ requirementId: REQUIREMENT_ID, round, questions: [{ question: "谁会用它？", options: [] }] });
     const set = new ClarificationChannelSet([channel, {
       name: "chat",
       isSourceOfTruth: false,

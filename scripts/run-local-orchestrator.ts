@@ -294,7 +294,7 @@ async function main(): Promise<void> {
       await alerts.send({
         kind: "needs_input",
         title: `Epic ${epic.id} cannot be decomposed`,
-        body: outcome.kind === "blocking_question" ? outcome.question : outcome.reasons.join("; "),
+        body: outcome.kind === "blocking_question" ? outcome.question.question : outcome.reasons.join("; "),
       }).catch((cause: unknown) => console.error("alert failed:", (cause as Error).message));
     }
   };

@@ -1,7 +1,9 @@
+import type { HumanQuestion } from "./human-question.js";
+
 export interface ClarificationQuestionBatch {
   requirementId: string;
   round: number;
-  questions: readonly string[];
+  questions: readonly HumanQuestion[];
 }
 
 export interface ClarificationAnswer {

@@ -97,8 +97,8 @@ describe("RequirementStore", () => {
     await expect(store.getRequirement(REQUIREMENT_ID)).resolves.toMatchObject({ clarifyRounds: 2 });
     const history = await store.clarifyHistory(REQUIREMENT_ID);
     expect(history).toMatchObject([
-      { round: 1, questions: ["Who reads the console?"], answers: ["The person on call."] },
-      { round: 2, questions: ["What does it show first?"], answers: null },
+      { round: 1, questions: [{ question: "Who reads the console?" }], answers: ["The person on call."] },
+      { round: 2, questions: [{ question: "What does it show first?" }], answers: null },
     ]);
   });
 

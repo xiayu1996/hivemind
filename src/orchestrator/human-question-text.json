@@ -1,0 +1,21 @@
+{
+  "contextPrefix": "背景：",
+  "recommendedSuffix": "（推荐）",
+  "otherOption": "其他：以上都不合适，直接写你的答案",
+  "singleReplyHint": "直接回复这条评论：选选项就写字母（如 A），不合适就直接写答案。",
+  "batchReplyHint": "直接回复这条评论：选选项就按题号写字母（如「1A 2B」），不合适的题直接写答案。",
+  "openReplyHint": "直接回复这条评论即可，按序号回答最好读。",
+  "questionMarkers": [
+    "问",
+    "Q"
+  ],
+  "choiceMarkers": [
+    "选项",
+    "选",
+    "option"
+  ],
+  "choiceNoteTemplate": "（系统解读：{choices}）",
+  "choiceSeparator": "；",
+  "questionChoiceTemplate": "问 {question} 选 {letter} = {label}",
+  "singleChoiceTemplate": "选 {letter} = {label}"
+}

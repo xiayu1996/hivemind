@@ -5,14 +5,14 @@ import type {
   ClarificationChannel,
   ClarificationQuestionBatch,
 } from "../orchestrator/clarification-channel.js";
+import { numberedQuestions, replyHint, type HumanQuestion } from "../orchestrator/human-question.js";
 import type { CommentIngestor } from "./comment-ingest.js";
 import type { NotionGateway } from "./gateway.js";
 
 /** Marks the batch a comment belongs to, so a person reading the page later can
  * tell which answers went with which questions. */
-export function questionCommentBody(round: number, questions: readonly string[]): string {
-  const lines = questions.map((question, index) => `${index + 1}. ${question}`);
-  return [`[澄清 第 ${round} 轮]`, ...lines, "", "直接回复这条评论即可，按序号回答最好读。"].join("\n");
+export function questionCommentBody(round: number, questions: readonly HumanQuestion[]): string {
+  return [`[澄清 第 ${round} 轮]`, ...numberedQuestions(questions), "", replyHint(questions)].join("\n");
 }
 
 function mirrorCommentBody(round: number, channelName: string, answers: readonly ClarificationAnswer[]): string {

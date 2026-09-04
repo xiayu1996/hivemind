@@ -49,7 +49,7 @@ describe("PiPmPort", () => {
       requirementId: REQUIREMENT_ID,
       title: "控制台",
       originalRequest: "我想随时知道现在在做什么。",
-      history: [{ round: 1, questions: ["先问过的问题？"], answers: ["答过的答案"] }],
+      history: [{ round: 1, questions: [{ question: "先问过的问题？", options: [] }], answers: ["答过的答案"] }],
       maxQuestions: 6,
       previousRejections: ["question 1 line 1 contains implementation language"],
     })).resolves.toEqual({ status: "ask", questions: ["谁会用它？"] });

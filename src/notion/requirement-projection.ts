@@ -7,6 +7,7 @@ import type {
   RequirementSnapshot,
   RequirementStore,
 } from "../orchestrator/requirement-store.js";
+import { questionText } from "../orchestrator/human-question.js";
 import type { DesiredRequirementPage } from "./blocks/requirement-page.js";
 import type { NotionOutbox } from "./outbox.js";
 import schema from "./notion-schema.json" with { type: "json" };
@@ -71,7 +72,7 @@ export function buildRequirementPage(input: RequirementPageInput): DesiredRequir
   const clarify: string[] = [];
   for (const round of input.clarify) {
     for (const [index, question] of round.questions.entries()) {
-      clarify.push(`第 ${round.round} 轮 问 ${index + 1}: ${question}`);
+      clarify.push(`第 ${round.round} 轮 问 ${index + 1}: ${questionText(question)}`);
     }
     for (const [index, answer] of (round.answers ?? []).entries()) {
       clarify.push(`第 ${round.round} 轮 答 ${index + 1}: ${answer}`);
