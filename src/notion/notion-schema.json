@@ -29,14 +29,116 @@
     "creator": "创建人",
     "taskId": "任务 ID",
     "syncFingerprint": "同步指纹",
-    "completionValue": "完成值"
+    "completionValue": "完成值",
+    "lastEdited": "最近更新",
+    "waitingOnHuman": "等待人",
+    "progress": "进度"
   },
   "options": {
-    "requirementStatus": ["待澄清", "澄清中", "PRD 待确认", "拆解执行中", "待验收", "已验收", "人工停靠"],
-    "epicStatus": ["待拆解", "拆解待确认", "进行中", "已完成"],
-    "aiStatus": ["待启动", "进行中", "需要输入", "待人确认", "人工停靠", "已完成", "失败"],
-    "phase": ["排队中", "需求分析", "开发中", "验证中", "端到端", "MR 已建"],
-    "priority": ["P0", "P1", "P2", "P3"],
-    "capabilities": ["web", "browser-e2e", "ios", "windows"]
+    "requirementStatus": [
+      "待澄清",
+      "澄清中",
+      "PRD 待确认",
+      "拆解执行中",
+      "待验收",
+      "已验收",
+      "人工停靠"
+    ],
+    "epicStatus": [
+      "待拆解",
+      "拆解待确认",
+      "进行中",
+      "已完成"
+    ],
+    "aiStatus": [
+      "待启动",
+      "进行中",
+      "需要输入",
+      "待人确认",
+      "人工停靠",
+      "已完成",
+      "失败"
+    ],
+    "phase": [
+      "排队中",
+      "需求分析",
+      "开发中",
+      "验证中",
+      "端到端",
+      "MR 已建"
+    ],
+    "priority": [
+      "P0",
+      "P1",
+      "P2",
+      "P3"
+    ],
+    "capabilities": [
+      "web",
+      "browser-e2e",
+      "ios",
+      "windows"
+    ]
+  },
+  "optionColors": {
+    "requirementStatus": {
+      "待澄清": "gray",
+      "澄清中": "red",
+      "PRD 待确认": "orange",
+      "拆解执行中": "blue",
+      "待验收": "yellow",
+      "已验收": "green",
+      "人工停靠": "purple"
+    },
+    "epicStatus": {
+      "待拆解": "gray",
+      "拆解待确认": "orange",
+      "进行中": "blue",
+      "已完成": "green"
+    },
+    "aiStatus": {
+      "待启动": "gray",
+      "进行中": "blue",
+      "需要输入": "red",
+      "待人确认": "orange",
+      "人工停靠": "purple",
+      "已完成": "green",
+      "失败": "pink"
+    },
+    "phase": {
+      "排队中": "gray",
+      "需求分析": "purple",
+      "开发中": "blue",
+      "验证中": "yellow",
+      "端到端": "orange",
+      "MR 已建": "green"
+    },
+    "priority": {
+      "P0": "red",
+      "P1": "orange",
+      "P2": "yellow",
+      "P3": "gray"
+    },
+    "capabilities": {
+      "web": "blue",
+      "browser-e2e": "purple",
+      "ios": "gray",
+      "windows": "brown"
+    }
+  },
+  "waitingLabels": {
+    "hoursSuffix": "小时",
+    "requirementStatus": {
+      "澄清中": "🙋 等你回答澄清问题",
+      "PRD 待确认": "🙋 等你确认 PRD",
+      "待验收": "🙋 等你验收"
+    },
+    "epicStatus": {
+      "拆解待确认": "🙋 等你批准拆解"
+    },
+    "aiStatus": {
+      "需要输入": "🙋 等你回答",
+      "待人确认": "🙋 等你确认 MR"
+    }
   }
 }
