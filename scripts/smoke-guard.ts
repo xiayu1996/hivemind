@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { JsonlDecoder } from "../src/runner/jsonl.js";
+import { defaultPiBinary } from "../src/runner/pi-binary.js";
 import {
   POLICY_ENV_VAR,
   assembleGuardPolicy,
@@ -21,7 +22,7 @@ import {
 } from "../src/guard/policy.js";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
-const PI_BIN = process.env.PI_BIN ?? `${process.env.HOME}/.hivemind/pi/0.84.3/pi/pi`;
+const PI_BIN = defaultPiBinary();
 const MOCK_PORT = process.env.HIVEMIND_MOCK_PORT ?? "8131";
 
 interface Probe {

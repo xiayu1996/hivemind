@@ -3,7 +3,7 @@
 24x7 自主编码 agent 服务：自动从 Notion 看板接取需求，分析拆解后以 TDD 驱动开发，覆盖单测/集成/snapshot/e2e/UI 五层测试，交付 MR 并将业务语言的验证报告回写 Notion。人几乎不写代码，Notion 是唯一的人机交互与内容归档空间。
 
 - 执行底座：[pi](https://github.com/earendil-works/pi)（provider 无关，day1 供应商：Codex / GLM / Grok，预留 Claude）
-- 编排拓扑：中心 orchestrator（Linux, systemd）+ 多机 worker（Mac mini / Windows），编排式流水线 + 解耦并行（CODE 按 footprint 并行、E2E 持续回归 loop）
+- 编排拓扑：中心 orchestrator（Linux, systemd）+ 多机 worker（Mac mini / Windows 主机上的 WSL2 Ubuntu），编排式流水线 + 解耦并行（CODE 按 footprint 并行、E2E 持续回归 loop）
 - 血统：busybee（作者的上一代 agent 服务，私有仓库）的下一代独立系统，移植其约 60% 已验证的 harness 基础设施与全部生产教训
 
 ## 设计文档

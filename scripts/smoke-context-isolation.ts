@@ -3,19 +3,18 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadExplicitContextBundle } from "../src/runner/context-files.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
 import { resolveModel, staticCatalog } from "../src/runner/model-resolver.js";
+import { defaultPiBinary } from "../src/runner/pi-binary.js";
 
 const MODEL = await resolveModel(staticCatalog([{ provider: "mock", id: "mock-1" }]), "mock", "mock-1");
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
-const PI_BIN = process.env.PI_BIN ?? join(
-  homedir(), ".hivemind", "pi", "0.84.3", "pi", process.platform === "win32" ? "pi.exe" : "pi",
-);
+const PI_BIN = defaultPiBinary();
 const MOCK_PORT = process.env.HIVEMIND_MOCK_PORT ?? "8133";
 const POISON = "CONTEXT_POISON_MUST_NOT_REACH_PROVIDER";
 const ALLOWED = "EXPLICIT_CONTEXT_REACHED_PROVIDER";

@@ -1,17 +1,15 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PiCompletionJudge, verifyCompletion } from "../src/pipeline/completion-verifier.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
 import { resolveModel, staticCatalog } from "../src/runner/model-resolver.js";
+import { defaultPiBinary } from "../src/runner/pi-binary.js";
 
 const MODEL = await resolveModel(staticCatalog([{ provider: "mock", id: "mock-1" }]), "mock", "mock-1");
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
-const PI_BIN = process.env.PI_BIN ?? join(
-  homedir(), ".hivemind", "pi", "0.84.3", "pi", process.platform === "win32" ? "pi.exe" : "pi",
-);
+const PI_BIN = defaultPiBinary();
 const MOCK_PORT = process.env.HIVEMIND_MOCK_PORT ?? "8134";
 
 function startMock(): ChildProcess {

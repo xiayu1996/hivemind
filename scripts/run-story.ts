@@ -26,6 +26,7 @@ import { ModelPolicy } from "../src/runner/model-policy.js";
 import { retryLimits } from "../src/pipeline/retry-limits.js";
 import { ScenarioRegistry } from "../src/regression/scenario-registry.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
+import { defaultPiBinary } from "../src/runner/pi-binary.js";
 import { browserLanePath } from "../src/verify/browser-config.js";
 import { BlindVerifyExecutor } from "../src/verify/executor.js";
 import { loadPromptLayers } from "../src/pipeline/prompt-loader.js";
@@ -84,9 +85,7 @@ async function main(): Promise<void> {
   const integrationWorktree = process.argv.includes("--integration-worktree")
     ? resolve(one("--integration-worktree"))
     : null;
-  const piBinary = resolve(one("--pi", join(
-    homedir(), ".hivemind", "pi", "0.84.3", "pi", process.platform === "win32" ? "pi.exe" : "pi",
-  )));
+  const piBinary = resolve(one("--pi", defaultPiBinary()));
   const dbUrl = process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db";
   const safeCardId = safeSegment(cardId);
   const evidenceRoot = resolve(one("--evidence-root", join(homedir(), ".hivemind", "evidence", safeCardId)));

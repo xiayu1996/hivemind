@@ -21,10 +21,4 @@ MOCK_FAULT_FILE=/tmp/fault.txt node poc/rpc-context/poc-5-error-catalog.mjs
 `rpc-client.mjs` 是协议合规的 RPC 客户端（只按 LF 分帧，剥离结尾 `\r`，
 不用 Node `readline`——它会在 JSON 字符串内合法的 U+2028/U+2029 处误切）。M1 的 PiRunner 以此为起点。
 
-## codex-oauth/
-
-`usage-limit-parser.mjs` + 单测。模板由 pi 二进制反推，非猜测。
-
-```bash
-node poc/codex-oauth/usage-limit-parser.test.mjs
-```
+usage-limit 文案解析器已移植进 `src/runner/usage-limit.ts`，`poc/codex-oauth/` 随之删除。

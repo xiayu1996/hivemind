@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -17,14 +17,13 @@ import { NotionStoryProjection } from "../src/notion/story-projection.js";
 import { SingleStoryWorker } from "../src/orchestrator/story-worker.js";
 import { PiModelCatalog, resolveModel } from "../src/runner/model-resolver.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
+import { defaultPiBinary } from "../src/runner/pi-binary.js";
 import { BlindVerifyExecutor } from "../src/verify/executor.js";
 import { GitMrStoryDelivery } from "../src/vcs/story-delivery.js";
 
 const execFileAsync = promisify(execFile);
 const REPO = fileURLToPath(new URL("..", import.meta.url));
-const PI_BIN = process.env.PI_BIN ?? join(
-  homedir(), ".hivemind", "pi", "0.84.3", "pi", process.platform === "win32" ? "pi.exe" : "pi",
-);
+const PI_BIN = defaultPiBinary();
 const MOCK_PORT = process.env.HIVEMIND_MOCK_PORT ?? "19101";
 const MOCK_EXTENSION = join(REPO, "poc", "rpc-context", "mock-provider-extension.mjs");
 const GUARD_EXTENSION = join(REPO, "extensions", "hive-guard.ts");

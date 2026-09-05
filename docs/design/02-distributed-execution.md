@@ -38,6 +38,8 @@ jobId 幂等规则（`task-<cardId>[-r<N>][-c<M>]`）、removeOnComplete:true、
 
 ### 1.5 Windows 兼容（已核实，真实问题）
 
+> **2026-09-05 更正**：Windows 主机上的 hivemind 一律跑在 WSL2 Ubuntu 里，与 Linux 走同一条 `deploy/linux/install.sh`、同一套 systemd 用户单元；原生 Windows / Git Bash 路径退役（`install-pi.ps1`、`smoke-windows-rpc.ts` 已删）。下文保留为当时的评估记录；仍有效的只有 danger-rules 的路径归一（被测仓库可能含 Windows 风格路径）。"Windows 探针"退化为"WSL 内 Linux worker + 有头浏览器需求时再议"。
+
 pi 在 Windows 有安装失败史（#4399）、npm spawn ENOENT 回归（#4665）、假设 shell 有 unzip/tar（#1348，官方 workaround 是 Git Bash）。缓解：
 
 - **Windows worker day1 定位二等公民**：只承接 cap.windows 探针 job，不承接 CODE；
@@ -215,7 +217,7 @@ busybee CredentialHealth 从全局单一扩展为 per-provider 三态机（close
 |---|---|---|
 | Linux | systemd（orchestrator.service + worker.service 分 unit） | Restart=always；Redis 同机 systemd 管理；分开 drain |
 | Mac mini | **LaunchAgent（用户会话）而非 LaunchDaemon** | 模拟器/浏览器 e2e 需要 GUI 会话；开机自动登录 + KeepAlive + caffeinate 防休眠；busybee launchd PATH 坑已知（幂等生成 plist 重写 PATH） |
-| Windows | **自动登录用户的登录计划任务 + 看门狗任务**（不用 nssm 服务） | Session 0 隔离会弄死有头浏览器 e2e；nssm 仅在确认全程 headless 时可选 |
+| Windows | **WSL2 Ubuntu 内的 systemd 用户单元**，与 Linux 行同一脚本（2026-09-05 更正，原计划任务 + 看门狗方案作废） | `/etc/wsl.conf` 启用 systemd；`loginctl enable-linger`；headless 浏览器可用，有头 e2e 不在此机承接 |
 
 relaunch 统一抽象为 `process.exit(1)` + 守护器拉起——KeepAlive / Restart=always / 计划任务重触发行为同构，平台差异被守护器吸收。
 

@@ -9,10 +9,11 @@ import { join } from "node:path";
 import { CheckpointStore } from "../src/runner/checkpoint.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
 import { resolveModel, staticCatalog } from "../src/runner/model-resolver.js";
+import { defaultPiBinary } from "../src/runner/pi-binary.js";
 
 const MODEL = await resolveModel(staticCatalog([{ provider: "mock", id: "mock-1" }]), "mock", "mock-1");
 
-const PI = `${process.env.HOME}/.hivemind/pi/0.84.3/pi/pi`;
+const PI = defaultPiBinary();
 const EXT = join(process.cwd(), "poc/rpc-context/mock-provider-extension.mjs");
 const MOCK_PORT = process.env.HIVEMIND_MOCK_PORT ?? "19102";
 

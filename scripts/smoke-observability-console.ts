@@ -2,7 +2,7 @@ import { createClient } from "@libsql/client";
 import { deepStrictEqual } from "node:assert";
 import { spawn, type ChildProcess } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { hostname, homedir, platform, release } from "node:os";
+import { hostname, platform, release } from "node:os";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";
@@ -16,13 +16,12 @@ import { CostLedger } from "../src/observability/cost-ledger.js";
 import { migrate } from "../src/persistence/migrate.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
 import { resolveModel, staticCatalog } from "../src/runner/model-resolver.js";
+import { defaultPiBinary, pinnedPiVersion } from "../src/runner/pi-binary.js";
 
 const MODEL = await resolveModel(staticCatalog([{ provider: "mock", id: "mock-1" }]), "mock", "mock-1");
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
-const PI_BIN = process.env.PI_BIN ?? join(
-  homedir(), ".hivemind", "pi", "0.84.3", "pi", process.platform === "win32" ? "pi.exe" : "pi",
-);
+const PI_BIN = defaultPiBinary();
 const MOCK_PORT = process.env.HIVEMIND_MOCK_PORT ?? "19099";
 const CONSOLE_PORT = Number(process.env.HIVEMIND_CONSOLE_PORT ?? "3211");
 
@@ -146,7 +145,7 @@ async function main(): Promise<void> {
       os: platform(),
       osRelease: release(),
       node: process.version,
-      pi: "0.84.3",
+      pi: pinnedPiVersion(),
     }]);
     app = await createConsoleServer(source, {
       uiRoot: join(REPO, "console-ui", "dist"),

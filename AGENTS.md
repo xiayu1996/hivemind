@@ -43,9 +43,11 @@ npm run lint      # oxlint src poc scripts
 npm run typecheck # tsc --noEmit，strict
 npm run build     # tsc 产出 dist/
 npm run db:migrate
-npm run preflight -- --repository-path <repo>   # 部署前就绪探针：pi/凭据/Notion/CLI/浏览器，不打印任何凭据
+npm run preflight -- --repository-path <repo>   # 就绪探针：pi/凭据/Notion/CLI/systemd/浏览器，不打印任何凭据
 npm run orchestrator:run -- --repository-path <repo> --repository-id <id>   # Epic/Story 执行常驻
 npm run requirements:run -- --repository-slug <owner/name>                  # 产品经理常驻（与上者共用一库一 outbox）
+
+deploy/linux/install.sh --repository-path <repo>   # 部署唯一入口，幂等；Ubuntu / Arch(Omarchy) / WSL2 Ubuntu 同一条命令
 
 npx tsx scripts/smoke-runner.ts            # 真实 pi 子进程冒烟
 npx tsx scripts/smoke-context-isolation.ts # 验证 context 文件不泄漏
@@ -53,7 +55,10 @@ npx tsx scripts/smoke-crash-recovery.ts    # SIGKILL 后从 checkpoint 续跑
 npx tsx scripts/smoke-browser-e2e.ts       # 真实 headless 浏览器 + 三层红线
 ```
 
-Node `>=26`，ESM，包管理用 npm。Linux 单节点部署走 `deploy/linux/install.sh` + systemd 用户单元，步骤见 [docs/runbooks/linux-single-node.md](docs/runbooks/linux-single-node.md)。
+Node `>=26`，ESM，包管理用 npm。部署只有 Linux 一条路：Windows 主机跑在 WSL2 Ubuntu 里，不再有原生 Windows 路径。
+`deploy/linux/install.sh` 是唯一入口，每个阶段先查再做，人工步骤（凭据、pi 登录、gh 登录）原地停下、重跑续接；见 [docs/runbooks/linux-single-node.md](docs/runbooks/linux-single-node.md)。
+pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src/runner/pi-binary.ts` 取，shell 经 `node -p` 取，不得再出现字面版本号。
+`scripts/` 只放长期入口（run-* / smoke-* / preflight / notion-bootstrap / install-pi / pi-login）；一次性排障脚本用完即删，不进仓库。
 
 ### 本地验证顺序
 

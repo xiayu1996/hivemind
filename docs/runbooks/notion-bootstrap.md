@@ -4,15 +4,14 @@
 
 ## 前置
 
-1. 在 Notion 建立顶层 `Hivemind · Agent Delivery Hub` 页面，并把页面共享给 hivemind integration。
-2. 在 `~/.hivemind/secrets.env` 写入 `NOTION_TOKEN`；文件权限只允许当前用户读取。
-3. 运行：
+`deploy/linux/install.sh` 在 secrets 文件里缺少三张库的 data source id 时会自动跑一次 bootstrap；只需先在 Notion 建好顶层页、共享给 integration，并在 `~/.hivemind/secrets.env` 填 `NOTION_TOKEN` 与 `HIVEMIND_NOTION_PARENT_PAGE_ID`。单独执行时：
 
-   ```sh
-   npx tsx scripts/notion-bootstrap.ts --parent <Agent Delivery Hub page id>
-   ```
+```sh
+npx tsx scripts/notion-bootstrap.ts                      # 建三张库
+npx tsx scripts/notion-bootstrap.ts --requirements-only  # 已有 Epics/Stories，只补 Requirements
+```
 
-4. 脚本会把 Stories data source ID 与 integration bot user ID 原子写入本机 secrets 文件；输出的其余 database/data source ID 只用于验收记录，不要贴进对话或无关日志。
+脚本把三个 data source id 与 integration bot user id 原子写入本机 secrets 文件；输出的其余 id 只用于验收记录，不要贴进对话或无关日志。Notion 侧没有幂等：重跑会再建一套库，因此安装脚本只在 id 缺失时调用它。
 
 脚本创建的属性里有三类只服务于人的可读性，orchestrator 不读写它们：
 
@@ -24,7 +23,7 @@
 
 选项配色写在 `src/notion/notion-schema.json` 的 `optionColors`，**只在创建时生效**：Notion API 拒绝给已存在的选项改色（`Cannot update color of select with name`）。对已建成的看板，配色要在 Notion UI 里手动按该表设置一次。
 
-Windows 上的完整 bootstrap、Webhook 验证和单卡验收顺序见 `m1-live-acceptance.md`。Webhook 首次发送的 verification token 由服务原子写入 secrets 文件，响应和日志均不包含 token。
+Webhook 是可选加速（单节点靠 60s 轮询兜底）：在 integration 的 Webhooks 页订阅 `page.created` / `page.properties_updated` / `page.content_updated` / `comment.created` 到 `<公网地址>/webhooks/notion`，首次 verification token 由服务原子写入 secrets 文件，响应和日志均不包含它。
 
 ## 视图
 

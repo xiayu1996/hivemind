@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# Install a pinned pi release into a side-by-side versioned directory.
+# Install the pinned pi release into a side-by-side versioned directory.
 #
 #   scripts/install-pi.sh [version]
 #
-# Versions live at ~/.hivemind/pi/<version>/pi/pi so several can coexist and the
-# orchestrator can roll a new one out per host without touching the running one.
-# Checksums are verified against the release SHA256SUMS; a mismatch aborts.
+# The pin lives in package.json (hivemind.piVersion); HIVEMIND_PI_VERSION or the
+# argument override it for a canary host. Versions live at
+# ~/.hivemind/pi/<version>/pi/pi so several coexist and a new one can be rolled
+# out per host without touching the running one. Checksums are verified against
+# the release SHA256SUMS; a mismatch aborts. Rerunning with the same pin is a no-op.
 
 set -euo pipefail
 
-PIN="${1:-${HIVEMIND_PI_VERSION:-0.84.3}}"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+PIN="${1:-${HIVEMIND_PI_VERSION:-$(node -p "require('$REPO/package.json').hivemind.piVersion")}}"
 ROOT="${HIVEMIND_HOME:-$HOME/.hivemind}/pi/$PIN"
 BIN="$ROOT/pi/pi"
 
