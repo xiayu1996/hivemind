@@ -23,6 +23,11 @@ watchEffect(async () => {
 
 const groups = computed(() => overviewGroups(overview.value));
 
+function itemSummary(item) {
+  if (!Number.isFinite(item.timestamp)) return item.summary;
+  return `${item.summary} · ${new Date(item.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+}
+
 function navigate(view) {
   history.pushState({}, "", view === "overview" ? "/" : `/${view}`);
   current.value = view;
@@ -45,8 +50,8 @@ function navigate(view) {
         <article v-for="group in groups" :key="group.title" class="overview-group">
           <h2>{{ group.title }}</h2>
           <p v-if="group.items.length === 0" class="empty">Nothing needs attention.</p>
-          <a v-for="item in group.items" :key="item.id" class="overview-item" :href="item.taskPath">
-            <strong>{{ item.title }}</strong><span>{{ item.state }} · {{ item.summary }}</span>
+          <a v-for="item in group.items" :key="item.id || item.storyId" class="overview-item" :href="item.taskPath">
+            <strong>{{ item.title }}</strong><span>{{ item.state }} · {{ itemSummary(item) }}</span>
           </a>
         </article>
       </template>
