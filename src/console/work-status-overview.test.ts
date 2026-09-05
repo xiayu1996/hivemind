@@ -1,4 +1,5 @@
 import { createClient } from "@libsql/client";
+import { readFile } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { migrate } from "../persistence/migrate.js";
 import { LibsqlConsoleDataSource } from "./libsql-data-source.js";
@@ -32,5 +33,20 @@ describe("S-E1ACTION-01-ignorecomments", () => {
       activeRequirementState: "no_active_requirements",
       activeRequirements: [],
     });
+  });
+
+  it("keeps the active-requirements section explicit when there is no active requirement", async () => {
+    await client.execute({
+      sql: `INSERT INTO human_gates (id, object_type, object_id, required_action, phase, navigation_target, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: ["gate-1", "story", "story-1", "Answer the question", "CODE", "/tasks/story-1", 1, 1],
+    });
+
+    const source = new LibsqlConsoleDataSource(client, async () => []);
+    await expect(source.workStatus()).resolves.toMatchObject({
+      activeRequirementState: "no_active_requirements",
+      activeRequirements: [],
+    });
+    await expect(readFile("console-ui/src/App.vue", "utf8")).resolves.toContain("No active requirements");
   });
 });
