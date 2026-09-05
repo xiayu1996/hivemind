@@ -126,7 +126,20 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
       summary: "blocking_question", updatedAt: Number(row.updated_at), taskPath: "/tasks",
     });
 
-    return { questions };
+    const activeRows = (await this.client.execute(
+      `SELECT id, title, state, state AS summary, updated_at FROM requirements
+        WHERE state NOT IN ('DONE', 'FAILED', 'HUMAN_PARKED') AND stop_reason IS NULL
+       UNION ALL
+       SELECT id, title, state, COALESCE(phase, state) AS summary, updated_at FROM stories
+        WHERE state NOT IN ('DELIVERED', 'FAILED', 'HUMAN_PARKED', 'NEEDS_INPUT') AND stop_reason IS NULL
+       ORDER BY updated_at DESC, id`,
+    )).rows;
+    const active = activeRows.map((row) => ({
+      id: String(row.id), title: String(row.title), state: String(row.state),
+      summary: String(row.summary), updatedAt: Number(row.updated_at), taskPath: "/tasks",
+    }));
+
+    return { questions, active, events: [] };
   }
 }
 
