@@ -52,6 +52,8 @@ describe("S-E3OVERVIEW-01-active", () => {
     await migrate(client);
     await client.batch([
       "INSERT INTO requirements (id, notion_page_id, title, state, original_request, created_at, updated_at) VALUES ('r-active','rp1','Active requirement','EXECUTING','Work',1,20)",
+      "INSERT INTO requirements (id, notion_page_id, title, state, original_request, created_at, updated_at) VALUES ('r-clarify','rp4','Clarification required','EXECUTING','Work',1,35)",
+      "INSERT INTO requirement_clarify_rounds (requirement_id, round, questions, asked_at) VALUES ('r-clarify',1,'[{\"question\":\"Choose region\"}]',10)",
       "INSERT INTO requirements (id, notion_page_id, title, state, original_request, stop_reason, created_at, updated_at) VALUES ('r-wait','rp2','Waiting requirement','CLARIFY','Work','blocking_question',1,30)",
       "INSERT INTO requirements (id, notion_page_id, title, state, original_request, created_at, updated_at) VALUES ('r-done','rp3','Done requirement','DONE','Work',1,40)",
       "INSERT INTO stories (id, notion_page_id, title, requirement, state, phase, created_at, updated_at) VALUES ('s-active','sp1','Active story','Work','CODE','CODE',1,25)",
