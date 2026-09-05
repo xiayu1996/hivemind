@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { migrate } from "../persistence/migrate.js";
 import { LibsqlConsoleDataSource } from "./libsql-data-source.js";
+import { createConsoleServer, type ConsoleDataSource } from "./server.js";
 
 describe("S-E1ACTION-01-ignorecomments", () => {
   let client: ReturnType<typeof createClient>;
@@ -64,6 +65,20 @@ describe("S-E1ACTION-01-ignorecomments", () => {
       }],
       activeRequirements: [{ id: "requirement-1" }],
     });
+  });
+
+  it("returns an observable loading failure rather than empty sections when projection fails", async () => {
+    const failingData: ConsoleDataSource = {
+      nodes: async () => [], tasks: async () => [], costs: async () => [], config: async () => [],
+      stats: async () => ({}), providers: async () => [],
+      workStatus: async () => { throw new Error("database unavailable"); },
+    };
+    const app = await createConsoleServer(failingData, { serveUi: false });
+    const response = await app.inject({ method: "GET", url: "/api/work-status" });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: "work_status_unavailable", retry: true });
+    await app.close();
+    await expect(readFile("console-ui/src/App.vue", "utf8")).resolves.toContain("Retry");
   });
 
   it("keeps the active-requirements section explicit when there is no active requirement", async () => {
