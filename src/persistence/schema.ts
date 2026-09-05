@@ -314,6 +314,21 @@ export const costEntries = sqliteTable("cost_entries", {
   ts: ms("ts").notNull(),
 }, (t) => [index("idx_cost_card").on(t.cardId, t.ts), index("idx_cost_provider").on(t.provider, t.ts)]);
 
+export const turnUsage = sqliteTable("turn_usage", {
+  runId: text("run_id").notNull(),
+  turn: integer("turn").notNull(),
+  cardId: text("card_id"),
+  phase: text("phase"),
+  provider: text("provider").notNull(),
+  modelId: text("model_id").notNull(),
+  uncachedInputTokens: integer("uncached_input_tokens").notNull().default(0),
+  cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
+  cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
+  outputTokens: integer("output_tokens").notNull().default(0),
+  cacheLossTokens: integer("cache_loss_tokens").notNull().default(0),
+  ts: ms("ts").notNull(),
+}, (t) => [primaryKey({ columns: [t.runId, t.turn] }), index("idx_turn_usage_card").on(t.cardId, t.ts)]);
+
 export const configEntries = sqliteTable("config_entries", {
   scopeId: text("scope_id").notNull().default("global"),
   key: text("key").notNull(),

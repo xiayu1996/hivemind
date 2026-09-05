@@ -20,6 +20,7 @@ const policy: GuardPolicy = {
   bannedBash: ["\\bgit\\s+commit\\b"],
   auditPath: "/audit/tool-audit.jsonl",
   e2eHostAllowlist: ["localhost"],
+  toolOutputLimits: { maxBytes: 51200, maxLines: 2000 },
 };
 
 describe("round trip", () => {

@@ -25,7 +25,16 @@ describe("LibsqlPhaseRecorder", () => {
       runId: "run-1",
       cardId: "card-1",
       phase: "CODE",
-      messages: [{ role: "assistant", content: "done" }],
+      messages: [
+        { role: "assistant", usage: { input: 1000, cacheRead: 0, cacheWrite: 0, output: 50 } },
+        { role: "toolResult", content: [] },
+        {
+          role: "assistant",
+          usage: { input: 2000, cacheRead: 0, cacheWrite: 0, output: 20 },
+          diagnostics: [{ kind: "provider_transport_failure" }],
+        },
+        { role: "assistant", content: "done", usage: { input: 100, cacheRead: 3072, cacheWrite: 0, output: 10 } },
+      ],
       providerPayloads: payloads,
       result: {
         settled: true,
@@ -42,6 +51,20 @@ describe("LibsqlPhaseRecorder", () => {
     expect(cost.rows).toMatchObject([{ provider: "mock", model_id: "mock-1", cost_usd: 0.05 }]);
     const events = await client.execute("SELECT type FROM event_log WHERE run_id = 'run-1'");
     expect(events.rows).toMatchObject([{ type: "rpc.agent_settled" }]);
+
+    // The second turn was sent to a cold shard: its whole previous context is a loss.
+    const turns = await client.execute("SELECT turn, cache_read_tokens, cache_loss_tokens FROM turn_usage ORDER BY turn");
+    expect(turns.rows).toMatchObject([
+      { turn: 1, cache_read_tokens: 0, cache_loss_tokens: 0 },
+      { turn: 2, cache_read_tokens: 0, cache_loss_tokens: 1050 },
+      { turn: 3, cache_read_tokens: 3072, cache_loss_tokens: 0 },
+    ]);
+    const analysis = canonical.find((event) => event.type === "cache.analysis");
+    expect(analysis?.data).toMatchObject({ turns: 3, lostTokens: 1050, losses: [{ turn: 2 }] });
+    const diagnostics = canonical.filter((event) => event.type === "provider/diagnostics");
+    expect(diagnostics.map((event) => event.data)).toEqual([
+      { turn: 2, diagnostics: [{ kind: "provider_transport_failure" }] },
+    ]);
     client.close();
     await rm(directory, { recursive: true, force: true });
   });

@@ -47,6 +47,7 @@ import { NotionEpicPlanDelivery } from "../src/notion/epic-plan-delivery.js";
 import { ingestEpicsForDecomposition } from "../src/notion/epic-intake.js";
 import { EpicDecomposer } from "../src/orchestrator/decompose-runner.js";
 import { PiDecomposePort } from "../src/orchestrator/pi-decompose-port.js";
+import type { ExplicitContextFile } from "../src/runner/context-files.js";
 import { EpicBranchFreshness } from "../src/orchestrator/epic-branch-refresh.js";
 import { surfaceBlockedEpics } from "../src/orchestrator/epic-blocker.js";
 import { EpicCompletion } from "../src/orchestrator/epic-completion.js";
@@ -65,6 +66,16 @@ import { createWorktree, locateWorktree, worktreeLayout } from "../src/vcs/workt
 
 const execFileAsync = promisify(execFile);
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
+
+/**
+ * The repository's own conventions, loaded into every DECOMPOSE and Story phase
+ * under the same label so the system-prompt prefix is identical across them. A
+ * repository without the file simply gets no context section.
+ */
+async function repositoryContextFiles(repositoryPath: string): Promise<ExplicitContextFile[]> {
+  const path = join(repositoryPath, "AGENTS.md");
+  return (await exists(path)) ? [{ label: "repository", path }] : [];
+}
 
 function optional(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -286,6 +297,11 @@ async function main(): Promise<void> {
         model: await modelPolicy.resolve("decompose", provider),
         promptRoot: join(ROOT, "prompts"),
         cwd: repositoryPath,
+        contextFiles: await repositoryContextFiles(repositoryPath),
+        guard: {
+          extension: join(ROOT, "extensions", "hive-guard.ts"),
+          auditPath: join(workRoot, "evidence", repositoryId, "decompose-tool-audit.jsonl"),
+        },
       }),
     );
     const outcome = await decomposer.decompose(epic);
@@ -386,7 +402,8 @@ async function main(): Promise<void> {
           "--model", model,
           "--target-branch", targetBranch,
           ...(integrationWorktree ? ["--integration-worktree", integrationWorktree] : []),
-          "--context", `repository=${join(location.worktreePath, "AGENTS.md")}`,
+          ...(await repositoryContextFiles(location.worktreePath))
+            .flatMap((file) => ["--context", `${file.label}=${file.path}`]),
         ], {
           cwd: ROOT,
           windowsHide: true,

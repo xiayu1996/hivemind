@@ -14,6 +14,7 @@ const policy: GuardPolicy = {
   bannedBash: [],
   auditPath: "/audit/tool-audit.jsonl",
   e2eHostAllowlist: [],
+  toolOutputLimits: { maxBytes: 51200, maxLines: 2000 },
 };
 
 const fenced = DEFAULT_FENCED_PATTERNS;

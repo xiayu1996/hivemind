@@ -6,6 +6,8 @@
  * first tool call and cannot be reached by the model.
  */
 
+import { toolOutputLimitsFor, type ToolOutputLimits } from "./tool-output.js";
+
 export const POLICY_ENV_VAR = "PI_GUARD_POLICY";
 
 export interface GuardPolicy {
@@ -30,6 +32,8 @@ export interface GuardPolicy {
    * expected to drive a browser at all, and any navigation is refused.
    */
   e2eHostAllowlist: string[];
+  /** Per-result size cap applied by the extension's tool_result hook. */
+  toolOutputLimits: ToolOutputLimits;
 }
 
 export type GuardPhase =
@@ -105,6 +109,7 @@ export function assembleGuardPolicy(input: GuardPolicyInput): GuardPolicy {
     bannedBash: readOnly ? [...READ_ONLY_BASH_PATTERNS] : [],
     auditPath: input.auditPath,
     e2eHostAllowlist: BROWSING_PHASES.has(input.phase) ? sortedUnique(input.e2eHostAllowlist ?? []) : [],
+    toolOutputLimits: toolOutputLimitsFor(input.phase),
   };
 }
 
@@ -129,6 +134,21 @@ function requireStringArray(source: Record<string, unknown>, key: string): strin
     throw new GuardPolicyError(`${key} must be an array of strings`);
   }
   return value as string[];
+}
+
+function requireLimits(source: Record<string, unknown>, key: string): ToolOutputLimits {
+  const value = source[key];
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new GuardPolicyError(`${key} must be an object`);
+  }
+  const record = value as Record<string, unknown>;
+  for (const field of ["maxBytes", "maxLines"] as const) {
+    const number = record[field];
+    if (typeof number !== "number" || !Number.isInteger(number) || number <= 0) {
+      throw new GuardPolicyError(`${key}.${field} must be a positive integer`);
+    }
+  }
+  return { maxBytes: record.maxBytes as number, maxLines: record.maxLines as number };
 }
 
 /**
@@ -160,6 +180,7 @@ export function parseGuardPolicy(raw: string): GuardPolicy {
     fencedPatterns: requireStringArray(source, "fencedPatterns"),
     bannedBash: requireStringArray(source, "bannedBash"),
     e2eHostAllowlist: requireStringArray(source, "e2eHostAllowlist"),
+    toolOutputLimits: requireLimits(source, "toolOutputLimits"),
   };
 }
 

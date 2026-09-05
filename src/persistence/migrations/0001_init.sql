@@ -392,6 +392,26 @@ CREATE TABLE IF NOT EXISTS cost_entries (
 CREATE INDEX IF NOT EXISTS idx_cost_card ON cost_entries(card_id, ts);
 CREATE INDEX IF NOT EXISTS idx_cost_provider ON cost_entries(provider, ts);
 
+-- One row per assistant turn, so prompt-cache losses can be told apart from the
+-- structural ceiling that a whole-run ratio hides.
+CREATE TABLE IF NOT EXISTS turn_usage (
+  run_id            TEXT NOT NULL,
+  turn              INTEGER NOT NULL,
+  card_id           TEXT,
+  phase             TEXT,
+  provider          TEXT NOT NULL,
+  model_id          TEXT NOT NULL,
+  uncached_input_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens     INTEGER NOT NULL DEFAULT 0,
+  cache_loss_tokens INTEGER NOT NULL DEFAULT 0,
+  ts                INTEGER NOT NULL,
+  PRIMARY KEY (run_id, turn),
+  CHECK (turn >= 1)
+);
+CREATE INDEX IF NOT EXISTS idx_turn_usage_card ON turn_usage(card_id, ts);
+
 -- Code defaults are the fallback truth; these rows are an overlay on top.
 CREATE TABLE IF NOT EXISTS config_entries (
   scope_id    TEXT NOT NULL DEFAULT 'global',

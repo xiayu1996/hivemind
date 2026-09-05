@@ -49,6 +49,8 @@ const KNOWN_TYPES = new Set([
   "tool_result",
   "usage",
   "cost.recorded",
+  "cache.analysis",
+  "provider/diagnostics",
   "llm/retry",
   "llm/retry-started",
   "shutdown",

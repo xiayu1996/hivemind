@@ -53,7 +53,12 @@ interface ProjectionDefinition<K, S> {
 - pi 每消息自带 `usage.cost`（dsh 清零弃用，我们直接消费）→ `cost_entries(cardId, phase, purpose, tier, provider, modelId, hostId, runId, tokens 四桶, costUsd, ts)`，append-only。
 - **子 agent/探针 job 的结果契约必须带 usage/cost 字段**（dsh SubagentResult 黑洞教训），跨机上卷中心。
 - 数据面三件：cost_entries 表直查；`GET /costs?groupBy=card|phase|provider|purpose|day` 聚合 API；EventLog `cost.recorded` 事件流（实时订阅面）。
-- 信号指标：**大脑花费占比**（策略被绕过/难度失控的早期信号）、**缓存命中率** cacheRead/计费 input（prompt 破坏前缀缓存的信号）、单卡成本 > p95×N 异常告警。
+- 信号指标：**大脑花费占比**（策略被绕过/难度失控的早期信号）、**缓存丢失事件**（见下）、单卡成本 > p95×N 异常告警。
+- **缓存指标不用单一命中率**（2026-09-05 实测修订）。命中率 = cacheRead/计费 input 由三个因子决定：固定前缀 P、每轮新增 d、轮数 N，零丢失时 ≈ 1 − (P + N·d)/(N·P + d·N²/2)。pi 的小前缀设计（首请求约 1–4K token，Codex CLI 约 12K）加上每 phase 独立会话（N 只有 4–8）使 hivemind 的理想上限只有 40%–70%，与 Codex CLI 交互会话的 95%+ 不可比，社区对照见 pi Discussion #6646。因此按轮落账 `turn_usage(run_id, turn, 四桶, cache_loss_tokens)`，并派生两个指标：
+  - **丢失事件**：某轮 cacheRead 低于上一轮总上下文的 90% 即计一次，记录丢失 token 数（`src/observability/cache-analysis.ts`）。这是唯一表示"前缀被破坏或路由漂移"的信号。
+  - **零丢失上限**：同一 run 在无丢失情况下的理想命中率，与实际并列展示；两者接近说明只剩结构性因素，差距大才值得查。
+  - pi 在传输回退（WebSocket → SSE）时给 assistant 消息挂 `diagnostics`，规范日志以 `provider/diagnostics` 事件保留，用于给丢失事件归因。
+- **降低每轮新增量是唯一可动的杠杆**：只读探索阶段（DECOMPOSE / DESIGN）的工具结果由 guard 策略 `toolOutputLimits` 截断（8KB / 200 行），CODE / VERIFY 保持 pi 默认 50KB / 2000 行以保留完整测试输出；仓库 AGENTS.md 以相同 label 装进 DECOMPOSE 与全部 Story phase 的 system prompt，作为跨会话共享前缀。
 - **软护栏**：日/月阈值（全局 + per-provider）超限只告警不阻断；per 卡成本回写 Notion 属性。不设硬预算中断——与 StallWatchdog 同一哲学：人为上限只伤害真实工作。
 - 错误归一：`AUTH / QUOTA / RATE_LIMIT / INVALID_REQUEST / SERVER / TIMEOUT / TRANSPORT` 分类表（dsh classifyPiAiError 模式，文本正则 + 优先 RPC 结构化错误码）；QUOTA 与 RATE_LIMIT 分流到 credentials/deferred 两条恢复路径（接 02 文档 §5.4 熔断矩阵）。
 

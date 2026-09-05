@@ -16,9 +16,18 @@ import {
   type GuardPolicy,
 } from "../src/guard/policy.js";
 import { decideToolCall, type ToolCallEvent } from "../src/guard/tool-decision.js";
+import { truncateToolResult, type ToolResultContent } from "../src/guard/tool-output.js";
+
+interface ToolResultEvent {
+  toolName: string;
+  toolCallId: string;
+  content: unknown;
+  isError?: boolean;
+}
 
 interface PiExtensionApi {
-  on(event: string, handler: (event: ToolCallEvent) => unknown): void;
+  on(event: "tool_call", handler: (event: ToolCallEvent) => unknown): void;
+  on(event: "tool_result", handler: (event: ToolResultEvent) => unknown): void;
 }
 
 interface AuditRecord {
@@ -108,5 +117,25 @@ export default function (api: PiExtensionApi): void {
     // No `terminate`: the run continues so the model can read the reason and
     // choose another approach instead of losing the whole phase.
     return { block: true, reason: `hive-guard: ${decision.reason ?? "blocked"}` };
+  });
+
+  // Every byte of a tool result is uncached input on the turn it lands in. The
+  // cap is part of the phase policy so an exploration phase cannot pull whole
+  // files into context; the marker tells the model how much it did not see.
+  api.on("tool_result", (event: ToolResultEvent) => {
+    if (!Array.isArray(event.content)) return;
+    const result = truncateToolResult(event.content as ToolResultContent[], policy.toolOutputLimits);
+    if (!result.truncated) return;
+    appendAudit(policy.auditPath, {
+      ts: new Date().toISOString(),
+      runId: policy.runId,
+      cardId: policy.cardId,
+      phase: policy.phase,
+      toolCallId: event.toolCallId,
+      toolName: event.toolName,
+      decision: "allow",
+      reason: `tool output truncated from ${result.originalBytes} bytes`,
+    });
+    return { content: result.content };
   });
 }

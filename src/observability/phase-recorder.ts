@@ -2,6 +2,11 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Client } from "@libsql/client";
 import type { PhaseTelemetryInput } from "../orchestrator/pi-phase-port.js";
+import {
+  analyzeCacheTurns,
+  diagnosticsFromMessages,
+  turnUsageFromMessages,
+} from "./cache-analysis.js";
 import { CostLedger } from "./cost-ledger.js";
 import {
   CanonicalLogWriter,
@@ -52,6 +57,12 @@ export class LibsqlPhaseRecorder {
     }
     await writer.append("assistant_message", { messages: input.messages });
     await writer.append("usage", input.result.usage);
+    const turns = turnUsageFromMessages(input.messages);
+    const cache = analyzeCacheTurns(turns);
+    await writer.append("cache.analysis", cache);
+    for (const diagnostic of diagnosticsFromMessages(input.messages)) {
+      await writer.append("provider/diagnostics", diagnostic);
+    }
     await writer.append("turn_end", { turn: 1, reason: "completed" });
     const cost = await this.ledger.record({
       runId: input.runId,
@@ -74,6 +85,27 @@ export class LibsqlPhaseRecorder {
     }
 
     const time = this.now();
+    const lossByTurn = new Map(cache.losses.map((loss) => [loss.turn, loss.lostTokens]));
+    const turnStatements = turns.map((turn) => ({
+      sql: `INSERT INTO turn_usage (run_id, turn, card_id, phase, provider, model_id,
+              uncached_input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, cache_loss_tokens, ts)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
+        input.runId,
+        turn.turn,
+        input.cardId,
+        input.phase,
+        this.options.provider,
+        this.options.modelId,
+        turn.input,
+        turn.cacheRead,
+        turn.cacheWrite,
+        turn.output,
+        lossByTurn.get(turn.turn) ?? 0,
+        time,
+      ],
+    }));
+    if (turnStatements.length > 0) await this.client.batch(turnStatements, "write");
     const statements = input.result.events.map((event) => ({
       sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
             VALUES (?, (SELECT COALESCE(MAX(seq), -1) + 1 FROM event_log WHERE run_id = ?),
