@@ -1,7 +1,9 @@
 // oxlint-disable unicorn/no-thenable -- the scenario grammar names a "then" field
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { POLICY_ENV_VAR, parseGuardPolicy } from "../guard/policy.js";
 import { resolveModel, staticCatalog } from "../runner/model-resolver.js";
+import type { RpcRunnerConfig } from "../runner/rpc-runner.js";
 import type { PiRunner, PromptResult } from "../runner/types.js";
 import { PiDecomposePort } from "./pi-decompose-port.js";
 
@@ -50,6 +52,28 @@ function port(instance: PiRunner) {
 }
 
 describe("PiDecomposePort", () => {
+  it("loads the guard with a DECOMPOSE policy and the repository context when given", async () => {
+    const instance = runner(JSON.stringify(CANDIDATE));
+    const configs: RpcRunnerConfig[] = [];
+    const guarded = new PiDecomposePort({
+      binary: "pi",
+      model: MODEL,
+      promptRoot: resolve("prompts"),
+      cwd: resolve("."),
+      contextFiles: [{ label: "repository", path: resolve("AGENTS.md") }],
+      guard: { extension: "/ext/hive-guard.ts", auditPath: "/audit/decompose.jsonl" },
+      createRunner: (config) => { configs.push(config); return instance; },
+    });
+    await guarded.run({ epicId: "M2", title: "t", requirement: "r", previousRejections: [] });
+
+    const config = configs[0]!;
+    expect(config.extensions).toEqual(["/ext/hive-guard.ts"]);
+    const policy = parseGuardPolicy(config.env![POLICY_ENV_VAR]!);
+    expect(policy).toMatchObject({ phase: "DECOMPOSE", cardId: "M2", worktreePath: resolve(".") });
+    expect(policy.toolOutputLimits.maxBytes).toBeLessThan(50 * 1024);
+    expect(config.systemPrompt?.text).toContain("## Context: repository");
+  });
+
   it("asks with the decomposition contract and returns the parsed candidate", async () => {
     const instance = runner(JSON.stringify(CANDIDATE));
 

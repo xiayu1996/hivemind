@@ -1,6 +1,8 @@
 import { z } from "zod";
+import { POLICY_ENV_VAR, assembleGuardPolicy, serializeGuardPolicy } from "../guard/policy.js";
 import { loadPromptLayers } from "../pipeline/prompt-loader.js";
 import { lastAssistantText } from "../runner/assistant-text.js";
+import { loadExplicitContextBundle, type ExplicitContextFile } from "../runner/context-files.js";
 import type { ResolvedModel } from "../runner/model-resolver.js";
 import { RpcPiRunner, type RpcRunnerConfig } from "../runner/rpc-runner.js";
 import type { PiRunner } from "../runner/types.js";
@@ -38,6 +40,17 @@ export interface PiDecomposePortOptions {
   model: ResolvedModel;
   promptRoot: string;
   cwd: string;
+  /**
+   * Repository conventions appended to the system prompt. They are the same
+   * files the Story phases load, so the shared prefix is cached across phases
+   * and across cards of the same repository.
+   */
+  contextFiles?: ExplicitContextFile[];
+  /**
+   * The in-process guard. DECOMPOSE has no write tools, so the guard's job here
+   * is the tool-output cap that keeps exploration from filling the context.
+   */
+  guard?: { extension: string; auditPath: string };
   extensions?: string[];
   createRunner?: (config: RpcRunnerConfig) => PiRunner;
 }
@@ -51,7 +64,21 @@ export class PiDecomposePort implements DecomposePort {
   constructor(private readonly options: PiDecomposePortOptions) {}
 
   async run(input: DecomposeRequest): Promise<DecompositionCandidate> {
-    const layers = await loadPromptLayers(this.options.promptRoot, "DECOMPOSE");
+    const [layers, context] = await Promise.all([
+      loadPromptLayers(this.options.promptRoot, "DECOMPOSE"),
+      loadExplicitContextBundle(this.options.contextFiles ?? []),
+    ]);
+    const guard = this.options.guard;
+    const policy = guard
+      ? assembleGuardPolicy({
+        phase: "DECOMPOSE",
+        cardId: input.epicId,
+        runId: `${input.epicId}-decompose`,
+        worktreePath: this.options.cwd,
+        auditPath: guard.auditPath,
+      })
+      : undefined;
+    const extensions = [...(this.options.extensions ?? []), ...(guard ? [guard.extension] : [])];
     const runner = (this.options.createRunner ?? ((config) => new RpcPiRunner(config)))({
       binary: this.options.binary,
       provider: this.options.model.provider,
@@ -59,8 +86,9 @@ export class PiDecomposePort implements DecomposePort {
       cwd: this.options.cwd,
       tools: ["read", "grep", "find", "ls"],
       contextFiles: "explicit",
-      ...(this.options.extensions ? { extensions: this.options.extensions } : {}),
-      systemPrompt: { mode: "replace", text: layers.combined },
+      ...(extensions.length > 0 ? { extensions } : {}),
+      ...(policy ? { env: { [POLICY_ENV_VAR]: serializeGuardPolicy(policy) } } : {}),
+      systemPrompt: { mode: "replace", text: `${layers.combined}${context.text}` },
     });
 
     try {

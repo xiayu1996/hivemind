@@ -156,10 +156,46 @@ async function main(): Promise<void> {
     auditPath,
   });
 
+  const decomposePolicy = assembleGuardPolicy({
+    phase: "DECOMPOSE",
+    cardId: "S-smoke",
+    runId: "run-smoke-decompose",
+    worktreePath: workDir,
+    auditPath,
+  });
+
   const mock = startMock();
   const failures: string[] = [];
   try {
     await waitForMock();
+
+    // Exploration phases cap tool output inside the tool_result hook. 5000
+    // numbered lines exceed both the byte and the line limit, so the model must
+    // see the marker and the audit must say how much was cut.
+    const oversized: Probe = {
+      label: "oversized output",
+      prompt: "USE_TOOL:seq 1 5000",
+      auditTarget: "seq 1 5000",
+      expectBlocked: false,
+    };
+    const oversizedEvents = await runProbe(oversized, decomposePolicy);
+    if (JSON.stringify(oversizedEvents).includes("hive-guard:")) {
+      failures.push("oversized output: a harmless read-only command was blocked");
+    }
+    // Only `content` reaches the model; pi keeps the tool's own `details` for
+    // its UI, so the check must not look at the whole event.
+    const modelVisible = oversizedEvents
+      .filter((event) => (event as { type?: string; message?: { role?: string } }).type === "message_end"
+        && (event as { message?: { role?: string } }).message?.role === "toolResult")
+      .map((event) => JSON.stringify((event as { message: { content: unknown } }).message.content))
+      .join("\n");
+    const marker = modelVisible.includes("output truncated for this phase");
+    if (!marker) failures.push("oversized output: the model-visible result carries no truncation marker");
+    if (modelVisible.includes("5000")) failures.push("oversized output: the tail still reached the model");
+    const truncationAudit = readAudit(auditPath).filter((record) =>
+      String(record.reason ?? "").startsWith("tool output truncated"));
+    if (truncationAudit.length === 0) failures.push("oversized output: no audit record of the truncation");
+    console.log(`DECOMPOSE oversized output: marker=${marker} audit_records=${truncationAudit.length}`);
 
     for (const probe of PROBES) {
       const events = await runProbe(probe, policy);
