@@ -112,9 +112,13 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
                             WHERE state NOT IN ('DONE', 'FAILED', 'HUMAN_PARKED')
                             ORDER BY updated_at DESC, id`),
     ]);
+    const pendingResponses = gates.rows.map(plain);
+    const activeRequirements = requirements.rows.map(plain);
     return {
-      pendingResponses: gates.rows.map(plain),
-      activeRequirements: requirements.rows.map(plain),
+      pendingResponseState: pendingResponses.length === 0 ? "no_pending_responses" : "available",
+      pendingResponses,
+      activeRequirementState: activeRequirements.length === 0 ? "no_active_requirements" : "available",
+      activeRequirements,
     };
   }
 }
