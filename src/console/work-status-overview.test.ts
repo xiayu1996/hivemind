@@ -23,4 +23,14 @@ describe("S-E1ACTION-01-ignorecomments", () => {
     const source = new LibsqlConsoleDataSource(client, async () => []);
     await expect(source.workStatus()).resolves.toMatchObject({ pendingResponses: [] });
   });
+
+  it("reports distinct successful empty states when no gate or active requirement exists", async () => {
+    const source = new LibsqlConsoleDataSource(client, async () => []);
+    await expect(source.workStatus()).resolves.toEqual({
+      pendingResponseState: "no_pending_responses",
+      pendingResponses: [],
+      activeRequirementState: "no_active_requirements",
+      activeRequirements: [],
+    });
+  });
 });
