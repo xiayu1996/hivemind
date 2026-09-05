@@ -26,6 +26,26 @@ describe("LibsqlConsoleDataSource", () => {
   });
 });
 
+describe("S-E3OVERVIEW-01-delivery", () => {
+  it("returns only valid delivered transition events tied to a story", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    await client.batch([
+      "INSERT INTO stories (id, notion_page_id, title, requirement, state, created_at, updated_at) VALUES ('s-delivered','sp1','Delivered today','Work','DELIVERED',1,1)",
+      "INSERT INTO event_log (run_id, seq, card_id, type, ts, data) VALUES ('run-1',0,'s-delivered','story.transition',100,'{\"to\":\"DELIVERED\"}')",
+      "INSERT INTO event_log (run_id, seq, card_id, type, ts, data) VALUES ('run-1',1,'s-delivered','story.transition',101,'{\"to\":\"CODE\"}')",
+      "INSERT INTO event_log (run_id, seq, card_id, type, ts, data) VALUES ('run-1',2,'s-delivered','story.transition',102,'not json')",
+      "INSERT INTO event_log (run_id, seq, card_id, type, ts, data) VALUES ('run-2',0,'missing','story.transition',103,'{\"to\":\"DELIVERED\"}')",
+    ], "write");
+    const source = new LibsqlConsoleDataSource(client, async () => []);
+
+    await expect(source.overview()).resolves.toMatchObject({ events: [
+      { storyId: "s-delivered", title: "Delivered today", state: "DELIVERED", timestamp: 100 },
+    ] });
+    client.close();
+  });
+});
+
 describe("S-E3OVERVIEW-01-active", () => {
   it("shows only recently active non-waiting requirements and stories", async () => {
     const client = createClient({ url: ":memory:" });
