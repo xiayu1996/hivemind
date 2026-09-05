@@ -26,6 +26,29 @@ describe("LibsqlConsoleDataSource", () => {
   });
 });
 
+describe("S-E3OVERVIEW-01-active", () => {
+  it("shows only recently active non-waiting requirements and stories", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    await client.batch([
+      "INSERT INTO requirements (id, notion_page_id, title, state, original_request, created_at, updated_at) VALUES ('r-active','rp1','Active requirement','EXECUTING','Work',1,20)",
+      "INSERT INTO requirements (id, notion_page_id, title, state, original_request, stop_reason, created_at, updated_at) VALUES ('r-wait','rp2','Waiting requirement','CLARIFY','Work','blocking_question',1,30)",
+      "INSERT INTO requirements (id, notion_page_id, title, state, original_request, created_at, updated_at) VALUES ('r-done','rp3','Done requirement','DONE','Work',1,40)",
+      "INSERT INTO stories (id, notion_page_id, title, requirement, state, phase, created_at, updated_at) VALUES ('s-active','sp1','Active story','Work','CODE','CODE',1,25)",
+      "INSERT INTO stories (id, notion_page_id, title, requirement, state, created_at, updated_at) VALUES ('s-delivered','sp2','Delivered story','Work','DELIVERED',1,50)",
+      "INSERT INTO stories (id, notion_page_id, title, requirement, state, created_at, updated_at) VALUES ('s-parked','sp3','Parked story','Work','HUMAN_PARKED',1,60)",
+      "INSERT INTO stories (id, notion_page_id, title, requirement, state, stop_reason, created_at, updated_at) VALUES ('s-wait','sp4','Waiting story','Work','NEEDS_INPUT','blocking_question',1,70)",
+    ], "write");
+    const source = new LibsqlConsoleDataSource(client, async () => []);
+
+    await expect(source.overview()).resolves.toMatchObject({ active: [
+      { id: "s-active", title: "Active story", state: "CODE", summary: "CODE" },
+      { id: "r-active", title: "Active requirement", state: "EXECUTING", summary: "EXECUTING" },
+    ] });
+    client.close();
+  });
+});
+
 describe("S-E3OVERVIEW-01-questions", () => {
   it("lists only unanswered clarification and active blocking questions", async () => {
     const client = createClient({ url: ":memory:" });
