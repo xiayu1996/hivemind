@@ -16,6 +16,18 @@ describe("S-E3OVERVIEW-01-delivery", () => {
 });
 
 describe("S-E3OVERVIEW-01-failure", () => {
+  it("does not treat the final hour before a DST change as yesterday", () => {
+    const now = new Date(2026, 2, 9, 12).getTime();
+    const yesterday = new Date(2026, 2, 8, 12).getTime();
+    const twoDaysAgo = new Date(2026, 2, 7, 23, 30).getTime();
+    const groups = overviewGroups({ questions: [], active: [], events: [
+      { storyId: "yesterday", title: "Yesterday", state: "FAILED", timestamp: yesterday, summary: "Failed", taskPath: "/tasks" },
+      { storyId: "two-days-ago", title: "Two days ago", state: "FAILED", timestamp: twoDaysAgo, summary: "Failed", taskPath: "/tasks" },
+    ] }, now);
+
+    expect(groups[3]?.items.map((item) => item.storyId)).toEqual(["yesterday"]);
+  });
+
   it("keeps only yesterday's failed events and preserves a failure reason", () => {
     const now = new Date(2026, 2, 12, 12).getTime();
     const yesterday = new Date(2026, 2, 11, 18).getTime();
