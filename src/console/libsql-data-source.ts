@@ -115,6 +115,7 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
     const pendingResponses = gates.rows.map(plain);
     const activeRequirements = requirements.rows.map(plain);
     return {
+      status: "success",
       pendingResponseState: pendingResponses.length === 0 ? "no_pending_responses" : "available",
       pendingResponses,
       activeRequirementState: activeRequirements.length === 0 ? "no_active_requirements" : "available",

@@ -28,6 +28,7 @@ describe("S-E1ACTION-01-ignorecomments", () => {
   it("reports distinct successful empty states when no gate or active requirement exists", async () => {
     const source = new LibsqlConsoleDataSource(client, async () => []);
     await expect(source.workStatus()).resolves.toEqual({
+      status: "success",
       pendingResponseState: "no_pending_responses",
       pendingResponses: [],
       activeRequirementState: "no_active_requirements",
