@@ -85,6 +85,22 @@ CREATE TABLE IF NOT EXISTS requirement_approval_events (
 );
 CREATE INDEX IF NOT EXISTS idx_requirement_approval_events ON requirement_approval_events(requirement_id);
 
+-- Explicit, central records of work awaiting an operator. Comments remain input
+-- evidence only; they cannot create an action item without a row here.
+CREATE TABLE IF NOT EXISTS human_gates (
+  id                TEXT PRIMARY KEY,
+  object_type       TEXT NOT NULL CHECK (object_type IN ('requirement','epic','story')),
+  object_id         TEXT NOT NULL,
+  required_action   TEXT NOT NULL,
+  phase             TEXT NOT NULL,
+  navigation_target TEXT NOT NULL,
+  priority          INTEGER NOT NULL DEFAULT 2,
+  state             TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open','resolved','cancelled')),
+  created_at        INTEGER NOT NULL,
+  updated_at        INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_human_gates_open ON human_gates(state, priority, created_at, id);
+
 -- Anchor blocks for the requirement page's owned sections, so a redelivery
 -- updates in place instead of appending a second copy.
 CREATE TABLE IF NOT EXISTS requirement_notion_sections (

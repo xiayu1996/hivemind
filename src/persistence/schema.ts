@@ -60,6 +60,19 @@ export const requirementApprovalEvents = sqliteTable("requirement_approval_event
   createdAt: ms("created_at").notNull(),
 }, (t) => [index("idx_requirement_approval_events").on(t.requirementId)]);
 
+export const humanGates = sqliteTable("human_gates", {
+  id: text("id").primaryKey(),
+  objectType: text("object_type").notNull(),
+  objectId: text("object_id").notNull(),
+  requiredAction: text("required_action").notNull(),
+  phase: text("phase").notNull(),
+  navigationTarget: text("navigation_target").notNull(),
+  priority: integer("priority").notNull().default(2),
+  state: text("state").notNull().default("open"),
+  createdAt: ms("created_at").notNull(),
+  updatedAt: ms("updated_at").notNull(),
+}, (t) => [index("idx_human_gates_open").on(t.state, t.priority, t.createdAt, t.id)]);
+
 export const requirementNotionSections = sqliteTable("requirement_notion_sections", {
   requirementId: text("requirement_id").notNull(),
   section: text("section").notNull(),

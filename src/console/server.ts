@@ -14,6 +14,7 @@ export interface ConsoleDataSource {
   config(): Promise<unknown[]>;
   stats(): Promise<unknown>;
   providers(): Promise<unknown[]>;
+  workStatus(): Promise<unknown>;
 }
 
 export interface ConsoleConfigWritePort {
@@ -55,6 +56,7 @@ export async function createConsoleServer(
   app.get("/api/config", async () => data.config());
   app.get("/api/stats", async () => data.stats());
   app.get("/api/providers", async () => data.providers());
+  app.get("/api/work-status", async () => data.workStatus());
 
   const writer = options.configWriter;
   if (writer) {
@@ -105,7 +107,7 @@ export async function createConsoleServer(
     });
     const index = await readFile(join(uiRoot, "index.html"), "utf8");
     app.get("/", async (_request, reply) => reply.type("text/html").send(index));
-    for (const route of ["/nodes", "/tasks", "/costs", "/config", "/stats", "/providers"]) {
+    for (const route of ["/nodes", "/tasks", "/costs", "/config", "/stats", "/providers", "/work-status"]) {
       app.get(route, async (_request, reply) => reply.type("text/html").send(index));
     }
   }

@@ -94,4 +94,27 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
       value: JSON.parse(String(row.value_json)),
     }));
   }
+
+  /** Only the central gate registry can create a pending response. */
+  async workStatus(): Promise<unknown> {
+    const [gates, requirements] = await Promise.all([
+      this.client.execute(`SELECT g.id, g.required_action, g.object_type, g.object_id, g.phase, g.navigation_target,
+                                  g.priority, g.created_at,
+                                  COALESCE(r.title, e.title, s.title, g.object_id) AS related_object
+                             FROM human_gates g
+                             LEFT JOIN requirements r ON g.object_type = 'requirement' AND g.object_id = r.id
+                             LEFT JOIN epics e ON g.object_type = 'epic' AND g.object_id = e.id
+                             LEFT JOIN stories s ON g.object_type = 'story' AND g.object_id = s.id
+                            WHERE g.state = 'open'
+                            ORDER BY g.priority, g.created_at, g.id`),
+      this.client.execute(`SELECT id, title, state AS phase, updated_at
+                             FROM requirements
+                            WHERE state NOT IN ('DONE', 'FAILED', 'HUMAN_PARKED')
+                            ORDER BY updated_at DESC, id`),
+    ]);
+    return {
+      pendingResponses: gates.rows.map(plain),
+      activeRequirements: requirements.rows.map(plain),
+    };
+  }
 }
