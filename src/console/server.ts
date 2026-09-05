@@ -56,7 +56,14 @@ export async function createConsoleServer(
   app.get("/api/config", async () => data.config());
   app.get("/api/stats", async () => data.stats());
   app.get("/api/providers", async () => data.providers());
-  app.get("/api/work-status", async () => data.workStatus());
+  app.get("/api/work-status", async (_request, reply) => {
+    try {
+      return await data.workStatus();
+    } catch {
+      // The detailed cause can contain infrastructure details; the operator only needs a retryable state.
+      return reply.code(503).send({ error: "work_status_unavailable", retry: true });
+    }
+  });
 
   const writer = options.configWriter;
   if (writer) {
