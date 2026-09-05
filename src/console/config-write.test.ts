@@ -12,6 +12,7 @@ const data: ConsoleDataSource = {
   config: async () => [],
   stats: async () => ({}),
   providers: async () => [],
+  workStatus: async () => ({ pendingResponses: [], activeRequirements: [] }),
 };
 
 describe("M2-13 console configuration write plane", () => {

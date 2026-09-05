@@ -8,6 +8,7 @@ const data: ConsoleDataSource = {
   config: async () => [{ key: "pipeline.maxRounds", value: 6 }],
   stats: async () => ({ footprintDeviation: { stories: 0, deviationRate: 0, unpredictedStoryRate: 0, perStory: [] } }),
   providers: async () => [{ provider: "openai-codex", state: "closed" }],
+  workStatus: async () => ({ pendingResponses: [], activeRequirements: [] }),
 };
 
 describe("read-only console", () => {
