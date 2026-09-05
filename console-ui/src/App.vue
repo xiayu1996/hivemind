@@ -49,12 +49,12 @@ function navigate(view) {
           <h3>Pending responses</h3>
           <p v-if="overview.pendingResponseState === 'no_pending_responses'" class="empty">No pending responses</p>
           <article v-for="gate in overview.pendingResponses" :key="gate.id">
-            <strong>{{ gate.required_action }}</strong>
+            <strong>{{ gate.requiredAction }}</strong>
             <dl>
-              <dt>Related object</dt><dd>{{ gate.related_object }}</dd>
-              <dt>Current phase</dt><dd>{{ gate.phase }}</dd>
+              <dt>Related object</dt><dd>{{ gate.relatedRequirementOrObject }}</dd>
+              <dt>Current phase</dt><dd>{{ gate.currentPhase }}</dd>
             </dl>
-            <a :href="gate.navigation_target">Open handling location</a>
+            <a :href="gate.navigationTarget">Open handling location</a>
           </article>
         </section>
         <section class="overview-section">

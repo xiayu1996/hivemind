@@ -98,9 +98,9 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
   /** Only the central gate registry can create a pending response. */
   async workStatus(): Promise<unknown> {
     const [gates, requirements] = await Promise.all([
-      this.client.execute(`SELECT g.id, g.required_action, g.object_type, g.object_id, g.phase, g.navigation_target,
-                                  g.priority, g.created_at,
-                                  COALESCE(r.title, e.title, s.title, g.object_id) AS related_object
+      this.client.execute(`SELECT g.id, g.required_action AS requiredAction, g.phase AS currentPhase,
+                                  g.navigation_target AS navigationTarget,
+                                  COALESCE(r.title, e.title, s.title, g.object_id) AS relatedRequirementOrObject
                              FROM human_gates g
                              LEFT JOIN requirements r ON g.object_type = 'requirement' AND g.object_id = r.id
                              LEFT JOIN epics e ON g.object_type = 'epic' AND g.object_id = e.id
