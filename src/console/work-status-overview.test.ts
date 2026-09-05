@@ -35,6 +35,16 @@ describe("S-E1ACTION-01-ignorecomments", () => {
     });
   });
 
+  it("keeps the pending-response section explicit when no centrally recorded human gate exists", async () => {
+    const source = new LibsqlConsoleDataSource(client, async () => []);
+    await expect(source.workStatus()).resolves.toMatchObject({
+      status: "success",
+      pendingResponseState: "no_pending_responses",
+      pendingResponses: [],
+    });
+    await expect(readFile("console-ui/src/App.vue", "utf8")).resolves.toContain("No pending responses");
+  });
+
   it("keeps the active-requirements section explicit when there is no active requirement", async () => {
     await client.execute({
       sql: `INSERT INTO human_gates (id, object_type, object_id, required_action, phase, navigation_target, created_at, updated_at)
