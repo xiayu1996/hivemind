@@ -119,7 +119,7 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
        UNION ALL
        SELECT id, title, state, updated_at FROM stories
         WHERE stop_reason = 'blocking_question' AND state NOT IN ('DELIVERED', 'FAILED', 'HUMAN_PARKED')
-       ORDER BY id`, 
+       ORDER BY id`,
     )).rows;
     for (const row of blockedRows) questions.push({
       id: `${String(row.id)}:blocked`, title: String(row.title), state: String(row.state),
