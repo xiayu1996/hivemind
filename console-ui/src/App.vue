@@ -23,9 +23,16 @@ watchEffect(async () => {
 const groups = computed(() => [
   { title: "Waiting for your answer", items: overview.value.questions },
   { title: "Active work", items: overview.value.active },
-  { title: "Delivered today", items: [] },
+  { title: "Delivered today", items: overview.value.events.filter((item) => item.state === "DELIVERED" && isToday(item.timestamp)) },
   { title: "Failed yesterday", items: [] },
 ]);
+
+function isToday(timestamp) {
+  if (!Number.isFinite(timestamp)) return false;
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  return timestamp >= start && timestamp < start + 86_400_000;
+}
 
 function navigate(view) {
   history.pushState({}, "", view === "overview" ? "/" : `/${view}`);

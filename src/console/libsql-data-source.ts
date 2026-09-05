@@ -139,7 +139,44 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
       summary: String(row.summary), updatedAt: Number(row.updated_at), taskPath: "/tasks",
     }));
 
-    return { questions, active, events: [] };
+    const eventRows = (await this.client.execute(
+      `SELECT e.card_id, e.type, e.ts, e.data, s.title
+         FROM event_log e JOIN stories s ON s.id = e.card_id
+        WHERE e.type IN ('story.transition', 'story.delivered')
+        ORDER BY e.ts DESC, e.run_id, e.seq`,
+    )).rows;
+    const events = eventRows.flatMap((row) => {
+      const timestamp = Number(row.ts);
+      if (!Number.isFinite(timestamp) || timestamp <= 0) return [];
+      const state = transitionedStoryState(String(row.type), row.data);
+      if (!state) return [];
+      return [{
+        storyId: String(row.card_id), title: String(row.title), state, timestamp,
+        summary: state === "FAILED" ? failureSummary(row.data) : "Delivered",
+        taskPath: "/tasks",
+      }];
+    });
+
+    return { questions, active, events };
+  }
+}
+
+function transitionedStoryState(type: string, value: unknown): "DELIVERED" | "FAILED" | null {
+  if (type === "story.delivered") return "DELIVERED";
+  try {
+    const state = (JSON.parse(String(value)) as { to?: unknown }).to;
+    return state === "DELIVERED" || state === "FAILED" ? state : null;
+  } catch {
+    return null;
+  }
+}
+
+function failureSummary(value: unknown): string {
+  try {
+    const reason = (JSON.parse(String(value)) as { reason?: unknown }).reason;
+    return typeof reason === "string" && reason.trim() !== "" ? reason : "Failed";
+  } catch {
+    return "Failed";
   }
 }
 
