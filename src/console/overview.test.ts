@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { overviewGroups } from "./overview.js";
 
+describe("S-E3OVERVIEW-01-delivery", () => {
+  it("does not treat the first half hour after a DST change as part of the prior day", () => {
+    const now = new Date(2026, 2, 8, 12).getTime();
+    const today = new Date(2026, 2, 8, 12).getTime();
+    const nextDay = new Date(2026, 2, 9, 0, 30).getTime();
+    const groups = overviewGroups({ questions: [], active: [], events: [
+      { storyId: "today", title: "Today", state: "DELIVERED", timestamp: today, summary: "Delivered", taskPath: "/tasks" },
+      { storyId: "next-day", title: "Next day", state: "DELIVERED", timestamp: nextDay, summary: "Delivered", taskPath: "/tasks" },
+    ] }, now);
+
+    expect(groups[2]?.items.map((item) => item.storyId)).toEqual(["today"]);
+  });
+});
+
 describe("S-E3OVERVIEW-01-failure", () => {
   it("keeps only yesterday's failed events and preserves a failure reason", () => {
     const now = new Date(2026, 2, 12, 12).getTime();
