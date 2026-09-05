@@ -1,7 +1,13 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { GuardPolicy } from "../guard/policy.js";
 import type { PiRunner, PromptResult, RpcEvent } from "../runner/types.js";
 import { BlindVerifyExecutor, type TreePinPort, type VerifyRecord } from "./executor.js";
+
+// The executor writes the browser config under the worktree, so the paths must be real and disposable.
+const scratch = mkdtempSync(join(tmpdir(), "hivemind-verify-"));
 
 function assistant(content: string): RpcEvent {
   return { type: "message_end", message: { role: "assistant", content } };
@@ -41,9 +47,9 @@ function input() {
     cardId: "story-1",
     round: 1,
     codeSessionId: "code.jsonl",
-    worktreePath: "C:/work/story-1",
-    evidencePath: "C:/evidence/story-1",
-    auditPath: "C:/evidence/story-1/audit.jsonl",
+    worktreePath: join(scratch, "work", "story-1"),
+    evidencePath: join(scratch, "evidence", "story-1"),
+    auditPath: join(scratch, "evidence", "story-1", "audit.jsonl"),
     specification: "The feature returns the expected result.",
     declaredScenarioIds: ["S-EPIC-01-unit"],
     allowedHosts: ["localhost"],

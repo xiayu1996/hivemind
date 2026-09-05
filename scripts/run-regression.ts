@@ -18,6 +18,7 @@ import { RegressionStore, regressionPolicy } from "../src/regression/store.js";
 import { RegressionSweeper } from "../src/regression/sweeper.js";
 import { PiModelCatalog, resolveModel } from "../src/runner/model-resolver.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
+import { defaultPiBinary } from "../src/runner/pi-binary.js";
 import { browserLanePath } from "../src/verify/browser-config.js";
 import { loadPromptLayers } from "../src/pipeline/prompt-loader.js";
 import { BlindVerifyExecutor } from "../src/verify/executor.js";
@@ -42,9 +43,7 @@ async function main(): Promise<void> {
   const epicId = process.argv.includes("--epic") ? one("--epic") : null;
   const provider = one("--provider", "openai-codex");
   const modelId = one("--model");
-  const piBinary = resolve(one("--pi", join(
-    homedir(), ".hivemind", "pi", "0.84.3", "pi", process.platform === "win32" ? "pi.exe" : "pi",
-  )));
+  const piBinary = resolve(one("--pi", defaultPiBinary()));
   const evidenceRoot = resolve(one("--evidence-root", join(homedir(), ".hivemind", "evidence", `regression-${pool}`)));
   const probeWorktree = process.argv.includes("--probe-worktree") ? resolve(one("--probe-worktree")) : null;
   const auditPath = join(evidenceRoot, "tool-audit.jsonl");

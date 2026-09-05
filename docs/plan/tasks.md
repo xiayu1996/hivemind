@@ -37,11 +37,11 @@
 | ID | 任务 | 输出物 | 验证方式 | 前置 |
 |---|---|---|---|---|
 | M0-01 | ✅ **账号策略已拍板（2026-08-30，Ryan）：一供应商一账号**——同一厂家的模型全局只有一个账号，横向扩展靠**增加供应商**而非增加同厂账号；取代 06 文档的方案 A（一机一账号） | 00-overview §2 决策表 + 本表 M2-15..19 | 已拍板。直接后果：并发额度与 usage window 是**供应商级全局资源**而非每机资源，多机共享同一账号，因此 provider 健康/配额跟踪与 failover 是多机化的**前置**，原 M4-01/03/04/05/06 与 M4-16 健康页前移为 M2-15..19 | — |
-| M0-02 | ✅ pi 安装与 pin：安装脚本将 pin 版本装入 `~/.hivemind/pi/<version>/` 并排目录；GLM(zai)/Grok(xai) key 配置就绪 | `scripts/install-pi.sh` + README 版本记录 | 全新环境执行脚本后 `pi --version` 等于 pin 值；zai/xai 各发一条最小 completion 成功 | — |
+| M0-02 | ✅ pi 安装与 pin：安装脚本将 pin 版本装入 `~/.hivemind/pi/<version>/` 并排目录；GLM(zai)/Grok(xai) key 配置就绪 | `scripts/install-pi.sh`，pin 唯一来源 `package.json` `hivemind.piVersion`（`src/runner/pi-binary.ts` 读取） | 全新环境执行脚本后 `pi --version` 等于 pin 值；zai/xai 各发一条最小 completion 成功 | — |
 | M0-03 | ✅ PoC-2a：RPC Context 导出/载入 | `poc/rpc-context/` 脚本 + `docs/poc/poc-2-context.md` | 导出 Context JSON → 新进程载入 → 再导出，两份 JSON 语义 diff 为空；载入后续跑一轮回答与原上下文连贯 | M0-02 |
 | M0-04 | ✅ PoC-2b：mid-run 注入 / abort / resume 能力 | 同上报告附录 | run 中 abort 后同 session 注入消息续跑成功；不支持则报告记录降级路径（extension turn 边界序列化 / json 模式 + phase 边界注入）并回写 02 文档 | M0-03 |
 | M0-05 | ✅ PoC-5：RPC 错误事件目录——人为制造 AUTH（坏 key）/ RATE_LIMIT / TRANSPORT（断网）/ INVALID_REQUEST 四类错误并采集结构化事件 | `fixtures/rpc-errors/*.json` + `docs/poc/poc-5-error-catalog.md` 错误模式表初稿 | 每类 ≥1 个真实样本；草拟的分类规则能对全部样本唯一分类 | M0-02 |
-| M0-06 | ✅ PoC-1：Windows Git Bash 下 pi RPC 冒烟 ×10（含工具调用任务） | `scripts/smoke-windows-rpc.ts` + `docs/poc/poc-1-windows.md` | 10/10 无 CRLF 分帧错误、无挂死；不过则报告中拍板降级为纯 Playwright 探针执行器 | M0-02 |
+| M0-06 | ✅ PoC-1：Windows Git Bash 下 pi RPC 冒烟 ×10（含工具调用任务） | `docs/poc/poc-1-windows.md`（冒烟脚本随原生 Windows 路径退役删除，2026-09-05） | 10/10 无 CRLF 分帧错误、无挂死；不过则报告中拍板降级为纯 Playwright 探针执行器 | M0-02 |
 | M0-07 | ✅ PoC-4：pi 默认 prompt vs 自建基线 A/B——3 张真实小卡各跑两条轨迹 | `docs/poc/poc-4-prompt-ab.md`（评分表 + 结论） | 每卡两条完整轨迹归档；盲评人（Ryan）不知分组；结论明确采用哪条基线 | M0-02 |
 | M0-08 | ✅ R1：Notion 评论 resolve 行为实测——`comment.updated` webhook 是否覆盖 resolve、list comments 对已 resolve 评论的可见性 | `docs/poc/notion-behavior.md` | 得出明确结论并回写 01 文档（是否需要"agent 回评确认后人再 resolve"协议约定） | — |
 | M0-09 | ⏸ R2：API 创建评论中 @mention 是否触发移动端推送——**本轮不追（2026-08-30，Ryan）**。已知观察：自己 @ 自己确实收不到推送；bot @ 他人的情形未测 | 同上文档补充 | 按「不触发」处理：needs_input 旁路告警（M1-35）因此是**必选路径**，不得降级为「Notion 看板即可」 | — |
@@ -281,8 +281,8 @@
 
 | ID | 任务 | 输出物 | 验证方式 | 前置 |
 |---|---|---|---|---|
-| M5-01 | Windows 探针 worker：登录计划任务 + 看门狗（不用 nssm，规避 Session 0 隔离）+ pi 强制 Git Bash 环境；只接 cap.windows 探针 job | 部署脚本 + 手册 | 重启 Windows 后 worker 自动回归；有头浏览器可启动；完成一次真实 windows 探针 job | M0-06, M3-10 |
-| M5-02 | Windows 降级路径（若 M0-06 判失败则替代 M5-01 的 pi 部分）：纯 Playwright 探针执行器 | `src/worker/playwright-probe.ts` | 无 pi 进程情况下完成一次 windows 探针 job 并回传证据 | M0-06 |
+| M5-01 | Windows 主机接入：WSL2 Ubuntu 内跑 Linux worker，复用 `deploy/linux/install.sh`（2026-09-05 改：原生 Windows 计划任务 + Git Bash 方案作废，02 §1.5/§6.1 已更正） | 复用 Linux 部署件 + runbook WSL 小节 | 全新 WSL2 Ubuntu 上一条命令跑通安装脚本；重启 Windows 后单元自动回归 | M3-06 |
+| M5-02 | ~~Windows 降级路径：纯 Playwright 探针执行器~~ 随 M5-01 改道作废 | — | — | — |
 | M5-03 | self-update 滚动升级：控制台发布目标版本 → worker 空闲自查 → 自 drain → 升级 → SHA handshake 上报；同时只升一台、Linux 最后；pi 版本纳入同机制先单机灰度 | `src/self-update/`（busybee 骨架 + 跨平台 relaunch 抽象） | 三机滚动升级一轮无任务丢失无双版本并跑；注入坏版本 handshake 失败 → 停止推进并告警；pi 新版本单机灰度流程走通 | M3-12 |
 | M5-04 | 行为回归统计基线固化：基线样本集入库 + nightly 常态化 | 基线集 + 报告存档 | 连续 7 天 nightly 报告生成且无误报 | M4-14 |
 | M5-05 | 运行周报页：Notion 单页投影（吞吐/成本/friction/回归趋势） | 周报生成器 | 一期真实周报生成，Ryan 认可可读性 | M4-16 |

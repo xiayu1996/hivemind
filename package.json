@@ -7,6 +7,9 @@
   "engines": {
     "node": ">=26.0.0"
   },
+  "hivemind": {
+    "piVersion": "0.84.3"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "build:console": "npm --prefix console-ui run build",

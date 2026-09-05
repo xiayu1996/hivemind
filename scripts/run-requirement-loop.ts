@@ -1,5 +1,4 @@
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadSecretsFile } from "../src/config/secrets-file.js";
 import { ConfigStore } from "../src/config/store.js";
@@ -27,6 +26,7 @@ import { openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
 import { ModelPolicy } from "../src/runner/model-policy.js";
 import { PiModelCatalog } from "../src/runner/model-resolver.js";
+import { defaultPiBinary } from "../src/runner/pi-binary.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -78,8 +78,7 @@ async function main(): Promise<void> {
     new NotionClarificationChannel(handle.client, gateway, comments),
   ]);
 
-  const piBinary = process.env.PI_BIN ?? join(homedir(), ".hivemind", "pi", "0.84.3", "pi",
-    process.platform === "win32" ? "pi.exe" : "pi");
+  const piBinary = defaultPiBinary();
   const catalog = new PiModelCatalog({ binary: piBinary });
   const policy = new ModelPolicy(config, catalog);
   const provider = optional("--provider") ?? (await policy.providersFor("product_manager"))[0];

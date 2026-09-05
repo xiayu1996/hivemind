@@ -17,10 +17,11 @@ import { probeProviderReadiness } from "../src/runner/auth-probe.js";
 import { assertProviderRetriesDisabled } from "../src/runner/failover.js";
 import { assertModelPolicy, ModelPolicy } from "../src/runner/model-policy.js";
 import { PiModelCatalog } from "../src/runner/model-resolver.js";
+import { defaultPiBinary, pinnedPiVersion } from "../src/runner/pi-binary.js";
 
 const execFileAsync = promisify(execFile);
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
-const PI_VERSION = process.env.HIVEMIND_PI_VERSION ?? "0.84.3";
+const PI_VERSION = pinnedPiVersion();
 
 type Verdict = "PASS" | "FAIL" | "WARN";
 
@@ -63,8 +64,7 @@ async function output(binary: string, args: string[], cwd?: string): Promise<str
  */
 async function main(): Promise<void> {
   const secretsPath = join(homedir(), ".hivemind", "secrets.env");
-  const piBinary = process.env.PI_BIN ??
-    join(homedir(), ".hivemind", "pi", PI_VERSION, "pi", process.platform === "win32" ? "pi.exe" : "pi");
+  const piBinary = defaultPiBinary();
   const repositoryPath = resolve(optional("--repository-path") ?? ROOT);
 
   await attempt("Node.js 26 or newer", async () => {
@@ -192,6 +192,15 @@ async function main(): Promise<void> {
   });
 
   if (process.platform === "linux") {
+    await attempt("systemd runs as PID 1 (needed for the service units)", async () => {
+      const comm = await readFile("/proc/1/comm", "utf8").then((value) => value.trim(), () => "");
+      if (comm !== "systemd") {
+        const wsl = await readFile("/proc/version", "utf8").then((value) => /microsoft/i.test(value), () => false);
+        throw new Error(wsl
+          ? "WSL runs without systemd; add [boot] systemd=true to /etc/wsl.conf and run wsl --shutdown"
+          : `PID 1 is ${comm || "unknown"}`);
+      }
+    }, "WARN");
     await attempt("kernel lets Chromium build its sandbox", async () => {
       const restricted = await readFile("/proc/sys/kernel/apparmor_restrict_unprivileged_userns", "utf8")
         .then((value) => value.trim() === "1", () => false);
