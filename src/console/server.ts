@@ -14,6 +14,7 @@ export interface ConsoleDataSource {
   config(): Promise<unknown[]>;
   stats(): Promise<unknown>;
   providers(): Promise<unknown[]>;
+  overview?(): Promise<unknown>;
 }
 
 export interface ConsoleConfigWritePort {
@@ -55,6 +56,7 @@ export async function createConsoleServer(
   app.get("/api/config", async () => data.config());
   app.get("/api/stats", async () => data.stats());
   app.get("/api/providers", async () => data.providers());
+  app.get("/api/overview", async () => data.overview?.() ?? ({ questions: [], active: [], events: [] }));
 
   const writer = options.configWriter;
   if (writer) {

@@ -94,4 +94,51 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
       value: JSON.parse(String(row.value_json)),
     }));
   }
+
+  /** A compact, dedicated read path for the console home page. */
+  async overview(): Promise<unknown> {
+    const questions: Array<Record<string, unknown>> = [];
+    const clarificationRows = (await this.client.execute(
+      `SELECT r.id, r.title, r.state, r.updated_at, c.round, c.questions
+         FROM requirements r JOIN requirement_clarify_rounds c ON c.requirement_id = r.id
+        WHERE c.answered_at IS NULL AND r.state NOT IN ('DONE', 'FAILED', 'HUMAN_PARKED')
+        ORDER BY r.updated_at DESC, r.id, c.round`,
+    )).rows;
+    for (const row of clarificationRows) {
+      const question = firstQuestion(row.questions);
+      if (question) questions.push({
+        id: `${String(row.id)}:clarify:${Number(row.round)}`,
+        title: String(row.title), state: String(row.state), summary: question,
+        updatedAt: Number(row.updated_at), taskPath: "/tasks",
+      });
+    }
+
+    const blockedRows = (await this.client.execute(
+      `SELECT id, title, state, updated_at FROM requirements
+        WHERE stop_reason = 'blocking_question' AND state NOT IN ('DONE', 'FAILED', 'HUMAN_PARKED')
+       UNION ALL
+       SELECT id, title, state, updated_at FROM stories
+        WHERE stop_reason = 'blocking_question' AND state NOT IN ('DELIVERED', 'FAILED', 'HUMAN_PARKED')
+       ORDER BY id`, 
+    )).rows;
+    for (const row of blockedRows) questions.push({
+      id: `${String(row.id)}:blocked`, title: String(row.title), state: String(row.state),
+      summary: "blocking_question", updatedAt: Number(row.updated_at), taskPath: "/tasks",
+    });
+
+    return { questions };
+  }
+}
+
+function firstQuestion(value: unknown): string | null {
+  try {
+    const parsed: unknown = JSON.parse(String(value));
+    if (!Array.isArray(parsed)) return null;
+    const question = parsed[0];
+    if (!question || typeof question !== "object" || typeof (question as { question?: unknown }).question !== "string") return null;
+    const text = (question as { question: string }).question.trim();
+    return text === "" ? null : text;
+  } catch {
+    return null;
+  }
 }
