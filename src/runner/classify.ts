@@ -22,12 +22,17 @@ export interface Classification {
  * auth failure is reported as an invalid_request_error. QUOTA must be tested
  * before RATE_LIMIT — reading a spent quota as mere throttling produces a worker
  * that waits forever for a window that will never open.
+ *
+ * A wording no rule matches lands in UNKNOWN, which is neither retried nor
+ * escalated, so a provider phrasing an exhausted balance its own way would fail
+ * cards with nobody told. DeepSeek does exactly that: it reports a spent balance
+ * as 402 "Insufficient Balance", with none of the words the other providers use.
  */
 const RULES: Array<{ class: ErrorClass; pattern: RegExp }> = [
-  { class: "QUOTA", pattern: /insufficient_quota|exceeded your current quota|usage limit/i },
+  { class: "QUOTA", pattern: /insufficient_quota|exceeded your current quota|usage limit|insufficient[_ ]balance|run out of balance|^402\b|\b402:/i },
   { class: "AUTH", pattern: /^401\b|\b401:|invalid_api_key|unauthorized|authentication|invalid_grant/i },
   { class: "RATE_LIMIT", pattern: /rate_limit_exceeded|rate limit reached|^429\b|\b429:/i },
-  { class: "INVALID_REQUEST", pattern: /^400\b|\b400:|invalid_value|context_length_exceeded/i },
+  { class: "INVALID_REQUEST", pattern: /^400\b|\b400:|^422\b|\b422:|invalid_value|invalid parameters|context_length_exceeded/i },
   { class: "SERVER", pattern: /^5\d\d\b|\b5\d\d:|server_error|overloaded|bad gateway/i },
   { class: "TIMEOUT", pattern: /timed out|timeout|ETIMEDOUT|deadline exceeded/i },
   { class: "TRANSPORT", pattern: /connection error|connection ended|websocket closed|terminated|socket hang up|ECONNRESET|EPIPE|fetch failed|network|premature close/i },
