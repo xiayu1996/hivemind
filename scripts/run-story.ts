@@ -231,6 +231,7 @@ async function main(): Promise<void> {
       {
         ...(integration ? { integration } : {}),
         maxInnerLoopRounds: limits.maxInnerLoopRounds,
+        friction: { record: (input) => store.recordFriction(input) },
       },
     ).run(cardId);
     // The scenarios a Story declares become the regression pools' problem the

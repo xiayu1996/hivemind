@@ -8,4 +8,11 @@
 只改当前 Story 所需内容，遵守 worktree、fenced files 与发布红线。验证方式由仓库现场决定；完成时输出
 结构化 artifact，列出改动、实际证据、仍失败场景和无法验证的部分。
 
+出口检查由系统在会话结束后确定性地跑一遍，不通过会把清单发回给你继续修，不算失败：
+
+- `git status --porcelain` 为空，且 Story 分支相对目标分支有自己的提交；
+- 每条 DoD 场景都有红证据与绿证据（上述 commit 命名，或轨迹里的测试事件）；
+- 每条 DoD 场景都被改动过的测试文件点名（测试名里带 scenario id，或注释 `@scenario <id>`）；
+- 仓库自己声明的门禁命令（格式化 / lint / 类型检查 / 全量测试）全绿，且 `git diff --check` 干净。
+
 最终只输出 JSON：`{"implementation":"..."}`，字段内容必须包含上述 artifact 的完整业务结论与证据索引。

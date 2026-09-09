@@ -1,5 +1,6 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { splitScenarioFailures } from "../pipeline/failure-classification.js";
 import type { BlindVerifyExecutor, BlindVerifyResult } from "../verify/executor.js";
 import type { PhaseTelemetryInput } from "./pi-phase-port.js";
 import type {
@@ -72,10 +73,20 @@ export class BlindVerifyStoryPort implements StoryVerifyPort {
         providerPayloads,
       });
     }
+    // The convergence criterion runs on the code-level failures alone; a
+    // scenario the environment lost is reported but not compared (03 8.6).
+    const split = splitScenarioFailures(result.record.failedScenarios, [
+      ...result.reasons,
+      ...result.validationErrors.map((error) => ({
+        scenarioId: error.slice(0, error.indexOf(": ")),
+        reason: error,
+      })),
+    ]);
     return {
       sessionId: result.record.verifySessionId,
       verdict: result.record.verdict,
       failedScenarios: result.record.failedScenarios,
+      codeFailedScenarios: split.code,
       evidenceDir: result.record.evidenceDir,
       screenshots: result.screenshots,
       artifact: verificationArtifact(result),

@@ -130,6 +130,24 @@ describe("BlindVerifyExecutor", () => {
     expect(pin.quarantine).toHaveBeenCalledOnce();
   });
 
+  it("calls a round the box lost inconclusive instead of spending an inner-loop round on it", async () => {
+    // The 2026-09-05 run spent four rounds on a dev server that was not up.
+    const instance = runner({
+      events: [assistant(JSON.stringify({
+        scenarios: [{ id: "S-EPIC-01-unit", status: "failed", reason: "connection refused on http://localhost:5173" }],
+      }))],
+    });
+    const executor = new BlindVerifyExecutor(
+      { create: () => instance },
+      { insert: async () => undefined },
+      pins(),
+    );
+
+    const result = await executor.run(input());
+    expect(result.record.verdict).toBe("inconclusive");
+    expect(result.record.failedScenarios).toEqual(["S-EPIC-01-unit"]);
+  });
+
   it("keeps the verifier's reason for every scenario that did not pass", async () => {
     const events = [
       { type: "test_result", scenarioId: "S-EPIC-01-unit", status: "failed" },

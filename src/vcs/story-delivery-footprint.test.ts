@@ -25,7 +25,7 @@ describe("S-M2-07-live actual footprint recorded by the live delivery path", () 
   it("records the directories the Story branch actually changed against its target branch", async () => {
     const footprints = { capture: vi.fn(async () => undefined), apply: vi.fn(async () => undefined) };
     const git = gitPort();
-    const delivery = new GitMrStoryDelivery({ create: vi.fn() }, {
+    const delivery = new GitMrStoryDelivery({ create: vi.fn(async () => ({ url: "https://github.com/example/repo/pull/7", provider: "github" as const })) }, {
       worktreePath: "D:/worktree",
       targetBranch: "main",
       git,
@@ -47,7 +47,7 @@ describe("S-M2-07-live actual footprint recorded by the live delivery path", () 
 
   it("records nothing when publishing the branch fails", async () => {
     const footprints = { capture: vi.fn(async () => undefined), apply: vi.fn(async () => undefined) };
-    const delivery = new GitMrStoryDelivery({ create: vi.fn() }, {
+    const delivery = new GitMrStoryDelivery({ create: vi.fn(async () => ({ url: "https://github.com/example/repo/pull/7", provider: "github" as const })) }, {
       worktreePath: "D:/worktree",
       targetBranch: "main",
       git: gitPort(async () => { throw new Error("remote rejected"); }),

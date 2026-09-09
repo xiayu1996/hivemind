@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { EVIDENCE_DIR_ENV, assembleGuardPolicy, type GuardPolicy } from "../guard/policy.js";
 import { captureTreePin, evaluateTreePin, type TreePin } from "../guard/tree-pin.js";
+import { splitScenarioFailures } from "../pipeline/failure-classification.js";
 import { validateVerdict, type TrajectoryEvidence, type VerdictDocument } from "../pipeline/verdict.js";
 import type { PiRunner, RpcEvent, TokenUsage } from "../runner/types.js";
 import { promptWithContinueRetry } from "../runner/continue-retry.js";
@@ -256,6 +257,28 @@ const defaultTreePin: TreePinPort = {
   },
 };
 
+/**
+ * The round's verdict.
+ *
+ * A tree that moved under the verifier is always a rejection: that is the
+ * forgery signal, and it is about the run, not about the box. Everything that
+ * did fail for environmental reasons alone is inconclusive, so the convergence
+ * criterion never sees it (03 section 8.6).
+ */
+function verdictOf(input: {
+  hasDocument: boolean;
+  valid: boolean;
+  treeMatches: boolean;
+  failedScenarios: readonly string[];
+  codeFailures: readonly string[];
+}): VerifyRecord["verdict"] {
+  if (!input.hasDocument) return "inconclusive";
+  if (!input.treeMatches) return "rejected";
+  if (input.valid && input.failedScenarios.length === 0) return "accepted";
+  if (input.failedScenarios.length === 0) return "rejected";
+  return input.codeFailures.length === 0 ? "inconclusive" : "rejected";
+}
+
 /** Runs VERIFY in a fresh, blind session and persists only a code-validated verdict. */
 export class BlindVerifyExecutor {
   constructor(
@@ -392,11 +415,26 @@ export class BlindVerifyExecutor {
       ...observedFailures,
       ...refusedClaims,
     ])].toSorted();
-    const verdict: VerifyRecord["verdict"] = !document || !validation
-      ? "inconclusive"
-      : validation.valid && pin.matches && failedScenarios.length === 0
-        ? "accepted"
-        : "rejected";
+    const scenarioReasons = document?.scenarios
+      .filter((scenario) => scenario.status !== "passed" && scenario.reason)
+      .map((scenario) => ({ scenarioId: scenario.id, reason: scenario.reason! })) ?? [];
+    const environmentReasons = [
+      ...scenarioReasons,
+      ...(validation?.errors ?? []).map((error) => ({
+        scenarioId: error.slice(0, error.indexOf(": ")),
+        reason: error,
+      })),
+    ];
+    // A round the box lost says nothing about the code, and the convergence
+    // criterion only means something on code-level failures (03 section 8.6).
+    const split = splitScenarioFailures(failedScenarios, environmentReasons);
+    const verdict: VerifyRecord["verdict"] = verdictOf({
+      hasDocument: Boolean(document && validation),
+      valid: validation?.valid ?? false,
+      treeMatches: pin.matches,
+      failedScenarios,
+      codeFailures: split.code,
+    });
     const record: VerifyRecord = {
       cardId: input.cardId,
       round: input.round,
@@ -410,9 +448,6 @@ export class BlindVerifyExecutor {
     await this.records.insert(record);
     const screenshots = document?.scenarios.flatMap((scenario) =>
       (scenario.screenshots ?? []).map((path) => ({ scenarioId: scenario.id, path }))) ?? [];
-    const reasons = document?.scenarios
-      .filter((scenario) => scenario.status !== "passed" && scenario.reason)
-      .map((scenario) => ({ scenarioId: scenario.id, reason: scenario.reason! })) ?? [];
-    return { record, screenshots, reasons, validationErrors, treeChanged: !pin.matches, runnerFailure: runnerError, events, usage, messages };
+    return { record, screenshots, reasons: scenarioReasons, validationErrors, treeChanged: !pin.matches, runnerFailure: runnerError, events, usage, messages };
   }
 }

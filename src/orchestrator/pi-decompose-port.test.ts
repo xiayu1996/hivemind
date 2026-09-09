@@ -17,6 +17,8 @@ const CANDIDATE = {
     id: "S-M2-01",
     title: "客户看到提案概要",
     requirement: "客户打开提案时先看到整体结论。",
+    userEntryPoint: "提案概要页",
+    verificationPath: "打开提案概要页确认结论展示",
     scenarios: [{ id: "S-M2-01-a", given: "客户收到提案", when: "客户打开提案", then: "客户先看到整体结论" }],
     dependsOn: [],
     predictedFootprint: ["src/orchestrator"],

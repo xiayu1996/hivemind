@@ -169,7 +169,9 @@ async function main(): Promise<void> {
     handle.client,
     gateway,
     comments,
-    new PlanApprovalStore(handle.client),
+    new PlanApprovalStore(handle.client, Date.now, {
+      maxStories: config.get("decompose.maxStoriesPerEpic"),
+    }),
   );
   const media = new NotionMediaReconciler(
     handle.client,
@@ -298,9 +300,11 @@ async function main(): Promise<void> {
       console.warn(`no provider can decompose ${epic.id} right now`);
       return;
     }
+    await config.reload();
+    const decompositionLimits = { maxStories: config.get("decompose.maxStoriesPerEpic") };
     const decomposer = new EpicDecomposer(
       handle.client,
-      new PlanApprovalStore(handle.client),
+      new PlanApprovalStore(handle.client, Date.now, decompositionLimits),
       new PiDecomposePort({
         binary: piBinary,
         model: await modelPolicy.resolve("decompose", provider),
@@ -312,6 +316,8 @@ async function main(): Promise<void> {
           auditPath: join(workRoot, "evidence", repositoryId, "decompose-tool-audit.jsonl"),
         },
       }),
+      Date.now,
+      decompositionLimits,
     );
     const outcome = await decomposer.decompose(epic);
     console.log(`Epic ${epic.id} decomposition: ${outcome.kind}`);

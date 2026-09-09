@@ -323,6 +323,14 @@ export const CONFIG_KEYS = {
     reload: "next-spawn",
     description: "Hosts an E2E run may navigate to. Anything else, including file://, is blocked.",
   }),
+  "decompose.maxStoriesPerEpic": def({
+    schema: positiveInt.max(20),
+    default: 4,
+    scope: "global",
+    reload: "hot",
+    description: "Stories one Epic may contain. A longer list is nearly always one feature cut by layer, which produces cards that cannot be verified or delivered on their own (03 doc section 8.5).",
+  }),
+
   // --- deterministic CODE exit (03 doc section 8.1) ---
   "codeExit.projectChecks": def({
     schema: z.array(z.object({

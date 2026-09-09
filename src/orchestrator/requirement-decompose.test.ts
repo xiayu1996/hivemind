@@ -133,6 +133,8 @@ describe("RequirementDecomposer", () => {
             id: "S-CONSOLE1-01",
             title: "首屏列出在等人回答的卡片",
             requirement: "值班的人打开首屏就看到全部在等他回答的卡片。",
+            userEntryPoint: "the S-CONSOLE1-01 view a person opens",
+            verificationPath: "open the S-CONSOLE1-01 view and check the outcome",
             scenarios: [{
               id: "S-CONSOLE1-01-a",
               given: "有卡片在等人回答",

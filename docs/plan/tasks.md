@@ -230,19 +230,23 @@
 
 目标：让一张垂直切片 Story 在无人干预下稳定走完 DESIGN→CODE→VERIFY→合流→draft MR。设计见 03 §8；断点分析见 `docs/design/diagrams/story-main-flow-as-built.html`。切入点：S-E3OVERVIEW-01（分支代码已完成、单测 22/22 通过，卡在流程）。
 
-> 前置动作：2026-09-05 会话的 41 个文件修复（P1–P31）仍在工作区未提交，先跑门禁提交，再开始 MQ。
+> 前置动作：2026-09-05 会话的 41 个文件修复（P1–P31）已提交（`fix: close the gaps that stalled Story cards mid-flow`）。
+>
+> 开跑前置：CODE 出口与合流复验都跑「仓库自己声明的门禁命令」，本仓库要先写进 config——
+> `codeExit.projectChecks = [{"name":"npm run lint","command":["npm","run","lint"]},{"name":"npm run typecheck","command":["npm","run","typecheck"]},{"name":"npm test","command":["npm","test"]}]`
+> （per-repo 作用域，空清单时合流复验会拒绝把未检查的合流算通过）。
 
 | ID | 任务 | 输出物 | 验证方式 | 前置 |
 |---|---|---|---|---|
-| MQ-01 | 供应商故障不进预算：QUOTA/RATE_LIMIT/TRANSPORT/TIMEOUT/AUTH 只进熔断，卡原地等待，不计内环与重入、不产生停点；熔断开合写 event_log；探测改用凭据探针；usage limit 无窗口时指数退避 | `src/runner/circuit-breaker.ts`、`scripts/run-local-orchestrator.ts` | 单测：每类故障后 `phase_reentries` 与 `inner_loop_rounds` 不变、`stop_reason` 为空；真实 fixture（"The usage limit has been reached"）进 `fixtures/rpc-errors/` 并有测试保证不被漏掉 | — |
-| MQ-02 | CODE 超时改为 checkpoint 续跑：prompt 超时不判失败，走 continue-retry；`maxContinueRetries` 耗尽才算一次失败；超时阈值 config 化 | `src/orchestrator/pi-phase-port.ts`、`src/config/registry.ts` | 单测：超时后 checkpoint 被载入续跑；`smoke-crash-recovery` 通过 | MQ-01 |
-| MQ-03 | OAuth 刷新单点化：orchestrator 持文件锁刷新，worker 只读；修好前 `schedule.maxConcurrentStories` 默认 1 | `src/runner/auth-*.ts` | 并发测试：两个 runner 同时启动只发生一次刷新 | — |
-| MQ-04 | CODE 出口确定性检查替代 completion judge：树干净且有提交、每场景红绿轨迹、`@scenario` 标记覆盖 DoD、format/lint/typecheck/全量测试；不过不计预算，清单喂回 CODE；撤销 MERGE judge | `src/pipeline/code-exit-gate.ts`（替换 completion-verifier 的调用位） | 单测覆盖四项各自失败的清单文案；S-E3OVERVIEW-01 分支上实跑一次全过 | — |
-| MQ-05 | MERGE 只写报告：删去门禁语义；报告业务区 regex lint | `prompts/phases/merge.md`、`src/notion/...` | MERGE 无 `git diff --check` 失败路径；lint 单测 | MQ-04 |
-| MQ-06 | 合流复验确定性化：rebase 后只跑本 Story 与 footprint 相交 Story 的测试（含 e2e 脚本），通过即 ff-merge；盲审归回归 loop，失败开 regression 卡；修 `scripts/run-story.ts` 盲审 cwd 与 HEAD 断言 | `src/vcs/subset-verifier.ts`、`src/vcs/merge-flow.ts` | 单测：复验只调用测试执行器不调用 BlindVerifyExecutor；集成测试：两张相交 Story 顺序合入 | MQ-04 |
-| MQ-07 | 收敛判据只吃代码层失败：环境类 fail 记 `inconclusive`，不进 failed 集合、不消耗轮次；连续两次 inconclusive 物化 friction | `src/pipeline/convergence.ts`、`src/verify/executor.ts` | 单测：服务 404 类理由不触发 expanded | MQ-06 |
-| MQ-08 | Story draft MR：DELIVERED 时开 story→epic 的 draft MR，链接回写 Notion MR 属性；Epic MR 仍为最终入口 | `src/vcs/story-delivery.ts` | 单测 + 真实 gh 实跑一次 | MQ-06 |
-| MQ-09 | DECOMPOSE 垂直切片约束：每张 Story 声明用户可见入口与独立验证路径；Epic 内 Story 数上限 config 化（默认 4）；水平切分打回重拆 | `prompts/phases/decompose.md`、`src/orchestrator/epic-decompose*.ts` | 单测：六张同页面验收条目的拆解被拒；现有 E1ACTION 拆解按新约束重拆 | — |
+| MQ-01 | ✅ 供应商故障不进预算：QUOTA/RATE_LIMIT/TRANSPORT/TIMEOUT/AUTH 只进熔断，卡原地等待，不计内环与重入、不产生停点；熔断开合写 event_log；探测改用凭据探针；usage limit 无窗口时指数退避 | `src/runner/circuit-breaker.ts`、`scripts/run-local-orchestrator.ts` | 单测：每类故障后 `phase_reentries` 与 `inner_loop_rounds` 不变、`stop_reason` 为空；真实 fixture（"The usage limit has been reached"）进 `fixtures/rpc-errors/` 并有测试保证不被漏掉 | — |
+| MQ-02 | ✅（smoke-crash-recovery 待真实 pi 跑） CODE 超时改为 checkpoint 续跑：prompt 超时不判失败，走 continue-retry；`maxContinueRetries` 耗尽才算一次失败；超时阈值 config 化 | `src/orchestrator/pi-phase-port.ts`、`src/config/registry.ts` | 单测：超时后 checkpoint 被载入续跑；`smoke-crash-recovery` 通过 | MQ-01 |
+| MQ-03 | ✅ OAuth 刷新单点化：orchestrator 持文件锁刷新，worker 只读；修好前 `schedule.maxConcurrentStories` 默认 1 | `src/runner/auth-*.ts` | 并发测试：两个 runner 同时启动只发生一次刷新 | — |
+| MQ-04 | ✅（S-E3OVERVIEW-01 实跑待配额恢复） CODE 出口确定性检查替代 completion judge：树干净且有提交、每场景红绿轨迹、`@scenario` 标记覆盖 DoD、format/lint/typecheck/全量测试；不过不计预算，清单喂回 CODE；撤销 MERGE judge | `src/pipeline/code-exit-gate.ts`（替换 completion-verifier 的调用位） | 单测覆盖四项各自失败的清单文案；S-E3OVERVIEW-01 分支上实跑一次全过 | — |
+| MQ-05 | ✅ MERGE 只写报告：删去门禁语义；报告业务区 regex lint | `prompts/phases/merge.md`、`src/notion/...` | MERGE 无 `git diff --check` 失败路径；lint 单测 | MQ-04 |
+| MQ-06 | ✅ 合流复验确定性化：rebase 后只跑本 Story 与 footprint 相交 Story 的测试（含 e2e 脚本），通过即 ff-merge；盲审归回归 loop，失败开 regression 卡；修 `scripts/run-story.ts` 盲审 cwd 与 HEAD 断言 | `src/vcs/subset-verifier.ts`、`src/vcs/merge-flow.ts` | 单测：复验只调用测试执行器不调用 BlindVerifyExecutor；集成测试：两张相交 Story 顺序合入 | MQ-04 |
+| MQ-07 | ✅ 收敛判据只吃代码层失败：环境类 fail 记 `inconclusive`，不进 failed 集合、不消耗轮次；连续两次 inconclusive 物化 friction | `src/pipeline/convergence.ts`、`src/verify/executor.ts` | 单测：服务 404 类理由不触发 expanded | MQ-06 |
+| MQ-08 | ✅（真实 gh 实跑待配额恢复） Story draft MR：DELIVERED 时开 story→epic 的 draft MR，链接回写 Notion MR 属性；Epic MR 仍为最终入口 | `src/vcs/story-delivery.ts` | 单测 + 真实 gh 实跑一次 | MQ-06 |
+| MQ-09 | ✅ DECOMPOSE 垂直切片约束：每张 Story 声明用户可见入口与独立验证路径；Epic 内 Story 数上限 config 化（默认 4）；水平切分打回重拆 | `prompts/phases/decompose.md`、`src/orchestrator/epic-decompose*.ts` | 单测：六张同页面验收条目的拆解被拒；现有 E1ACTION 拆解按新约束重拆 | — |
 | MQ-10 | **MQ 验收**：S-E3OVERVIEW-01 在无人干预下从当前 NEEDS_INPUT 恢复后走完 CODE 出口检查→VERIFY→合流→draft MR；随后重拆的第二张 Story 从 QUEUED 走完全程 | `docs/poc/mp-acceptance.md` 追记 | 两张卡各自 event_log 中无 retry_limit_exceeded；供应商故障期间 `stop_reason` 始终为空 | MQ-01..09 |
 
 ---

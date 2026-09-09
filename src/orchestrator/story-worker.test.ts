@@ -53,6 +53,107 @@ describe("SingleStoryWorker", () => {
 
   afterEach(() => client.close());
 
+  const designAndCode = vi.fn(async (input: ManagedPhaseInput) => {
+    if (input.phase === "DESIGN") {
+      return {
+        sessionId: "session-design",
+        artifacts: [
+          { kind: "design-summary", body: "Use central phase artifacts." },
+          { kind: "dod", body: DOD },
+        ],
+      };
+    }
+    if (input.phase === "CODE") {
+      return {
+        sessionId: `session-code-${input.round}`,
+        artifacts: [{ kind: "implementation", body: `Implementation round ${input.round}` }],
+      };
+    }
+    return {
+      sessionId: "session-merge",
+      artifacts: [{ kind: "delivery-report", body: "Both scenarios passed." }],
+    };
+  });
+
+  it("spends no inner-loop round on a verification the environment lost", async () => {
+    const outcomes = [
+      { verdict: "inconclusive" as const, failedScenarios: ["S-EPIC1-01-a"], codeFailedScenarios: [] },
+      { verdict: "accepted" as const, failedScenarios: [] },
+    ];
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => {
+        const outcome = outcomes[input.round - 1]!;
+        return { sessionId: `session-verify-${input.round}`, artifact: JSON.stringify(outcome), ...outcome };
+      }),
+    };
+    const worker = new SingleStoryWorker(
+      store,
+      { run: designAndCode },
+      verifier,
+      { deliver: vi.fn(async () => ({ mrUrl: null })) },
+      { enqueue: vi.fn(async () => undefined) },
+    );
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED", stopReason: null });
+    // Two rounds ran; the failing one was not charged, so the budget is intact.
+    await expect(store.getVerificationFailureHistory("S-EPIC1-01")).resolves.toEqual([]);
+  });
+
+  it("stops for a person after two consecutive rounds lost to the environment, and records the friction", async () => {
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => ({
+        sessionId: `session-verify-${input.round}`,
+        artifact: "{}",
+        verdict: "inconclusive" as const,
+        failedScenarios: ["S-EPIC1-01-a"],
+        codeFailedScenarios: [],
+      })),
+    };
+    const friction = { record: vi.fn(async () => undefined) };
+    const worker = new SingleStoryWorker(
+      store,
+      { run: designAndCode },
+      verifier,
+      { deliver: vi.fn(async () => ({ mrUrl: null })) },
+      { enqueue: vi.fn(async () => undefined) },
+      { friction },
+    );
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({
+      state: "NEEDS_INPUT",
+      stopReason: "verify_loop_exceeded",
+    });
+    expect(friction.record).toHaveBeenCalledWith(expect.objectContaining({
+      cardId: "S-EPIC1-01",
+      kind: "verification_inconclusive",
+    }));
+  });
+
+  it("compares only the code-level failures between rounds", async () => {
+    // Round 2 fails on the same code scenario plus one the box lost: as a raw
+    // set that is not a proper subset, and the loop would stop on "expanded".
+    const outcomes = [
+      { verdict: "rejected" as const, failedScenarios: ["S-EPIC1-01-a", "S-EPIC1-01-b"], codeFailedScenarios: ["S-EPIC1-01-a", "S-EPIC1-01-b"] },
+      { verdict: "rejected" as const, failedScenarios: ["S-EPIC1-01-a", "S-EPIC1-01-b"], codeFailedScenarios: ["S-EPIC1-01-b"] },
+      { verdict: "accepted" as const, failedScenarios: [] },
+    ];
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => {
+        const outcome = outcomes[input.round - 1]!;
+        return { sessionId: `session-verify-${input.round}`, artifact: JSON.stringify(outcome), ...outcome };
+      }),
+    };
+    const worker = new SingleStoryWorker(
+      store,
+      { run: designAndCode },
+      verifier,
+      { deliver: vi.fn(async () => ({ mrUrl: null })) },
+      { enqueue: vi.fn(async () => undefined) },
+    );
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED", rounds: 3 });
+  });
+
   it("runs DESIGN, a converging CODE/VERIFY loop, MERGE and delivery", async () => {
     const phases = vi.fn(async (input: ManagedPhaseInput) => {
       if (input.phase === "DESIGN") {

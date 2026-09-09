@@ -445,9 +445,38 @@ export class StoryExecutionStore {
 
   /** Failed sets of the rounds recorded after `since` (a person's last action
    * on the card, so a resume starts a fresh inner loop), oldest first. */
+  /**
+   * A failure of the pipeline rather than of the Story. It is recorded on the
+   * card so the reflection pipeline can count patterns per repository (03
+   * section 4); nothing consumes it yet.
+   */
+  async recordFriction(input: {
+    cardId: string;
+    runId: string;
+    kind: string;
+    detail: string;
+  }): Promise<void> {
+    const time = this.now();
+    await this.client.batch([
+      eventStatement(input.runId, input.cardId, null, "friction.recorded", {
+        kind: input.kind,
+        detail: input.detail,
+      }, time),
+    ], "write");
+  }
+
+  /**
+   * The rounds the convergence criterion may compare: rejected ones only. A
+   * round recorded as inconclusive was lost to the environment and says
+   * nothing about whether the failing set is shrinking, so it must not be
+   * charged to the budget here either — the resume path reads this, not the
+   * in-memory loop (03 section 8.6).
+   */
   async getVerificationFailureHistory(cardId: string, since = 0): Promise<string[][]> {
     const rows = (await this.client.execute({
-      sql: "SELECT failed_scenarios FROM verify_records WHERE card_id = ? AND created_at > ? ORDER BY round",
+      sql: `SELECT failed_scenarios FROM verify_records
+            WHERE card_id = ? AND created_at > ? AND verdict = 'rejected'
+            ORDER BY round`,
       args: [cardId, since],
     })).rows;
     return rows.map((row) => parseStringArray(row.failed_scenarios, "failed scenarios"));

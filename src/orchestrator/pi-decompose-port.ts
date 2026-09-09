@@ -23,6 +23,8 @@ const storySchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
   requirement: z.string().min(1),
+  userEntryPoint: z.string().min(1),
+  verificationPath: z.string().min(1),
   scenarios: z.array(scenarioSchema),
   dependsOn: z.array(z.string()),
   predictedFootprint: z.array(z.string()),
