@@ -41,7 +41,9 @@ export const STORY_TRANSITIONS: Record<StoryState, readonly StoryState[]> = {
   MERGE: ["DELIVERED", "CODE", "NEEDS_INPUT", "FAILED"],
   DELIVERED: ["REGRESSION_FIX"],
   REGRESSION_FIX: ["DELIVERED", "NEEDS_INPUT", "FAILED"],
-  NEEDS_INPUT: ["DESIGN", "CODE", "VERIFY", "MERGE", "REGRESSION_FIX", "FAILED"],
+  // A Story can stop before its pipeline starts (the worker died in QUEUED);
+  // resuming it means queueing it again, not skipping into DESIGN.
+  NEEDS_INPUT: ["QUEUED", "DESIGN", "CODE", "VERIFY", "MERGE", "REGRESSION_FIX", "FAILED"],
   HUMAN_PARKED: [],
   FAILED: [],
 };

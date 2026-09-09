@@ -22,6 +22,7 @@ const respond = (cmd, id, extra = {}) => send({ type: "response", command: cmd, 
 
 if (MODE === "garbage") process.stdout.write("this is not json\n");
 
+const steering = [];
 let buffer = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
@@ -52,7 +53,11 @@ function handle(cmd) {
       respond("abort", cmd.id);
       return;
     case "steer":
+      steering.push(cmd.message);
       respond("steer", cmd.id);
+      return;
+    case "clear_queue":
+      respond("clear_queue", cmd.id, { data: { steering: steering.splice(0), followUp: [] } });
       return;
     case "prompt": {
       if (MODE === "reject-prompt") {

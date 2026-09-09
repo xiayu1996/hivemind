@@ -1,5 +1,6 @@
-import { checkBash, checkFilePath } from "./danger-rules.js";
-import type { GuardPolicy } from "./policy.js";
+import { resolve } from "node:path";
+import { checkBash, checkFilePath, isWithinRoot } from "./danger-rules.js";
+import { EVIDENCE_DIR_ENV, type GuardPolicy } from "./policy.js";
 
 export interface ToolCallEvent {
   toolName: string;
@@ -95,6 +96,31 @@ function navigationTargets(command: string): string[] {
   return targets;
 }
 
+const REDIRECT = /(?:^|[\s;|&])\d?(?:>>|>)(?![>&])\s*(\S+)/g;
+const EVIDENCE_VARIABLE = new RegExp(`^\\$(?:\\{${EVIDENCE_DIR_ENV}\\}|${EVIDENCE_DIR_ENV})(?=/|$)`);
+const ROUTE_INTERCEPTION = /\bplaywright-cli\b[^|;&\n]*\s(?:un)?route(?:\s|$)/;
+
+/**
+ * A read-only phase may still write where the policy says it may: a verifier
+ * starting the service it is about to look at needs somewhere to put its log.
+ * Redirects into the extra write roots (the evidence directory) and to
+ * /dev/null are removed before the write heuristics judge the command, so
+ * they see only the redirects that would touch the repository.
+ */
+function withoutPermittedRedirects(command: string, policy: GuardPolicy): string {
+  const evidenceRoot = policy.extraWriteRoots[0];
+  return command.replaceAll(REDIRECT, (match, rawTarget: string) => {
+    // Shell quoting and the evidence-directory variable are how the prompt
+    // tells a verifier to write; both must read as the path they denote.
+    let target = rawTarget.replaceAll(/^["']+|["']+$/g, "");
+    if (evidenceRoot && EVIDENCE_VARIABLE.test(target)) target = target.replace(EVIDENCE_VARIABLE, evidenceRoot);
+    if (target === "/dev/null") return " ";
+    if (!target.startsWith("/")) return match;
+    const absolute = resolve(target);
+    return policy.extraWriteRoots.some((root) => isWithinRoot(absolute, resolve(root))) ? " " : match;
+  });
+}
+
 function extractPath(input: unknown): string | undefined {
   if (typeof input !== "object" || input === null) return undefined;
   const source = input as Record<string, unknown>;
@@ -136,8 +162,19 @@ export function decideToolCall(
     }
     const verdict = checkBash(command);
     if (verdict.deny) return { block: true, reason: verdict.reason, target: command };
-    if (bannedBashPatterns.some((pattern) => pattern.test(command))) {
+    const judged = withoutPermittedRedirects(command, policy);
+    if (bannedBashPatterns.some((pattern) => pattern.test(judged))) {
       return { block: true, reason: `shell write is forbidden in ${policy.phase}`, target: command };
+    }
+    // Only read-only phases get a browser lane, and they judge the running
+    // system; a browser told to answer requests itself would be judging a
+    // fixture the verifier wrote.
+    if (policy.e2eHostAllowlist.length > 0 && ROUTE_INTERCEPTION.test(command)) {
+      return {
+        block: true,
+        reason: `request interception fakes the system under test and is forbidden in ${policy.phase}`,
+        target: command,
+      };
     }
     for (const target of navigationTargets(command)) {
       const navigation = decideNavigation(target, policy);

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { classifyError } from "./classify.js";
 import { extractFailure } from "./failure.js";
 
-const FIXTURES = join(process.cwd(), "fixtures/rpc-errors");
+const FIXTURES = join(process.cwd(), "fixtures/rpc-errors/openai-codex");
 const failureOf = (name: string) =>
   extractFailure(JSON.parse(readFileSync(join(FIXTURES, `${name}.json`), "utf8")).events)!.errorMessage;
 
@@ -17,6 +17,7 @@ describe("captured fixtures classify as expected", () => {
     ["server", "SERVER"],
     ["transport", "TRANSPORT"],
     ["mid_stream_drop", "TRANSPORT"],
+    ["usage_limit_codex", "QUOTA"],
   ];
 
   for (const [fixture, expected] of cases) {
@@ -24,6 +25,17 @@ describe("captured fixtures classify as expected", () => {
       expect(classifyError(failureOf(fixture)).class).toBe(expected);
     });
   }
+
+  it("claims every fixture captured for this provider", () => {
+    // A fixture nobody asserts on is a captured provider wording the classifier
+    // has never been run against, which is exactly how the Codex usage-limit
+    // text reached production unclassified.
+    const captured = readdirSync(FIXTURES)
+      .filter((name) => name.endsWith(".json"))
+      .map((name) => name.replace(/\.json$/, ""))
+      .toSorted();
+    expect(captured).toEqual(cases.map(([fixture]) => fixture).toSorted());
+  });
 });
 
 describe("rule ordering", () => {

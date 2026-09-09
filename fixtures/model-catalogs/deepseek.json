@@ -1,0 +1,23 @@
+{
+  "provider": "deepseek",
+  "piVersion": "0.84.3",
+  "capturedAt": "2026-09-09T09:11:41.789Z",
+  "models": [
+    {
+      "provider": "deepseek",
+      "id": "deepseek-v4-flash",
+      "contextWindow": 1000000,
+      "maxOutput": 384000,
+      "thinking": true,
+      "images": false
+    },
+    {
+      "provider": "deepseek",
+      "id": "deepseek-v4-pro",
+      "contextWindow": 1000000,
+      "maxOutput": 384000,
+      "thinking": true,
+      "images": false
+    }
+  ]
+}

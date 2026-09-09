@@ -29,7 +29,7 @@ src/
 prompts/          基线层 + per-phase prompt，各自独立文件
 extensions/       pi extension：hive-guard / model-policy 兜底（浏览器不走 MCP，见 02 §4.3）
 poc/              M0 PoC 脚本（可丢弃）；scripts/ 为长期保留脚本
-fixtures/         真实采集的契约 fixture（rpc-errors/ 来自 M0-05 实测，非手写）
+fixtures/         真实采集的契约 fixture（rpc-errors/ 来自 M0-05 实测；model-catalogs/ 由 scripts/catalog-snapshot.ts 采，非手写）
 docs/design/      冻结设计 00–06；docs/poc/ 为 M0 执行记录与逐项 go/no-go
 ```
 
@@ -49,6 +49,9 @@ npm run requirements:run -- --repository-slug <owner/name>                  # �
 
 deploy/linux/install.sh --repository-path <repo>   # 部署唯一入口，幂等；Ubuntu / Arch(Omarchy) / WSL2 Ubuntu 同一条命令
 
+npx tsx scripts/catalog-snapshot.ts <provider>   # 采 provider 目录快照（该机需有这家凭据）
+npx tsx scripts/provider-add.ts <provider> ...   # 声明 provider（写 model.providers，等价于在 console 上改）
+
 npx tsx scripts/smoke-runner.ts            # 真实 pi 子进程冒烟
 npx tsx scripts/smoke-context-isolation.ts # 验证 context 文件不泄漏
 npx tsx scripts/smoke-crash-recovery.ts    # SIGKILL 后从 checkpoint 续跑
@@ -58,7 +61,7 @@ npx tsx scripts/smoke-browser-e2e.ts       # 真实 headless 浏览器 + 三层�
 Node `>=26`，ESM，包管理用 npm。部署只有 Linux 一条路：Windows 主机跑在 WSL2 Ubuntu 里，不再有原生 Windows 路径。
 `deploy/linux/install.sh` 是唯一入口，每个阶段先查再做，人工步骤（凭据、pi 登录、gh 登录）原地停下、重跑续接；见 [docs/runbooks/linux-single-node.md](docs/runbooks/linux-single-node.md)。
 pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src/runner/pi-binary.ts` 取，shell 经 `node -p` 取，不得再出现字面版本号。
-`scripts/` 只放长期入口（run-* / smoke-* / preflight / notion-bootstrap / install-pi / pi-login）；一次性排障脚本用完即删，不进仓库。
+`scripts/` 只放长期入口（run-* / smoke-* / preflight / notion-bootstrap / install-pi / pi-login / catalog-snapshot / provider-add）；一次性排障脚本用完即删，不进仓库。
 
 ### 本地验证顺序
 
@@ -80,6 +83,8 @@ pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src
 - **跨 phase 上下文是无状态全量注入**，不做 session fork。`assemblePhasePrompt` 只读它的参数：不读时钟、不读文件系统、不取随机数，每个集合按稳定键排序。相同输入必须产出逐字节相同的 prompt——跨机重建、failover、崩溃恢复三件事都骑在这一条上，且它是 provider 前缀缓存生效的前提。
 - **全系统只有三类真停点**：`blocking_question`、`verify_loop_exceeded`、`retry_limit_exceeded`（见 03 §1.5，DB CHECK 强制）。新增停点需要改设计文档。
 - **内环收敛判据是严格真子集**（`failed(N) ⊊ failed(N-1)`）；轮次硬上限（内环 6 / phase 重入 3 / continue 8 / regression 重开 2）只是最终兜底，上限设在离散轮次，不设在时长或 token。
+- **加一个 provider 是数据改动，不是代码改动**：`model.providers`（registry 键，console 可编辑，标了 dangerous）声明每家怎么认证、每档用哪个模型；代码里不出现任何字面 model id。加进 `model.failoverChain` 是另一个决策，分开配、分开审计。
+- **provider 目录有两个源**：pinned pi 的实时目录是权威，`fixtures/model-catalogs/` 的采集快照是无 pi / 无该家凭据时的兜底（漂移测试守住一致）。快照进仓库还有第二个作用：它让"这个 model id 是否存在"变成**同步**判据，配置写入当场就能拒绝坏 id，而不是等到 spawn 时卡住一张卡。
 - **验证命令永不硬编码**，由 agent 看现场决定。防造假靠三层：prompt 约束、工具面物理掐断、verdict 代码校验；三层缺一不可，prompt 是最弱的一层。
 - **`VERIFY.session_id != CODE.session_id`** 由 DB CHECK 强制，不靠应用层自觉。
 
@@ -96,11 +101,17 @@ pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src
 - **错误提取只认单一契约**：assistant 消息的 `stopReason === "error"` + `errorMessage`。但 RPC 有**两条**错误面——命令级 `{type:"response", success:false, error}` 与运行期 `stopReason:"error"`，前者不走这条契约。
 - **分类规则顺序有载荷**：QUOTA 必须排在 RATE_LIMIT 之前。配额耗尽也是 429，读反了 worker 会永远等一个不会打开的窗口。
 - **TokenUsage 四桶互斥**（`uncachedInput / output / cacheRead / cacheWrite`）。reasoning 是 output 的细分，**不重复累加**；cacheRead 与 cacheWrite 单价不同，折进 input 就永久失去准确定价能力。
-- **checkpoint 存 session JSONL 文件本身**，不存消息数组：RPC 有 `get_messages` 导出，但**没有任何载入命令**。
+- **checkpoint 存 session JSONL 文件本身**，不存消息数组：RPC 有 `get_messages` 导出，但**没有任何载入命令**（0.85.0 的 `SessionManager.inMemory()` 只在库内 SDK 面，`AgentSession` 仍硬编码 JSONL，见 pi#9000）。
+- **checkpoint 必须以换行结尾**：向未终止的末行追加会把下一条记录并进去，两条一起丢（pi#8345，0.84.4 已修根因，我们仍强制，因为 checkpoint 活得比写它的 pi 版本长）。修复被触发即为异常，走 `onRepair` 进规范日志，不做静默字段。
 - **只修尾部损坏**（pi 已知 bug 的形态）；中段损坏拒绝修复并回退更老快照。宁可多跑一段，也不拿一个被悄悄改过的会话续跑。
 - **默认 `--no-context-files`**：pi 会向上层叠 `CLAUDE.md` / `AGENTS.md`，实测会把宿主机的个人指令读进任务上下文，且静默无报错、事后难归因。需要的文件显式装载，并把生效清单记入规范日志。
+- **reasoning effort 与 tier 同构**：`model.purposeThinking` 按 purpose 配 `--thinking` 档位，由 `ModelPolicy.resolve` 挂到 `ResolvedModel` 上随模型一起走，所以每个 port 零改动即透传。只有目录明说 `thinking=yes` 的模型才会收到档位——理由同下一条，pi 对用不上的参数不报错。
 - **`resolveModel` 是所有 model 参数的唯一入口且必须自校验模型 id**：坏 id 在 spawn 时只是 warning，pi 会当自定义模型继续跑并编造价格。
-- **凭据探针一律 `--no-refresh`**；`pi auth check` 在 `not_ready` 时**退出码仍为 0**，必须解析 JSON status。
+- **model id 存在 ≠ 本账号可用**：ChatGPT 订阅账号会拒掉 pi 目录里照样列着的 id（实测 `gpt-5.4-mini` / `gpt-5.4` / `gpt-5.3-codex-spark`，见 06 §3）。快照只能回答"是否存在"，"能否用"只有真实往返能回答——这就是 preflight 除凭据探针之外还要花一轮 capacity_probe 的原因。
+- **凭据探针一律 `--no-refresh`**；`pi auth check` 在 `not_ready` 时**退出码仍为 0**，必须解析 JSON status。存着 token 就报 `ready`，refresh 是否还能用它不知道。
+- **spawn 前清理陈旧 `auth.json.lock`，握手超时高于 pi 的 30s 夺锁窗口**：被 SIGKILL 的 pi 留下锁目录，下一个 pi 静默等满 30s——击杀/隔离/宿主机真死后的第一次 spawn 必然卡死。清理只认 mtime 超 30s（pi 自己的判据），夺不走活持有者的锁：破锁会让两个进程轮换同一个 refresh token，双双作废。
+- **放弃一轮之前先 `clear_queue` 再 `abort`**：`abort` 故意保留 steering / follow-up 队列并在之后继续投递，不清就等于用刚被丢弃那一轮的指令去驱动下一轮。
+- **等人不算在干活**：RPC 下"阻塞等人"的信号是 stdout 的 `extension_ui_request`（对话类方法要等 stdin 回 `extension_ui_response`），不是 extension 侧的 `ui_prompt_start/end`——后者在 RPC 模式不发。心跳读 `waitingOnUser`。
 - **usage-limit 文案里的分钟数是相对值**，锚定事件自身时间戳，不能锚定"我们读到它的时间"——在 outbox 积压过就会算错窗口。
 
 ### 代码风格
@@ -119,7 +130,8 @@ pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src
 ## 测试
 
 - 纯函数决策逻辑（收敛判据、footprint 相交、拓扑调度、triage 路由、去重键）全部单测覆盖。
-- **契约 fixture 来自真实采集**（`fixtures/rpc-errors/` 是 M0-05 从真实错误流采的），不手写臆造；新增 fixture 时要有测试保证它不会被漏掉。
+- **契约 fixture 来自真实采集**（`fixtures/rpc-errors/<provider>/` 是从真实错误流采的，openai-codex 那批来自 M0-05），不手写臆造；新增 fixture 时要有测试保证它不会被漏掉。
+- **进 failover chain 的每个 provider 都必须有自己的 AUTH / QUOTA / RATE_LIMIT 采集**，由 `assertErrorFixtureCoverage` 在 preflight 与 orchestrator 启动时强制。分类器读的是文案，每家措辞不同；把配额耗尽读成限流，worker 会等一个永远不开的窗口。
 - 测试描述行为而非正确性。行为过时了就连同测试一起改，并在 PR 里说明为什么。
 
 ## 编辑本文件

@@ -36,7 +36,8 @@ deploy/linux/install.sh --repository-path <被开发仓库的本地 checkout>
 ## 2. 凭据怎么来
 
 - **Notion**：在 Notion 开发者后台建内部 integration，能力勾选读/写/插入内容、读/插入评论、用户信息（不含邮箱）。建一个顶层页面并把 integration 加进该页的 connections，只共享这一页及其子页。token 填 `NOTION_TOKEN`，页面 id 填 `HIVEMIND_NOTION_PARENT_PAGE_ID`。
-- **pi provider**：pi 的登录只在其 TUI 里。每台机器各自登录，不复制 `auth.json`。探针一律 `pi auth check --no-refresh`，它在 `not_ready` 时退出码仍为 0，脚本解析 JSON 里的 `status`。
+- **pi provider（订阅制，如 openai-codex）**：pi 的登录只在其 TUI 里。每台机器各自登录，不复制 `auth.json`。探针一律 `pi auth check --no-refresh`，它在 `not_ready` 时退出码仍为 0，脚本解析 JSON 里的 `status`。
+- **pi provider（API key 制）**：把 key 写进 `secrets.env`，变量名以 pi 的 `docs/providers.md` 为准（如 `DEEPSEEK_API_KEY`）。两个 systemd 单元都以 `EnvironmentFile=-` 加载这个文件，runner 再把它透给 pi 子进程。`auth check` 对这类 provider 只验 key 是否存在——实测填一个假 key 也返回 `ready`——所以探针会另跑一次 cheap 档的真实往返来验有效性。
 - **gh / glab**：`gh auth login --git-protocol ssh --web`。最小权限是仓库读写与 PR 创建，不给组织管理。
 - **告警通道**：飞书群自定义机器人的 webhook，或一套 SMTP 应用密码（`SMTP_TO` 支持逗号分隔多人）。配好后 `npx tsx scripts/smoke-alert.ts` 发一条 P0 冒烟，脚本只打印通道名。
 
@@ -48,7 +49,7 @@ deploy/linux/install.sh --repository-path <被开发仓库的本地 checkout>
 npm run preflight -- --repository-path <repo>
 ```
 
-逐项 PASS/WARN/FAIL：Node、pi 版本、secrets 权限与键、Notion 可达与三库已共享、库迁移与配置断言、failover 链各 provider 凭据、四个 purpose 档位都有 provider、`gh`/`glab` 已登录、git 身份、仓库 origin、systemd 为 PID 1、内核允许 Chromium 沙箱、headless Chromium 已装。任何 FAIL 都不要启动服务；探针不打印凭据值。
+逐项 PASS/WARN/FAIL：Node、pi 版本、secrets 权限与键、Notion 可达与三库已共享、库迁移与配置断言、failover 链各 provider 凭据与一次真实往返、四个 purpose 档位都有 provider、`gh`/`glab` 已登录、git 身份、仓库 origin、systemd 为 PID 1、内核允许 Chromium 沙箱、headless Chromium 已装。任何 FAIL 都不要启动服务；探针不打印凭据值。
 
 ## 4. 运行中
 

@@ -54,6 +54,34 @@ describe("provider circuit breaker", () => {
     });
   });
 
+  it("holds a usage limit that names no window for the configured period instead of asking a person", () => {
+    const health = fail(closedHealth("openai-codex", NOW), "Codex error: The usage limit has been reached");
+    expect(health).toMatchObject({
+      state: "open",
+      lastErrorClass: "QUOTA",
+      retryAt: NOW + 30 * 60_000,
+      needsHuman: false,
+    });
+    expect(probeDue(health, NOW + 29 * 60_000)).toBe(false);
+    expect(probeDue(health, NOW + 30 * 60_000)).toBe(true);
+  });
+
+  it("doubles the windowless usage-limit hold up to the ceiling", () => {
+    // The hold is a guess, and the only way to test it is to spend a dispatch:
+    // repeating the same guess every 30 minutes burns quota on probing alone.
+    const capped: BreakerPolicy = { ...policy, quotaHoldMs: 30 * 60_000, quotaHoldMaxMs: 2 * 3_600_000 };
+    const message = "Codex error: The usage limit has been reached";
+    let health = onProviderFailure(closedHealth("openai-codex", NOW), { at: NOW, errorMessage: message, policy: capped });
+    expect(health.retryAt).toBe(NOW + 30 * 60_000);
+    health = onProviderFailure(health, { at: NOW, errorMessage: message, policy: capped });
+    expect(health.retryAt).toBe(NOW + 60 * 60_000);
+    health = onProviderFailure(health, { at: NOW, errorMessage: message, policy: capped });
+    expect(health.retryAt).toBe(NOW + 120 * 60_000);
+    health = onProviderFailure(health, { at: NOW, errorMessage: message, policy: capped });
+    expect(health.retryAt).toBe(NOW + 120 * 60_000);
+    expect(onProviderSuccess(health, NOW).consecutiveFailures).toBe(0);
+  });
+
   it("treats a spent balance with no window as needing a human", () => {
     const health = fail(closedHealth("zai-coding-cn", NOW), "429: insufficient_quota");
     expect(health).toMatchObject({ state: "open", lastErrorClass: "QUOTA", needsHuman: true, retryAt: null });

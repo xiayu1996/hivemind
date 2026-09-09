@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Client, InStatement } from "@libsql/client";
-import type { DecompositionCandidate, DecompositionStory } from "./decompose.js";
+import type { DecompositionCandidate, DecompositionLimits, DecompositionStory } from "./decompose.js";
 import { evaluateDecomposition } from "./decompose.js";
 import { EPIC_BOARD_STATUS, epicStatusStatement } from "./epic-status-projection.js";
 import { assertEpicTransition, type EpicState } from "./state-machine.js";
@@ -39,8 +39,11 @@ function presentationPayload(plan: DecompositionCandidate): string {
     epicId: plan.epicId,
     status: "拆解待确认",
     businessGoal: plan.businessGoal,
-    stories: plan.stories.map((story) => ({ id: story.id, title: story.title })),
-    ...(plan.stories.length > 8 ? { recommendation: "建议考虑拆分 Epic，便于人工评审。" } : {}),
+    stories: plan.stories.map((story) => ({
+      id: story.id,
+      title: story.title,
+      userEntryPoint: story.userEntryPoint,
+    })),
   });
 }
 
@@ -49,10 +52,14 @@ export class PlanApprovalStore {
   constructor(
     private readonly client: Client,
     private readonly now: () => number = Date.now,
+    /** The Story-count ceiling, from `decompose.maxStoriesPerEpic`. Passed in
+     * rather than read here so the gate and DECOMPOSE judge the same plan by
+     * the same number. */
+    private readonly limits: DecompositionLimits = {},
   ) {}
 
   async present(input: PresentPlanInput): Promise<void> {
-    const accepted = evaluateDecomposition(input.plan);
+    const accepted = evaluateDecomposition(input.plan, this.limits);
     if (accepted.kind !== "accepted" || accepted.epicId !== input.epicId) {
       throw new Error("only an accepted decomposition for this Epic can await approval");
     }

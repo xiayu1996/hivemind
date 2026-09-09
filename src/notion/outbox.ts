@@ -7,6 +7,12 @@ export interface EnqueueNotionOperation {
   operation: string;
   target: string;
   payload: unknown;
+  /**
+   * The same payload was delivered before, but the remote has since moved on
+   * and must receive it again. Dedup exists for crash replay; a desired state
+   * that recurs after an intermediate one is new work, not a replay.
+   */
+  resend?: boolean;
 }
 
 export interface EnqueueResult {
@@ -111,11 +117,20 @@ export class NotionOutbox {
     }
 
     const existing = await this.client.execute({
-      sql: "SELECT id FROM notion_outbox WHERE target = ? AND payload_hash = ?",
+      sql: "SELECT id, state FROM notion_outbox WHERE target = ? AND payload_hash = ?",
       args: [input.target, encoded.hash],
     });
     const id = existing.rows[0]?.id;
     if (id === undefined) throw new Error("outbox conflict row disappeared");
+    if (input.resend && existing.rows[0]?.state === "sent") {
+      await this.client.execute({
+        sql: `UPDATE notion_outbox
+              SET state = 'pending', attempts = 0, last_error = NULL, sent_at = NULL, created_at = ?, priority = ?
+              WHERE id = ? AND state = 'sent'`,
+        args: [this.now(), input.priority, id],
+      });
+      return { id: Number(id), inserted: true, payloadHash: encoded.hash };
+    }
     return { id: Number(id), inserted: false, payloadHash: encoded.hash };
   }
 

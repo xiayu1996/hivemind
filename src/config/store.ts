@@ -67,7 +67,13 @@ export class ConfigStore {
       const key = String(row.key);
       if (!isConfigKey(key) || String(row.scope_id) !== this.scopeId(key)) continue;
       const parsed = CONFIG_KEYS[key].schema.safeParse(JSON.parse(String(row.value_json)));
-      if (!parsed.success) continue; // a value that no longer validates falls back to the default
+      if (!parsed.success) {
+        // Falling back to the default is the safe choice, but it silently swaps
+        // the effective value: a model id that left the catalogue would revert
+        // the whole provider policy to the built-in one without a trace.
+        console.warn(`config ${key} no longer validates and is falling back to its default: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
+        continue;
+      }
       overlay.set(key, parsed.data);
       version += Number(row.version);
     }

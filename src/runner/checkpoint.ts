@@ -11,6 +11,16 @@ export interface Checkpoint {
   createdAt: number;
   /** Lines dropped by the trailing-corruption repair, if any. */
   truncatedLines: number;
+  /** Whether the copy had to add the trailing newline the session file lacked. */
+  terminatedLastLine: boolean;
+}
+
+export interface RepairNotice {
+  runId: string;
+  seq: number;
+  sessionFile: string;
+  truncatedLines: number;
+  terminatedLastLine: boolean;
 }
 
 export interface CheckpointStoreOptions {
@@ -18,6 +28,14 @@ export interface CheckpointStoreOptions {
   /** How many checkpoints to keep per run. */
   keep?: number;
   now?: () => number;
+  /**
+   * Called when a captured session needed repair. pi fixed both known causes
+   * (torn tail, missing trailing newline) by 0.84.4, so on the pinned release
+   * this should never fire: it means either an older pi wrote the session or a
+   * new corruption mode exists, and both are worth a canonical-log entry rather
+   * than a silently recorded field.
+   */
+  onRepair?: (notice: RepairNotice) => void;
 }
 
 const META_SUFFIX = ".meta.json";
@@ -29,10 +47,12 @@ const META_SUFFIX = ".meta.json";
  * only thing pi can actually resume from is a session JSONL file. Checkpoints
  * therefore store the file itself, not a message array.
  *
- * Sessions are treated as a discardable cache with a known failure mode: pi has
- * an open bug where the tail of the JSONL can be left corrupt. Every checkpoint
- * is validated on write and repaired by truncating to the last intact record,
- * because corruption always sits at the end.
+ * Sessions are treated as a discardable cache with two known failure modes, both
+ * fixed upstream in pi 0.84.4 and both still repaired here because a checkpoint
+ * may have been written by an older pi: the tail of the JSONL can be left
+ * corrupt (truncated to the last intact record, since corruption always sits at
+ * the end), and a file missing its trailing newline corrupts the next entry pi
+ * appends on resume (the newline is added).
  */
 export class CheckpointStore {
   private readonly keep: number;
@@ -52,7 +72,10 @@ export class CheckpointStore {
     await mkdir(this.options.dir, { recursive: true });
 
     const raw = await readFile(sessionFile, "utf8");
-    const { repaired, truncatedLines } = repairJsonl(raw);
+    const { repaired, truncatedLines, terminatedLastLine } = repairJsonl(raw);
+    if (truncatedLines > 0 || terminatedLastLine) {
+      this.options.onRepair?.({ runId, seq, sessionFile, truncatedLines, terminatedLastLine });
+    }
 
     const name = `${runId}.${String(seq).padStart(6, "0")}.jsonl`;
     const target = join(this.options.dir, name);
@@ -69,6 +92,7 @@ export class CheckpointStore {
       bytes: Buffer.byteLength(repaired),
       createdAt: this.now(),
       truncatedLines,
+      terminatedLastLine,
     };
 
     await writeFile(`${target}${META_SUFFIX}`, JSON.stringify(checkpoint), "utf8");
@@ -131,33 +155,45 @@ export class CheckpointStore {
 export interface RepairResult {
   repaired: string;
   truncatedLines: number;
+  terminatedLastLine: boolean;
 }
 
 /**
- * Drops unparseable trailing records.
+ * Drops unparseable trailing records and guarantees a trailing newline.
  *
- * Only the tail is repaired: pi's corruption shows up when a write is cut short,
- * so a bad record in the middle means something else is wrong and truncating
- * there would silently discard good history. In that case the content is
- * returned unchanged and the caller can fall back to an older checkpoint.
+ * Only the tail is truncated: pi's corruption shows up when a write is cut
+ * short, so a bad record in the middle means something else is wrong and
+ * truncating there would silently discard good history. In that case the
+ * records are left as they are and the caller can fall back to an older
+ * checkpoint.
+ *
+ * The trailing newline is not cosmetic. Appending to a session file whose last
+ * line is unterminated used to merge the next entry into it, which loses both
+ * records at once; fixed in pi 0.84.4, still enforced here because a checkpoint
+ * outlives the pi release that wrote it.
  */
 export function repairJsonl(raw: string): RepairResult {
   const lines = raw.split("\n");
-  const trailingBlank = lines.at(-1) === "" ? 1 : 0;
-  const records = trailingBlank ? lines.slice(0, -1) : lines;
+  const terminated = lines.at(-1) === "";
+  const records = terminated ? lines.slice(0, -1) : lines;
 
   let lastGood = records.length - 1;
   while (lastGood >= 0 && !isJson(records[lastGood]!)) lastGood--;
 
-  const truncatedLines = records.length - 1 - lastGood;
-  if (truncatedLines === 0) return { repaired: raw, truncatedLines: 0 };
-
+  let truncatedLines = records.length - 1 - lastGood;
   // Corruption before the tail is not the known failure mode; leave it alone.
-  for (let i = 0; i <= lastGood; i++) {
-    if (!isJson(records[i]!)) return { repaired: raw, truncatedLines: 0 };
+  if (truncatedLines > 0) {
+    for (let i = 0; i <= lastGood; i++) {
+      if (!isJson(records[i]!)) { truncatedLines = 0; break; }
+    }
   }
 
-  return { repaired: `${records.slice(0, lastGood + 1).join("\n")}\n`, truncatedLines };
+  const kept = truncatedLines > 0 ? records.slice(0, lastGood + 1) : records;
+  if (kept.length === 0) return { repaired: "", truncatedLines: 0, terminatedLastLine: false };
+
+  const terminatedLastLine = truncatedLines === 0 && !terminated;
+  if (truncatedLines === 0 && terminated) return { repaired: raw, truncatedLines: 0, terminatedLastLine: false };
+  return { repaired: `${kept.join("\n")}\n`, truncatedLines, terminatedLastLine };
 }
 
 function isJson(line: string): boolean {

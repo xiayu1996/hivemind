@@ -25,6 +25,28 @@ export interface BreakerPolicy {
   rateLimitOpenMs: number;
   /** Usage-limit windows at or under this are worth waiting out. */
   deferWithinMinutes: number;
+  /** How long a usage limit that named no window is held before dispatch tries
+   * again. Absent for callers built before the field existed. */
+  quotaHoldMs?: number;
+  /** Ceiling for the doubling of that hold. */
+  quotaHoldMaxMs?: number;
+}
+
+const DEFAULT_QUOTA_HOLD_MS = 30 * 60_000;
+const DEFAULT_QUOTA_HOLD_MAX_MS = 4 * 3_600_000;
+
+/**
+ * Each further windowless usage limit doubles the hold. The first hold is a
+ * guess: the provider named no window, so the only way to learn the window has
+ * reopened is to spend a dispatch on it. Holding the same 30 minutes forever
+ * spends one every 30 minutes for as long as the account stays spent, which is
+ * how a quiet weekend burns a day of quota on probes alone.
+ */
+function windowlessQuotaHold(policy: BreakerPolicy, consecutiveFailures: number): number {
+  const base = policy.quotaHoldMs ?? DEFAULT_QUOTA_HOLD_MS;
+  const ceiling = policy.quotaHoldMaxMs ?? DEFAULT_QUOTA_HOLD_MAX_MS;
+  const exponent = Math.min(Math.max(consecutiveFailures - 1, 0), 20);
+  return Math.min(base * 2 ** exponent, Math.max(base, ceiling));
 }
 
 export interface ProviderFailure {
@@ -74,10 +96,15 @@ export function onProviderFailure(health: ProviderHealth, input: ProviderFailure
   if (classification.class === "AUTH") return opened(null, true);
   if (classification.class === "QUOTA") {
     const limit = parseUsageLimit(errorMessage, at);
-    // A usage window reopens on its own; a spent balance does not.
-    return limit?.resetAt === null || limit === null
-      ? opened(null, true)
-      : opened(limit.resetAt, false);
+    if (limit !== null && limit.resetAt !== null) return opened(limit.resetAt, false);
+    // A subscription usage limit reopens on its own even when the message
+    // names no window; a credentials probe cannot tell when, so the breaker
+    // holds for a fixed period and a real dispatch is the test. A spent
+    // balance ("insufficient_quota") does not come back without a person.
+    if (/usage limit/i.test(errorMessage)) {
+      return opened(at + windowlessQuotaHold(policy, consecutiveFailures), false);
+    }
+    return opened(null, true);
   }
   if (classification.class === "RATE_LIMIT") return opened(at + policy.rateLimitOpenMs, false);
   if (consecutiveFailures >= policy.failureThreshold) {
@@ -140,5 +167,7 @@ export async function breakerPolicy(config: ConfigStore): Promise<BreakerPolicy>
     transientOpenMs: config.get("provider.transientOpenMs"),
     rateLimitOpenMs: config.get("provider.rateLimitOpenMs"),
     deferWithinMinutes: config.get("model.deferIfResetWithinMin"),
+    quotaHoldMs: config.get("provider.quotaHoldMs"),
+    quotaHoldMaxMs: config.get("provider.quotaHoldMaxMs"),
   };
 }

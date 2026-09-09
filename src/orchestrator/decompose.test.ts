@@ -6,6 +6,7 @@ import {
   evaluateDecomposition,
   inspectBusinessLanguage,
   type DecompositionCandidate,
+  type RejectedDecomposition,
 } from "./decompose.js";
 
 const checkoutEpic: DecompositionCandidate = {
@@ -16,6 +17,8 @@ const checkoutEpic: DecompositionCandidate = {
       id: "S-CHECKOUT-01",
       title: "Customers can apply an eligible promotion",
       requirement: "Customers see the adjusted purchase total when they apply an eligible promotion.",
+      userEntryPoint: "the S-CHECKOUT-01 view a person opens",
+      verificationPath: "open the S-CHECKOUT-01 view and check the outcome",
       scenarios: [{ id: "S-CHECKOUT-01-promotion", given: "A customer has an eligible promotion", when: "They apply it to a purchase", then: "They see the adjusted total" }],
       dependsOn: [],
       predictedFootprint: ["checkout/pricing"],
@@ -24,6 +27,8 @@ const checkoutEpic: DecompositionCandidate = {
       id: "S-CHECKOUT-02",
       title: "Customers receive a purchase receipt",
       requirement: "Customers receive a receipt after a successful purchase.",
+      userEntryPoint: "the S-CHECKOUT-02 view a person opens",
+      verificationPath: "open the S-CHECKOUT-02 view and check the outcome",
       scenarios: [{ id: "S-CHECKOUT-02-receipt", given: "A customer completes a purchase", when: "The purchase succeeds", then: "They receive a receipt" }],
       dependsOn: ["S-CHECKOUT-01"],
       predictedFootprint: ["checkout/receipts"],
@@ -38,6 +43,8 @@ const accountEpic: DecompositionCandidate = {
     id: "S-ACCOUNT-01",
     title: "Members can choose profile visibility",
     requirement: "Members can choose whether their profile is visible to everyone or only approved contacts.",
+    userEntryPoint: "the S-ACCOUNT-01 view a person opens",
+    verificationPath: "open the S-ACCOUNT-01 view and check the outcome",
     scenarios: [{ id: "S-ACCOUNT-01-visibility", given: "A member has a profile", when: "They choose approved contacts", then: "Only approved contacts can view the profile" }],
     dependsOn: [],
     predictedFootprint: ["accounts/profile-visibility"],
@@ -51,6 +58,8 @@ const deliveryEpic: DecompositionCandidate = {
     id: "S-DELIVERY-01",
     title: "Customers see delivery progress",
     requirement: "Customers can see whether their delivery is being prepared, on its way, or complete.",
+    userEntryPoint: "the S-DELIVERY-01 view a person opens",
+    verificationPath: "open the S-DELIVERY-01 view and check the outcome",
     scenarios: [{ id: "S-DELIVERY-01-progress", given: "A customer has placed an order", when: "They view the delivery", then: "They see its current progress" }],
     dependsOn: [],
     predictedFootprint: ["delivery/progress"],
@@ -128,5 +137,72 @@ describe("@scenario S-M2-01-language business words that only look technical", (
     ]) {
       expect(inspectBusinessLanguage("requirement", line)).toHaveLength(1);
     }
+  });
+});
+
+// @scenario S-M2-06-splitnotice
+const slice = (number: string, entryPoint: string, footprint: string) => ({
+  id: `S-M2-${number}`,
+  title: `Customer outcome ${number}`,
+  requirement: `Customers receive outcome ${number}.`,
+  userEntryPoint: entryPoint,
+  verificationPath: `open ${entryPoint} and check the outcome`,
+  // oxlint-disable-next-line unicorn/no-thenable -- Given/When/Then is the decomposition contract.
+  scenarios: [{
+    id: `S-M2-${number}-ready`,
+    given: "a customer needs service",
+    when: "the plan is approved",
+    then: "the customer receives the outcome",
+  }],
+  dependsOn: [],
+  predictedFootprint: [footprint],
+});
+
+const candidate = (stories: ReturnType<typeof slice>[]) => ({
+  epicId: "M2",
+  businessGoal: "Customers receive an ordered service plan.",
+  stories,
+});
+
+describe("vertical slices", () => {
+  it("accepts slices that each land somewhere else a person can look", () => {
+    const result = evaluateDecomposition(candidate([
+      slice("01", "the service plan page", "plan"),
+      slice("02", "the monthly service report", "reporting"),
+    ]));
+    expect(result.kind).toBe("accepted");
+  });
+
+  it("refuses two Stories that show their outcome in the same place", () => {
+    // Six cards for one page is what the 2026-09-05 Epic did, and none of them
+    // could be verified or delivered on its own.
+    const result = evaluateDecomposition(candidate([
+      slice("01", "the service plan page", "plan"),
+      slice("02", "the service plan page", "reporting"),
+    ]));
+    expect(result.kind).toBe("rejected");
+    expect((result as RejectedDecomposition).reasons.join(" ")).toContain("cut into layers");
+  });
+
+  it("refuses an Epic cut by layer, where every Story claims the same footprint", () => {
+    const result = evaluateDecomposition(candidate([
+      slice("01", "the service plan page", "plan"),
+      slice("02", "the monthly service report", "plan"),
+    ]));
+    expect((result as RejectedDecomposition).reasons.join(" ")).toContain("cut by layer");
+  });
+
+  it("refuses more Stories than the Epic is allowed to carry", () => {
+    const stories = ["01", "02", "03", "04", "05"].map((number) =>
+      slice(number, `the outcome ${number} page`, `area-${number}`));
+    const result = evaluateDecomposition(candidate(stories), { maxStories: 4 });
+    expect((result as RejectedDecomposition).reasons.join(" ")).toContain("more than the 4 allowed");
+  });
+
+  it("names the missing entry point and verification path rather than a shape error", () => {
+    const broken = { ...slice("01", "", "plan"), verificationPath: "  " };
+    const reasons = (evaluateDecomposition(candidate([broken])) as RejectedDecomposition).reasons.join(" ");
+    expect(reasons).toContain("user-visible entry point");
+    expect(reasons).toContain("without a sibling Story");
   });
 });

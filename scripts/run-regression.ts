@@ -16,12 +16,13 @@ import { BlindSweepPort } from "../src/regression/blind-sweep-port.js";
 import { ScenarioRegistry, type ScenarioPool } from "../src/regression/scenario-registry.js";
 import { RegressionStore, regressionPolicy } from "../src/regression/store.js";
 import { RegressionSweeper } from "../src/regression/sweeper.js";
-import { PiModelCatalog, resolveModel } from "../src/runner/model-resolver.js";
+import { resolveModel } from "../src/runner/model-resolver.js";
+import { defaultModelCatalog } from "../src/runner/catalog.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
 import { browserLanePath } from "../src/verify/browser-config.js";
 import { loadPromptLayers } from "../src/pipeline/prompt-loader.js";
-import { BlindVerifyExecutor } from "../src/verify/executor.js";
+import { BlindVerifyExecutor, EVIDENCE_DIR_ENV } from "../src/verify/executor.js";
 import { processGitCommand } from "../src/vcs/story-delivery.js";
 
 const execFileAsync = promisify(execFile);
@@ -49,7 +50,7 @@ async function main(): Promise<void> {
   const auditPath = join(evidenceRoot, "tool-audit.jsonl");
   const dbUrl = process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db";
 
-  const model = await resolveModel(new PiModelCatalog({ binary: piBinary, cwd: worktreePath }), provider, modelId);
+  const model = await resolveModel(defaultModelCatalog(piBinary, worktreePath), provider, modelId);
   const handle = openDb(dbUrl);
   try {
     await migrate(handle.client);
@@ -76,6 +77,7 @@ async function main(): Promise<void> {
             PATH: browserLanePath(ROOT),
             [POLICY_ENV_VAR]: serializeGuardPolicy(guard),
             [CANONICAL_CAPTURE_ENV]: join(guard.extraWriteRoots[0] ?? evidenceRoot, "provider-requests.jsonl"),
+            [EVIDENCE_DIR_ENV]: guard.extraWriteRoots[0] ?? evidenceRoot,
           },
         }),
       },

@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { snapshotModelIds } from "../runner/catalog-snapshot.js";
+import { THINKING_LEVELS } from "../runner/model-resolver.js";
 
 /**
  * How a changed value reaches a running process.
@@ -29,6 +31,43 @@ const repositoryRelativePath = z.string().trim().min(1).refine(
   "must be a non-empty repository-relative path",
 );
 
+const modelTier = z.enum(["brain", "standard", "cheap"]);
+
+/**
+ * A provider hivemind may spawn. Model ids are cross-checked against the
+ * recorded catalogue (`fixtures/model-catalogs/`) rather than only at spawn
+ * time: validation runs inside this schema and cannot await a pi spawn, so
+ * without the recording a typo is accepted here and only surfaces later as a
+ * card that cannot start. A provider with no recording yet is left to the
+ * startup assertion, which does have the live catalogue.
+ */
+const providerProfiles = z.record(
+  z.string().min(1),
+  z.object({
+    authType: z.enum(["api_key", "oauth"]),
+    /** The environment variable pi reads the key from; see pi's docs/providers.md. */
+    envKey: z.string().regex(/^[A-Z][A-Z0-9_]*$/).optional(),
+    tiers: z.partialRecord(modelTier, z.string().min(1)),
+  }).refine(
+    (profile) => profile.authType !== "api_key" || profile.envKey !== undefined,
+    { message: "an api_key provider must name the environment variable holding its key", path: ["envKey"] },
+  ),
+).superRefine((profiles, ctx) => {
+  for (const [provider, profile] of Object.entries(profiles)) {
+    const known = snapshotModelIds(provider);
+    if (known.length === 0) continue; // no recording for this provider yet
+    for (const [tier, id] of Object.entries(profile.tiers)) {
+      if (!known.includes(id)) {
+        ctx.addIssue({
+          code: "custom",
+          path: [provider, "tiers", tier],
+          message: `${provider} does not advertise the model ${id}`,
+        });
+      }
+    }
+  }
+});
+
 /**
  * Every dynamically configurable key. Defaults live here, in code, so the system
  * still runs with an empty config_entries table; the database only ever overlays.
@@ -55,6 +94,13 @@ export const CONFIG_KEYS = {
     scope: "global",
     reload: "hot",
     description: "Maximum 'continue' retries after a stream interruption within one run.",
+  }),
+  "retry.promptTimeoutMs": def({
+    schema: positiveInt.max(6 * 3_600_000),
+    default: 900_000,
+    scope: "global",
+    reload: "next-spawn",
+    description: "How long one prompt may run before the turn is abandoned and resumed with a continue; a phase that needs longer than this is resumed, not failed.",
   }),
   "retry.maxRegressionReopens": def({
     schema: positiveInt.max(10),
@@ -109,25 +155,28 @@ export const CONFIG_KEYS = {
   }),
 
   // --- model policy ---
-  "model.tierMap": def({
-    schema: z.record(
-      z.enum(["brain", "standard", "cheap"]),
-      z.record(z.string(), z.string()),
-    ),
+  "model.providers": def({
+    schema: providerProfiles,
     default: {
-      brain: { "openai-codex": "gpt-5.6-sol" },
-      standard: { "openai-codex": "gpt-5.6-terra" },
-      cheap: { "openai-codex": "gpt-5.4-mini" },
+      "openai-codex": {
+        authType: "oauth",
+        // Every tier is a 5.6-or-newer id on purpose: a ChatGPT subscription
+        // rejects gpt-5.4, gpt-5.4-mini and gpt-5.3-codex-spark outright even
+        // though pi lists all three, so a cheaper-looking id would fail the
+        // capacity probe on every subscription host.
+        tiers: { brain: "gpt-5.6-sol", standard: "gpt-5.6-terra", cheap: "gpt-5.6-luna" },
+      },
     },
     scope: "global",
     reload: "hot",
-    description: "Tier to provider-model mapping. Model ids are validated against the provider catalogue at startup, because pi accepts an unknown id with only a warning.",
+    dangerous: true,
+    description: "Every provider hivemind may spawn: how it authenticates, and which model serves each tier. Adding a provider or changing a model is a data change made here or in the console, never a code change. Ids are checked against the recorded catalogue on write and against the live one at startup, because pi accepts an unknown id with only a warning and then invents pricing for it.",
   }),
   "model.purposeTiers": def({
     schema: z.record(
       z.enum([
         "product_manager", "decompose", "design", "code", "verify", "merge",
-        "completion_judge", "capacity_probe", "triage", "distiller",
+        "capacity_probe", "triage", "distiller",
       ]),
       z.enum(["brain", "standard", "cheap"]),
     ),
@@ -138,7 +187,6 @@ export const CONFIG_KEYS = {
       code: "standard",
       verify: "standard",
       merge: "standard",
-      completion_judge: "cheap",
       capacity_probe: "cheap",
       triage: "cheap",
       distiller: "cheap",
@@ -146,6 +194,29 @@ export const CONFIG_KEYS = {
     scope: "global",
     reload: "hot",
     description: "What each call site is for, and which tier serves it. Overriding a purpose here is the only way to move it between tiers.",
+  }),
+  "model.purposeThinking": def({
+    schema: z.record(
+      z.enum([
+        "product_manager", "decompose", "design", "code", "verify", "merge",
+        "capacity_probe", "triage", "distiller",
+      ]),
+      z.enum(THINKING_LEVELS),
+    ),
+    default: {
+      product_manager: "high",
+      decompose: "high",
+      design: "high",
+      code: "medium",
+      verify: "medium",
+      merge: "low",
+      capacity_probe: "off",
+      triage: "low",
+      distiller: "off",
+    },
+    scope: "global",
+    reload: "hot",
+    description: "Reasoning effort per call site. A level is only passed to a model whose catalogue row advertises thinking; the rest are spawned at pi's own default, because pi accepts an unusable argument without complaint.",
   }),
   "model.failoverChain": def({
     schema: z.array(z.string()).min(1),
@@ -189,6 +260,27 @@ export const CONFIG_KEYS = {
     scope: "global",
     reload: "hot",
     description: "How long a breaker stays open after a rate limit that named no window of its own.",
+  }),
+  "provider.quotaHoldMs": def({
+    schema: positiveInt.max(24 * 3_600_000),
+    default: 30 * 60_000,
+    scope: "global",
+    reload: "hot",
+    description: "How long a breaker stays open after a subscription usage limit that named no window; a credentials probe cannot tell when the window reopens, so a real dispatch after this hold is the test.",
+  }),
+  "provider.credentialRefreshIntervalMs": def({
+    schema: positiveInt.max(24 * 3_600_000),
+    default: 600_000,
+    scope: "per-host",
+    reload: "hot",
+    description: "How often the single refresher may rotate the shared credential file. Every other process probes read-only, so this is the only write to it.",
+  }),
+  "provider.quotaHoldMaxMs": def({
+    schema: positiveInt.max(24 * 3_600_000),
+    default: 4 * 3_600_000,
+    scope: "global",
+    reload: "hot",
+    description: "Ceiling for the doubling hold after repeated usage limits that named no window; without a cap the backoff would outlive any real window.",
   }),
   "model.deferIfResetWithinMin": def({
     schema: positiveInt.max(180),
@@ -260,10 +352,10 @@ export const CONFIG_KEYS = {
   }),
   "schedule.maxConcurrentStories": def({
     schema: positiveInt.max(16),
-    default: 2,
+    default: 1,
     scope: "per-host",
     reload: "hot",
-    description: "How many Stories one host runs at once. The scheduler decides which Stories may run together; this decides how many of them fit on this machine.",
+    description: "How many Stories one host runs at once. The scheduler decides which Stories may run together; this decides how many of them fit on this machine. Kept at 1 while several concurrent pi processes still share one credential file: their OAuth refreshes rotate the same token and invalidate each other.",
   }),
   "schedule.hotspotPaths": def({
     schema: z.array(repositoryRelativePath),
@@ -295,6 +387,32 @@ export const CONFIG_KEYS = {
     scope: "global",
     reload: "next-spawn",
     description: "Hosts an E2E run may navigate to. Anything else, including file://, is blocked.",
+  }),
+  "decompose.maxStoriesPerEpic": def({
+    schema: positiveInt.max(20),
+    default: 4,
+    scope: "global",
+    reload: "hot",
+    description: "Stories one Epic may contain. A longer list is nearly always one feature cut by layer, which produces cards that cannot be verified or delivered on their own (03 doc section 8.5).",
+  }),
+
+  // --- deterministic CODE exit (03 doc section 8.1) ---
+  "codeExit.projectChecks": def({
+    schema: z.array(z.object({
+      name: z.string().trim().min(1),
+      command: z.array(z.string().trim().min(1)).min(1),
+    }).strict()),
+    default: [],
+    scope: "per-repo",
+    reload: "hot",
+    description: "The repository's own gate commands (format, lint, typecheck, tests) as argv, run at the CODE exit. Declared per repository because hivemind does not get to decide how somebody else's repository is checked; empty means the exit rests on the commit, evidence and marker checks alone.",
+  }),
+  "codeExit.maxRounds": def({
+    schema: positiveInt.max(10),
+    default: 3,
+    scope: "global",
+    reload: "hot",
+    description: "How many times the CODE exit findings are handed back to the same session before the phase gives up. The findings cost no inner-loop round and no reentry; this only bounds the handback.",
   }),
   "guard.contextFilePolicy": def({
     schema: z.enum(["explicit", "inherit"]),

@@ -1,5 +1,5 @@
 import type { Client } from "@libsql/client";
-import { evaluateDecomposition, type DecompositionCandidate } from "./decompose.js";
+import { evaluateDecomposition, type DecompositionCandidate, type DecompositionLimits } from "./decompose.js";
 import { blockerAnswers, blockingQuestionStatement, withBlockerAnswers } from "./epic-blocker.js";
 import type { HumanQuestion } from "./human-question.js";
 import type { PlanApprovalStore } from "./plan-approval.js";
@@ -41,6 +41,8 @@ export class EpicDecomposer {
     private readonly approvals: PlanApprovalStore,
     private readonly port: DecomposePort,
     private readonly now: () => number = Date.now,
+    /** The Story-count ceiling, from `decompose.maxStoriesPerEpic`. */
+    private readonly limits: DecompositionLimits = {},
   ) {}
 
   async decompose(epic: EpicIntake): Promise<DecomposeOutcome> {
@@ -57,7 +59,7 @@ export class EpicDecomposer {
         requirement,
         previousRejections: [...rejections],
       });
-      const evaluated = evaluateDecomposition(candidate);
+      const evaluated = evaluateDecomposition(candidate, this.limits);
 
       if (evaluated.kind === "blocking_question") {
         // The one stop the decomposition is allowed to take: a missing fact that

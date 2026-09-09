@@ -57,7 +57,6 @@ export class NotionStoryInputSync {
     const page = pageSchema.parse(response.data);
     const parsedStatus = selectSchema.safeParse(page.properties[schema.propertyNames.aiStatus]);
     const observed = parsedStatus.success ? parsedStatus.data.select?.name : undefined;
-    if (!observed) throw new Error(`Notion Story has no AI status: ${pageId}`);
     const row = (await this.client.execute({
       sql: `SELECT id, state, resume_state, notion_ai_status_shadow
             FROM stories WHERE notion_page_id = ?`,
@@ -65,6 +64,9 @@ export class NotionStoryInputSync {
     })).rows[0];
     if (!row) throw new Error(`Notion page is not an ingested Story: ${pageId}`);
     const cardId = String(row.id);
+    // A freshly created page has no status until the first property projection
+    // lands; there is nothing a person could have changed yet.
+    if (!observed) return { cardId, intent: "initialized" };
     const internalState = state(row.state);
     const persistedShadow = row.notion_ai_status_shadow === null ? null : String(row.notion_ai_status_shadow);
     const shadow = persistedShadow ?? notionAiStatusForState(internalState);
@@ -111,8 +113,10 @@ export class NotionStoryInputSync {
         parkedResumeState: intent.state,
       });
     } else if (intent.type === "continue_development") {
+      // A stop in VERIFY or MERGE is answered in CODE: neither of those phases
+      // may change code, so sending the card back there would only stop it again.
       const target = internalState === "NEEDS_INPUT"
-        ? resumeState === "VERIFY" ? "CODE" : resumeState
+        ? resumeState === "VERIFY" || resumeState === "MERGE" ? "CODE" : resumeState
         : internalState === "MERGE"
           ? "CODE"
           : internalState === "DELIVERED"

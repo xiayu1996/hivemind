@@ -3,7 +3,7 @@ import { RpcPiRunner } from "../src/runner/rpc-runner.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
 
 const binary = defaultPiBinary();
-const model = await resolveModel(new PiModelCatalog({ binary }), "openai-codex", "gpt-5.4-mini");
+const model = await resolveModel(new PiModelCatalog({ binary }), "openai-codex", "gpt-5.6-luna");
 
 const runner = new RpcPiRunner({
   binary,

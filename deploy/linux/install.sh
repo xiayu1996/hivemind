@@ -187,6 +187,10 @@ HIVEMIND_NOTION_PARENT_PAGE_ID=
 # One out-of-band alert channel; without it nobody learns about a blocking question.
 FEISHU_WEBHOOK_URL=
 # or SMTP_HOST= SMTP_PORT= SMTP_SECURE= SMTP_USER= SMTP_PASSWORD= SMTP_FROM= SMTP_TO=
+# API keys for providers in model.failoverChain, one per provider (the env var name
+# each provider expects is in pi's docs/providers.md). Subscription providers such as
+# openai-codex authenticate through scripts/pi-login.sh instead and need nothing here.
+# DEEPSEEK_API_KEY=
 EOT
   echo "wrote a template to $SECRETS"
 fi

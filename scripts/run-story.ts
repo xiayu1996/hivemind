@@ -10,25 +10,26 @@ import { PiStoryPhasePort } from "../src/orchestrator/pi-phase-port.js";
 import { EpicIntegrator } from "../src/orchestrator/epic-integration.js";
 import { StoryExecutionStore } from "../src/orchestrator/story-execution-store.js";
 import { EpicMergeFlow } from "../src/vcs/merge-flow.js";
-import { blindSubsetVerifier } from "../src/vcs/subset-verifier.js";
+import { testSubsetVerifier } from "../src/vcs/subset-verifier.js";
+import { captureTreePin } from "../src/guard/tree-pin.js";
+import { quarantineWorktree, worktreeLayout } from "../src/vcs/worktree.js";
 import { LibsqlActualFootprintStore } from "../src/vcs/actual-footprint.js";
 import { NotionStoryProjection } from "../src/notion/story-projection.js";
 import { SingleStoryWorker } from "../src/orchestrator/story-worker.js";
-import { PiCompletionJudge } from "../src/pipeline/completion-verifier.js";
 import { openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
 import { POLICY_ENV_VAR, serializeGuardPolicy, type GuardPolicy } from "../src/guard/policy.js";
 import { probeProviderReadiness } from "../src/runner/auth-probe.js";
 import { type ExplicitContextFile } from "../src/runner/context-files.js";
-import { PiModelCatalog, resolveModel } from "../src/runner/model-resolver.js";
+import { resolveModel } from "../src/runner/model-resolver.js";
+import { defaultModelCatalog } from "../src/runner/catalog.js";
 import { ConfigStore } from "../src/config/store.js";
-import { ModelPolicy } from "../src/runner/model-policy.js";
 import { retryLimits } from "../src/pipeline/retry-limits.js";
 import { ScenarioRegistry } from "../src/regression/scenario-registry.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
 import { browserLanePath } from "../src/verify/browser-config.js";
-import { BlindVerifyExecutor } from "../src/verify/executor.js";
+import { BlindVerifyExecutor, EVIDENCE_DIR_ENV } from "../src/verify/executor.js";
 import { loadPromptLayers } from "../src/pipeline/prompt-loader.js";
 import { discoverMRPort } from "../src/vcs/mr/adapters.js";
 import { GitMrStoryDelivery, processGitCommand } from "../src/vcs/story-delivery.js";
@@ -65,6 +66,21 @@ function safeSegment(value: string): string {
   return safe;
 }
 
+/** Runs one declared check where the merge is being verified. */
+async function runCheck(
+  cwd: string,
+  check: { name: string; command: readonly string[] },
+): Promise<{ passed: boolean; detail: string }> {
+  const [command, ...args] = check.command;
+  try {
+    const done = await execFileAsync(command!, args, { cwd, windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
+    return { passed: true, detail: done.stdout.trim().slice(-2000) };
+  } catch (cause) {
+    const output = `${(cause as { stdout?: string }).stdout ?? ""}${(cause as { stderr?: string }).stderr ?? ""}`.trim();
+    return { passed: false, detail: (output === "" ? (cause as Error).message : output).slice(-2000) };
+  }
+}
+
 async function gitMessages(worktreePath: string, targetBranch: string): Promise<string[]> {
   const result = await execFileAsync("git", ["log", "--format=%s", `${targetBranch}..HEAD`], {
     cwd: worktreePath,
@@ -98,7 +114,7 @@ async function main(): Promise<void> {
   if (!readiness.ready) {
     throw new Error(`provider is not ready: ${provider} (${readiness.reason ?? "unknown reason"})`);
   }
-  const model = await resolveModel(new PiModelCatalog({ binary: piBinary, cwd: worktreePath }), provider, modelId);
+  const model = await resolveModel(defaultModelCatalog(piBinary, worktreePath), provider, modelId);
   const handle = openDb(dbUrl);
   try {
     await migrate(handle.client);
@@ -113,30 +129,11 @@ async function main(): Promise<void> {
       modelId: model.id,
       hostId: hostname(),
     });
-    // The judge answers one yes/no question per phase exit; running it on the
-    // phase's own tier is what made it the pipeline's quietest cost line.
     const config = await ConfigStore.load(handle.client);
     const limits = await retryLimits(config);
     // The same list feeds the guard, the browser and the verdict check; it is
     // read here once so no layer can drift from the others.
     const allowedHosts = config.get("guard.e2eHostAllowlist");
-    const judgeModel = await new ModelPolicy(
-      config,
-      new PiModelCatalog({ binary: piBinary, cwd: worktreePath }),
-    ).resolve("completion_judge", model.provider).catch((cause: unknown) => {
-      // A provider with no cheap tier still gets a judge, but never silently:
-      // the phase model is the expensive fallback, not the intended one.
-      console.warn(`completion judge falls back to the phase model: ${(cause as Error).message}`);
-      return model;
-    });
-    const completionJudge = new PiCompletionJudge(() => new RpcPiRunner({
-      binary: piBinary,
-      provider: judgeModel.provider,
-      model: judgeModel,
-      cwd: worktreePath,
-      tools: [],
-      contextFiles: "explicit",
-    }));
     const phases = new PiStoryPhasePort({
       binary: piBinary,
       model,
@@ -147,14 +144,25 @@ async function main(): Promise<void> {
       auditPath,
       guardExtension,
       canonicalCaptureExtension: canonicalExtension,
-      completionJudge,
+      // A Story inside an Epic lands on the Epic head, so its own commits are
+      // the ones after the branch point with the target, not after its tip.
+      codeExit: {
+        baseRef: targetBranch,
+        projectChecks: config.get("codeExit.projectChecks"),
+        maxRounds: config.get("codeExit.maxRounds"),
+      },
       contextFiles: contextFiles(),
       recordTelemetry: (input) => recorder.record(input),
       maxContinueRetries: limits.maxContinueRetries,
+      promptTimeoutMs: limits.promptTimeoutMs,
     });
     // The verifier runs under its own phase contract, and with the browser
     // lane's CLI on its PATH; nothing is installed into the worktree for it.
     const verifyLayers = await loadPromptLayers(join(ROOT, "prompts"), "VERIFY");
+    // The worktree lives under <work root>/worktrees/<repo>/<card>; a tree that
+    // changed during VERIFY is moved to the quarantine root beside it, so the
+    // round is rejected with evidence instead of the worker dying.
+    const layout = worktreeLayout(resolve(worktreePath, "..", "..", ".."));
     const blindExecutor = new BlindVerifyExecutor(
       {
         create: (policy: GuardPolicy) => new RpcPiRunner({
@@ -171,10 +179,17 @@ async function main(): Promise<void> {
             PATH: browserLanePath(ROOT),
             [POLICY_ENV_VAR]: serializeGuardPolicy(policy),
             [CANONICAL_CAPTURE_ENV]: join(policy.extraWriteRoots[0]!, "provider-requests.jsonl"),
+            [EVIDENCE_DIR_ENV]: policy.extraWriteRoots[0]!,
           },
         }),
       },
       { insert: async () => undefined },
+      {
+        capture: captureTreePin,
+        quarantine: async (path, reason) => {
+          await quarantineWorktree(path, reason, layout);
+        },
+      },
     );
     const verifier = new BlindVerifyStoryPort({
       executor: blindExecutor,
@@ -197,17 +212,13 @@ async function main(): Promise<void> {
           store,
           new EpicMergeFlow(
             processGitCommand,
-            blindSubsetVerifier(blindExecutor, {
-              cardId,
-              round: 1,
-              codeSessionId: `integration:${cardId}`,
-              worktreePath: integrationWorktree,
-              evidencePath: join(evidenceRoot, "integration"),
-              auditPath,
-              specification: JSON.stringify(await store.getDefinitionOfDone(cardId)),
-              allowedHosts,
-              commitMessages: [],
-            }),
+            // Deterministic re-verification: the repository's own checks, run on
+            // the integration branch. The browser sweep that used to run here
+            // belongs to the regression loop (03 section 8.3).
+            testSubsetVerifier(
+              { run: (check) => runCheck(integrationWorktree, check) },
+              config.get("codeExit.projectChecks"),
+            ),
             { storyWorktree: worktreePath, integrationWorktree, mainBranch: targetBranch },
           ),
         )
@@ -221,6 +232,7 @@ async function main(): Promise<void> {
       {
         ...(integration ? { integration } : {}),
         maxInnerLoopRounds: limits.maxInnerLoopRounds,
+        friction: { record: (input) => store.recordFriction(input) },
       },
     ).run(cardId);
     // The scenarios a Story declares become the regression pools' problem the

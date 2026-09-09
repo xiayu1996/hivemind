@@ -28,6 +28,8 @@ export interface StorySnapshot extends StoryIntake {
   phase: StoryPhase | null;
   innerLoopRounds: number;
   phaseReentries: number;
+  /** When a person last acted on the card; the inner loop budget restarts from there. */
+  lastHumanActionAt: number | null;
   stopReason: string | null;
   mrUrl: string | null;
   resumeState: StoryState | null;
@@ -161,7 +163,7 @@ export class StoryExecutionStore {
     const result = await this.client.execute({
       sql: `SELECT id, epic_id, notion_page_id, title, requirement, state, phase, repo, branch,
                    target_branch, mr_url, resume_state,
-                   inner_loop_rounds, phase_reentries, stop_reason
+                   inner_loop_rounds, phase_reentries, stop_reason, last_human_action_at
             FROM stories WHERE id = ?`,
       args: [cardId],
     });
@@ -177,6 +179,9 @@ export class StoryExecutionStore {
       phase: optionalString(row.phase) as StoryPhase | null,
       innerLoopRounds: numberValue(row.inner_loop_rounds, "inner-loop rounds"),
       phaseReentries: numberValue(row.phase_reentries, "phase reentries"),
+      lastHumanActionAt: row.last_human_action_at === null || row.last_human_action_at === undefined
+        ? null
+        : Number(row.last_human_action_at),
       stopReason: optionalString(row.stop_reason),
       mrUrl: optionalString(row.mr_url),
       resumeState: optionalString(row.resume_state) as StoryState | null,
@@ -242,11 +247,15 @@ export class StoryExecutionStore {
     const resumeState = input.to === "HUMAN_PARKED"
       ? input.expectedFrom
       : null;
+    // A person resuming a Story that stopped on its retry budget grants a new
+    // budget; otherwise the very next failure would stop it again.
+    const resetReentries = input.expectedFrom === "NEEDS_INPUT" && input.to !== "HUMAN_PARKED";
     const [update] = await this.client.batch([
       {
         sql: `UPDATE stories
               SET state = ?, phase = ?, stop_reason = NULL, resume_state = ?,
                   notion_ai_status_shadow = ?, human_wins_until = ?,
+                  phase_reentries = CASE WHEN ? THEN 0 ELSE phase_reentries END,
                   last_human_action_at = ?, updated_at = ?
               WHERE id = ? AND state = ?`,
         args: [
@@ -255,6 +264,7 @@ export class StoryExecutionStore {
           resumeState,
           input.observedAiStatus,
           input.humanWinsUntil,
+          resetReentries ? 1 : 0,
           time,
           time,
           input.cardId,
@@ -433,10 +443,41 @@ export class StoryExecutionStore {
     return { sessionId: run.session_id, artifacts };
   }
 
-  async getVerificationFailureHistory(cardId: string): Promise<string[][]> {
+  /** Failed sets of the rounds recorded after `since` (a person's last action
+   * on the card, so a resume starts a fresh inner loop), oldest first. */
+  /**
+   * A failure of the pipeline rather than of the Story. It is recorded on the
+   * card so the reflection pipeline can count patterns per repository (03
+   * section 4); nothing consumes it yet.
+   */
+  async recordFriction(input: {
+    cardId: string;
+    runId: string;
+    kind: string;
+    detail: string;
+  }): Promise<void> {
+    const time = this.now();
+    await this.client.batch([
+      eventStatement(input.runId, input.cardId, null, "friction.recorded", {
+        kind: input.kind,
+        detail: input.detail,
+      }, time),
+    ], "write");
+  }
+
+  /**
+   * The rounds the convergence criterion may compare: rejected ones only. A
+   * round recorded as inconclusive was lost to the environment and says
+   * nothing about whether the failing set is shrinking, so it must not be
+   * charged to the budget here either — the resume path reads this, not the
+   * in-memory loop (03 section 8.6).
+   */
+  async getVerificationFailureHistory(cardId: string, since = 0): Promise<string[][]> {
     const rows = (await this.client.execute({
-      sql: "SELECT failed_scenarios FROM verify_records WHERE card_id = ? ORDER BY round",
-      args: [cardId],
+      sql: `SELECT failed_scenarios FROM verify_records
+            WHERE card_id = ? AND created_at > ? AND verdict = 'rejected'
+            ORDER BY round`,
+      args: [cardId, since],
     })).rows;
     return rows.map((row) => parseStringArray(row.failed_scenarios, "failed scenarios"));
   }
@@ -733,7 +774,7 @@ export class StoryExecutionStore {
 
   async buildPhaseInput(cardId: string, phase: StoryPhase, round: number): Promise<PhaseInput> {
     const story = await this.getStory(cardId);
-    const [specResult, artifactResult, feedbackResult, verifyResult, rejectionResult] = await Promise.all([
+    const [specResult, artifactResult, feedbackResult, verifyResult, rejectionResult, bounceResult] = await Promise.all([
       this.client.execute({
         sql: "SELECT spec_id, status, text FROM story_specs WHERE story_id = ? ORDER BY spec_id",
         args: [cardId],
@@ -756,13 +797,23 @@ export class StoryExecutionStore {
         args: [cardId],
       }),
       this.client.execute({
-        // Only this phase's rejections: the prompt presents them as reasons an
-        // earlier attempt of this phase was rejected. run_id breaks the tie two
-        // rows written in the same millisecond would otherwise leave to SQLite.
+        // This phase's own rejections, plus MERGE's for CODE: the merge gate
+        // cannot change code, so what it refused is CODE's to fix next round.
+        // run_id breaks the tie two rows written in the same millisecond would
+        // otherwise leave to SQLite.
         sql: `SELECT phase, failure FROM phase_runs
-              WHERE card_id = ? AND phase = ? AND status = 'failed' AND failure IS NOT NULL
+              WHERE card_id = ? AND phase IN (?, ?) AND status = 'failed' AND failure IS NOT NULL
               ORDER BY ended_at DESC, started_at DESC, run_id DESC LIMIT 5`,
-        args: [cardId, phase],
+        args: [cardId, phase, phase === "CODE" ? "MERGE" : phase],
+      }),
+      // The Epic head bouncing the branch (a rebase conflict, a failed subset
+      // re-verification) is recorded as an event, not a phase run; it is the
+      // most recent reason a CODE round exists at all.
+      this.client.execute({
+        sql: `SELECT type, data FROM event_log
+              WHERE card_id = ? AND type IN ('merge.verification_failed', 'merge.conflict')
+              ORDER BY id DESC LIMIT ?`,
+        args: [cardId, phase === "CODE" ? 2 : 0],
       }),
     ]);
 
@@ -804,10 +855,18 @@ export class StoryExecutionStore {
         ? failedScenarios.map((scenarioId) => ({ scenarioId, path: evidenceDir }))
         : [],
       failedScenarios,
-      previousRejections: rejectionResult.rows.map((row) => ({
-        phase: stringValue(row.phase, "rejected phase"),
-        reason: stringValue(row.failure, "rejection reason").slice(0, 800),
-      })),
+      previousRejections: [
+        ...rejectionResult.rows.map((row) => ({
+          phase: stringValue(row.phase, "rejected phase"),
+          reason: stringValue(row.failure, "rejection reason").slice(0, 800),
+        })),
+        ...bounceResult.rows.map((row) => ({
+          phase: "MERGE",
+          reason: `${String(row.type) === "merge.conflict" ? "rebase onto the Epic head conflicted" : "re-verification on the Epic head failed"}: ${
+            String((JSON.parse(stringValue(row.data, "merge event")) as { reason?: string }).reason ?? "")
+          }`.slice(0, 800),
+        })),
+      ],
     };
   }
 }
