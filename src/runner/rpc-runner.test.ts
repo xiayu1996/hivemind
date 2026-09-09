@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { RpcPiRunner } from "./rpc-runner.js";
+import { RpcPiRunner, buildArgs } from "./rpc-runner.js";
 import { RunnerDeadError, RunnerHandshakeError } from "./types.js";
-import { resolveModel, staticCatalog } from "./model-resolver.js";
+import { resolveModel, staticCatalog, withThinkingLevel } from "./model-resolver.js";
 
 const FAKE_MODEL = await resolveModel(staticCatalog([{ provider: "fake", id: "fake-1" }]), "fake", "fake-1");
 
@@ -156,5 +156,29 @@ describe("commands", () => {
     await expect(runner.setAutoRetry(false)).resolves.toBeUndefined();
     await expect(runner.steer("change course")).resolves.toBeUndefined();
     await expect(runner.abort()).resolves.toBeUndefined();
+  });
+});
+
+describe("spawn arguments", () => {
+  const base = { binary: "pi", provider: "fake", cwd: "/tmp" } as const;
+
+  it("passes the effort the model policy chose, without any port relaying it", async () => {
+    const reasoning = await resolveModel(
+      staticCatalog([{ provider: "fake", id: "fake-1", thinking: true }]), "fake", "fake-1");
+    const args = buildArgs({ ...base, model: withThinkingLevel(reasoning, "high") });
+    expect(args).toContain("--thinking");
+    expect(args[args.indexOf("--thinking") + 1]).toBe("high");
+  });
+
+  it("sends no effort for a model that does not advertise thinking", async () => {
+    const args = buildArgs({ ...base, model: withThinkingLevel(FAKE_MODEL, "high") });
+    expect(args).not.toContain("--thinking");
+  });
+
+  it("lets an explicit spawn option override the model's own level", async () => {
+    const reasoning = await resolveModel(
+      staticCatalog([{ provider: "fake", id: "fake-1", thinking: true }]), "fake", "fake-1");
+    const args = buildArgs({ ...base, model: withThinkingLevel(reasoning, "high"), thinking: "off" });
+    expect(args[args.indexOf("--thinking") + 1]).toBe("off");
   });
 });

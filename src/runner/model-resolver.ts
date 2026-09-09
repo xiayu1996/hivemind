@@ -19,10 +19,27 @@ export interface ModelCapabilities {
   images?: boolean;
 }
 
+/** pi's reasoning-effort levels, as accepted by `--thinking`. */
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+
 export interface ResolvedModel extends ModelCapabilities {
   provider: string;
   id: string;
+  /**
+   * The reasoning effort the purpose asks for, already checked against what the
+   * model advertises. Absent means the level is left to pi: a model whose
+   * catalogue row says it does not reason, or does not say either way, is never
+   * sent one, because pi accepts an unusable spawn argument without complaint.
+   */
+  thinkingLevel?: ThinkingLevel;
   readonly [resolvedModel]: true;
+}
+
+/** Attaches a reasoning effort to a resolved model, if the model supports one. */
+export function withThinkingLevel(model: ResolvedModel, level: ThinkingLevel | undefined): ResolvedModel {
+  if (level === undefined || model.thinking !== true) return model;
+  return { ...model, thinkingLevel: level };
 }
 
 export interface ModelDescriptor extends ModelCapabilities {

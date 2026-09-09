@@ -7,9 +7,9 @@ import { ModelPolicy, assertModelPolicy } from "./model-policy.js";
 const catalog = {
   list: async (provider: string) => ({
     "openai-codex": [
-      { provider: "openai-codex", id: "gpt-5.6-sol" },
-      { provider: "openai-codex", id: "gpt-5.6-terra" },
-      { provider: "openai-codex", id: "gpt-5.4-mini" },
+      { provider: "openai-codex", id: "gpt-5.6-sol", thinking: true },
+      { provider: "openai-codex", id: "gpt-5.6-terra", thinking: true },
+      { provider: "openai-codex", id: "gpt-5.4-mini", thinking: false },
     ],
     "zai-coding-cn": [{ provider: "zai-coding-cn", id: "glm-5" }],
   }[provider] ?? []),
@@ -91,5 +91,26 @@ describe("ModelPolicy", () => {
       "zai-coding-cn": { authType: "api_key", envKey: "ZAI_CODING_CN_API_KEY", tiers: { standard: "typo-model" } },
     }, "test");
     await expect(assertModelPolicy(config, catalog)).rejects.toThrow(/typo-model/);
+  });
+
+  it("attaches the purpose's reasoning effort only to a model that advertises thinking", async () => {
+    const policy = new ModelPolicy(config, catalog);
+    // design is a brain-tier purpose and gpt-5.6-sol reasons, so the level rides along.
+    await expect(policy.resolve("design", "openai-codex")).resolves.toMatchObject({ thinkingLevel: "high" });
+    // triage lands on a model whose catalogue row says it does not reason: pi
+    // would accept the argument and do nothing useful with it, so none is sent.
+    await expect(policy.resolve("triage", "openai-codex")).resolves.not.toHaveProperty("thinkingLevel");
+  });
+
+  it("passes a changed effort through without touching the tier", async () => {
+    await config.set("model.purposeThinking", {
+      product_manager: "high", decompose: "high", design: "minimal", code: "medium",
+      verify: "medium", merge: "low", capacity_probe: "off", triage: "low", distiller: "off",
+    }, "test");
+    const policy = new ModelPolicy(config, catalog);
+    await expect(policy.resolve("design", "openai-codex")).resolves.toMatchObject({
+      id: "gpt-5.6-sol",
+      thinkingLevel: "minimal",
+    });
   });
 });

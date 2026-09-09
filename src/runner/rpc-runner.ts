@@ -241,10 +241,14 @@ export class RpcPiRunner implements PiRunner {
   }
 }
 
-function buildArgs(config: RpcRunnerConfig): string[] {
+/** Exported for the spawn-argument tests; the runner is the only caller. */
+export function buildArgs(config: RpcRunnerConfig): string[] {
   const args = ["--provider", config.provider, "--model", config.model.id];
 
-  if (config.thinking) args.push("--thinking", config.thinking);
+  // An explicit spawn option wins; otherwise the level the model policy chose
+  // for this purpose travels with the model itself, so no port has to relay it.
+  const thinking = config.thinking ?? config.model.thinkingLevel;
+  if (thinking) args.push("--thinking", thinking);
   if (config.sessionDir) args.push("--session-dir", config.sessionDir);
   if (config.sessionFile) args.push("--session", config.sessionFile);
   for (const ext of config.extensions ?? []) args.push("-e", ext);

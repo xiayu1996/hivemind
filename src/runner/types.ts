@@ -1,4 +1,4 @@
-import type { ResolvedModel } from "./model-resolver.js";
+import type { ResolvedModel, ThinkingLevel } from "./model-resolver.js";
 
 /** Envelope of everything pi emits on stdout in RPC mode. */
 export interface RpcEvent {
@@ -23,7 +23,7 @@ export interface RunnerSpawnOptions {
   cwd: string;
   sessionDir?: string;
   sessionFile?: string;
-  thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  thinking?: ThinkingLevel;
   /** Tool allowlist. An empty array disables every tool. */
   tools?: string[];
   extensions?: string[];

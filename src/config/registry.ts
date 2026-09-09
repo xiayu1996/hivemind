@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { snapshotModelIds } from "../runner/catalog-snapshot.js";
+import { THINKING_LEVELS } from "../runner/model-resolver.js";
 
 /**
  * How a changed value reaches a running process.
@@ -189,6 +190,29 @@ export const CONFIG_KEYS = {
     scope: "global",
     reload: "hot",
     description: "What each call site is for, and which tier serves it. Overriding a purpose here is the only way to move it between tiers.",
+  }),
+  "model.purposeThinking": def({
+    schema: z.record(
+      z.enum([
+        "product_manager", "decompose", "design", "code", "verify", "merge",
+        "capacity_probe", "triage", "distiller",
+      ]),
+      z.enum(THINKING_LEVELS),
+    ),
+    default: {
+      product_manager: "high",
+      decompose: "high",
+      design: "high",
+      code: "medium",
+      verify: "medium",
+      merge: "low",
+      capacity_probe: "off",
+      triage: "low",
+      distiller: "off",
+    },
+    scope: "global",
+    reload: "hot",
+    description: "Reasoning effort per call site. A level is only passed to a model whose catalogue row advertises thinking; the rest are spawned at pi's own default, because pi accepts an unusable argument without complaint.",
   }),
   "model.failoverChain": def({
     schema: z.array(z.string()).min(1),

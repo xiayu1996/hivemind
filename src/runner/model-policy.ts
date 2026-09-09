@@ -1,5 +1,5 @@
 import type { ConfigStore } from "../config/store.js";
-import { resolveModel, type ModelCatalog, type ResolvedModel } from "./model-resolver.js";
+import { resolveModel, withThinkingLevel, type ModelCatalog, type ResolvedModel, type ThinkingLevel } from "./model-resolver.js";
 
 /** Every call site that spends tokens. A new one must be declared here and
  * given a tier in config; there is no default tier for an unknown purpose. */
@@ -45,12 +45,19 @@ export class ModelPolicy {
     return tier;
   }
 
+  /** The reasoning effort this call site asks for, before the model is consulted. */
+  thinkingFor(purpose: ModelPurpose): ThinkingLevel | undefined {
+    const levels = this.config.get("model.purposeThinking") as Partial<Record<ModelPurpose, ThinkingLevel>>;
+    return levels[purpose];
+  }
+
   async resolve(purpose: ModelPurpose, provider: string): Promise<ResolvedModel> {
     const tier = await this.tierOf(purpose);
     const profiles = this.config.get("model.providers") as ProviderProfiles;
     const id = profiles[provider]?.tiers[tier];
     if (!id) throw new Error(`provider ${provider} has no model configured for the ${tier} tier`);
-    return resolveModel(this.catalog, provider, id);
+    // The effort rides on the model so that every port relays it for free.
+    return withThinkingLevel(await resolveModel(this.catalog, provider, id), this.thinkingFor(purpose));
   }
 
   /** The profile of a provider hivemind is configured to spawn. */
