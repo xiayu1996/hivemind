@@ -6,6 +6,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=%h/.hivemind/service.env
+# Provider API keys live here; the runner passes them to the pi child process.
+# Marked optional so a host whose providers all use OAuth still starts.
+EnvironmentFile=-%h/.hivemind/secrets.env
 # @REPO@ is replaced by deploy/linux/install.sh; systemd does not expand variables here.
 WorkingDirectory=@REPO@
 ExecStart=/usr/bin/env npx tsx scripts/run-local-orchestrator.ts --repository-path ${HIVEMIND_REPOSITORY_PATH} --repository-id ${HIVEMIND_REPOSITORY_ID}

@@ -61,6 +61,11 @@ export class RpcPiRunner implements PiRunner {
       [...(this.config.binaryArgs ?? []), "--mode", "rpc", ...buildArgs(this.config)],
       {
       cwd: this.config.cwd,
+      // The child sees the orchestrator's whole environment, which includes
+      // credentials it has no business with (NOTION_TOKEN among them). Passing
+      // only a base set plus the active provider's key is a deliberate later
+      // step, not an oversight: several extensions read host variables today
+      // and narrowing this without auditing them would break them silently.
       env: { ...process.env, ...this.config.env },
       stdio: ["pipe", "pipe", "pipe"],
       },
