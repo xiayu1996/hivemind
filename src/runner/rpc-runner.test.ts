@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { mkdir, mkdtemp, stat, utimes } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RpcPiRunner, buildArgs } from "./rpc-runner.js";
@@ -11,6 +13,9 @@ const FAKE_PI = fileURLToPath(new URL("./testing/fake-pi.mjs", import.meta.url))
 const FIXTURES = join(process.cwd(), "fixtures/rpc-errors/openai-codex");
 
 const runners: RpcPiRunner[] = [];
+// Never the host's real credential lock: these tests must not reap a lock a
+// developer's own pi is holding.
+const AUTH_LOCK = join(await mkdtemp(join(tmpdir(), "hm-rpc-lock-")), "auth.json.lock");
 
 // The fake speaks the RPC protocol on stdin/stdout, so it stands in for the binary.
 function makeNodeRunner(mode = "normal", extraEnv: Record<string, string> = {}) {
@@ -21,6 +26,7 @@ function makeNodeRunner(mode = "normal", extraEnv: Record<string, string> = {}) 
     model: FAKE_MODEL,
     cwd: process.cwd(),
     tools: [],
+    authLockPath: AUTH_LOCK,
     env: { FAKE_PI_MODE: mode, ...extraEnv },
   });
   runners.push(runner);
@@ -43,7 +49,8 @@ describe("handshake", () => {
       binary: process.execPath,
       binaryArgs: [FAKE_PI],
       provider: "fake", model: FAKE_MODEL, cwd: process.cwd(),
-        env: { FAKE_PI_MODE: "silent" },
+      authLockPath: AUTH_LOCK,
+      env: { FAKE_PI_MODE: "silent" },
       handshakeTimeoutMs: 1_500,
     });
     runners.push(runner);
@@ -64,6 +71,20 @@ describe("handshake", () => {
     const runner = makeNodeRunner("garbage");
     await expect(runner.start()).resolves.toBeUndefined();
     expect(runner.events().some((e) => e.type === "__unparseable__")).toBe(true);
+  });
+});
+
+describe("the credential lock a killed pi leaves behind", () => {
+  it("is cleared before the spawn, so recovery after a kill starts instead of stalling", async () => {
+    await mkdir(AUTH_LOCK, { recursive: true });
+    const abandoned = new Date(Date.now() - 120_000);
+    await utimes(AUTH_LOCK, abandoned, abandoned);
+
+    const runner = makeNodeRunner();
+    await runner.start();
+
+    expect(runner.authLock.reaped).toBe(true);
+    await expect(stat(AUTH_LOCK)).rejects.toThrow();
   });
 });
 

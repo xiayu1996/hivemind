@@ -160,7 +160,11 @@ export const CONFIG_KEYS = {
     default: {
       "openai-codex": {
         authType: "oauth",
-        tiers: { brain: "gpt-5.6-sol", standard: "gpt-5.6-terra", cheap: "gpt-5.4-mini" },
+        // Every tier is a 5.6-or-newer id on purpose: a ChatGPT subscription
+        // rejects gpt-5.4, gpt-5.4-mini and gpt-5.3-codex-spark outright even
+        // though pi lists all three, so a cheaper-looking id would fail the
+        // capacity probe on every subscription host.
+        tiers: { brain: "gpt-5.6-sol", standard: "gpt-5.6-terra", cheap: "gpt-5.6-luna" },
       },
     },
     scope: "global",

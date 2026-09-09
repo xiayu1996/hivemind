@@ -9,7 +9,7 @@ const catalog = {
     "openai-codex": [
       { provider: "openai-codex", id: "gpt-5.6-sol", thinking: true },
       { provider: "openai-codex", id: "gpt-5.6-terra", thinking: true },
-      { provider: "openai-codex", id: "gpt-5.4-mini", thinking: false },
+      { provider: "openai-codex", id: "gpt-5.6-luna", thinking: false },
     ],
     "zai-coding-cn": [{ provider: "zai-coding-cn", id: "glm-5" }],
   }[provider] ?? []),
@@ -29,7 +29,7 @@ describe("ModelPolicy", () => {
     const policy = new ModelPolicy(config, catalog);
     await expect(policy.resolve("design", "openai-codex")).resolves.toMatchObject({ provider: "openai-codex", id: "gpt-5.6-sol" });
     await expect(policy.resolve("code", "openai-codex")).resolves.toMatchObject({ id: "gpt-5.6-terra" });
-    await expect(policy.resolve("triage", "openai-codex")).resolves.toMatchObject({ id: "gpt-5.4-mini" });
+    await expect(policy.resolve("triage", "openai-codex")).resolves.toMatchObject({ id: "gpt-5.6-luna" });
   });
 
   it("refuses a purpose the provider declares no model for, instead of guessing one", async () => {
@@ -43,7 +43,7 @@ describe("ModelPolicy", () => {
     await expect(config.set("model.providers", {
       "openai-codex": {
         authType: "oauth",
-        tiers: { brain: "gpt-5.6-imaginary", standard: "gpt-5.6-terra", cheap: "gpt-5.4-mini" },
+        tiers: { brain: "gpt-5.6-imaginary", standard: "gpt-5.6-terra", cheap: "gpt-5.6-luna" },
       },
     }, "test")).rejects.toThrow(/does not advertise/);
   });
@@ -62,7 +62,7 @@ describe("ModelPolicy", () => {
     await config.set("model.providers", {
       "openai-codex": {
         authType: "oauth",
-        tiers: { brain: "gpt-5.6-sol", standard: "gpt-5.6-terra", cheap: "gpt-5.4-mini" },
+        tiers: { brain: "gpt-5.6-sol", standard: "gpt-5.6-terra", cheap: "gpt-5.6-luna" },
       },
       "zai-coding-cn": { authType: "api_key", envKey: "ZAI_CODING_CN_API_KEY", tiers: { standard: "glm-5", cheap: "glm-5" } },
     }, "test");
@@ -82,7 +82,7 @@ describe("ModelPolicy", () => {
       triage: "cheap", distiller: "cheap",
     }, "test");
     const policy = new ModelPolicy(config, catalog);
-    await expect(policy.resolve("design", "openai-codex")).resolves.toMatchObject({ id: "gpt-5.4-mini" });
+    await expect(policy.resolve("design", "openai-codex")).resolves.toMatchObject({ id: "gpt-5.6-luna" });
   });
 
   it("rejects the whole policy at startup when any configured id is not in its catalogue", async () => {

@@ -14,6 +14,7 @@ import { createNotionHttpTransport } from "../src/notion/sdk-adapters.js";
 import { openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
 import { probeProviderReadiness } from "../src/runner/auth-probe.js";
+import { reapStalePiAuthLock } from "../src/runner/auth-lock.js";
 import { probeCredentialRoundTrip } from "../src/runner/credential-roundtrip.js";
 import { assertErrorFixtureCoverage } from "../src/runner/error-fixtures.js";
 import { assertProviderRetriesDisabled } from "../src/runner/failover.js";
@@ -80,6 +81,17 @@ async function main(): Promise<void> {
     if (version !== PI_VERSION) throw new Error(`found ${version} at ${piBinary}`);
     return piBinary;
   });
+
+  // An abandoned credential lock means the last pi on this host was killed
+  // mid-refresh. It is cleared rather than reported as broken, because the next
+  // spawn would otherwise stall for pi's whole staleness window with no output
+  // at all; a lock a peer worker still holds is left alone and reported.
+  await attempt("pi credential lock is free", async () => {
+    const lock = await reapStalePiAuthLock();
+    if (lock.reaped) return `cleared a lock abandoned ${Math.round(lock.ageMs! / 1000)}s ago`;
+    if (lock.ageMs !== null) return `held by another process for ${Math.round(lock.ageMs / 1000)}s`;
+    return "no lock";
+  }, "WARN");
 
   const stored = await loadSecretsFile().catch(() => new Map<string, string>());
   await attempt("secrets file present and private", async () => {

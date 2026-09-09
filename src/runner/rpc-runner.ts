@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { pendingUiPrompts, type PendingUiPrompt } from "./activity.js";
+import { PI_AUTH_LOCK_STALE_MS, piAuthLockPath, reapStalePiAuthLock, type AuthLockReap } from "./auth-lock.js";
 import { JsonlDecoder, encodeCommand } from "./jsonl.js";
 import { extractFailure, sumUsage } from "./failure.js";
 import {
@@ -14,7 +15,10 @@ import {
   type RunnerSpawnOptions,
 } from "./types.js";
 
-const DEFAULT_HANDSHAKE_TIMEOUT_MS = 20_000;
+// Above pi's 30s credential-lock staleness window: a spawn that queues behind a
+// peer worker's refresh has to be able to outwait it, or a healthy pi is killed
+// for a lock it was correctly respecting.
+const DEFAULT_HANDSHAKE_TIMEOUT_MS = PI_AUTH_LOCK_STALE_MS + 15_000;
 const COMMAND_TIMEOUT_MS = 30_000;
 const DEFAULT_PROMPT_TIMEOUT_MS = 900_000;
 const SIGKILL_GRACE_MS = 5_000;
@@ -25,6 +29,8 @@ export interface RpcRunnerConfig extends RunnerSpawnOptions {
   binaryArgs?: string[];
   /** How long the startup round trip may take before the process is killed. */
   handshakeTimeoutMs?: number;
+  /** pi's credential lock, overridden by tests. Defaults to pi's own location. */
+  authLockPath?: string;
 }
 
 /**
@@ -48,6 +54,7 @@ export class RpcPiRunner implements PiRunner {
   // reads as still open. Deciding what an unattended run should answer is a
   // guard-policy question, not a transport one.
   #answeredUiRequests = new Set<string>();
+  #authLock: AuthLockReap = { reaped: false, ageMs: null };
 
   constructor(private readonly config: RpcRunnerConfig) {}
 
@@ -60,12 +67,23 @@ export class RpcPiRunner implements PiRunner {
     return pendingUiPrompts(this.#events, this.#answeredUiRequests);
   }
 
+  /** What the pre-spawn credential-lock check found, for the canonical log. */
+  get authLock(): AuthLockReap {
+    return this.#authLock;
+  }
+
   get stderr(): string {
     return this.#stderr;
   }
 
   async start(): Promise<void> {
     if (this.#proc) throw new Error("runner already started");
+
+    // A pi killed mid-refresh leaves its credential lock behind, and the next
+    // spawn then blocks on it for longer than the handshake waits. Recovery
+    // after a kill is a routine path here, so the abandoned lock is cleared
+    // before the spawn rather than diagnosed afterwards.
+    this.#authLock = await reapStalePiAuthLock(this.config.authLockPath ?? piAuthLockPath());
 
     this.#proc = spawn(
       this.config.binary,

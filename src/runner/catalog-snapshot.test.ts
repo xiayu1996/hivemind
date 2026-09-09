@@ -46,5 +46,7 @@ describe.skipIf(!piInstalled)("recorded catalogues match the pinned pi", () => {
     expect(recorded.piVersion).toBe(pinnedPiVersion());
     expect(live.toSorted((left, right) => left.id.localeCompare(right.id)))
       .toEqual(recorded.models);
-  });
+    // Each provider costs one real pi spawn, which can queue behind another
+    // process holding pi's credential lock; the default 5s is not enough.
+  }, 60_000);
 });
