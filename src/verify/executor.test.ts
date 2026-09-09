@@ -37,6 +37,8 @@ function runner(options: { session?: string; content?: string; events?: RpcEvent
     stop: vi.fn(async () => undefined),
     steer: vi.fn(async () => undefined),
     abort: vi.fn(async () => undefined),
+    clearQueue: vi.fn(async () => ({ steering: [], followUp: [] })),
+    waitingOnUser: [],
     getMessages: vi.fn(async () => []),
     kill: vi.fn(async () => undefined),
   };

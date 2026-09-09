@@ -39,6 +39,10 @@ async function promptOnce(runner: PiRunner, message: string, timeoutMs?: number)
     return await runner.prompt(message, timeoutMs);
   } catch (cause) {
     if (!(cause instanceof RunnerTimeoutError) || !runner.alive) throw cause;
+    // pi keeps the steering and follow-up queue across an abort and continues it
+    // afterwards, so a turn abandoned here would otherwise resume under
+    // instructions written for the stream that just broke.
+    await runner.clearQueue().catch(() => undefined);
     await runner.abort().catch(() => undefined);
     return {
       settled: false,

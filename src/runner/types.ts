@@ -1,3 +1,4 @@
+import type { PendingUiPrompt } from "./activity.js";
 import type { ResolvedModel, ThinkingLevel } from "./model-resolver.js";
 
 /** Envelope of everything pi emits on stdout in RPC mode. */
@@ -58,6 +59,18 @@ export interface TokenUsage {
   costUsd: number;
 }
 
+/**
+ * Steering and follow-up messages pi had queued but not yet delivered.
+ *
+ * `abort` deliberately keeps the queue and continues it, so abandoning a turn
+ * without clearing first hands the next turn instructions written for the one
+ * that was just thrown away.
+ */
+export interface QueuedMessages {
+  steering: string[];
+  followUp: string[];
+}
+
 export interface PromptResult {
   settled: boolean;
   failure: RunFailure | null;
@@ -75,6 +88,8 @@ export interface PiRunner {
   prompt(message: string, timeoutMs?: number): Promise<PromptResult>;
   steer(message: string): Promise<void>;
   abort(): Promise<void>;
+  /** Removes queued steering and follow-up messages and returns their text. */
+  clearQueue(): Promise<QueuedMessages>;
   getMessages(): Promise<unknown[]>;
   getState(): Promise<Record<string, unknown>>;
   setAutoRetry(enabled: boolean): Promise<void>;
@@ -82,6 +97,11 @@ export interface PiRunner {
   /** Forceful termination, for watchdogs and quarantine. No graceful shutdown. */
   kill(): Promise<void>;
   readonly alive: boolean;
+  /**
+   * Extension dialogs pi is blocked on. Non-empty means the run is waiting for a
+   * person, which a heartbeat must not count as work in progress.
+   */
+  readonly waitingOnUser: readonly PendingUiPrompt[];
 }
 
 export class RunnerHandshakeError extends Error {

@@ -13,7 +13,7 @@
 
 hivemind 走 pi 路线（provider 抽象、成本、reasoning 档位都齐），cumora 的教训作为加固清单吸收（§7）。
 
-## 2. pi 的 OAuth 机制（v0.84.3 源码核实）
+## 2. pi 的 OAuth 机制（v0.85.1 源码核实）
 
 - **client_id 复用官方 Codex CLI**（`app_EMoamEEZ73f0CkXaXp7hrann`），且**不伪装**：authorize URL 带 `originator=pi`，请求头 `originator: pi` + pi 的 User-Agent——OpenAI 完全识别 pi 流量并照常服务。
 - **两种登录**（`/login` 是 TUI 交互命令，**RPC 协议没有 auth 命令**→ 登录必须是带外人工步骤）：

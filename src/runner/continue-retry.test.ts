@@ -17,11 +17,14 @@ const TIMEOUT = "timeout" as const;
 function stubRunner(
   results: Array<PromptResult | typeof TIMEOUT>,
   alive = true,
-): PiRunner & { prompts: string[]; aborts: number } {
+): PiRunner & { prompts: string[]; aborts: number; queueClears: number; calls: string[] } {
   const prompts: string[] = [];
+  const calls: string[] = [];
   return {
     prompts,
+    calls,
     aborts: 0,
+    queueClears: 0,
     alive,
     async start() {},
     async prompt(message: string) {
@@ -31,13 +34,15 @@ function stubRunner(
       return next;
     },
     async steer() {},
-    async abort() { this.aborts++; },
+    async abort() { this.aborts++; calls.push("abort"); },
+    async clearQueue() { this.queueClears++; calls.push("clearQueue"); return { steering: [], followUp: [] }; },
+    waitingOnUser: [],
     async getMessages() { return []; },
     async getState() { return {}; },
     async setAutoRetry() {},
     async stop() {},
     async kill() {},
-  } as PiRunner & { prompts: string[]; aborts: number };
+  } as PiRunner & { prompts: string[]; aborts: number; queueClears: number; calls: string[] };
 }
 
 const noWait = { sleep: async () => {}, backoffMs: () => 0 };
@@ -53,6 +58,15 @@ describe("a prompt that never settles", () => {
     expect(outcome.continueRetries).toBe(1);
     expect(runner.prompts).toEqual(["implement the story", "continue"]);
     expect(runner.aborts).toBe(1);
+  });
+
+  it("clears the queue before aborting, so the resumed turn is not steered by the broken one", async () => {
+    // pi keeps queued steering and follow-up messages across an abort and
+    // continues them afterwards.
+    const runner = stubRunner([TIMEOUT, ok()]);
+    await promptWithContinueRetry(runner, "implement the story", { maxContinueRetries: 8, ...noWait });
+
+    expect(runner.calls).toEqual(["clearQueue", "abort"]);
   });
 
   it("spends the continue budget on repeated timeouts and then gives up", async () => {

@@ -18,6 +18,8 @@ function fakeRunner(reply: string, stateId = "session-1"): PiRunner {
     prompt: vi.fn(async () => result),
     steer: vi.fn(async () => undefined),
     abort: vi.fn(async () => undefined),
+    clearQueue: vi.fn(async () => ({ steering: [], followUp: [] })),
+    waitingOnUser: [],
     getMessages: vi.fn(async () => [{ role: "assistant", content: [{ type: "text", text: reply }] }]),
     getState: vi.fn(async () => ({ sessionId: stateId })),
     setAutoRetry: vi.fn(async () => undefined),

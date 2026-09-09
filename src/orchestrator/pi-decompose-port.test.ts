@@ -39,6 +39,8 @@ function runner(reply: string): PiRunner & { prompts: string[] } {
     stop: vi.fn(async () => undefined),
     steer: vi.fn(async () => undefined),
     abort: vi.fn(async () => undefined),
+    clearQueue: vi.fn(async () => ({ steering: [], followUp: [] })),
+    waitingOnUser: [],
     kill: vi.fn(async () => undefined),
   };
 }

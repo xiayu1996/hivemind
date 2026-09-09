@@ -101,12 +101,15 @@ pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src
 - **错误提取只认单一契约**：assistant 消息的 `stopReason === "error"` + `errorMessage`。但 RPC 有**两条**错误面——命令级 `{type:"response", success:false, error}` 与运行期 `stopReason:"error"`，前者不走这条契约。
 - **分类规则顺序有载荷**：QUOTA 必须排在 RATE_LIMIT 之前。配额耗尽也是 429，读反了 worker 会永远等一个不会打开的窗口。
 - **TokenUsage 四桶互斥**（`uncachedInput / output / cacheRead / cacheWrite`）。reasoning 是 output 的细分，**不重复累加**；cacheRead 与 cacheWrite 单价不同，折进 input 就永久失去准确定价能力。
-- **checkpoint 存 session JSONL 文件本身**，不存消息数组：RPC 有 `get_messages` 导出，但**没有任何载入命令**。
+- **checkpoint 存 session JSONL 文件本身**，不存消息数组：RPC 有 `get_messages` 导出，但**没有任何载入命令**（0.85.0 的 `SessionManager.inMemory()` 只在库内 SDK 面，`AgentSession` 仍硬编码 JSONL，见 pi#9000）。
+- **checkpoint 必须以换行结尾**：向未终止的末行追加会把下一条记录并进去，两条一起丢（pi#8345，0.84.4 已修根因，我们仍强制，因为 checkpoint 活得比写它的 pi 版本长）。修复被触发即为异常，走 `onRepair` 进规范日志，不做静默字段。
 - **只修尾部损坏**（pi 已知 bug 的形态）；中段损坏拒绝修复并回退更老快照。宁可多跑一段，也不拿一个被悄悄改过的会话续跑。
 - **默认 `--no-context-files`**：pi 会向上层叠 `CLAUDE.md` / `AGENTS.md`，实测会把宿主机的个人指令读进任务上下文，且静默无报错、事后难归因。需要的文件显式装载，并把生效清单记入规范日志。
 - **reasoning effort 与 tier 同构**：`model.purposeThinking` 按 purpose 配 `--thinking` 档位，由 `ModelPolicy.resolve` 挂到 `ResolvedModel` 上随模型一起走，所以每个 port 零改动即透传。只有目录明说 `thinking=yes` 的模型才会收到档位——理由同下一条，pi 对用不上的参数不报错。
 - **`resolveModel` 是所有 model 参数的唯一入口且必须自校验模型 id**：坏 id 在 spawn 时只是 warning，pi 会当自定义模型继续跑并编造价格。
 - **凭据探针一律 `--no-refresh`**；`pi auth check` 在 `not_ready` 时**退出码仍为 0**，必须解析 JSON status。
+- **放弃一轮之前先 `clear_queue` 再 `abort`**：`abort` 故意保留 steering / follow-up 队列并在之后继续投递，不清就等于用刚被丢弃那一轮的指令去驱动下一轮。
+- **等人不算在干活**：RPC 下"阻塞等人"的信号是 stdout 的 `extension_ui_request`（对话类方法要等 stdin 回 `extension_ui_response`），不是 extension 侧的 `ui_prompt_start/end`——后者在 RPC 模式不发。心跳读 `waitingOnUser`。
 - **usage-limit 文案里的分钟数是相对值**，锚定事件自身时间戳，不能锚定"我们读到它的时间"——在 outbox 积压过就会算错窗口。
 
 ### 代码风格

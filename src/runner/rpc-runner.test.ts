@@ -43,7 +43,7 @@ describe("handshake", () => {
       binary: process.execPath,
       binaryArgs: [FAKE_PI],
       provider: "fake", model: FAKE_MODEL, cwd: process.cwd(),
-      env: { FAKE_PI_MODE: "silent" },
+        env: { FAKE_PI_MODE: "silent" },
       handshakeTimeoutMs: 1_500,
     });
     runners.push(runner);
@@ -156,6 +156,23 @@ describe("commands", () => {
     await expect(runner.setAutoRetry(false)).resolves.toBeUndefined();
     await expect(runner.steer("change course")).resolves.toBeUndefined();
     await expect(runner.abort()).resolves.toBeUndefined();
+  });
+
+  it("returns the queued messages clear_queue removed, so a caller can put them back", async () => {
+    const runner = makeNodeRunner();
+    await runner.start();
+    await runner.steer("focus on error handling");
+
+    expect(await runner.clearQueue()).toEqual({ steering: ["focus on error handling"], followUp: [] });
+    expect(await runner.clearQueue()).toEqual({ steering: [], followUp: [] });
+  });
+
+  it("reports no waiting prompt for a run that settled normally", async () => {
+    const runner = makeNodeRunner();
+    await runner.start();
+    await runner.prompt("do the work", 10_000);
+
+    expect(runner.waitingOnUser).toEqual([]);
   });
 });
 

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { pendingUiPrompts, type PendingUiPrompt } from "./activity.js";
 import { JsonlDecoder, encodeCommand } from "./jsonl.js";
 import { extractFailure, sumUsage } from "./failure.js";
 import {
@@ -7,6 +8,7 @@ import {
   RunnerTimeoutError,
   type PiRunner,
   type PromptResult,
+  type QueuedMessages,
   type RpcEvent,
   type RpcResponse,
   type RunnerSpawnOptions,
@@ -42,11 +44,20 @@ export class RpcPiRunner implements PiRunner {
   #stderr = "";
   #exit: { code: number | null; signal: string | null } | null = null;
   #nextId = 1;
+  // Nothing answers extension dialogs yet, so this stays empty and every dialog
+  // reads as still open. Deciding what an unattended run should answer is a
+  // guard-policy question, not a transport one.
+  #answeredUiRequests = new Set<string>();
 
   constructor(private readonly config: RpcRunnerConfig) {}
 
   get alive(): boolean {
     return this.#proc !== null && this.#exit === null;
+  }
+
+  /** Extension dialogs awaiting an answer; see `pendingUiPrompts`. */
+  get waitingOnUser(): readonly PendingUiPrompt[] {
+    return pendingUiPrompts(this.#events, this.#answeredUiRequests);
   }
 
   get stderr(): string {
@@ -129,6 +140,15 @@ export class RpcPiRunner implements PiRunner {
 
   async abort(): Promise<void> {
     await this.#request({ type: "abort" }, COMMAND_TIMEOUT_MS);
+  }
+
+  async clearQueue(): Promise<QueuedMessages> {
+    const response = await this.#request({ type: "clear_queue" }, COMMAND_TIMEOUT_MS);
+    if (!response.success) throw new Error(`clear_queue rejected: ${response.error ?? "unknown reason"}`);
+    return {
+      steering: stringList(response.data?.steering),
+      followUp: stringList(response.data?.followUp),
+    };
   }
 
   async setAutoRetry(enabled: boolean): Promise<void> {
@@ -239,6 +259,10 @@ export class RpcPiRunner implements PiRunner {
     proc.kill("SIGKILL");
     await this.#waitFor(() => this.#exit !== null, "kill", SIGKILL_GRACE_MS, true).catch(() => undefined);
   }
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
 }
 
 /** Exported for the spawn-argument tests; the runner is the only caller. */

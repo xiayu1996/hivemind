@@ -1,7 +1,7 @@
 {
   "provider": "openai-codex",
-  "piVersion": "0.84.3",
-  "capturedAt": "2026-09-09T09:11:40.874Z",
+  "piVersion": "0.85.1",
+  "capturedAt": "2026-09-09T09:32:12.053Z",
   "models": [
     {
       "provider": "openai-codex",
