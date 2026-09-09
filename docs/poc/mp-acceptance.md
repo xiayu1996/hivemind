@@ -87,6 +87,15 @@ Story 首次由 Epic 拆解生成（而非看板建卡），暴露出一批只�
 - **澄清记录第一轮两行署名为 user id 而非人名**：人名解析在第二轮之前才上线。澄清记录按设计只追加，未回头改写这两行；它们是当时真实发生的样子。
 - **本机库手工建表**：`data/hivemind-mp.db` 建于 `notion_users` 表加入 `0001_init.sql` 之前；预发布立场不加 `0002+` 迁移，故用同一份 DDL 手工建了该表，未删库重建（删库会丢掉这条需求的澄清历史）。全新环境不受影响。Linux 验收环境将从零建库，不带此痕迹。
 
+## MQ 主流程收敛（2026-09-09）
+
+代码侧改动已完成（MQ-01..09，见 `docs/plan/tasks.md`），门禁 `npm run lint` / `npm run typecheck` / `npm test`（127 文件 827 测试）全绿。
+Codex 订阅额度接近耗尽，本轮不跑 pi agent，卡片回归等配额恢复。
+
+不需要 agent 的一次实测：把新的 CODE 出口确定性检查直接跑在 S-E3OVERVIEW-01 那棵停住的工作树上（`data/work/worktrees/hivemind/S-E3OVERVIEW-01`），结果全过——
+树干净、相对 main 有 14 个提交、四条场景各有红绿提交与测试文件点名、`git diff --check` 干净、仓库三条门禁命令全绿（该分支自身 126 文件 768 测试通过）。
+即这张卡的代码在 09-06 就已经满足出口条件，把它停在 `retry_limit_exceeded` 的是流程本身，新出口会放它过去。
+
 ## 尚未发生
 
 - Linux 主机上执行 `deploy/linux/install.sh` → `npm run preflight` → 两个 systemd 单元起来；同机重跑 `smoke-browser-e2e`。
