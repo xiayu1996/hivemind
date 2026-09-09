@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Story 主流程（as-built）与断点标注 · 2026-09-09</title>
+<style>
+  :root { --fg:#1f2937; --muted:#6b7280; --bg:#ffffff; --line:#e5e7eb; --bad:#b91c1c; --warn:#b45309; --fixed:#047857; }
+  body { margin:0; padding:32px 40px 64px; font:15px/1.6 -apple-system,"PingFang SC","Helvetica Neue",sans-serif; color:var(--fg); background:var(--bg); max-width:1280px; }
+  h1 { font-size:24px; margin:0 0 4px; }
+  h2 { font-size:18px; margin:40px 0 12px; border-bottom:1px solid var(--line); padding-bottom:6px; }
+  p.lead { color:var(--muted); margin:0 0 20px; }
+  .legend span { display:inline-block; margin-right:16px; font-size:13px; }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; vertical-align:middle; }
+  .mermaid { background:#fafafa; border:1px solid var(--line); border-radius:8px; padding:16px; overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:14px; }
+  th, td { border:1px solid var(--line); padding:8px 10px; vertical-align:top; text-align:left; }
+  th { background:#f3f4f6; }
+  td.k { white-space:nowrap; font-weight:600; }
+  .bad { color:var(--bad); } .warn { color:var(--warn); } .fixed { color:var(--fixed); }
+  code { font-family:ui-monospace,Menlo,monospace; font-size:13px; background:#f3f4f6; padding:1px 4px; border-radius:3px; }
+  .note { font-size:13px; color:var(--muted); }
+</style>
+</head>
+<body>
+<h1>Story 主流程（as-built）与断点标注</h1>
+<p class="lead">依据 2026-09-05 会话日志、本地库 <code>data/hivemind-mp.db</code> 的 event_log、以及 <code>src/orchestrator</code> / <code>src/vcs</code> / <code>src/verify</code> 当前代码整理。画的是代码里实际发生的路径，不是设计文档里的理想路径。编号 F1 到 F10 对应下方问题表。</p>
+<div class="legend">
+  <span><i class="dot" style="background:#fecaca"></i>未修复，阻断主流程</span>
+  <span><i class="dot" style="background:#fde68a"></i>设计层问题，需讨论</span>
+  <span><i class="dot" style="background:#a7f3d0"></i>已在工作区修复，未提交</span>
+  <span><i class="dot" style="background:#dbeafe"></i>LLM 判定节点（非确定性）</span>
+</div>
+
+<h2>1. 一张 Story 从排队到交付的真实路径</h2>
+<pre class="mermaid">
+flowchart TD
+  classDef bad fill:#fecaca,stroke:#b91c1c,color:#111;
+  classDef warn fill:#fde68a,stroke:#b45309,color:#111;
+  classDef fixed fill:#a7f3d0,stroke:#047857,color:#111;
+  classDef llm fill:#dbeafe,stroke:#1d4ed8,color:#111;
+  classDef human fill:#f3e8ff,stroke:#7e22ce,color:#111;
+
+  Q[QUEUED] --> D
+  subgraph DESIGN[DESIGN · 只读]
+    D["pi agent 读仓库 + 需求<br/>输出 design_summary + DoD YAML"]:::llm
+    D --> Dfreeze["parseDoD → 冻结 DoD<br/>F1 场景全是 UI 层，无人复核"]:::warn
+  end
+  Dfreeze --> C
+
+  subgraph LOOP["内环 · 最多 6 轮"]
+    C["CODE · pi agent TDD<br/>red/green 逐场景 commit"]:::llm
+    C --> Cto["prompt 超时 15 分钟<br/>F2 超时即 phase.failed"]:::bad
+    C --> Cjudge["completion judge（LLM）<br/>看最后 20 条工具结果判 done<br/>F3 误判 → retry_limit_exceeded"]:::llm
+    Cjudge --> V
+    V["VERIFY · fresh session 盲审<br/>自己起服务 + playwright-cli 截图<br/>F4 端口/进程/截图落点靠 agent 自觉"]:::llm
+    V --> Vcheck["verdict 代码校验<br/>截图存在性 / mtime / host"]
+    Vcheck --> Conv{"收敛判据<br/>failed(N) ⊊ failed(N-1)"}
+    Conv -- "环境故障也算场景失败<br/>F5 expanded → 停" --> NI
+    Conv -- converging --> C
+    Conv -- accepted --> M
+  end
+
+  subgraph MERGE[MERGE · 只读]
+    M["pi agent 写 delivery_report<br/>自己决定跑 git diff --check"]:::llm
+    M --> Mjudge["completion judge（LLM）<br/>F6 门禁失败 → 曾映射回 MERGE 原地再停"]:::fixed
+  end
+  Mjudge --> I
+
+  subgraph INTEGRATION["合流到 Epic 集成分支"]
+    I["rebase 到 epic/&lt;id&gt;<br/>footprint 相交检查"]
+    I --> Isub["子集复验 = 再跑一次完整盲审<br/>F7 cwd 仍是 Story 树，截图落错 → 全场景失败"]:::bad
+    Isub -- 失败 --> Cback["回 CODE，worktree 不动<br/>F8 代码没错也要重跑整轮内环"]:::warn
+    Isub -- 通过 --> FF["ff-merge 到集成分支<br/>触发 Epic 回归 sweep"]
+  end
+  Cback --> C
+
+  FF --> Del["StoryDelivery：push 分支<br/>Epic 内 Story 不开 MR"]
+  Del --> DEL[DELIVERED]:::human
+  DEL --> EpicMR{"Epic 全部 Story 都 DELIVERED<br/>且 integrated？"}
+  EpicMR -- 否 --> Wait["F9 人看不到任何可见交付<br/>E1ACTION 需 6 张全完"]:::warn
+  EpicMR -- 是 --> MR["Epic 单 MR → EPIC_ACCEPT → DONE"]:::human
+
+  Cto --> Reentry{"phase_reentries < 3？"}
+  Cjudge -- not done --> Reentry
+  Reentry -- 是 --> C
+  Reentry -- 否 --> NI
+  NI["NEEDS_INPUT<br/>retry_limit_exceeded / verify_loop_exceeded<br/>F10 供应商故障与代码失败同一停点"]:::bad
+  NI -- "人把 AI 状态拖回进行中<br/>预算重置" --> C
+
+  Prov["供应商故障：usage limit / 超时 / 证书 / OAuth 401<br/>F10 每次探测 = 真派单 = 消耗一次尝试"]:::bad
+  Prov -.-> Cto
+  Prov -.-> Reentry
+</pre>
+
+<h2>2. S-E3OVERVIEW-01 实际走过的路（event_log）</h2>
+<pre class="mermaid">
+timeline
+  title 一张 4 个场景、293 行改动的小 Story，两天没出 MERGE
+  09-05 16:44 : QUEUED → DESIGN → CODE，5 分钟写完 4 场景 red/green
+  09-05 17:00 : VERIFY 第 1 轮通过 → MERGE
+  09-05 17:01 : MERGE 撞 Codex usage limit → 记为 Story 失败 → retry_limit_exceeded
+  09-05 20:46 到 21:06 : 人工拖回 6 次，每次回到 MERGE，git diff --check 报一行尾随空格，MERGE 无权改，原地再停 6 次
+  09-05 21:12 : 拖回 CODE，VERIFY 第 2 轮 4 场景全失败（盲审起的服务 404，不是代码错）→ verify_loop_exceeded
+  09-05 21:20 到 21:31 : 再拖回，第 3 轮剩 1 失败，第 4 轮通过 → MERGE 再被同一行空格否决 → 停
+  09-06 06:58 : 第 5 轮 CODE 已提交 remove trailing whitespace，但会话 15 分钟超时被判失败
+  09-06 全天 : 9 次尝试，6 次超时、1 次证书、1 次连不上、最后 OAuth refresh 401 → retry_limit_exceeded
+  现状 : 分支代码完整、单测 22/22 通过、空格已修，卡停在 NEEDS_INPUT，成本 $2.83
+</pre>
+
+<h2>3. 问题表</h2>
+<table>
+  <thead><tr><th>编号</th><th>节点</th><th>问题</th><th>证据</th><th>状态</th></tr></thead>
+  <tbody>
+    <tr><td class="k">F1</td><td>DESIGN</td><td>DoD 由 agent 一次生成即冻结，无人复核。四个场景全部要求浏览器证据，把 VERIFY 的成本和脆弱性放到最大。设计摘要引用仓库内部任务编号。</td><td>Story 页"核心设计"含 M1-02 / M1-28；<code>prompts/phases/design.md</code> 无限制</td><td class="warn">设计层</td></tr>
+    <tr><td class="k">F2</td><td>CODE</td><td>prompt 超时固定 15 分钟，超时不续跑而是 phase.failed 并消耗重入预算。真实 CODE 轮次 16 到 33 分钟。</td><td><code>src/runner/rpc-runner.ts:17</code>；09-06 六次 "timed out waiting for agent_settled"</td><td class="bad">未修</td></tr>
+    <tr><td class="k">F3</td><td>CODE 出口</td><td>completion judge 是 LLM，只看最后 20 条工具结果，曾误判"没有 commit"、要求浏览器证据。它的否决直接走 retry_limit_exceeded。</td><td>P17 / P18；E1ACTION 三条 "Evidence is insufficient"</td><td class="fixed">部分修，未提交</td></tr>
+    <tr><td class="k">F4</td><td>VERIFY</td><td>盲审要自己起服务、选端口、截图到指定目录，全靠 prompt 约束。出现过起不了服务、端口互撞、截图落进 worktree 触发 tree-pin 崩溃、用 route 伪造接口。</td><td>P14 / P15 / P22 / P23 / P28</td><td class="fixed">逐个补丁，未提交</td></tr>
+    <tr><td class="k">F5</td><td>收敛判据</td><td>环境故障（服务 404）被记成场景失败，failed 集合被污染后判 expanded 直接停。历史按上次人工动作截断，MERGE 退回的轮次曾让 worker 直接崩。</td><td>21:15 第 2 轮 4 场景失败原因都是 "Route GET:/api/overview not found"；P26</td><td class="warn">设计层</td></tr>
+    <tr><td class="k">F6</td><td>MERGE</td><td>只读阶段，却是唯一执行 <code>git diff --check</code> 的地方，且由 agent 自选。失败后曾映射回 MERGE 原地再停，CODE 拿不到原因。</td><td>6 次 retry_limit_exceeded 同一原因；P24 / P29</td><td class="fixed">已修，未提交</td></tr>
+    <tr><td class="k">F7</td><td>合流复验</td><td>盲审 runner 的 cwd 固定为 Story worktree，截图落错目录，校验器在 integration 目录找不到 → 全场景失败。P31 改会话名没有触及。</td><td><code>scripts/run-story.ts:170</code>；E2RESULTS 10 轮、E1ACTION 7 轮</td><td class="bad">未修</td></tr>
+    <tr><td class="k">F8</td><td>合流复验</td><td>每次合流都重跑一遍完整浏览器盲审，成本与首轮 VERIFY 相同。失败后回 CODE 但 worktree 不动，CODE 只能重新走整轮内环。</td><td>cost_entries：VERIFY 与 CODE 花费相当</td><td class="warn">设计层</td></tr>
+    <tr><td class="k">F9</td><td>交付</td><td>Epic 内 Story 不开 MR，Epic MR 要等全部 Story 交付并集成。一个"小任务"没有任何人可见的交付物。</td><td><code>story-delivery.ts:61</code>；<code>run-local-orchestrator.ts:511</code></td><td class="warn">设计层</td></tr>
+    <tr><td class="k">F10</td><td>停点与供应商</td><td>usage limit、超时、OAuth 401 与代码失败共用 retry_limit_exceeded；熔断探测方式是真派单，每次探测消耗一次尝试；usage limit 文案不带重置窗口时盲猜 30 分钟；多个 pi 进程共享一份 OAuth 凭据并发刷新。</td><td>三张卡 phase.failed 约 45 条，供应商类约 31 条；provider.opened 只记录 1 次</td><td class="bad">未修</td></tr>
+  </tbody>
+</table>
+
+<h2>4. 结构性观察</h2>
+<p>一轮内环里串着 5 个 fail-closed 的 LLM 判定：CODE agent、CODE completion judge、VERIFY agent、MERGE agent、MERGE completion judge；合流再加一个盲审 agent。每个节点的否决都被当成"代码有问题"计入预算。即使每个节点 90% 可靠，一轮全过的概率也只有 0.9<sup>6</sup> ≈ 53%，而任何一次供应商故障都会再吃掉一次预算。这比任何单个 bug 更能解释"小任务跑不完"。</p>
+<h2>5. 目标流程（2026-09-09 决策 D17 到 D22，设计见 03 §8）</h2>
+<pre class="mermaid">
+flowchart TD
+  classDef llm fill:#dbeafe,stroke:#1d4ed8,color:#111;
+  classDef det fill:#ecfdf5,stroke:#047857,color:#111;
+  classDef human fill:#f3e8ff,stroke:#7e22ce,color:#111;
+
+  Q[QUEUED] --> D["DESIGN · agent 产出 DoD<br/>垂直切片约束：可见入口 + 独立验证路径"]:::llm
+  D --> C["CODE · agent TDD"]:::llm
+  C --> G["CODE 出口确定性检查<br/>树干净有提交 · 每场景红绿轨迹<br/>@scenario 覆盖 DoD · format/lint/typecheck/tests"]:::det
+  G -- 不过：清单喂回，不计预算 --> C
+  G -- 通过 --> V["VERIFY · 唯一 LLM 盲审<br/>环境类失败记 inconclusive，不进 failed 集合"]:::llm
+  V -- 场景失败且收敛 --> C
+  V -- 接受 --> R["MERGE · 只写业务语言报告<br/>regex lint，无否决权"]:::llm
+  R --> I["合流 · rebase 到 epic 头<br/>只跑本 Story + 相交 Story 的测试"]:::det
+  I -- 冲突或测试失败 --> C
+  I -- 通过 --> FF["ff-merge · 开 story→epic draft MR<br/>链接回写 Notion"]:::det
+  FF --> DEL[DELIVERED]:::human
+  FF -.触发.-> REG["回归 loop · 浏览器盲审（异步，非 gate）<br/>失败开 regression 卡"]:::llm
+  DEL --> E{"Epic 全部 Story 交付"}
+  E -- 是 --> MR["epic→main 最终 MR"]:::human
+
+  P["供应商故障<br/>只进熔断，卡原地等待<br/>不计预算、不产生停点<br/>CODE 超时走 checkpoint 续跑"]:::det
+  P -.-> C
+  P -.-> V
+</pre>
+<p>与第 1 节相比，内环里的 LLM 判定从 5 到 6 个降到 2 个（CODE agent 与 VERIFY 盲审），其余全部是代码执行的确定性步骤；供应商故障与代码失败彻底分离；每张 Story 完成当下就有人可见的 draft MR。</p>
+
+<p class="note">归档时间 2026-09-09。数据来源：<code>data/hivemind-mp.db</code>、<code>data/decisions/2026-09-05-proxy-decisions.md</code>、会话日志 1388b2ab。</p>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({ startOnLoad: true, theme: "neutral", flowchart: { htmlLabels: true, curve: "basis" } });
+</script>
+</body>
+</html>

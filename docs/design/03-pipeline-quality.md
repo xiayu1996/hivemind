@@ -251,3 +251,40 @@ stateDiagram-v2
 | 角色 | 档位 | 说明 |
 |---|---|---|
 | PM（澄清/PRD/需求拆解/验收清单生成） | 大脑 | 面向用户的唯一业务对话面；prompt 独立于开发线（prompts/pm/），经 resolveModel 取模型 |
+
+## 8. 增补（2026-09-09）：主流程收敛——内环只保留一个 LLM 判定
+
+依据 2026-09-05 首次 Epic→Story 实跑的数据（三张 Story、约 45 条 phase.failed，其中供应商类约 31 条，无一交付）与 `docs/design/diagrams/story-main-flow-as-built.html` 的断点分析。核心结论：一轮内环串着 CODE agent、CODE completion judge、VERIFY agent、MERGE agent、MERGE completion judge 五个 fail-closed 的 LLM 判定，合流再加一个盲审；每个否决都按"代码有问题"计入预算，供应商故障再吃一次预算。这是"小任务跑不完"的结构性原因，不是某个 bug。
+
+### 8.1 CODE 出口改为确定性检查，撤销 completion judge
+
+§0 第 4 条引入 completion judge 的目的是抓"自称完成但没做"。它要抓的三种形态全部有确定性替代，且 §2.1 / §2.3 早已把原料定义成了契约：
+
+| 假完成形态 | 代码检查（CODE 出口，fail-closed） |
+|---|---|
+| 树脏、没提交 | `git status --porcelain` 为空；`main..HEAD` 有提交 |
+| 红绿没跑 | 规范日志里每个 scenario_id 至少一次失败的 test 事件后接一次成功的 test 事件（§2.3 双通道之一） |
+| 场景没测 | 扫测试文件收集 `@scenario` 标记与 DoD diff（§2.1，此前未实现） |
+| 不可合并 | format / lint / typecheck / 全量测试通过；`git diff --check` 干净 |
+
+不过检查项**不计任何预算、不产生停点**，清单原样喂回 CODE 继续。确定性覆盖不到的只剩"实现是否真的满足需求"，那是 VERIFY 的职责；CODE judge 与 VERIFY 重叠，撤销。MERGE 的 completion judge 同样撤销：它要确认的"没越权合并、报告存在"分别由工具面掐断与 artifact 存在性检查覆盖。
+
+### 8.2 MERGE 只写报告，没有否决权
+
+MERGE 阶段保留为"写业务语言交付报告"，报告质量由 §5 的业务区 regex lint 校验。MERGE 不再跑任何门禁；门禁全部前移到 8.1 的 CODE 出口，并在合流时由系统再跑一次。此前 `git diff --check` 是 agent 在只读阶段自选执行、失败后无处修复，导致六次原地停点。
+
+### 8.3 合流复验改为确定性测试，浏览器盲审归回归 loop
+
+§1.3 子集复验的目的是抓"单独对、叠在一起错"。实跑证实这是真需求（三个 Epic 的 Story 都改同一页面与路由表），但 §1.4 的常驻回归 loop 本就负责这件事。修订：rebase 到 Epic 头后，只运行本 Story 与 footprint 相交 Story 在 CODE 阶段写下的全部测试（含 e2e 脚本），通过即 ff-merge；浏览器盲审只在 Story 首轮 VERIFY 做一次，合入后由回归 loop 异步扫，失败开 regression 卡而不是把 Story 打回 CODE。合流从 gate 变成确定性步骤，成本接近零。
+
+### 8.4 供应商故障不进任何预算
+
+usage limit、限流、超时、传输中断、OAuth 刷新失败只进熔断器：卡原地等待，不计内环、不计重入、不产生停点。三类真停点不变，但只由代码层面的失败触发。CODE 的 prompt 超时改为 checkpoint 续跑，续跑耗尽才算一次失败。熔断探测使用不计费的凭据探针，不再以真派单探测；用量窗口解析不到时指数退避。Notion 上区分"等待供应商"与"需要输入"。OAuth 刷新单点化：多 pi 进程共享一份凭据并发刷新会互相作废旋转令牌。
+
+### 8.5 Story 是垂直切片，每张 Story 有自己的 draft MR
+
+对齐 INVEST：Story 必须 Independent 与 Testable，是切穿全部层、有用户可见入口、可独立验证的垂直切片；Epic 只是分组。DECOMPOSE 增加约束：每张 Story 必须声明用户可见入口与独立验证路径，Epic 内 Story 数上限 config 化（默认 4），超限或出现水平切分（同一页面的验收条目被拆成多张卡）即打回重拆。交付：Story DELIVERED 时开 story→epic 的 draft MR（stacked PR），链接回写 Notion；Epic 完成时开 epic→main 的最终 MR。§1.3 "Epic 级单 MR"修订为"Epic MR 是最终合并入口，Story MR 是人可见的交付单元"。
+
+### 8.6 收敛判据只看代码层失败
+
+`failed(N) ⊊ failed(N-1)` 的输入必须只含场景级失败。盲审因环境原因（服务未起、端口占用、截图落点错误）给出的 fail 记为 `inconclusive`，不进入 failed 集合，也不消耗轮次；连续两次 inconclusive 才作为系统侧 friction 物化。
