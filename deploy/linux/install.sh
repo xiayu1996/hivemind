@@ -151,6 +151,10 @@ step "pi"
 "$REPO/scripts/install-pi.sh"
 PI_VERSION="$(node -p "require('$REPO/package.json').hivemind.piVersion")"
 PI_BIN="${PI_BIN:-$HIVEMIND_HOME/pi/${HIVEMIND_PI_VERSION:-$PI_VERSION}/pi/pi}"
+# Models hivemind declares on top of pi's built-in catalogue. Every host needs
+# them: the recorded catalogue is what configuration validates against, and a
+# host without them advertises a smaller catalogue than the fixtures record.
+"$REPO/scripts/install-pi-models.sh"
 
 step "Headless Chromium"
 if (cd "$REPO" && npx playwright-cli install-browser --list 2>/dev/null | grep -q chromium_headless_shell); then

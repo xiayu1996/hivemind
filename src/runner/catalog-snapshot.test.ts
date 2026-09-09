@@ -6,6 +6,7 @@ import {
   snapshotModelIds,
   snapshottedProviders,
 } from "./catalog-snapshot.js";
+import { declaredModelIds } from "./declared-models.js";
 import { defaultPiBinary, pinnedPiVersion } from "./pi-binary.js";
 import { PiModelCatalog } from "./model-resolver.js";
 import { resolveModel } from "./model-resolver.js";
@@ -27,6 +28,15 @@ describe("recorded provider catalogues", () => {
     const ids = snapshotModelIds(provider);
     expect(ids.length).toBeGreaterThan(0);
     await expect(resolveModel(snapshotCatalog(), provider, ids[0]!)).resolves.toMatchObject({ provider });
+  });
+});
+
+describe("models hivemind declares to pi", () => {
+  it.each([...declaredModelIds()])("%s: every declared model is in the recorded catalogue", (provider, ids) => {
+    // A declared id missing from the recording means the capture ran on a host
+    // that had not installed deploy/pi/models.json, and configuration would
+    // then refuse an id pi actually serves.
+    expect(snapshotModelIds(provider)).toEqual(expect.arrayContaining(ids));
   });
 });
 
