@@ -10,7 +10,6 @@ export const MODEL_PURPOSES = [
   "code",
   "verify",
   "merge",
-  "completion_judge",
   "capacity_probe",
   "triage",
   "distiller",

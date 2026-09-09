@@ -41,6 +41,26 @@ export interface VerdictValidation {
   greenEvidence: string[];
 }
 
+/**
+ * The two red/green channels of section 2.3, read as one set each: the commit
+ * messages CODE is required to write per scenario, and the test events its
+ * session emitted. Shared with the deterministic CODE exit so the convention
+ * has exactly one reader.
+ */
+export function redGreenFromCommits(
+  commitMessages: readonly string[],
+  trajectory: readonly TrajectoryEvidence[],
+): { red: Set<string>; green: Set<string> } {
+  const red = commitEvidence(commitMessages, "red");
+  const green = commitEvidence(commitMessages, "green");
+  for (const event of trajectory) {
+    if (event.type !== "test_result" || !event.scenarioId) continue;
+    if (event.status === "failed") red.add(event.scenarioId);
+    if (event.status === "passed") green.add(event.scenarioId);
+  }
+  return { red, green };
+}
+
 function commitEvidence(messages: readonly string[], kind: "red" | "green"): Set<string> {
   const prefix = kind === "red" ? "test" : "feat";
   const pattern = new RegExp(`^${prefix}\\((S-[A-Z0-9]+-\\d{2}-[a-z0-9]+)\\):\\s*${kind}\\b`, "i");
@@ -64,13 +84,7 @@ export async function validateVerdict(input: VerdictInput): Promise<VerdictValid
       .filter((event) => event.type === "test_result" && event.status === "passed" && event.scenarioId)
       .map((event) => event.scenarioId!),
   );
-  const red = commitEvidence(input.commitMessages, "red");
-  const green = commitEvidence(input.commitMessages, "green");
-  for (const event of input.trajectory) {
-    if (event.type !== "test_result" || !event.scenarioId) continue;
-    if (event.status === "failed") red.add(event.scenarioId);
-    if (event.status === "passed") green.add(event.scenarioId);
-  }
+  const { red, green } = redGreenFromCommits(input.commitMessages, input.trajectory);
 
   const evidenceRoot = resolve(input.evidenceRoot);
   const allowedHosts = new Set(input.allowedHosts.map((host) => host.toLowerCase()));

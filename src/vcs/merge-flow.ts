@@ -90,7 +90,21 @@ export class EpicMergeFlow {
       };
     }
     const scenarioIds = [...new Set(affectedStories.flatMap((story) => story.scenarioIds!))].toSorted();
+    // What the re-verification ran against has to be what gets merged. Without
+    // this the checks could pass on one revision and a different one could be
+    // fast-forwarded in, which is exactly the shape of a green merge nobody
+    // verified.
+    const verifiedRevision = (await this.git.run(this.options.storyWorktree, ["rev-parse", "HEAD"])).trim();
     const verification = await this.verifySubset(scenarioIds);
+    const revisionNow = (await this.git.run(this.options.storyWorktree, ["rev-parse", "HEAD"])).trim();
+    if (revisionNow !== verifiedRevision) {
+      return {
+        kind: "verification_failed",
+        integrationBranch: target,
+        scenarioIds,
+        reason: `the Story branch moved during re-verification: verified ${verifiedRevision}, now ${revisionNow}`,
+      };
+    }
     if (!verification.passed || verification.scenarioIds.join("\0") !== scenarioIds.join("\0")) {
       const failed = verification.passed ? scenarioIds : verification.scenarioIds;
       const detail = (verification.reasons ?? []).join("; ");

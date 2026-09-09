@@ -29,7 +29,7 @@ describe("ModelPolicy", () => {
     const policy = new ModelPolicy(config, catalog);
     await expect(policy.resolve("design", "openai-codex")).resolves.toMatchObject({ provider: "openai-codex", id: "gpt-5.6-sol" });
     await expect(policy.resolve("code", "openai-codex")).resolves.toMatchObject({ id: "gpt-5.6-terra" });
-    await expect(policy.resolve("completion_judge", "openai-codex")).resolves.toMatchObject({ id: "gpt-5.4-mini" });
+    await expect(policy.resolve("triage", "openai-codex")).resolves.toMatchObject({ id: "gpt-5.4-mini" });
   });
 
   it("refuses a purpose the provider declares no model for, instead of guessing one", async () => {
@@ -65,7 +65,7 @@ describe("ModelPolicy", () => {
     // a partial map would silently leave a call site with no tier at all.
     await config.set("model.purposeTiers", {
       product_manager: "brain", decompose: "brain", design: "cheap", code: "standard",
-      verify: "standard", merge: "standard", completion_judge: "cheap", capacity_probe: "cheap",
+      verify: "standard", merge: "standard", capacity_probe: "cheap",
       triage: "cheap", distiller: "cheap",
     }, "test");
     const policy = new ModelPolicy(config, catalog);

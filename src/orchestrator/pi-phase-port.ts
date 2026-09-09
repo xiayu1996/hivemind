@@ -9,9 +9,19 @@ import {
   assembleGuardPolicy,
   serializeGuardPolicy,
 } from "../guard/policy.js";
-import { verifyCompletion, type CompletionJudge } from "../pipeline/completion-verifier.js";
+import {
+  collectCodeExitFacts,
+  evaluateCodeExit,
+  renderCodeExitFindings,
+  type CodeExitFacts,
+  type ProjectCheck,
+} from "../pipeline/code-exit-gate.js";
 import { CANONICAL_CAPTURE_ENV } from "../observability/capture-contract.js";
 import { loadPromptLayers } from "../pipeline/prompt-loader.js";
+import {
+  lintBusinessLanguage,
+  renderBusinessLanguageFindings,
+} from "../report/business-language.js";
 import { lastAssistantText } from "../runner/assistant-text.js";
 import { jsonPayloadCandidates } from "../util/json-payload.js";
 import { loadExplicitContextBundle, type ExplicitContextFile } from "../runner/context-files.js";
@@ -42,27 +52,35 @@ export interface PhaseTelemetryInput {
   providerPayloads: unknown[];
 }
 
-/** What the orchestrator measured in the worktree after a writing phase ended. */
-export interface WorktreeFacts {
-  clean: boolean;
-  head: string;
-  recentCommits: string[];
-}
-
 const execFileAsync = promisify(execFile);
 
-async function gitWorktreeFacts(worktreePath: string): Promise<WorktreeFacts> {
-  const git = async (args: string[]): Promise<string> =>
-    (await execFileAsync("git", args, { cwd: worktreePath, windowsHide: true })).stdout.trim();
-  const [status, head, log] = await Promise.all([
-    git(["status", "--porcelain"]),
-    git(["rev-parse", "--short", "HEAD"]),
-    git(["log", "--oneline", "-15"]),
-  ]);
-  return { clean: status === "", head, recentCommits: log === "" ? [] : log.split("\n") };
+const WRITING_PHASES = new Set<ManagedPhaseInput["phase"]>(["CODE", "REGRESSION_FIX"]);
+
+/** How the deterministic CODE exit is measured for this repository. */
+export interface CodeExitOptions {
+  /** Branch the Story is landing on, the base of its own commits. */
+  baseRef: string;
+  /** The repository's own gate commands, declared in config rather than here:
+   * hivemind does not get to decide how somebody else's repository is checked. */
+  projectChecks: readonly ProjectCheck[];
+  /** How many times the findings are handed back before the phase gives up.
+   * The findings cost no round and no reentry, but the loop is still bounded:
+   * a session that cannot satisfy a deterministic check in this many tries is
+   * not going to. */
+  maxRounds?: number;
 }
 
-const WRITING_PHASES = new Set<ManagedPhaseInput["phase"]>(["CODE", "REGRESSION_FIX"]);
+const DEFAULT_CODE_EXIT_ROUNDS = 3;
+const DEFAULT_REPORT_REWRITES = 2;
+
+/** A CODE exit that never satisfied its checks. Carries the findings so the
+ * next round starts from them instead of from a bare failure message. */
+export class CodeExitNotMetError extends Error {
+  constructor(readonly findings: readonly string[]) {
+    super(`CODE exit checks were not met: ${findings.join(" | ")}`);
+    this.name = "CodeExitNotMetError";
+  }
+}
 
 export interface PiStoryPhasePortOptions {
   binary: string;
@@ -74,18 +92,24 @@ export interface PiStoryPhasePortOptions {
   auditPath: string;
   guardExtension: string;
   canonicalCaptureExtension: string;
-  completionJudge: CompletionJudge;
+  /** Present for writing phases; absent leaves the phase with output parsing
+   * as its only exit check, which is all a read-only phase has to prove. */
+  codeExit?: CodeExitOptions;
   contextFiles?: ExplicitContextFile[];
   /** Hosts a browser-driving phase may navigate to; from guard.e2eHostAllowlist. */
   e2eHostAllowlist?: string[];
   extensions?: string[];
   env?: Record<string, string>;
   maxContinueRetries?: number;
+  /** Wall clock for one prompt; a turn that outruns it is resumed, not failed. */
+  promptTimeoutMs?: number;
+  /** How many rewrites the delivery report gets before it ships as written. */
+  maxReportRewrites?: number;
   createRunner?: (config: RpcRunnerConfig) => PiRunner;
   recordTelemetry?: (input: PhaseTelemetryInput) => Promise<void>;
   readProviderPayloads?: (path: string) => Promise<unknown[]>;
-  /** Measures the worktree for the completion judge; defaults to git. */
-  inspectWorktree?: (worktreePath: string) => Promise<WorktreeFacts>;
+  /** Measures the CODE exit; defaults to git plus the declared checks. */
+  collectExitFacts?: (options: CodeExitOptions, dodScenarioIds: readonly string[]) => Promise<CodeExitFacts>;
 }
 
 /** Collects JSON payloads the model may have wrapped in prose or a code fence.
@@ -157,39 +181,6 @@ function flattenToString(item: unknown): string {
   }
   return String(item);
 }
-
-/** Compacts observable tool activity out of the session so the completion
- * judge can check artifact claims against what actually ran on the host.
- * Head and tail are kept per result because pass/fail summaries sit at the
- * end of long command output. */
-function toolEvidenceDigest(messages: unknown[]): string[] {
-  const results: string[] = [];
-  for (const message of messages) {
-    const record = message as { role?: string; content?: unknown };
-    if (record.role !== "toolResult") continue;
-    const text = Array.isArray(record.content)
-      ? (record.content as Array<{ type?: string; text?: string }>)
-        .filter((item) => item.type === "text")
-        .map((item) => item.text ?? "")
-        .join("\n")
-      : "";
-    const trimmed = text.trim();
-    if (!trimmed) continue;
-    results.push(trimmed.length <= 500
-      ? trimmed
-      : `${trimmed.slice(0, 250)}\n...\n${trimmed.slice(-250)}`);
-  }
-  return results.slice(-20);
-}
-
-/** What each phase owes, so the completion judge does not import its own
- * assumptions from the phase name. */
-const PHASE_CONTRACTS: Record<ManagedPhaseInput["phase"], string> = {
-  DESIGN: "Read-only analysis: return one JSON object whose design_summary and dod_yaml are both strings; the dod_yaml value is a YAML-formatted string by contract, not a defect. Producing the DoD needs no code or test changes, so their absence proves nothing; a write attempt blocked by the guard is expected enforcement, not incompleteness.",
-  CODE: "Implement the DoD scenarios in the worktree with tests, run the relevant verification, and report the implementation JSON. Commit the work to the story branch so the worktree is clean. Evidence from a browser (the ui and e2e layers) is produced by the separate blind VERIFY phase, which alone has the browser lane; this session has none, so its absence here is not incompleteness. The `worktree` facts among the side effects were measured by the orchestrator after the session ended: `clean: true` together with the listed commits is the proof of committing and cleanliness, and outranks anything the transcript shows or omits.",
-  REGRESSION_FIX: "Fix the regressed scenarios in the worktree and report the implementation JSON. Commit the work to the story branch so the worktree is clean. Browser evidence belongs to the separate blind VERIFY phase and is not expected here. The `worktree` facts among the side effects were measured by the orchestrator after the session ended and outrank the transcript.",
-  MERGE: "Prepare the delivery report JSON only. Publishing the branch and opening the MR are performed by the orchestrator outside this session; the agent must not merge, push or deploy.",
-};
 
 function sessionId(state: Record<string, unknown>): string {
   const value = state.sessionFile ?? state.sessionId;
@@ -267,35 +258,24 @@ export class PiStoryPhasePort implements StoryPhasePort {
       await runner.start();
       await runner.setAutoRetry(false);
       const phaseSessionId = sessionId(await runner.getState());
-      const result = await promptWithContinueRetry(runner, input.prompt, {
-        maxContinueRetries: this.options.maxContinueRetries ?? 8,
-      });
+      const result = await promptWithContinueRetry(
+        runner,
+        input.prompt,
+        { maxContinueRetries: this.options.maxContinueRetries ?? 8 },
+        this.options.promptTimeoutMs,
+      );
       if (result.failure) throw new Error(result.failure.errorMessage);
       const messages = await runner.getMessages();
       const providerPayloads = await (this.options.readProviderPayloads ?? readProviderPayloads)(capturePath);
       if (providerPayloads.length === 0) throw new Error("phase provider request was not captured");
-      const raw = lastAssistantText(messages);
-      const artifacts = parseResult(input, raw);
-      // The transcript digest only keeps the last tool results, so a commit made
-      // early in a long session is invisible to the judge; the worktree itself
-      // is measured instead and outranks anything the model wrote.
-      const worktree = WRITING_PHASES.has(input.phase)
-        ? await (this.options.inspectWorktree ?? gitWorktreeFacts)(this.options.worktreePath)
-        : undefined;
-      const completion = await verifyCompletion(this.options.completionJudge, {
-        phase: input.phase,
-        contract: PHASE_CONTRACTS[input.phase],
-        claimedArtifact: raw,
-        sideEffects: {
-          settled: result.settled,
-          sessionId: phaseSessionId,
-          eventCount: result.events.length,
-          usage: result.usage,
-          ...(worktree ? { worktree } : {}),
-          toolResults: toolEvidenceDigest(messages),
-        },
-      });
-      if (!completion.done) throw new Error(completion.reason);
+      let artifacts = parseResult(input, lastAssistantText(messages));
+      const codeExit = this.options.codeExit;
+      if (codeExit && WRITING_PHASES.has(input.phase)) {
+        artifacts = await this.enforceCodeExit(input, runner, codeExit, artifacts);
+      }
+      if (input.phase === "MERGE") {
+        artifacts = await this.rewriteUntilReadable(input, runner, artifacts);
+      }
       await this.options.recordTelemetry?.({
         runId: input.runId,
         cardId: input.context.cardId,
@@ -309,4 +289,106 @@ export class PiStoryPhasePort implements StoryPhasePort {
       await runner.stop().catch(() => undefined);
     }
   }
+
+  /**
+   * The deterministic CODE exit, in place of a model judging whether the phase
+   * it just ran is finished. Findings are handed back to the same live session:
+   * they are a work item, not a verdict on the Story, so they cost no round and
+   * no reentry and reuse everything the session has already loaded.
+   */
+  private async enforceCodeExit(
+    input: ManagedPhaseInput,
+    runner: PiRunner,
+    options: CodeExitOptions,
+    artifacts: ManagedPhaseResult["artifacts"],
+  ): Promise<ManagedPhaseResult["artifacts"]> {
+    const dodScenarioIds = input.context.specs.map((spec) => spec.id);
+    const collect = this.options.collectExitFacts ?? ((gate, scenarioIds) => this.measureCodeExit(gate, scenarioIds));
+    const maxRounds = options.maxRounds ?? DEFAULT_CODE_EXIT_ROUNDS;
+    let current = artifacts;
+    for (let attempt = 1; ; attempt++) {
+      const verdict = evaluateCodeExit(await collect(options, dodScenarioIds));
+      if (verdict.passed) return current;
+      if (attempt >= maxRounds) throw new CodeExitNotMetError(verdict.findings);
+      const result = await promptWithContinueRetry(
+        runner,
+        renderCodeExitFindings(verdict),
+        { maxContinueRetries: this.options.maxContinueRetries ?? 8 },
+        this.options.promptTimeoutMs,
+      );
+      if (result.failure) throw new Error(result.failure.errorMessage);
+      current = parseResult(input, lastAssistantText(await runner.getMessages()));
+    }
+  }
+
+  /**
+   * Asks MERGE to rewrite a report whose business section reads like a
+   * transcript. MERGE has no veto over the Story (section 8.2), so a report
+   * that is still technical after its rewrites ships as written: what people
+   * read is worth a retry, never a stalled card.
+   */
+  private async rewriteUntilReadable(
+    input: ManagedPhaseInput,
+    runner: PiRunner,
+    artifacts: ManagedPhaseResult["artifacts"],
+  ): Promise<ManagedPhaseResult["artifacts"]> {
+    const maxRewrites = this.options.maxReportRewrites ?? DEFAULT_REPORT_REWRITES;
+    let current = artifacts;
+    for (let attempt = 0; attempt < maxRewrites; attempt++) {
+      const report = current.find((item) => item.kind === "delivery-report")?.body ?? "";
+      const findings = lintBusinessLanguage(report);
+      if (findings.length === 0) return current;
+      const result = await promptWithContinueRetry(
+        runner,
+        renderBusinessLanguageFindings(findings),
+        { maxContinueRetries: this.options.maxContinueRetries ?? 8 },
+        this.options.promptTimeoutMs,
+      );
+      if (result.failure) throw new Error(result.failure.errorMessage);
+      current = parseResult(input, lastAssistantText(await runner.getMessages()));
+    }
+    return current;
+  }
+
+  private async measureCodeExit(
+    options: CodeExitOptions,
+    dodScenarioIds: readonly string[],
+  ): Promise<CodeExitFacts> {
+    const worktreePath = this.options.worktreePath;
+    return collectCodeExitFacts({
+      git: {
+        run: async (args) => (await execFileAsync("git", [...args], {
+          cwd: worktreePath,
+          windowsHide: true,
+          maxBuffer: 4 * 1024 * 1024,
+        })).stdout,
+      },
+      readWorktreeFile: (path) => readFile(join(worktreePath, path), "utf8"),
+      runCheck: async (check) => {
+        const [command, ...args] = check.command;
+        try {
+          const done = await execFileAsync(command!, args, {
+            cwd: worktreePath,
+            windowsHide: true,
+            maxBuffer: 8 * 1024 * 1024,
+            env: process.env,
+          });
+          return { passed: true, detail: tail(done.stdout) };
+        } catch (cause) {
+          const output = `${(cause as { stdout?: string }).stdout ?? ""}${(cause as { stderr?: string }).stderr ?? ""}`;
+          return { passed: false, detail: tail(output === "" ? (cause as Error).message : output) };
+        }
+      },
+      baseRef: options.baseRef,
+      dodScenarioIds,
+      projectChecks: options.projectChecks,
+    });
+  }
+}
+
+/** Check output is for a person and for the next CODE round; the failing tail
+ * is where a runner puts its summary. */
+function tail(output: string): string {
+  const trimmed = output.trim();
+  return trimmed.length <= 2000 ? trimmed : `...\n${trimmed.slice(-2000)}`;
 }

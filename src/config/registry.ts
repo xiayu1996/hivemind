@@ -56,6 +56,13 @@ export const CONFIG_KEYS = {
     reload: "hot",
     description: "Maximum 'continue' retries after a stream interruption within one run.",
   }),
+  "retry.promptTimeoutMs": def({
+    schema: positiveInt.max(6 * 3_600_000),
+    default: 900_000,
+    scope: "global",
+    reload: "next-spawn",
+    description: "How long one prompt may run before the turn is abandoned and resumed with a continue; a phase that needs longer than this is resumed, not failed.",
+  }),
   "retry.maxRegressionReopens": def({
     schema: positiveInt.max(10),
     default: 2,
@@ -127,7 +134,7 @@ export const CONFIG_KEYS = {
     schema: z.record(
       z.enum([
         "product_manager", "decompose", "design", "code", "verify", "merge",
-        "completion_judge", "capacity_probe", "triage", "distiller",
+        "capacity_probe", "triage", "distiller",
       ]),
       z.enum(["brain", "standard", "cheap"]),
     ),
@@ -138,7 +145,6 @@ export const CONFIG_KEYS = {
       code: "standard",
       verify: "standard",
       merge: "standard",
-      completion_judge: "cheap",
       capacity_probe: "cheap",
       triage: "cheap",
       distiller: "cheap",
@@ -196,6 +202,20 @@ export const CONFIG_KEYS = {
     scope: "global",
     reload: "hot",
     description: "How long a breaker stays open after a subscription usage limit that named no window; a credentials probe cannot tell when the window reopens, so a real dispatch after this hold is the test.",
+  }),
+  "provider.credentialRefreshIntervalMs": def({
+    schema: positiveInt.max(24 * 3_600_000),
+    default: 600_000,
+    scope: "per-host",
+    reload: "hot",
+    description: "How often the single refresher may rotate the shared credential file. Every other process probes read-only, so this is the only write to it.",
+  }),
+  "provider.quotaHoldMaxMs": def({
+    schema: positiveInt.max(24 * 3_600_000),
+    default: 4 * 3_600_000,
+    scope: "global",
+    reload: "hot",
+    description: "Ceiling for the doubling hold after repeated usage limits that named no window; without a cap the backoff would outlive any real window.",
   }),
   "model.deferIfResetWithinMin": def({
     schema: positiveInt.max(180),
@@ -267,10 +287,10 @@ export const CONFIG_KEYS = {
   }),
   "schedule.maxConcurrentStories": def({
     schema: positiveInt.max(16),
-    default: 2,
+    default: 1,
     scope: "per-host",
     reload: "hot",
-    description: "How many Stories one host runs at once. The scheduler decides which Stories may run together; this decides how many of them fit on this machine.",
+    description: "How many Stories one host runs at once. The scheduler decides which Stories may run together; this decides how many of them fit on this machine. Kept at 1 while several concurrent pi processes still share one credential file: their OAuth refreshes rotate the same token and invalidate each other.",
   }),
   "schedule.hotspotPaths": def({
     schema: z.array(repositoryRelativePath),
@@ -302,6 +322,24 @@ export const CONFIG_KEYS = {
     scope: "global",
     reload: "next-spawn",
     description: "Hosts an E2E run may navigate to. Anything else, including file://, is blocked.",
+  }),
+  // --- deterministic CODE exit (03 doc section 8.1) ---
+  "codeExit.projectChecks": def({
+    schema: z.array(z.object({
+      name: z.string().trim().min(1),
+      command: z.array(z.string().trim().min(1)).min(1),
+    }).strict()),
+    default: [],
+    scope: "per-repo",
+    reload: "hot",
+    description: "The repository's own gate commands (format, lint, typecheck, tests) as argv, run at the CODE exit. Declared per repository because hivemind does not get to decide how somebody else's repository is checked; empty means the exit rests on the commit, evidence and marker checks alone.",
+  }),
+  "codeExit.maxRounds": def({
+    schema: positiveInt.max(10),
+    default: 3,
+    scope: "global",
+    reload: "hot",
+    description: "How many times the CODE exit findings are handed back to the same session before the phase gives up. The findings cost no inner-loop round and no reentry; this only bounds the handback.",
   }),
   "guard.contextFilePolicy": def({
     schema: z.enum(["explicit", "inherit"]),

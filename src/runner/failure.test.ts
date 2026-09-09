@@ -19,6 +19,7 @@ describe("extractFailure against captured pi output", () => {
     ["invalid_request", /400/],
     ["transport", /connection error/i],
     ["mid_stream_drop", /connection error/i],
+    ["usage_limit_codex", /usage limit has been reached/i],
   ];
 
   for (const [name, pattern] of cases) {

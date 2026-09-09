@@ -1,7 +1,7 @@
 import type { Row } from "@libsql/client";
 import { execFile } from "node:child_process";
 import { stat } from "node:fs/promises";
-import { hostname } from "node:os";
+import { homedir, hostname } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -18,7 +18,8 @@ import { ConfigStore } from "../src/config/store.js";
 import { breakerPolicy, intakeHalted, usableProviders } from "../src/runner/circuit-breaker.js";
 import { classifyError } from "../src/runner/classify.js";
 import { assertProviderRetriesDisabled } from "../src/runner/failover.js";
-import { probeProviderReadiness } from "../src/runner/auth-probe.js";
+import { probeProviderReadiness, refreshProviderCredentials } from "../src/runner/auth-probe.js";
+import { refreshCredentialsOnce } from "../src/runner/auth-refresh.js";
 import { probeOpenProviders } from "../src/runner/provider-probe.js";
 import { assertModelPolicy, ModelPolicy } from "../src/runner/model-policy.js";
 import { PiModelCatalog } from "../src/runner/model-resolver.js";
@@ -147,6 +148,8 @@ async function main(): Promise<void> {
   const config = await ConfigStore.load(handle.client);
   const providerHealth = new LibsqlProviderHealthStore(handle.client);
   const piBinary = defaultPiBinary();
+  const credentialFilePath = join(homedir(), ".pi", "agent", "auth.json");
+  const credentialLockPath = join(homedir(), ".hivemind", "auth-refresh.lock");
   const modelPolicy = new ModelPolicy(config, new PiModelCatalog({ binary: piBinary }));
   await assertOutOfBandChannel(alerts, config);
   await assertProviderRetriesDisabled(config);
@@ -629,6 +632,28 @@ async function main(): Promise<void> {
       // One account per vendor: the window and the concurrency limit belong to
       // the account, so the breaker state that decides this is central.
       const chain = providerOverride ? [providerOverride] : await modelPolicy.providersFor("code");
+      // The single refresher. Every pi process the workers spawn probes the
+      // shared credential file read-only; this is the one place that rotates
+      // the token, so two refreshes can never invalidate each other.
+      for (const name of chain) {
+        const outcome = await refreshCredentialsOnce({
+          lockPath: credentialLockPath,
+          minIntervalMs: config.get("provider.credentialRefreshIntervalMs"),
+          lastRefreshedAt: async () => {
+            try {
+              return (await stat(credentialFilePath)).mtimeMs;
+            } catch {
+              // No credential file yet: pi login has not run on this host, and
+              // the readiness probe below is what reports that.
+              return 0;
+            }
+          },
+          refresh: async () => {
+            await refreshProviderCredentials(piBinary, name);
+          },
+        });
+        if (outcome === "failed") console.warn(`credential refresh failed for ${name}; the readiness probe decides what that means`);
+      }
       // A breaker that opened on credentials names no window of its own, so the
       // read-only probe is the only thing that can ever close it again.
       await probeOpenProviders(

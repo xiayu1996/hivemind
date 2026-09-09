@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { createClient } from "@libsql/client";
-import { PiCompletionJudge } from "../src/pipeline/completion-verifier.js";
 import { LibsqlPhaseRecorder } from "../src/observability/phase-recorder.js";
 import { CANONICAL_CAPTURE_ENV } from "../src/observability/capture-contract.js";
 import { migrate } from "../src/persistence/migrate.js";
@@ -93,16 +92,6 @@ async function main(): Promise<void> {
       cwd: REPO,
     }), "mock", "mock-1");
     const runnerEnvironment = { HIVEMIND_MOCK_PORT: MOCK_PORT };
-    const completionJudge = new PiCompletionJudge(() => new RpcPiRunner({
-      binary: PI_BIN,
-      provider: model.provider,
-      model,
-      cwd: worktree,
-      tools: [],
-      extensions: [MOCK_EXTENSION],
-      contextFiles: "explicit",
-      env: runnerEnvironment,
-    }));
     const recorder = new LibsqlPhaseRecorder(client, {
       evidenceRoot: evidence,
       provider: model.provider,
@@ -119,7 +108,7 @@ async function main(): Promise<void> {
       auditPath,
       guardExtension: GUARD_EXTENSION,
       canonicalCaptureExtension: CANONICAL_EXTENSION,
-      completionJudge,
+      codeExit: { baseRef: "main", projectChecks: [] },
       extensions: [MOCK_EXTENSION],
       env: runnerEnvironment,
       recordTelemetry: (input) => recorder.record(input),

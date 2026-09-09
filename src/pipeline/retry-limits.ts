@@ -5,10 +5,13 @@ export interface RetryLimits {
   maxPhaseReentries: number;
   maxContinueRetries: number;
   maxRegressionReopens: number;
+  /** Not a ceiling on attempts but on one prompt's wall clock; a turn that hits
+   * it is resumed through the continue budget above. */
+  promptTimeoutMs: number;
 }
 
 /**
- * The four ceilings, read together so no call site invents its own default.
+ * The ceilings, read together so no call site invents its own default.
  * They are read per dispatch rather than per turn: a ceiling that moved while a
  * card was mid-loop would change the meaning of the rounds already spent.
  */
@@ -19,6 +22,7 @@ export async function retryLimits(config: ConfigStore): Promise<RetryLimits> {
     maxPhaseReentries: config.get("retry.maxPhaseReentries"),
     maxContinueRetries: config.get("retry.maxContinueRetries"),
     maxRegressionReopens: config.get("retry.maxRegressionReopens"),
+    promptTimeoutMs: config.get("retry.promptTimeoutMs"),
   };
 }
 
