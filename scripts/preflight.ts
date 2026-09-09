@@ -14,6 +14,7 @@ import { createNotionHttpTransport } from "../src/notion/sdk-adapters.js";
 import { openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
 import { probeProviderReadiness } from "../src/runner/auth-probe.js";
+import { needsApiKeyEnv, providerKeyEnv } from "../src/runner/provider-env.js";
 import { reapStalePiAuthLock } from "../src/runner/auth-lock.js";
 import { probeCredentialRoundTrip } from "../src/runner/credential-roundtrip.js";
 import { assertErrorFixtureCoverage } from "../src/runner/error-fixtures.js";
@@ -171,9 +172,33 @@ async function main(): Promise<void> {
       return Promise.resolve(chain.join(", "));
     });
     for (const provider of chain) {
+      // An api_key provider's key reaches pi only if something puts it there.
+      // systemd gives the daemons the secrets file; a preflight run by hand
+      // gets nothing, and pi then reports the provider as unconfigured — which
+      // reads exactly like a credential nobody ever added.
+      let providerEnv: Record<string, string> | undefined;
+      await attempt(`provider ${provider} key reaches pi`, async () => {
+        const profile = await policy.profileOf(provider);
+        if (!needsApiKeyEnv(profile)) {
+          providerEnv = {};
+          return "oauth; credential lives in pi's auth file";
+        }
+        providerEnv = providerKeyEnv({
+          provider,
+          ...(profile.envKey ? { envKey: profile.envKey } : {}),
+          secrets: stored,
+          secretsPath,
+        });
+        return Object.keys(providerEnv)[0]!;
+      }, severity);
+      // Without the key, the probes below would fail for a reason that has
+      // nothing to do with the credential being valid.
+      if (providerEnv === undefined) continue;
+      const spawnEnv = providerEnv;
+
       let configured = false;
       await attempt(`provider ${provider} credentials ready`, async () => {
-        const readiness = await probeProviderReadiness(piBinary, provider);
+        const readiness = await probeProviderReadiness(piBinary, provider, spawnEnv);
         if (!readiness.ready) throw new Error(readiness.reason ?? "not ready; run scripts/pi-login.sh");
         configured = true;
       }, severity);
@@ -182,7 +207,7 @@ async function main(): Promise<void> {
       // cheap tier is what separates a working key from a revoked one.
       await attempt(`provider ${provider} answers a real turn`, async () => {
         const model = await policy.resolve("capacity_probe", provider);
-        await probeCredentialRoundTrip({ binary: piBinary, provider, model });
+        await probeCredentialRoundTrip({ binary: piBinary, provider, model, env: spawnEnv });
         return model.id;
       }, severity);
     }

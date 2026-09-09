@@ -26,12 +26,21 @@ export function parseAuthProbeOutput(output: string, provider: string): Provider
   };
 }
 
-async function authCheck(binary: string, provider: string, extraArgs: string[]): Promise<ProviderReadiness> {
+async function authCheck(
+  binary: string,
+  provider: string,
+  extraArgs: string[],
+  env?: Record<string, string>,
+): Promise<ProviderReadiness> {
   let output: string;
   try {
     output = (await execFileAsync(binary, [
       "auth", "check", "--provider", provider, "--json", ...extraArgs,
-    ], { windowsHide: true, maxBuffer: 1024 * 1024 })).stdout;
+    ], {
+      windowsHide: true,
+      maxBuffer: 1024 * 1024,
+      ...(env ? { env: { ...process.env, ...env } } : {}),
+    })).stdout;
   } catch (cause) {
     // `auth check` exits non-zero for some not_ready states but still prints the
     // JSON status; the exit code alone is not the answer.
@@ -42,9 +51,17 @@ async function authCheck(binary: string, provider: string, extraArgs: string[]):
   return parseAuthProbeOutput(output, provider);
 }
 
-/** Probes credentials without permitting pi to refresh or mutate the credential file. */
-export async function probeProviderReadiness(binary: string, provider: string): Promise<ProviderReadiness> {
-  return authCheck(binary, provider, ["--no-refresh"]);
+/**
+ * Probes credentials without permitting pi to refresh or mutate the credential
+ * file. An api_key provider needs its key in `env`: without it pi reports the
+ * provider as unconfigured, which is indistinguishable from a missing key.
+ */
+export async function probeProviderReadiness(
+  binary: string,
+  provider: string,
+  env?: Record<string, string>,
+): Promise<ProviderReadiness> {
+  return authCheck(binary, provider, ["--no-refresh"], env);
 }
 
 /**
@@ -52,6 +69,10 @@ export async function probeProviderReadiness(binary: string, provider: string): 
  * file. Only the process holding the refresh lock may call it: see
  * `refreshCredentialsOnce`. Everything else probes read-only.
  */
-export async function refreshProviderCredentials(binary: string, provider: string): Promise<ProviderReadiness> {
-  return authCheck(binary, provider, []);
+export async function refreshProviderCredentials(
+  binary: string,
+  provider: string,
+  env?: Record<string, string>,
+): Promise<ProviderReadiness> {
+  return authCheck(binary, provider, [], env);
 }

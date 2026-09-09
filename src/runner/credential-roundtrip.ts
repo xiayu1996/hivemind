@@ -7,6 +7,8 @@ export interface RoundTripOptions {
   provider: string;
   model: ResolvedModel;
   timeoutMs?: number;
+  /** The provider's key, for an api_key provider; see `providerKeyEnv`. */
+  env?: Record<string, string>;
 }
 
 /**
@@ -26,6 +28,7 @@ export async function probeCredentialRoundTrip(options: RoundTripOptions): Promi
     model: options.model,
     cwd: tmpdir(),
     tools: [],
+    ...(options.env ? { env: options.env } : {}),
     contextFiles: "explicit",
     systemPrompt: { mode: "append", text: "Answer with a single word." },
   });
