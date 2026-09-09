@@ -21,6 +21,7 @@ import { assertProviderRetriesDisabled } from "../src/runner/failover.js";
 import { probeProviderReadiness, refreshProviderCredentials } from "../src/runner/auth-probe.js";
 import { refreshCredentialsOnce } from "../src/runner/auth-refresh.js";
 import { probeOpenProviders } from "../src/runner/provider-probe.js";
+import { assertErrorFixtureCoverage } from "../src/runner/error-fixtures.js";
 import { assertModelPolicy, ModelPolicy } from "../src/runner/model-policy.js";
 import { defaultModelCatalog } from "../src/runner/catalog.js";
 import { LibsqlProviderHealthStore } from "../src/runner/provider-health-store.js";
@@ -155,6 +156,9 @@ async function main(): Promise<void> {
   await assertOutOfBandChannel(alerts, config);
   await assertProviderRetriesDisabled(config);
   await assertModelPolicy(config, modelCatalog);
+  // A provider whose failure wordings were never captured would have its quota
+  // message read as UNKNOWN, and the card would take the wrong recovery path.
+  assertErrorFixtureCoverage(config.get("model.failoverChain"));
   const storyApi = new NotionGatewayStoryApi(gateway);
   const botUserId = stored.get("NOTION_BOT_USER_ID");
   const comments = new CommentIngestor(

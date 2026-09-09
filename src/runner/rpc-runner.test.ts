@@ -8,7 +8,7 @@ import { resolveModel, staticCatalog, withThinkingLevel } from "./model-resolver
 const FAKE_MODEL = await resolveModel(staticCatalog([{ provider: "fake", id: "fake-1" }]), "fake", "fake-1");
 
 const FAKE_PI = fileURLToPath(new URL("./testing/fake-pi.mjs", import.meta.url));
-const FIXTURES = join(process.cwd(), "fixtures/rpc-errors");
+const FIXTURES = join(process.cwd(), "fixtures/rpc-errors/openai-codex");
 
 const runners: RpcPiRunner[] = [];
 

@@ -15,6 +15,7 @@ import { openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
 import { probeProviderReadiness } from "../src/runner/auth-probe.js";
 import { probeCredentialRoundTrip } from "../src/runner/credential-roundtrip.js";
+import { assertErrorFixtureCoverage } from "../src/runner/error-fixtures.js";
 import { assertProviderRetriesDisabled } from "../src/runner/failover.js";
 import { assertModelPolicy, ModelPolicy } from "../src/runner/model-policy.js";
 import { defaultModelCatalog } from "../src/runner/catalog.js";
@@ -153,6 +154,10 @@ async function main(): Promise<void> {
     const policy = new ModelPolicy(config, catalog);
     const chain = config.get("model.failoverChain");
     const severity = chain.length > 1 ? "WARN" : "FAIL";
+    await attempt("every provider in the chain has captured failure wordings", () => {
+      assertErrorFixtureCoverage(chain);
+      return Promise.resolve(chain.join(", "));
+    });
     for (const provider of chain) {
       let configured = false;
       await attempt(`provider ${provider} credentials ready`, async () => {

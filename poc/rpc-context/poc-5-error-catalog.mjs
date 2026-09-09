@@ -4,7 +4,7 @@
 // by pi's own retry loop (the design mandates retry.provider.maxRetries: 0 for
 // the same reason: hivemind owns retry policy).
 //
-// Output: fixtures/rpc-errors/<fault>.json plus a classification check that every
+// Output: fixtures/rpc-errors/<provider>/<fault>.json plus a classification check that every
 // sample maps to exactly one bucket.
 
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -13,7 +13,7 @@ import { PiRpc } from "./rpc-client.mjs";
 
 const EXT = new URL("./mock-provider-extension.mjs", import.meta.url).pathname;
 const FIXTURES = process.env.FIXTURE_DIR
-  ?? new URL("../../fixtures/rpc-errors/", import.meta.url).pathname;
+  ?? new URL("../../fixtures/rpc-errors/openai-codex/", import.meta.url).pathname;
 const OUT = process.env.POC_OUT ?? "/tmp/hivemind-poc5";
 mkdirSync(FIXTURES, { recursive: true });
 mkdirSync(OUT, { recursive: true });

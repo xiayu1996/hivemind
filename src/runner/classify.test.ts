@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { classifyError } from "./classify.js";
 import { extractFailure } from "./failure.js";
 
-const FIXTURES = join(process.cwd(), "fixtures/rpc-errors");
+const FIXTURES = join(process.cwd(), "fixtures/rpc-errors/openai-codex");
 const failureOf = (name: string) =>
   extractFailure(JSON.parse(readFileSync(join(FIXTURES, `${name}.json`), "utf8")).events)!.errorMessage;
 
@@ -26,7 +26,7 @@ describe("captured fixtures classify as expected", () => {
     });
   }
 
-  it("claims every captured fixture", () => {
+  it("claims every fixture captured for this provider", () => {
     // A fixture nobody asserts on is a captured provider wording the classifier
     // has never been run against, which is exactly how the Codex usage-limit
     // text reached production unclassified.

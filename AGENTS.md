@@ -125,7 +125,8 @@ pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src
 ## 测试
 
 - 纯函数决策逻辑（收敛判据、footprint 相交、拓扑调度、triage 路由、去重键）全部单测覆盖。
-- **契约 fixture 来自真实采集**（`fixtures/rpc-errors/` 是 M0-05 从真实错误流采的），不手写臆造；新增 fixture 时要有测试保证它不会被漏掉。
+- **契约 fixture 来自真实采集**（`fixtures/rpc-errors/<provider>/` 是从真实错误流采的，openai-codex 那批来自 M0-05），不手写臆造；新增 fixture 时要有测试保证它不会被漏掉。
+- **进 failover chain 的每个 provider 都必须有自己的 AUTH / QUOTA / RATE_LIMIT 采集**，由 `assertErrorFixtureCoverage` 在 preflight 与 orchestrator 启动时强制。分类器读的是文案，每家措辞不同；把配额耗尽读成限流，worker 会等一个永远不开的窗口。
 - 测试描述行为而非正确性。行为过时了就连同测试一起改，并在 PR 里说明为什么。
 
 ## 编辑本文件
