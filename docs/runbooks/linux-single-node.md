@@ -21,7 +21,7 @@ cd ~/hivemind
 deploy/linux/install.sh --repository-path <被开发仓库的本地 checkout>
 ```
 
-脚本幂等，可反复执行。它按顺序做：识别发行版与 WSL；校验 Node；`npm ci`（lockfile 未变则跳过）；装 Chromium 系统库（apt 走 Playwright 自带清单，Arch 走 pacman `--needed`）；Ubuntu 23.10+ 解除 AppArmor 对用户命名空间的限制并写入 `/etc/sysctl.d/`（否则 Chromium 沙箱报 `No usable sandbox!`，不要用 `--no-sandbox` 绕过）；装 pinned pi（版本在 `package.json` 的 `hivemind.piVersion`，SHA256 校验）；装 headless shell；建 `~/.hivemind`、`secrets.env` 模板、`service.env`（systemd 不加载登录 shell，node 路径要写死）；渲染两个 systemd 用户单元。
+脚本幂等，可反复执行。它按顺序做：识别发行版与 WSL；校验 Node；`npm ci`（lockfile 未变则跳过）；装 Chromium 系统库（apt 走 Playwright 自带清单，Arch 走 pacman `--needed`）；Ubuntu 23.10+ 解除 AppArmor 对用户命名空间的限制并写入 `/etc/sysctl.d/`（否则 Chromium 沙箱报 `No usable sandbox!`，不要用 `--no-sandbox` 绕过）；装 pinned pi（版本在 `package.json` 的 `hivemind.piVersion`，SHA256 校验）；装 `deploy/pi/models.json` 到 `~/.pi/agent/`（hivemind 追加给 pi 的模型声明；已存在且内容不同时原地停下并打 diff，不覆盖手工配置）；装 headless shell；建 `~/.hivemind`、`secrets.env` 模板、`service.env`（systemd 不加载登录 shell，node 路径要写死）；渲染两个 systemd 用户单元。
 
 之后进入需要人的阶段。每到一个未完成的阶段脚本以退出码 2 停下，只打印一件事：
 

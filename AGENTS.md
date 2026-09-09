@@ -30,6 +30,7 @@ prompts/          基线层 + per-phase prompt，各自独立文件
 extensions/       pi extension：hive-guard / model-policy 兜底（浏览器不走 MCP，见 02 §4.3）
 poc/              M0 PoC 脚本（可丢弃）；scripts/ 为长期保留脚本
 fixtures/         真实采集的契约 fixture（rpc-errors/ 来自 M0-05 实测；model-catalogs/ 由 scripts/catalog-snapshot.ts 采，非手写）
+deploy/pi/        hivemind 追加给 pi 的模型声明（models.json），install.sh 幂等装到 ~/.pi/agent/
 docs/design/      冻结设计 00–06；docs/poc/ 为 M0 执行记录与逐项 go/no-go
 ```
 
@@ -107,6 +108,7 @@ pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src
 - **默认 `--no-context-files`**：pi 会向上层叠 `CLAUDE.md` / `AGENTS.md`，实测会把宿主机的个人指令读进任务上下文，且静默无报错、事后难归因。需要的文件显式装载，并把生效清单记入规范日志。
 - **reasoning effort 与 tier 同构**：`model.purposeThinking` 按 purpose 配 `--thinking` 档位，由 `ModelPolicy.resolve` 挂到 `ResolvedModel` 上随模型一起走，所以每个 port 零改动即透传。只有目录明说 `thinking=yes` 的模型才会收到档位——理由同下一条，pi 对用不上的参数不报错。
 - **`resolveModel` 是所有 model 参数的唯一入口且必须自校验模型 id**：坏 id 在 spawn 时只是 warning，pi 会当自定义模型继续跑并编造价格。
+- **pi 内置目录之外的模型走 `deploy/pi/models.json`**，由 `scripts/install-pi-models.sh` 装到 `~/.pi/agent/models.json`（install.sh 已串进 pi 阶段）。它必须在每台机器上一致：采集快照记的是"pi 宣告了什么"，少装一台就少宣告一个 id，漂移测试和配置校验都会在那台机器上炸。声明里 `input` 不写 `"image"` 就永远不会发图（pi 默认 `["text"]`），`cost` 不写就静默记 0。
 - **model id 存在 ≠ 本账号可用**：ChatGPT 订阅账号会拒掉 pi 目录里照样列着的 id（实测 `gpt-5.4-mini` / `gpt-5.4` / `gpt-5.3-codex-spark`，见 06 §3）。快照只能回答"是否存在"，"能否用"只有真实往返能回答——这就是 preflight 除凭据探针之外还要花一轮 capacity_probe 的原因。
 - **凭据探针一律 `--no-refresh`**；`pi auth check` 在 `not_ready` 时**退出码仍为 0**，必须解析 JSON status。存着 token 就报 `ready`，refresh 是否还能用它不知道。
 - **spawn 前清理陈旧 `auth.json.lock`，握手超时高于 pi 的 30s 夺锁窗口**：被 SIGKILL 的 pi 留下锁目录，下一个 pi 静默等满 30s——击杀/隔离/宿主机真死后的第一次 spawn 必然卡死。清理只认 mtime 超 30s（pi 自己的判据），夺不走活持有者的锁：破锁会让两个进程轮换同一个 refresh token，双双作废。
