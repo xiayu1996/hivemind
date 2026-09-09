@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { snapshotModelIds } from "../runner/catalog-snapshot.js";
 
 /**
  * How a changed value reaches a running process.
@@ -28,6 +29,43 @@ const repositoryRelativePath = z.string().trim().min(1).refine(
   (path) => !path.startsWith("/") && !path.split("/").includes(".."),
   "must be a non-empty repository-relative path",
 );
+
+const modelTier = z.enum(["brain", "standard", "cheap"]);
+
+/**
+ * A provider hivemind may spawn. Model ids are cross-checked against the
+ * recorded catalogue (`fixtures/model-catalogs/`) rather than only at spawn
+ * time: validation runs inside this schema and cannot await a pi spawn, so
+ * without the recording a typo is accepted here and only surfaces later as a
+ * card that cannot start. A provider with no recording yet is left to the
+ * startup assertion, which does have the live catalogue.
+ */
+const providerProfiles = z.record(
+  z.string().min(1),
+  z.object({
+    authType: z.enum(["api_key", "oauth"]),
+    /** The environment variable pi reads the key from; see pi's docs/providers.md. */
+    envKey: z.string().regex(/^[A-Z][A-Z0-9_]*$/).optional(),
+    tiers: z.partialRecord(modelTier, z.string().min(1)),
+  }).refine(
+    (profile) => profile.authType !== "api_key" || profile.envKey !== undefined,
+    { message: "an api_key provider must name the environment variable holding its key", path: ["envKey"] },
+  ),
+).superRefine((profiles, ctx) => {
+  for (const [provider, profile] of Object.entries(profiles)) {
+    const known = snapshotModelIds(provider);
+    if (known.length === 0) continue; // no recording for this provider yet
+    for (const [tier, id] of Object.entries(profile.tiers)) {
+      if (!known.includes(id)) {
+        ctx.addIssue({
+          code: "custom",
+          path: [provider, "tiers", tier],
+          message: `${provider} does not advertise the model ${id}`,
+        });
+      }
+    }
+  }
+});
 
 /**
  * Every dynamically configurable key. Defaults live here, in code, so the system
@@ -116,19 +154,18 @@ export const CONFIG_KEYS = {
   }),
 
   // --- model policy ---
-  "model.tierMap": def({
-    schema: z.record(
-      z.enum(["brain", "standard", "cheap"]),
-      z.record(z.string(), z.string()),
-    ),
+  "model.providers": def({
+    schema: providerProfiles,
     default: {
-      brain: { "openai-codex": "gpt-5.6-sol" },
-      standard: { "openai-codex": "gpt-5.6-terra" },
-      cheap: { "openai-codex": "gpt-5.4-mini" },
+      "openai-codex": {
+        authType: "oauth",
+        tiers: { brain: "gpt-5.6-sol", standard: "gpt-5.6-terra", cheap: "gpt-5.4-mini" },
+      },
     },
     scope: "global",
     reload: "hot",
-    description: "Tier to provider-model mapping. Model ids are validated against the provider catalogue at startup, because pi accepts an unknown id with only a warning.",
+    dangerous: true,
+    description: "Every provider hivemind may spawn: how it authenticates, and which model serves each tier. Adding a provider or changing a model is a data change made here or in the console, never a code change. Ids are checked against the recorded catalogue on write and against the live one at startup, because pi accepts an unknown id with only a warning and then invents pricing for it.",
   }),
   "model.purposeTiers": def({
     schema: z.record(

@@ -18,7 +18,13 @@ export const MODEL_PURPOSES = [
 export type ModelPurpose = (typeof MODEL_PURPOSES)[number];
 export type ModelTier = "brain" | "standard" | "cheap";
 
-type TierMap = Partial<Record<ModelTier, Record<string, string>>>;
+export interface ProviderProfile {
+  authType: "api_key" | "oauth";
+  envKey?: string;
+  tiers: Partial<Record<ModelTier, string>>;
+}
+
+type ProviderProfiles = Record<string, ProviderProfile>;
 
 /**
  * The single entry point from a purpose to a spawnable model. pi accepts an
@@ -41,19 +47,27 @@ export class ModelPolicy {
 
   async resolve(purpose: ModelPurpose, provider: string): Promise<ResolvedModel> {
     const tier = await this.tierOf(purpose);
-    const tierMap = this.config.get("model.tierMap") as TierMap;
-    const id = tierMap[tier]?.[provider];
+    const profiles = this.config.get("model.providers") as ProviderProfiles;
+    const id = profiles[provider]?.tiers[tier];
     if (!id) throw new Error(`provider ${provider} has no model configured for the ${tier} tier`);
     return resolveModel(this.catalog, provider, id);
+  }
+
+  /** The profile of a provider hivemind is configured to spawn. */
+  async profileOf(provider: string): Promise<ProviderProfile> {
+    await this.config.reload();
+    const profile = (this.config.get("model.providers") as ProviderProfiles)[provider];
+    if (!profile) throw new Error(`provider ${provider} is not configured`);
+    return profile;
   }
 
   /** The failover chain narrowed to the providers that declare a model for the
    * purpose's tier, in chain order. Health is a separate concern. */
   async providersFor(purpose: ModelPurpose): Promise<string[]> {
     const tier = await this.tierOf(purpose);
-    const tierMap = this.config.get("model.tierMap") as TierMap;
+    const profiles = this.config.get("model.providers") as ProviderProfiles;
     const chain = this.config.get("model.failoverChain");
-    return chain.filter((provider) => tierMap[tier]?.[provider] !== undefined);
+    return chain.filter((provider) => profiles[provider]?.tiers[tier] !== undefined);
   }
 }
 
@@ -61,10 +75,10 @@ export class ModelPolicy {
  * A typo here is otherwise discovered as an invented price on a real run. */
 export async function assertModelPolicy(config: ConfigStore, catalog: ModelCatalog): Promise<void> {
   await config.reload();
-  const tierMap = config.get("model.tierMap") as TierMap;
+  const profiles = config.get("model.providers") as ProviderProfiles;
   const failures: string[] = [];
-  for (const [tier, providers] of Object.entries(tierMap)) {
-    for (const [provider, id] of Object.entries(providers ?? {})) {
+  for (const [provider, profile] of Object.entries(profiles)) {
+    for (const [tier, id] of Object.entries(profile.tiers)) {
       try {
         await resolveModel(catalog, provider, id);
       } catch {
