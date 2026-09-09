@@ -55,6 +55,12 @@ export interface PiModelCatalogOptions {
   binary: string;
   extensions?: string[];
   cwd?: string;
+  /**
+   * Extra variables for the pi spawn. An API-key provider lists nothing at all
+   * without its key in the environment, and a command run by hand inherits no
+   * `EnvironmentFile`, so the caller has to supply it.
+   */
+  env?: Record<string, string>;
 }
 
 /**
@@ -75,6 +81,7 @@ export class PiModelCatalog implements ModelCatalog {
     ];
     const result = await execFileAsync(this.options.binary, args, {
       ...(this.options.cwd ? { cwd: this.options.cwd } : {}),
+      ...(this.options.env ? { env: { ...process.env, ...this.options.env } } : {}),
       windowsHide: true,
       maxBuffer: 4 * 1024 * 1024,
     });
