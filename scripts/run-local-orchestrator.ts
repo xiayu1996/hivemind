@@ -22,7 +22,7 @@ import { probeProviderReadiness, refreshProviderCredentials } from "../src/runne
 import { refreshCredentialsOnce } from "../src/runner/auth-refresh.js";
 import { probeOpenProviders } from "../src/runner/provider-probe.js";
 import { assertModelPolicy, ModelPolicy } from "../src/runner/model-policy.js";
-import { PiModelCatalog } from "../src/runner/model-resolver.js";
+import { defaultModelCatalog } from "../src/runner/catalog.js";
 import { LibsqlProviderHealthStore } from "../src/runner/provider-health-store.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
 import { CommentIngestor } from "../src/notion/comment-ingest.js";
@@ -150,10 +150,11 @@ async function main(): Promise<void> {
   const piBinary = defaultPiBinary();
   const credentialFilePath = join(homedir(), ".pi", "agent", "auth.json");
   const credentialLockPath = join(homedir(), ".hivemind", "auth-refresh.lock");
-  const modelPolicy = new ModelPolicy(config, new PiModelCatalog({ binary: piBinary }));
+  const modelCatalog = defaultModelCatalog(piBinary);
+  const modelPolicy = new ModelPolicy(config, modelCatalog);
   await assertOutOfBandChannel(alerts, config);
   await assertProviderRetriesDisabled(config);
-  await assertModelPolicy(config, new PiModelCatalog({ binary: piBinary }));
+  await assertModelPolicy(config, modelCatalog);
   const storyApi = new NotionGatewayStoryApi(gateway);
   const botUserId = stored.get("NOTION_BOT_USER_ID");
   const comments = new CommentIngestor(

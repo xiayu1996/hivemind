@@ -16,7 +16,8 @@ import { BlindSweepPort } from "../src/regression/blind-sweep-port.js";
 import { ScenarioRegistry, type ScenarioPool } from "../src/regression/scenario-registry.js";
 import { RegressionStore, regressionPolicy } from "../src/regression/store.js";
 import { RegressionSweeper } from "../src/regression/sweeper.js";
-import { PiModelCatalog, resolveModel } from "../src/runner/model-resolver.js";
+import { resolveModel } from "../src/runner/model-resolver.js";
+import { defaultModelCatalog } from "../src/runner/catalog.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
 import { browserLanePath } from "../src/verify/browser-config.js";
@@ -49,7 +50,7 @@ async function main(): Promise<void> {
   const auditPath = join(evidenceRoot, "tool-audit.jsonl");
   const dbUrl = process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db";
 
-  const model = await resolveModel(new PiModelCatalog({ binary: piBinary, cwd: worktreePath }), provider, modelId);
+  const model = await resolveModel(defaultModelCatalog(piBinary, worktreePath), provider, modelId);
   const handle = openDb(dbUrl);
   try {
     await migrate(handle.client);

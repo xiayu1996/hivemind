@@ -16,7 +16,7 @@ import { migrate } from "../src/persistence/migrate.js";
 import { probeProviderReadiness } from "../src/runner/auth-probe.js";
 import { assertProviderRetriesDisabled } from "../src/runner/failover.js";
 import { assertModelPolicy, ModelPolicy } from "../src/runner/model-policy.js";
-import { PiModelCatalog } from "../src/runner/model-resolver.js";
+import { defaultModelCatalog } from "../src/runner/catalog.js";
 import { defaultPiBinary, pinnedPiVersion } from "../src/runner/pi-binary.js";
 
 const execFileAsync = promisify(execFile);
@@ -141,7 +141,7 @@ async function main(): Promise<void> {
   });
 
   if (config) {
-    const catalog = new PiModelCatalog({ binary: piBinary });
+    const catalog = defaultModelCatalog(piBinary);
     await attempt("every configured model id exists in its provider's catalogue", () => assertModelPolicy(config!, catalog));
     await attempt("provider retries are disabled (failover owns retries)", () => assertProviderRetriesDisabled(config!));
     await attempt("an out-of-band alert channel is configured", () =>

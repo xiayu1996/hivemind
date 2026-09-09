@@ -25,7 +25,7 @@ import { RequirementStore } from "../src/orchestrator/requirement-store.js";
 import { openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
 import { ModelPolicy } from "../src/runner/model-policy.js";
-import { PiModelCatalog } from "../src/runner/model-resolver.js";
+import { defaultModelCatalog } from "../src/runner/catalog.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -79,7 +79,7 @@ async function main(): Promise<void> {
   ]);
 
   const piBinary = defaultPiBinary();
-  const catalog = new PiModelCatalog({ binary: piBinary });
+  const catalog = defaultModelCatalog(piBinary);
   const policy = new ModelPolicy(config, catalog);
   const provider = optional("--provider") ?? (await policy.providersFor("product_manager"))[0];
   if (!provider) throw new Error("no provider in the failover chain serves the product manager tier");

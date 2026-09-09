@@ -21,7 +21,8 @@ import { migrate } from "../src/persistence/migrate.js";
 import { POLICY_ENV_VAR, serializeGuardPolicy, type GuardPolicy } from "../src/guard/policy.js";
 import { probeProviderReadiness } from "../src/runner/auth-probe.js";
 import { type ExplicitContextFile } from "../src/runner/context-files.js";
-import { PiModelCatalog, resolveModel } from "../src/runner/model-resolver.js";
+import { resolveModel } from "../src/runner/model-resolver.js";
+import { defaultModelCatalog } from "../src/runner/catalog.js";
 import { ConfigStore } from "../src/config/store.js";
 import { retryLimits } from "../src/pipeline/retry-limits.js";
 import { ScenarioRegistry } from "../src/regression/scenario-registry.js";
@@ -113,7 +114,7 @@ async function main(): Promise<void> {
   if (!readiness.ready) {
     throw new Error(`provider is not ready: ${provider} (${readiness.reason ?? "unknown reason"})`);
   }
-  const model = await resolveModel(new PiModelCatalog({ binary: piBinary, cwd: worktreePath }), provider, modelId);
+  const model = await resolveModel(defaultModelCatalog(piBinary, worktreePath), provider, modelId);
   const handle = openDb(dbUrl);
   try {
     await migrate(handle.client);
