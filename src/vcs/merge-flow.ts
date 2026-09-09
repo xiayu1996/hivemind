@@ -12,7 +12,13 @@ export interface MergeStory {
 }
 
 export interface SubsetVerifier {
-  (scenarioIds: readonly string[]): Promise<{ passed: boolean; scenarioIds: readonly string[] }>;
+  (scenarioIds: readonly string[]): Promise<{
+    passed: boolean;
+    scenarioIds: readonly string[];
+    /** What the verifier and the verdict checks said about the failures; the
+     * Story's next CODE round is written from these. */
+    reasons?: readonly string[];
+  }>;
 }
 
 export interface EpicMergeFlowOptions {
@@ -86,7 +92,14 @@ export class EpicMergeFlow {
     const scenarioIds = [...new Set(affectedStories.flatMap((story) => story.scenarioIds!))].toSorted();
     const verification = await this.verifySubset(scenarioIds);
     if (!verification.passed || verification.scenarioIds.join("\0") !== scenarioIds.join("\0")) {
-      return { kind: "verification_failed", integrationBranch: target, scenarioIds };
+      const failed = verification.passed ? scenarioIds : verification.scenarioIds;
+      const detail = (verification.reasons ?? []).join("; ");
+      return {
+        kind: "verification_failed",
+        integrationBranch: target,
+        scenarioIds,
+        reason: `subset re-verification on ${target} failed for ${failed.join(", ")}${detail ? `: ${detail}` : ""}`,
+      };
     }
     if (this.options.actualFootprints) {
       const baseRevision = (await this.git.run(this.options.integrationWorktree, ["rev-parse", "HEAD"])).trim();

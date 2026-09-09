@@ -137,8 +137,21 @@ export class SingleStoryWorker {
     let mergeRunId = "";
     let totalRounds = mergeOnly ? story.innerLoopRounds : 0;
     if (!mergeOnly) {
-      const failureHistory = await this.store.getVerificationFailureHistory(cardId);
-      for (let round = failureHistory.length + 1; round <= this.maxInnerLoopRounds; round++) {
+      // The budget counts the rounds since a person last acted on the card: a
+      // resume is a decision to spend more, not a replay of the spent rounds.
+      const failureHistory = await this.store.getVerificationFailureHistory(cardId, story.lastHumanActionAt ?? 0);
+      // Round numbers keep counting across resumes; the budget does not.
+      let round = story.innerLoopRounds;
+      if (failureHistory.length >= this.maxInnerLoopRounds) {
+        // The Epic head refused the branch after the loop was already spent:
+        // there is no round left to fix it in, so this is the verification stop.
+        const stopRunId = this.createRunId(cardId, "VERIFY", round);
+        await this.store.stopForInput(cardId, story.state, "verify_loop_exceeded", stopRunId);
+        await this.projection.enqueue(cardId);
+        return { state: "NEEDS_INPUT", rounds: round, mrUrl: null, stopReason: "verify_loop_exceeded" };
+      }
+      for (let attempt = failureHistory.length + 1; attempt <= this.maxInnerLoopRounds; attempt++) {
+        round += 1;
         const codeRunId = this.createRunId(cardId, "CODE", round);
         const code = await this.runPhase(cardId, "CODE", round, codeRunId);
         artifact(code, "implementation");
@@ -162,7 +175,7 @@ export class SingleStoryWorker {
 
         failureHistory.push([...new Set(verification.failedScenarios)].toSorted());
         const convergence = classifyConvergence(failureHistory);
-        if (round === this.maxInnerLoopRounds || !convergence.mayContinue) {
+        if (attempt === this.maxInnerLoopRounds || !convergence.mayContinue) {
           await this.store.stopForInput(cardId, "VERIFY", "verify_loop_exceeded", verifyRunId);
           await this.projection.enqueue(cardId);
           return {

@@ -30,7 +30,7 @@ const RULES: Array<{ class: ErrorClass; pattern: RegExp }> = [
   { class: "INVALID_REQUEST", pattern: /^400\b|\b400:|invalid_value|context_length_exceeded/i },
   { class: "SERVER", pattern: /^5\d\d\b|\b5\d\d:|server_error|overloaded|bad gateway/i },
   { class: "TIMEOUT", pattern: /timed out|timeout|ETIMEDOUT|deadline exceeded/i },
-  { class: "TRANSPORT", pattern: /connection error|terminated|socket hang up|ECONNRESET|EPIPE|fetch failed|network|premature close/i },
+  { class: "TRANSPORT", pattern: /connection error|connection ended|websocket closed|terminated|socket hang up|ECONNRESET|EPIPE|fetch failed|network|premature close/i },
 ];
 
 const PROFILE: Record<ErrorClass, Omit<Classification, "class">> = {

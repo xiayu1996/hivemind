@@ -1,14 +1,18 @@
 import { z } from "zod";
-import { assembleGuardPolicy, type GuardPolicy } from "../guard/policy.js";
+import { EVIDENCE_DIR_ENV, assembleGuardPolicy, type GuardPolicy } from "../guard/policy.js";
 import { captureTreePin, evaluateTreePin, type TreePin } from "../guard/tree-pin.js";
 import { validateVerdict, type TrajectoryEvidence, type VerdictDocument } from "../pipeline/verdict.js";
 import type { PiRunner, RpcEvent, TokenUsage } from "../runner/types.js";
+import { promptWithContinueRetry } from "../runner/continue-retry.js";
 import { jsonPayloadCandidates } from "../util/json-payload.js";
 import { writePlaywrightCliConfig } from "./browser-config.js";
+
+export { EVIDENCE_DIR_ENV } from "../guard/policy.js";
 
 const scenarioSchema = z.object({
   id: z.string().min(1),
   status: z.enum(["passed", "failed", "inconclusive"]),
+  reason: z.string().optional(),
   url: z.string().optional(),
   screenshots: z.array(z.string()).optional(),
 }).strict();
@@ -30,6 +34,19 @@ export interface BlindVerifyInput {
   /** From verify.chromiumSandbox; undefined keeps the sandbox. */
   chromiumSandbox?: boolean;
   commitMessages: string[];
+  /** How many dropped streams to continue before the run is the provider's failure. */
+  maxContinueRetries?: number;
+  /**
+   * The playwright-cli session this run drives. A session outlives one run and
+   * keeps the output directory it was opened with, so two runs sharing a name
+   * (a Story's VERIFY and its Epic-head re-verification) would write each
+   * other's evidence; the default names the run itself.
+   */
+  browserSession?: string;
+}
+
+function browserSessionFor(input: BlindVerifyInput): string {
+  return input.browserSession ?? `${input.cardId}-verify-${input.round}`;
 }
 
 export interface VerifyRecord {
@@ -59,6 +76,8 @@ export interface TreePinPort {
 export interface BlindVerifyResult {
   record: VerifyRecord;
   screenshots: Array<{ scenarioId: string; path: string }>;
+  /** Why each non-passing scenario did not pass, in the verifier's words. */
+  reasons: Array<{ scenarioId: string; reason: string }>;
   validationErrors: string[];
   treeChanged: boolean;
   /** The verifier's own failure, if it never reached a verdict. Telemetry must
@@ -177,6 +196,7 @@ function toVerdictDocument(value: z.infer<typeof verifierReplySchema>): VerdictD
     scenarios: value.scenarios.map((scenario) => ({
       id: scenario.id,
       status: scenario.status,
+      ...(scenario.reason === undefined ? {} : { reason: scenario.reason }),
       ...(scenario.url === undefined ? {} : { url: scenario.url }),
       ...(scenario.screenshots === undefined ? {} : { screenshots: scenario.screenshots }),
     })),
@@ -189,16 +209,26 @@ function toVerdictDocument(value: z.infer<typeof verifierReplySchema>): VerdictD
  * on any machine; the paths the browser writes to are already fixed in the
  * worktree's Playwright configuration.
  */
-export function browserLaneInstructions(cardId: string, allowedHosts: readonly string[]): string {
+export function browserLaneInstructions(session: string, allowedHosts: readonly string[]): string {
   const hosts = [...allowedHosts].toSorted().join(", ");
   return [
     "Browser lane: a headless Chromium is available through the `playwright-cli` command; always pass the session flag",
-    `\`-s=${cardId}\`. Its configuration is already written into this worktree: the browser loads only these hosts: ${hosts};`,
+    `\`-s=${session}\`. Its configuration is already written into this worktree: the browser loads only these hosts: ${hosts};`,
     "every other request is refused by the browser itself, and pages loaded from local files are not allowed.",
     "Snapshots and screenshots are saved into this round's evidence directory automatically; refer to them by file name.",
-    `Typical use: \`playwright-cli -s=${cardId} open <url>\`, then \`snapshot\`, \`click <ref>\`, \`fill <ref> <text>\`, \`screenshot\`, and \`close\`.`,
+    "Only screenshots taken by playwright-cli in this session count: a file a script produced elsewhere does not exist here",
+    "and the claim is refused. Report the exact URL the browser opened, never a placeholder.",
+    "Call `screenshot` and `snapshot` without a filename: the default lands in the evidence directory, while a named file",
+    "is written into the worktree, which changes the tree under verification and voids the round.",
+    "Do not intercept or fake network responses (`route`): the page must be judged against the real service.",
+    `Typical use: \`playwright-cli -s=${session} open <url>\`, then \`snapshot\`, \`click <ref>\`, \`fill <ref> <text>\`, \`screenshot\`, and \`close\`.`,
     "A scenario whose layer is ui or e2e must be exercised in the browser: report the page you judged in `url` and the",
     "screenshot file names in `screenshots`. Close the browser before returning the verdict.",
+    "Other verifiers may be running on this machine: pick a port nobody is listening on (check with `lsof -i :<port>`),",
+    "never assume a page on a well-known port is yours, and stop every process you started before returning the verdict.",
+    "If a page needs a running service, start it yourself in the background and confirm it answers before opening pages:",
+    `\`nohup <command> > "$${EVIDENCE_DIR_ENV}/service.log" 2>&1 &\` — that directory is the only place you may write,`,
+    "and a process that is not detached does not outlive the command that started it.",
   ].join(" ");
 }
 
@@ -209,8 +239,9 @@ function promptFor(input: BlindVerifyInput): string {
     "Choose and run the relevant tests from the repository and the specification.",
     "Run tests in a mode that reports each individual test name, so every scenario's outcome is observable in the transcript.",
     "Evidence protocol (mandatory): after observing the outcome of each scenario, print a line exactly of the form HIVEMIND_TEST_RESULT <scenario_id> <passed|failed|inconclusive>, once per declared scenario id. A verdict whose scenarios have no observable evidence in this session is rejected.",
-    ...(input.allowedHosts.length > 0 ? [browserLaneInstructions(input.cardId, input.allowedHosts)] : []),
-    "Return only JSON: {\"scenarios\":[{\"id\":string,\"status\":\"passed\"|\"failed\"|\"inconclusive\",\"url\"?:string,\"screenshots\"?:string[]}]}",
+    ...(input.allowedHosts.length > 0 ? [browserLaneInstructions(browserSessionFor(input), input.allowedHosts)] : []),
+    "Return only JSON: {\"scenarios\":[{\"id\":string,\"status\":\"passed\"|\"failed\"|\"inconclusive\",\"reason\"?:string,\"url\"?:string,\"screenshots\"?:string[]}]}",
+    "For every scenario that is not passed, `reason` is mandatory: one sentence naming the observed evidence (the failing test, the command that was refused, the page that did not load). A person decides what to do next from that sentence alone.",
     "Specification:",
     input.specification,
     "Declared scenarios:",
@@ -263,6 +294,7 @@ export class BlindVerifyExecutor {
     let verifySessionId = "";
     let document: VerdictDocument | null = null;
     let runnerError: string | null = null;
+    let providerFailure: string | null = null;
     let usage: TokenUsage = {
       input: 0,
       output: 0,
@@ -280,11 +312,24 @@ export class BlindVerifyExecutor {
       if (verifySessionId === input.codeSessionId) {
         throw new Error("VERIFY runner reused the CODE session");
       }
-      const result = await runner.prompt(promptFor(input));
+      // A stream the provider drops mid-run is continued in the same session,
+      // the way the writing phases do; a failure that survives the retries is
+      // the provider's, not the code's, and is raised rather than recorded as
+      // a round the convergence criterion would then count against the card.
+      let result: Awaited<ReturnType<typeof promptWithContinueRetry>>;
+      try {
+        result = await promptWithContinueRetry(runner, promptFor(input), { maxContinueRetries: input.maxContinueRetries ?? 8 });
+      } catch (cause) {
+        providerFailure = cause instanceof Error ? cause.message : String(cause);
+        throw cause;
+      }
       events = [...result.events];
       usage = result.usage;
       messages = await runner.getMessages();
-      if (result.failure) throw new Error(result.failure.errorMessage);
+      if (result.failure) {
+        providerFailure = result.failure.errorMessage;
+        throw new Error(result.failure.errorMessage);
+      }
       const raw = assistantText(events);
       if (!raw) throw new Error("VERIFY returned no assistant verdict");
       const candidates = jsonPayloadCandidates(raw);
@@ -301,6 +346,7 @@ export class BlindVerifyExecutor {
     } finally {
       await runner.stop().catch(() => undefined);
     }
+    if (providerFailure !== null) throw new Error(`VERIFY provider failure: ${providerFailure}`);
 
     const endedAt = this.now();
     const after = this.pins.capture(input.worktreePath);
@@ -334,10 +380,17 @@ export class BlindVerifyExecutor {
     const observedFailures = observed
       .filter((event) => event.status === "failed" && event.scenarioId !== undefined && declared.has(event.scenarioId))
       .map((event) => event.scenarioId!);
+    // A claim the code checks refused (a screenshot that does not exist, a host
+    // off the list) is a failed scenario, not a footnote: the convergence
+    // criterion and the next CODE round both work from the failed set.
+    const refusedClaims = (validation?.errors ?? [])
+      .map((error) => error.slice(0, error.indexOf(": ")))
+      .filter((id) => declared.has(id));
     const failedScenarios = [...new Set([
       ...(document?.scenarios.filter((scenario) => scenario.status !== "passed").map((scenario) => scenario.id)
         ?? [...declared]),
       ...observedFailures,
+      ...refusedClaims,
     ])].toSorted();
     const verdict: VerifyRecord["verdict"] = !document || !validation
       ? "inconclusive"
@@ -357,6 +410,9 @@ export class BlindVerifyExecutor {
     await this.records.insert(record);
     const screenshots = document?.scenarios.flatMap((scenario) =>
       (scenario.screenshots ?? []).map((path) => ({ scenarioId: scenario.id, path }))) ?? [];
-    return { record, screenshots, validationErrors, treeChanged: !pin.matches, runnerFailure: runnerError, events, usage, messages };
+    const reasons = document?.scenarios
+      .filter((scenario) => scenario.status !== "passed" && scenario.reason)
+      .map((scenario) => ({ scenarioId: scenario.id, reason: scenario.reason! })) ?? [];
+    return { record, screenshots, reasons, validationErrors, treeChanged: !pin.matches, runnerFailure: runnerError, events, usage, messages };
   }
 }

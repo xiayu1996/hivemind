@@ -25,7 +25,12 @@ export interface BreakerPolicy {
   rateLimitOpenMs: number;
   /** Usage-limit windows at or under this are worth waiting out. */
   deferWithinMinutes: number;
+  /** How long a usage limit that named no window is held before dispatch tries
+   * again. Absent for callers built before the field existed. */
+  quotaHoldMs?: number;
 }
+
+const DEFAULT_QUOTA_HOLD_MS = 30 * 60_000;
 
 export interface ProviderFailure {
   at: number;
@@ -74,10 +79,13 @@ export function onProviderFailure(health: ProviderHealth, input: ProviderFailure
   if (classification.class === "AUTH") return opened(null, true);
   if (classification.class === "QUOTA") {
     const limit = parseUsageLimit(errorMessage, at);
-    // A usage window reopens on its own; a spent balance does not.
-    return limit?.resetAt === null || limit === null
-      ? opened(null, true)
-      : opened(limit.resetAt, false);
+    if (limit !== null && limit.resetAt !== null) return opened(limit.resetAt, false);
+    // A subscription usage limit reopens on its own even when the message
+    // names no window; a credentials probe cannot tell when, so the breaker
+    // holds for a fixed period and a real dispatch is the test. A spent
+    // balance ("insufficient_quota") does not come back without a person.
+    if (/usage limit/i.test(errorMessage)) return opened(at + (policy.quotaHoldMs ?? DEFAULT_QUOTA_HOLD_MS), false);
+    return opened(null, true);
   }
   if (classification.class === "RATE_LIMIT") return opened(at + policy.rateLimitOpenMs, false);
   if (consecutiveFailures >= policy.failureThreshold) {
@@ -140,5 +148,6 @@ export async function breakerPolicy(config: ConfigStore): Promise<BreakerPolicy>
     transientOpenMs: config.get("provider.transientOpenMs"),
     rateLimitOpenMs: config.get("provider.rateLimitOpenMs"),
     deferWithinMinutes: config.get("model.deferIfResetWithinMin"),
+    quotaHoldMs: config.get("provider.quotaHoldMs"),
   };
 }

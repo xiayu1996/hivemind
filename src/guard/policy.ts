@@ -85,7 +85,10 @@ export const WRITE_TOOLS = ["apply_patch", "edit", "notebook_edit", "powershell"
  * deliberately small heuristic set cannot enumerate.
  */
 export const READ_ONLY_BASH_PATTERNS = [
-  "(?:^|[^>])(?:>>|>)(?![>&])\\s*\\S+",
+  // A redirect starts a word: `cmd > file`, `cmd >file`, `2>file`. A `>` inside
+  // a word (`=>`, `->`, `<unset>`) is not one; inline scripts and quoted text
+  // are full of those and must stay runnable read-only.
+  "(?:^|[\\s;|&])\\d?(?:>>|>)(?![>&])\\s*\\S+",
   "\\bsed\\s+[^\\n]*?-i(?:[^\\s]*)?(?:\\s|$)",
   "(?:^|[|;]\\s*)tee(?:\\s|$)",
   "\\bgit\\s+commit\\b",
@@ -94,6 +97,10 @@ export const READ_ONLY_BASH_PATTERNS = [
 function sortedUnique(values: readonly string[]): string[] {
   return [...new Set(values)].toSorted((a, b) => a.localeCompare(b, "en"));
 }
+
+/** Names the round's evidence directory in a read-only phase's shell, so a
+ * command may write there by variable without knowing the machine's path. */
+export const EVIDENCE_DIR_ENV = "HIVEMIND_EVIDENCE_DIR";
 
 /** Creates the complete, deterministic policy injected before a phase starts. */
 export function assembleGuardPolicy(input: GuardPolicyInput): GuardPolicy {

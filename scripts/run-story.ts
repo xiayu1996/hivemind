@@ -11,6 +11,8 @@ import { EpicIntegrator } from "../src/orchestrator/epic-integration.js";
 import { StoryExecutionStore } from "../src/orchestrator/story-execution-store.js";
 import { EpicMergeFlow } from "../src/vcs/merge-flow.js";
 import { blindSubsetVerifier } from "../src/vcs/subset-verifier.js";
+import { captureTreePin } from "../src/guard/tree-pin.js";
+import { quarantineWorktree, worktreeLayout } from "../src/vcs/worktree.js";
 import { LibsqlActualFootprintStore } from "../src/vcs/actual-footprint.js";
 import { NotionStoryProjection } from "../src/notion/story-projection.js";
 import { SingleStoryWorker } from "../src/orchestrator/story-worker.js";
@@ -28,7 +30,7 @@ import { ScenarioRegistry } from "../src/regression/scenario-registry.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
 import { browserLanePath } from "../src/verify/browser-config.js";
-import { BlindVerifyExecutor } from "../src/verify/executor.js";
+import { BlindVerifyExecutor, EVIDENCE_DIR_ENV } from "../src/verify/executor.js";
 import { loadPromptLayers } from "../src/pipeline/prompt-loader.js";
 import { discoverMRPort } from "../src/vcs/mr/adapters.js";
 import { GitMrStoryDelivery, processGitCommand } from "../src/vcs/story-delivery.js";
@@ -155,6 +157,10 @@ async function main(): Promise<void> {
     // The verifier runs under its own phase contract, and with the browser
     // lane's CLI on its PATH; nothing is installed into the worktree for it.
     const verifyLayers = await loadPromptLayers(join(ROOT, "prompts"), "VERIFY");
+    // The worktree lives under <work root>/worktrees/<repo>/<card>; a tree that
+    // changed during VERIFY is moved to the quarantine root beside it, so the
+    // round is rejected with evidence instead of the worker dying.
+    const layout = worktreeLayout(resolve(worktreePath, "..", "..", ".."));
     const blindExecutor = new BlindVerifyExecutor(
       {
         create: (policy: GuardPolicy) => new RpcPiRunner({
@@ -171,10 +177,17 @@ async function main(): Promise<void> {
             PATH: browserLanePath(ROOT),
             [POLICY_ENV_VAR]: serializeGuardPolicy(policy),
             [CANONICAL_CAPTURE_ENV]: join(policy.extraWriteRoots[0]!, "provider-requests.jsonl"),
+            [EVIDENCE_DIR_ENV]: policy.extraWriteRoots[0]!,
           },
         }),
       },
       { insert: async () => undefined },
+      {
+        capture: captureTreePin,
+        quarantine: async (path, reason) => {
+          await quarantineWorktree(path, reason, layout);
+        },
+      },
     );
     const verifier = new BlindVerifyStoryPort({
       executor: blindExecutor,
@@ -197,7 +210,9 @@ async function main(): Promise<void> {
           store,
           new EpicMergeFlow(
             processGitCommand,
-            blindSubsetVerifier(blindExecutor, {
+            // The DoD is frozen by DESIGN, which has not run yet for a QUEUED
+            // Story: it is read when the merge actually verifies, not here.
+            async (scenarioIds) => blindSubsetVerifier(blindExecutor, {
               cardId,
               round: 1,
               codeSessionId: `integration:${cardId}`,
@@ -207,7 +222,7 @@ async function main(): Promise<void> {
               specification: JSON.stringify(await store.getDefinitionOfDone(cardId)),
               allowedHosts,
               commitMessages: [],
-            }),
+            })(scenarioIds),
             { storyWorktree: worktreePath, integrationWorktree, mainBranch: targetBranch },
           ),
         )

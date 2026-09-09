@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { mkdir, readFile } from "node:fs/promises";
 import { parse, stringify } from "yaml";
 import { dirname, join } from "node:path";
@@ -40,6 +42,28 @@ export interface PhaseTelemetryInput {
   providerPayloads: unknown[];
 }
 
+/** What the orchestrator measured in the worktree after a writing phase ended. */
+export interface WorktreeFacts {
+  clean: boolean;
+  head: string;
+  recentCommits: string[];
+}
+
+const execFileAsync = promisify(execFile);
+
+async function gitWorktreeFacts(worktreePath: string): Promise<WorktreeFacts> {
+  const git = async (args: string[]): Promise<string> =>
+    (await execFileAsync("git", args, { cwd: worktreePath, windowsHide: true })).stdout.trim();
+  const [status, head, log] = await Promise.all([
+    git(["status", "--porcelain"]),
+    git(["rev-parse", "--short", "HEAD"]),
+    git(["log", "--oneline", "-15"]),
+  ]);
+  return { clean: status === "", head, recentCommits: log === "" ? [] : log.split("\n") };
+}
+
+const WRITING_PHASES = new Set<ManagedPhaseInput["phase"]>(["CODE", "REGRESSION_FIX"]);
+
 export interface PiStoryPhasePortOptions {
   binary: string;
   model: ResolvedModel;
@@ -60,6 +84,8 @@ export interface PiStoryPhasePortOptions {
   createRunner?: (config: RpcRunnerConfig) => PiRunner;
   recordTelemetry?: (input: PhaseTelemetryInput) => Promise<void>;
   readProviderPayloads?: (path: string) => Promise<unknown[]>;
+  /** Measures the worktree for the completion judge; defaults to git. */
+  inspectWorktree?: (worktreePath: string) => Promise<WorktreeFacts>;
 }
 
 /** Collects JSON payloads the model may have wrapped in prose or a code fence.
@@ -160,8 +186,8 @@ function toolEvidenceDigest(messages: unknown[]): string[] {
  * assumptions from the phase name. */
 const PHASE_CONTRACTS: Record<ManagedPhaseInput["phase"], string> = {
   DESIGN: "Read-only analysis: return one JSON object whose design_summary and dod_yaml are both strings; the dod_yaml value is a YAML-formatted string by contract, not a defect. Producing the DoD needs no code or test changes, so their absence proves nothing; a write attempt blocked by the guard is expected enforcement, not incompleteness.",
-  CODE: "Implement the DoD scenarios in the worktree with tests, run the relevant verification, and report the implementation JSON. Commit the work to the story branch so the worktree is clean.",
-  REGRESSION_FIX: "Fix the regressed scenarios in the worktree and report the implementation JSON. Commit the work to the story branch so the worktree is clean.",
+  CODE: "Implement the DoD scenarios in the worktree with tests, run the relevant verification, and report the implementation JSON. Commit the work to the story branch so the worktree is clean. Evidence from a browser (the ui and e2e layers) is produced by the separate blind VERIFY phase, which alone has the browser lane; this session has none, so its absence here is not incompleteness. The `worktree` facts among the side effects were measured by the orchestrator after the session ended: `clean: true` together with the listed commits is the proof of committing and cleanliness, and outranks anything the transcript shows or omits.",
+  REGRESSION_FIX: "Fix the regressed scenarios in the worktree and report the implementation JSON. Commit the work to the story branch so the worktree is clean. Browser evidence belongs to the separate blind VERIFY phase and is not expected here. The `worktree` facts among the side effects were measured by the orchestrator after the session ended and outrank the transcript.",
   MERGE: "Prepare the delivery report JSON only. Publishing the branch and opening the MR are performed by the orchestrator outside this session; the agent must not merge, push or deploy.",
 };
 
@@ -250,6 +276,12 @@ export class PiStoryPhasePort implements StoryPhasePort {
       if (providerPayloads.length === 0) throw new Error("phase provider request was not captured");
       const raw = lastAssistantText(messages);
       const artifacts = parseResult(input, raw);
+      // The transcript digest only keeps the last tool results, so a commit made
+      // early in a long session is invisible to the judge; the worktree itself
+      // is measured instead and outranks anything the model wrote.
+      const worktree = WRITING_PHASES.has(input.phase)
+        ? await (this.options.inspectWorktree ?? gitWorktreeFacts)(this.options.worktreePath)
+        : undefined;
       const completion = await verifyCompletion(this.options.completionJudge, {
         phase: input.phase,
         contract: PHASE_CONTRACTS[input.phase],
@@ -259,6 +291,7 @@ export class PiStoryPhasePort implements StoryPhasePort {
           sessionId: phaseSessionId,
           eventCount: result.events.length,
           usage: result.usage,
+          ...(worktree ? { worktree } : {}),
           toolResults: toolEvidenceDigest(messages),
         },
       });

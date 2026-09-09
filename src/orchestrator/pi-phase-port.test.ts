@@ -95,6 +95,32 @@ describe("PiStoryPhasePort", () => {
     expect(telemetry).toHaveBeenCalledOnce();
   });
 
+  it("hands the completion judge the worktree as measured, not as the transcript remembers it", async () => {
+    temporary = await mkdtemp(join(tmpdir(), "hivemind-pi-phase-"));
+    const model = await resolveModel({ list: async () => [{ provider: "mock", id: "mock-1" }] }, "mock", "mock-1");
+    const prompts: string[] = [];
+    const port = new PiStoryPhasePort({
+      binary: "pi",
+      model,
+      worktreePath: resolve("."),
+      promptRoot: resolve("prompts"),
+      sessionRoot: join(temporary, "sessions"),
+      evidencePath: join(temporary, "evidence"),
+      auditPath: join(temporary, "audit.jsonl"),
+      guardExtension: resolve("extensions/hive-guard.ts"),
+      canonicalCaptureExtension: resolve("extensions/canonical-capture.ts"),
+      completionJudge: { complete: async (prompt) => { prompts.push(prompt); return JSON.stringify({ done: true, reason: "complete" }); } },
+      createRunner: () => fakeRunner(JSON.stringify({ implementation: "Done; committed." })),
+      readProviderPayloads: async () => [{ model: "mock-1", messages: [] }],
+      inspectWorktree: async () => ({ clean: true, head: "abc1234", recentCommits: ["abc1234 feat(S-EPIC1-01-a): green"] }),
+    });
+
+    await port.run(phaseInput("CODE"));
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain('"worktree":{"clean":true,"head":"abc1234","recentCommits":["abc1234 feat(S-EPIC1-01-a): green"]}');
+    expect(prompts[0]).toContain("measured by the orchestrator");
+  });
+
   it("fails closed before persistence when the phase output is not the declared JSON contract", async () => {
     temporary = await mkdtemp(join(tmpdir(), "hivemind-pi-phase-"));
     const model = await resolveModel({ list: async () => [{ provider: "mock", id: "mock-1" }] }, "mock", "mock-1");

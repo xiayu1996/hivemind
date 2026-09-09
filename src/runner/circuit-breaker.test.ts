@@ -54,6 +54,18 @@ describe("provider circuit breaker", () => {
     });
   });
 
+  it("holds a usage limit that names no window for the configured period instead of asking a person", () => {
+    const health = fail(closedHealth("openai-codex", NOW), "Codex error: The usage limit has been reached");
+    expect(health).toMatchObject({
+      state: "open",
+      lastErrorClass: "QUOTA",
+      retryAt: NOW + 30 * 60_000,
+      needsHuman: false,
+    });
+    expect(probeDue(health, NOW + 29 * 60_000)).toBe(false);
+    expect(probeDue(health, NOW + 30 * 60_000)).toBe(true);
+  });
+
   it("treats a spent balance with no window as needing a human", () => {
     const health = fail(closedHealth("zai-coding-cn", NOW), "429: insufficient_quota");
     expect(health).toMatchObject({ state: "open", lastErrorClass: "QUOTA", needsHuman: true, retryAt: null });

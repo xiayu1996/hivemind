@@ -20,11 +20,16 @@ export function blindSubsetVerifier(
 ): SubsetVerifier {
   return async (scenarioIds) => {
     const declaredScenarioIds = [...scenarioIds];
-    const result = await port.run({ ...base, declaredScenarioIds });
+    const result = await port.run({ ...base, declaredScenarioIds, browserSession: `${base.cardId}-integration` });
     const passed = result.record.verdict === "accepted";
+    const reasons = [
+      ...result.reasons.map((item) => `${item.scenarioId}: ${item.reason}`),
+      ...result.validationErrors,
+    ];
     return {
       passed,
       scenarioIds: passed ? declaredScenarioIds : result.record.failedScenarios,
+      ...(reasons.length > 0 ? { reasons } : {}),
     };
   };
 }

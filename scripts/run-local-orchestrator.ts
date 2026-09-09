@@ -16,6 +16,7 @@ import { planRegressionSweep } from "../src/regression/scheduler.js";
 import { loadSecretsFile, upsertSecretFile } from "../src/config/secrets-file.js";
 import { ConfigStore } from "../src/config/store.js";
 import { breakerPolicy, intakeHalted, usableProviders } from "../src/runner/circuit-breaker.js";
+import { classifyError } from "../src/runner/classify.js";
 import { assertProviderRetriesDisabled } from "../src/runner/failover.js";
 import { probeProviderReadiness } from "../src/runner/auth-probe.js";
 import { probeOpenProviders } from "../src/runner/provider-probe.js";
@@ -192,8 +193,13 @@ async function main(): Promise<void> {
       coordinator.registerActivePage(pageId);
     }
     const stories = (await handle.client.execute({
-      sql: `SELECT id, notion_page_id FROM stories
-            WHERE state NOT IN ('DELIVERED', 'FAILED') ORDER BY id`,
+      // A Story whose page is still queued for creation only has a synthetic id;
+      // polling it would 404 every round.
+      sql: `SELECT id, notion_page_id FROM stories s
+            WHERE state NOT IN ('DELIVERED', 'FAILED')
+              AND NOT EXISTS (SELECT 1 FROM notion_outbox o
+                              WHERE o.card_id = s.id AND o.operation = 'create_story_page' AND o.state = 'pending')
+            ORDER BY id`,
     })).rows;
     for (const story of stories) {
       const cardId = String(story.id);
@@ -359,6 +365,27 @@ async function main(): Promise<void> {
       const targetBranch = row.target_branch ? String(row.target_branch) : "main";
       if (!row.repo) throw new Error(`Story ${cardId} does not declare a repository`);
       const layout = worktreeLayout(workRoot);
+      // A Story inside an Epic lands on the Epic branch, which needs a worktree
+      // of its own: the Story's own worktree is mid-rebase during the merge.
+      // The Epic branch is also the Story branch's start point, so it has to
+      // exist before the Story worktree is cut.
+      const epicId = String(row.epic_id ?? "");
+      let integrationWorktree: string | null = null;
+      if (epicId) {
+        const integrationCard = `epic-${epicId}`;
+        const epicBranch = `epic/${epicId}`;
+        let integration = locateWorktree(repositoryId, integrationCard, layout);
+        if (!(await exists(integration.worktreePath))) {
+          integration = await createWorktree({
+            repositoryPath,
+            repositoryId,
+            cardId: integrationCard,
+            branch: epicBranch,
+            startPoint: targetBranch === epicBranch ? targetBranchDefault : targetBranch,
+          }, layout);
+        }
+        integrationWorktree = integration.worktreePath;
+      }
       let location = locateWorktree(repositoryId, cardId, layout);
       if (!(await exists(location.worktreePath))) {
         location = await createWorktree({
@@ -370,24 +397,6 @@ async function main(): Promise<void> {
         }, layout);
       } else if (await currentBranch(location.worktreePath) !== branch) {
         throw new Error(`existing worktree for ${cardId} is not on ${branch}`);
-      }
-      // A Story inside an Epic lands on the Epic branch, which needs a worktree
-      // of its own: the Story's own worktree is mid-rebase during the merge.
-      const epicId = String(row.epic_id ?? "");
-      let integrationWorktree: string | null = null;
-      if (epicId) {
-        const integrationCard = `epic-${epicId}`;
-        let integration = locateWorktree(repositoryId, integrationCard, layout);
-        if (!(await exists(integration.worktreePath))) {
-          integration = await createWorktree({
-            repositoryPath,
-            repositoryId,
-            cardId: integrationCard,
-            branch: `epic/${epicId}`,
-            startPoint: targetBranch,
-          }, layout);
-        }
-        integrationWorktree = integration.worktreePath;
       }
       const npm = process.platform === "win32" ? "npm.cmd" : "npm";
       let result;
@@ -415,11 +424,23 @@ async function main(): Promise<void> {
       } catch (error) {
         // The provider's own health is separate from the card's: this records
         // why the attempt died so the breaker can drop that node of the chain.
-        await providerHealth.recordFailure(
-          provider,
-          error instanceof Error ? error.message : String(error),
-          await breakerPolicy(config),
-        );
+        // A worker that died for reasons the error catalogue does not know
+        // (a defect of ours, a missing binary) says nothing about the provider
+        // and must not open its breaker.
+        const failureMessage = error instanceof Error ? error.message : String(error);
+        const providerFault = classifyError(failureMessage).class !== "UNKNOWN";
+        if (providerFault) {
+          await providerHealth.recordFailure(provider, failureMessage, await breakerPolicy(config));
+          // A quota window, a rate limit or an outage says nothing about the
+          // card: the breaker holds dispatch until the provider is back, and
+          // the card simply runs again then. Spending its reentry budget or
+          // parking it would turn a provider event into a stop a person has to
+          // clear by hand.
+          // The breaker's own "intake halted" line is the alert for this; a P0
+          // per attempt would repeat it for every card on every retry.
+          console.warn(`Story ${cardId} attempt ended on a ${classifyError(failureMessage).class} provider fault; it stays ${(await store.getStory(cardId).catch(() => undefined))?.state ?? "as is"} and waits for the breaker`);
+          return;
+        }
         // The worker already recorded the phase failure. Bound automatic
         // reentries: DESIGN and CODE re-dispatch until the budget is spent,
         // VERIFY/MERGE failures park immediately for a human resume decision.
@@ -688,6 +709,12 @@ async function main(): Promise<void> {
 
   const stop = async (): Promise<void> => {
     clearInterval(timer);
+    // A Story worker keeps running after its parent dies, and a restarted
+    // orchestrator would dispatch the same card again beside it: drain first.
+    if (inFlight.size > 0) {
+      console.log(`Waiting for ${inFlight.size} in-flight Story run(s) before exit`);
+      await Promise.allSettled(inFlight.values());
+    }
     coordinator.stop();
     await coordinator.waitForIdle();
     await media.waitForIdle();

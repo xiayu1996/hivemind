@@ -24,6 +24,7 @@ function verificationArtifact(result: BlindVerifyResult): string {
   return JSON.stringify({
     verdict: result.record.verdict,
     failedScenarios: result.record.failedScenarios,
+    reasons: result.reasons,
     validationErrors: result.validationErrors,
     treeChanged: result.treeChanged,
     evidenceDir: result.record.evidenceDir,

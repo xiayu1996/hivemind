@@ -5,6 +5,9 @@ import { isWithinRoot } from "../guard/danger-rules.js";
 export interface ScenarioVerdict {
   id: string;
   status: "passed" | "failed" | "inconclusive";
+  /** The verifier's one-sentence account of what it observed; the only thing a
+   * person reading the board gets to decide from when a round is rejected. */
+  reason?: string;
   url?: string;
   screenshots?: string[];
 }

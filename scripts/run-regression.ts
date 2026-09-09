@@ -21,7 +21,7 @@ import { RpcPiRunner } from "../src/runner/rpc-runner.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
 import { browserLanePath } from "../src/verify/browser-config.js";
 import { loadPromptLayers } from "../src/pipeline/prompt-loader.js";
-import { BlindVerifyExecutor } from "../src/verify/executor.js";
+import { BlindVerifyExecutor, EVIDENCE_DIR_ENV } from "../src/verify/executor.js";
 import { processGitCommand } from "../src/vcs/story-delivery.js";
 
 const execFileAsync = promisify(execFile);
@@ -76,6 +76,7 @@ async function main(): Promise<void> {
             PATH: browserLanePath(ROOT),
             [POLICY_ENV_VAR]: serializeGuardPolicy(guard),
             [CANONICAL_CAPTURE_ENV]: join(guard.extraWriteRoots[0] ?? evidenceRoot, "provider-requests.jsonl"),
+            [EVIDENCE_DIR_ENV]: guard.extraWriteRoots[0] ?? evidenceRoot,
           },
         }),
       },

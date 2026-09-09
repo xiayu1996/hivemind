@@ -6,7 +6,8 @@ const story: StorySnapshot = {
   id: "S-EPIC1-01", epicId: "EPIC1", notionPageId: "page-1", title: "Deliver safely",
   requirement: "Publish a reviewed Story branch.", repo: "example/repo", branch: "story/epic1-01",
   targetBranch: "main", state: "MERGE", phase: "MERGE", innerLoopRounds: 1,
-  phaseReentries: 0, stopReason: null, mrUrl: null, resumeState: null,
+  phaseReentries: 0,
+  lastHumanActionAt: null, stopReason: null, mrUrl: null, resumeState: null,
 };
 
 function gitPort(push: () => Promise<string> = async () => "") {

@@ -190,6 +190,13 @@ export const CONFIG_KEYS = {
     reload: "hot",
     description: "How long a breaker stays open after a rate limit that named no window of its own.",
   }),
+  "provider.quotaHoldMs": def({
+    schema: positiveInt.max(24 * 3_600_000),
+    default: 30 * 60_000,
+    scope: "global",
+    reload: "hot",
+    description: "How long a breaker stays open after a subscription usage limit that named no window; a credentials probe cannot tell when the window reopens, so a real dispatch after this hold is the test.",
+  }),
   "model.deferIfResetWithinMin": def({
     schema: positiveInt.max(180),
     default: 15,

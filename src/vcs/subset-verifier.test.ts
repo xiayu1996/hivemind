@@ -27,6 +27,7 @@ function result(verdict: BlindVerifyResult["record"]["verdict"], failedScenarios
       createdAt: 1,
     },
     screenshots: [],
+  reasons: [],
     validationErrors: [],
     treeChanged: false,
     runnerFailure: null,
@@ -53,6 +54,20 @@ describe("blindSubsetVerifier", () => {
 
     await expect(blindSubsetVerifier(port, base)(["S-M2-01-a", "S-M2-02-a"]))
       .resolves.toEqual({ passed: false, scenarioIds: ["S-M2-01-a"] });
+  });
+
+  it("carries the verifier's reasons and the refused claims into the merge result", async () => {
+    const rejected = result("rejected", ["S-M2-01-a"]);
+    rejected.reasons = [{ scenarioId: "S-M2-01-a", reason: "page returned 404" }];
+    rejected.validationErrors = ["S-M2-01-a: screenshot does not exist (x.png)"];
+    const port = { run: vi.fn(async () => rejected) };
+
+    await expect(blindSubsetVerifier(port, base)(["S-M2-01-a"])).resolves.toEqual({
+      passed: false,
+      scenarioIds: ["S-M2-01-a"],
+      reasons: ["S-M2-01-a: page returned 404", "S-M2-01-a: screenshot does not exist (x.png)"],
+    });
+    expect(port.run.mock.calls.at(0)?.at(0)).toMatchObject({ browserSession: "S-M2-02-integration" });
   });
 
   it("treats an inconclusive verdict as a failure rather than a pass", async () => {
