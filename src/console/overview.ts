@@ -152,7 +152,7 @@ export function costSection(data: OverviewData, now = Date.now()): CostSection {
     title: "Approximate costs",
     todayLabel: `Today ${formatUsd(todayTotal)}`,
     monthLabel: `This month ${formatUsd(monthTotal)}`,
-    updatedLabel: latest === null ? "" : `Updated ${formatRelativeTime(latest, now)}`,
+    updatedLabel: latest === null ? "No cost recorded yet" : `Updated ${formatRelativeTime(latest, now)}`,
     chart: daily.map((day) => ({
       dateLabel: day.dateLabel,
       amountLabel: formatUsd(day.total),

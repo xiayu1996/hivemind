@@ -3,6 +3,18 @@ import { describe, expect, it } from "vitest";
 import { migrate } from "../persistence/migrate.js";
 import { LibsqlConsoleDataSource } from "./libsql-data-source.js";
 
+describe("S-E3OVERVIEW-02-nocost", () => {
+  it("returns an empty cost list when nothing was recorded", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const source = new LibsqlConsoleDataSource(client, async () => []);
+
+    const overview = await source.overview() as { costs: unknown[] };
+    expect(overview.costs).toEqual([]);
+    client.close();
+  });
+});
+
 describe("S-E3OVERVIEW-02-summary", () => {
   it("returns only the recent cost records the cost region needs", async () => {
     const client = createClient({ url: ":memory:" });
