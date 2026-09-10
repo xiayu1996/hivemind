@@ -85,6 +85,8 @@ describe("S-E3OVERVIEW-01-questions", () => {
       "INSERT INTO requirements (id, notion_page_id, title, state, original_request, stop_reason, created_at, updated_at) VALUES ('r-done','rp3','Done requirement','DONE','Need a decision','blocking_question',1,22)",
       "INSERT INTO requirement_clarify_rounds (requirement_id, round, questions, asked_at) VALUES ('r-open',1,'[{\"question\":\"Which region?\"}]',10)",
       "INSERT INTO stories (id, notion_page_id, title, requirement, state, stop_reason, created_at, updated_at) VALUES ('s-blocked','sp1','Blocked story','Requirement','NEEDS_INPUT','blocking_question',1,23)",
+      "INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data) VALUES ('run-blocked-requirement',0,'r-blocked',NULL,'requirement.stopped',25,'{\"detail\":\"Choose a deployment region\"}')",
+      "INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data) VALUES ('run-blocked-story',0,'s-blocked',NULL,'story.stopped',26,'{\"reason\":\"blocking_question\"}')",
       "INSERT INTO stories (id, notion_page_id, title, requirement, state, stop_reason, created_at, updated_at) VALUES ('s-resumed','sp2','Resumed story','Requirement','CODE',NULL,1,24)",
     ], "write");
     const source = new LibsqlConsoleDataSource(client, async () => []);
@@ -92,8 +94,8 @@ describe("S-E3OVERVIEW-01-questions", () => {
     await expect(source.overview()).resolves.toMatchObject({
       questions: [
         { id: "r-open:clarify:1", title: "Open requirement", summary: "Which region?" },
-        { id: "r-blocked:blocked", title: "Blocked requirement", summary: "blocking_question" },
-        { id: "s-blocked:blocked", title: "Blocked story", summary: "blocking_question" },
+        { id: "r-blocked:blocked", title: "Blocked requirement", summary: "Choose a deployment region" },
+        { id: "s-blocked:blocked", title: "Blocked story", summary: "Waiting for your answer" },
       ],
     });
     client.close();
