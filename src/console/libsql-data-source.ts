@@ -127,10 +127,13 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
         WHERE stop_reason = 'blocking_question' AND state NOT IN ('DELIVERED', 'FAILED', 'HUMAN_PARKED')
        ORDER BY id`,
     )).rows;
-    for (const row of blockedRows) questions.push({
-      id: `${String(row.id)}:blocked`, title: String(row.title), state: String(row.state),
-      summary: "blocking_question", updatedAt: Number(row.updated_at), taskPath: "/tasks",
-    });
+    for (const row of blockedRows) {
+      const detail = await stoppedDetail(this.client, String(row.id));
+      questions.push({
+        id: `${String(row.id)}:blocked`, title: String(row.title), state: String(row.state),
+        summary: detail ?? "Waiting for your answer", updatedAt: Number(row.updated_at), taskPath: "/tasks",
+      });
+    }
 
     const activeRows = (await this.client.execute(
       `SELECT id, title, state, 'Last updated' AS summary, updated_at FROM requirements
@@ -169,6 +172,34 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
 
     return { questions, active, events };
   }
+}
+
+async function stoppedDetail(client: Client, cardId: string): Promise<string | null> {
+  const row = (await client.execute({
+    sql: `SELECT data FROM event_log WHERE card_id = ? AND type IN ('requirement.stopped', 'story.stopped')
+          ORDER BY ts DESC, id DESC LIMIT 1`,
+    args: [cardId],
+  })).rows[0];
+  if (!row) return null;
+  try {
+    const detail = (JSON.parse(String(row.data)) as { detail?: unknown }).detail;
+    return typeof detail === "string" && detail.trim() !== "" ? detail : null;
+  } catch {
+    return null;
+  }
+}
+
+function activeSummary(type: unknown, phase: unknown): string {
+  const eventType = typeof type === "string" ? type : "";
+  const eventPhase = typeof phase === "string" ? phase : "";
+  if (eventType === "phase.enter") {
+    return ({ CODE: "Writing code", VERIFY: "Running verification", DESIGN: "Planning work", MERGE: "Preparing delivery" } as Record<string, string>)[eventPhase] ?? "Work is under way";
+  }
+  if (eventType === "verify.verdict") return "Verification just finished";
+  if (eventType === "story.stopped" || eventType === "requirement.stopped") return "Waiting for your answer";
+  if (eventType.endsWith(".transition")) return "Work is under way";
+  if (eventType !== "") return "Work is under way";
+  return "Just created, not started";
 }
 
 function transitionedStoryState(type: string, value: unknown): "DELIVERED" | "FAILED" | null {
