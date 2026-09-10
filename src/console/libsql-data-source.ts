@@ -5,6 +5,7 @@ import { renderTraceHtml } from "../observability/projections/trace-html.js";
 import { traceProjection } from "../observability/projections/units.js";
 import { summarizeFootprintDeviation } from "../orchestrator/footprint-deviation.js";
 import type { ConsoleDataSource } from "./server.js";
+import { notionPageUrl } from "./notion-link.js";
 import { formatWaitingDuration } from "./work-status-time.js";
 
 function plain(row: Row): Record<string, unknown> {
@@ -109,7 +110,8 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
                              FROM human_gates
                             WHERE state = 'open'
                             ORDER BY priority, created_at, id`),
-      this.client.execute(`SELECT r.id AS id, r.title AS title, s.id AS story_id,
+      this.client.execute(`SELECT r.id AS id, r.title AS title, r.notion_page_id AS notion_page_id,
+                                  s.id AS story_id,
                                   COALESCE(s.phase, s.state) AS phase, s.title AS working_on,
                                   s.phase_started_at
                              FROM requirements r
@@ -164,6 +166,7 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
         workingOn: String(row.working_on),
         activeFor: formatWaitingDuration((this.now() - Number(row.phase_started_at)) / 60_000),
         latestProgress: `${phase} started`,
+        notionUrl: notionPageUrl(row.notion_page_id as string | null),
       };
     });
     return {

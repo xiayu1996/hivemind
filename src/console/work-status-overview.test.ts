@@ -256,7 +256,7 @@ describe("work status", () => {
     expect(status.json()).toMatchObject({ pendingResponses: [{}], activeRequirements: [{}] });
 
     // Every write surface on the read-only overview is refused by the server, not the UI.
-    for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"] as const) {
       const write = await app.inject({ method, url: "/api/work-status" });
       expect(write.statusCode).toBe(405);
       expect(write.json()).toEqual({ error: "console is read-only" });
