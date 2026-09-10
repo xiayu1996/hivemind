@@ -28,6 +28,21 @@ describe("enqueue", () => {
 });
 
 describe("replay", () => {
+  it("revives a sent row when the same payload is wanted again after the remote moved on", async () => {
+    const db = createClient({ url: ":memory:" });
+    await migrate(db);
+    const outbox = new NotionOutbox(db, () => 10);
+    const first = await outbox.enqueue({ priority: 1, operation: "sync", target: "t", payload: { a: 1 } });
+    await db.execute("UPDATE notion_outbox SET state = 'sent', sent_at = 11");
+    const replay = await outbox.enqueue({ priority: 1, operation: "sync", target: "t", payload: { a: 1 } });
+    expect(replay).toMatchObject({ id: first.id, inserted: false });
+    const again = await outbox.enqueue({ priority: 1, operation: "sync", target: "t", payload: { a: 1 }, resend: true });
+    expect(again).toMatchObject({ id: first.id, inserted: true });
+    const row = (await db.execute("SELECT state, attempts, sent_at FROM notion_outbox")).rows[0];
+    expect(row).toMatchObject({ state: "pending", attempts: 0, sent_at: null });
+    db.close();
+  });
+
   it("leaves rows for other deliveries alone when told which operations it owns", async () => {
     const outbox = new NotionOutbox(client);
     await outbox.enqueue({ target: "epic-1", operation: "present_epic_plan", payload: { n: 1 }, priority: 1 });

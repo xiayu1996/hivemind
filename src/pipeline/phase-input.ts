@@ -96,8 +96,9 @@ export function assemblePhasePrompt(input: PhaseInput): string {
   if (input.previousRejections.length > 0) {
     const rows = sortBy(input.previousRejections, (r) => `${r.phase} ${r.reason}`)
       .map((r) => `- [${r.phase}] ${r.reason}`);
-    parts.push("## Why earlier attempts of this phase were rejected\n\n" +
-      "Address every reason below in this attempt; do not repeat the rejected approach:\n\n" +
+    parts.push("## Why earlier attempts were rejected\n\n" +
+      "Address every reason below in this attempt; do not repeat the rejected approach. " +
+      "A reason tagged with a later phase is a gate that phase refused this branch at, and only this phase can change the code it names:\n\n" +
       rows.join("\n"));
   }
 

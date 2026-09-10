@@ -6,26 +6,35 @@ const story: StorySnapshot = {
   id: "S-EPIC1-01", epicId: "EPIC1", notionPageId: "page-1", title: "Deliver safely",
   requirement: "Publish a reviewed Story branch.", repo: "example/repo", branch: "story/epic1-01",
   targetBranch: "main", state: "MERGE", phase: "MERGE", innerLoopRounds: 1,
-  phaseReentries: 0, stopReason: null, mrUrl: null, resumeState: null,
+  phaseReentries: 0,
+  lastHumanActionAt: null, stopReason: null, mrUrl: null, resumeState: null,
 };
 
 describe("GitMrStoryDelivery", () => {
-  it("S-M2-06-epicmr publishes a clean Story branch but creates no Story-level merge request", async () => {
+  it("S-M2-06-epicmr stacks a Story's draft merge request onto the Epic branch, never onto main", async () => {
     const calls: string[][] = [];
     const git = { run: vi.fn(async (_cwd: string, args: string[]) => {
       calls.push(args);
       return args[0] === "branch" ? "story/epic1-01\n" : "";
     }) };
-    const create = vi.fn();
+    const create = vi.fn(async () => ({ url: "https://github.com/example/repo/pull/7", provider: "github" as const }));
     const delivery = new GitMrStoryDelivery({ create }, { worktreePath: "D:/worktree", git });
 
-    await expect(delivery.deliver({ story, mergeArtifact: "All scenarios passed." })).resolves.toEqual({ mrUrl: null });
+    await expect(delivery.deliver({ story, mergeArtifact: "All scenarios passed." }))
+      .resolves.toEqual({ mrUrl: "https://github.com/example/repo/pull/7" });
     expect(calls).toEqual([
       ["branch", "--show-current"],
       ["status", "--porcelain"],
       ["push", "--set-upstream", "origin", "story/epic1-01"],
     ]);
-    expect(create).not.toHaveBeenCalled();
+    expect(create).toHaveBeenCalledWith({
+      repository: "example/repo",
+      sourceBranch: "story/epic1-01",
+      targetBranch: "epic/EPIC1",
+      title: "[S-EPIC1-01] Deliver safely",
+      body: "All scenarios passed.",
+      draft: true,
+    });
   });
 
   it("does not publish when the worktree is dirty", async () => {

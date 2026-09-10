@@ -53,6 +53,156 @@ describe("SingleStoryWorker", () => {
 
   afterEach(() => client.close());
 
+  const designAndCode = vi.fn(async (input: ManagedPhaseInput) => {
+    if (input.phase === "DESIGN") {
+      return {
+        sessionId: "session-design",
+        artifacts: [
+          { kind: "design-summary", body: "Use central phase artifacts." },
+          { kind: "dod", body: DOD },
+        ],
+      };
+    }
+    if (input.phase === "CODE") {
+      return {
+        sessionId: `session-code-${input.round}`,
+        artifacts: [{ kind: "implementation", body: `Implementation round ${input.round}` }],
+      };
+    }
+    return {
+      sessionId: "session-merge",
+      artifacts: [{ kind: "delivery-report", body: "Both scenarios passed." }],
+    };
+  });
+
+  it("spends no inner-loop round on a verification the environment lost", async () => {
+    const outcomes = [
+      { verdict: "inconclusive" as const, failedScenarios: ["S-EPIC1-01-a"], codeFailedScenarios: [] },
+      { verdict: "accepted" as const, failedScenarios: [] },
+    ];
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => {
+        const outcome = outcomes[input.round - 1]!;
+        return { sessionId: `session-verify-${input.round}`, artifact: JSON.stringify(outcome), ...outcome };
+      }),
+    };
+    const worker = new SingleStoryWorker(
+      store,
+      { run: designAndCode },
+      verifier,
+      { deliver: vi.fn(async () => ({ mrUrl: null })) },
+      { enqueue: vi.fn(async () => undefined) },
+    );
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED", stopReason: null });
+    // Two rounds ran; the failing one was not charged, so the budget is intact.
+    await expect(store.getVerificationFailureHistory("S-EPIC1-01")).resolves.toEqual([]);
+  });
+
+  it("stops for a person after two consecutive rounds lost to the environment, and records the friction", async () => {
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => ({
+        sessionId: `session-verify-${input.round}`,
+        artifact: "{}",
+        verdict: "inconclusive" as const,
+        failedScenarios: ["S-EPIC1-01-a"],
+        codeFailedScenarios: [],
+      })),
+    };
+    const friction = { record: vi.fn(async () => undefined) };
+    const worker = new SingleStoryWorker(
+      store,
+      { run: designAndCode },
+      verifier,
+      { deliver: vi.fn(async () => ({ mrUrl: null })) },
+      { enqueue: vi.fn(async () => undefined) },
+      { friction },
+    );
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({
+      state: "NEEDS_INPUT",
+      stopReason: "verify_loop_exceeded",
+    });
+    expect(friction.record).toHaveBeenCalledWith(expect.objectContaining({
+      cardId: "S-EPIC1-01",
+      kind: "verification_inconclusive",
+    }));
+  });
+
+  it("stops before buying another turn once the card has spent its allowance", async () => {
+    const phases = vi.fn(designAndCode);
+    const worker = new SingleStoryWorker(
+      store,
+      { run: phases },
+      { run: vi.fn(async () => { throw new Error("verification should never be reached"); }) },
+      { deliver: vi.fn(async () => ({ mrUrl: null })) },
+      { enqueue: vi.fn(async () => undefined) },
+      {
+        spend: {
+          cardSpend: async () => ({ billedUsd: 6, subscriptionUsd: 0 }),
+          ceilingUsd: async () => 5,
+          spendByPhase: async () => new Map([["CODE", 6]]),
+        },
+      },
+    );
+
+    const result = await worker.run("S-EPIC1-01");
+    expect(result).toMatchObject({ state: "NEEDS_INPUT", stopReason: "cost_ceiling_exceeded" });
+    // The point of checking before the round: no further turn is bought.
+    expect(phases).not.toHaveBeenCalledWith(expect.objectContaining({ phase: "CODE" }));
+    expect(result.stopReport).toContain("$6.00 of $5.00");
+  });
+
+  it("keeps going when only subscription allowance has been used, which is not money", async () => {
+    const worker = new SingleStoryWorker(
+      store,
+      { run: designAndCode },
+      {
+        run: vi.fn(async (input) => ({
+          sessionId: `session-verify-${input.round}`,
+          artifact: "{}",
+          verdict: "accepted" as const,
+          failedScenarios: [],
+        })),
+      },
+      { deliver: vi.fn(async () => ({ mrUrl: "https://example.invalid/mr/1" })) },
+      { enqueue: vi.fn(async () => undefined) },
+      {
+        spend: {
+          cardSpend: async () => ({ billedUsd: 0.2, subscriptionUsd: 400 }),
+          ceilingUsd: async () => 5,
+        },
+      },
+    );
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
+  });
+
+  it("compares only the code-level failures between rounds", async () => {
+    // Round 2 fails on the same code scenario plus one the box lost: as a raw
+    // set that is not a proper subset, and the loop would stop on "expanded".
+    const outcomes = [
+      { verdict: "rejected" as const, failedScenarios: ["S-EPIC1-01-a", "S-EPIC1-01-b"], codeFailedScenarios: ["S-EPIC1-01-a", "S-EPIC1-01-b"] },
+      { verdict: "rejected" as const, failedScenarios: ["S-EPIC1-01-a", "S-EPIC1-01-b"], codeFailedScenarios: ["S-EPIC1-01-b"] },
+      { verdict: "accepted" as const, failedScenarios: [] },
+    ];
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => {
+        const outcome = outcomes[input.round - 1]!;
+        return { sessionId: `session-verify-${input.round}`, artifact: JSON.stringify(outcome), ...outcome };
+      }),
+    };
+    const worker = new SingleStoryWorker(
+      store,
+      { run: designAndCode },
+      verifier,
+      { deliver: vi.fn(async () => ({ mrUrl: null })) },
+      { enqueue: vi.fn(async () => undefined) },
+    );
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED", rounds: 3 });
+  });
+
   it("runs DESIGN, a converging CODE/VERIFY loop, MERGE and delivery", async () => {
     const phases = vi.fn(async (input: ManagedPhaseInput) => {
       if (input.phase === "DESIGN") {
@@ -165,6 +315,69 @@ describe("SingleStoryWorker", () => {
       state: "NEEDS_INPUT",
       stopReason: "verify_loop_exceeded",
     });
+  });
+
+  async function spendInnerLoop(): Promise<void> {
+    // One real round freezes the DoD through DESIGN; the remaining rounds of the
+    // budget are recorded directly, as a long inner loop would have left them.
+    const first = new SingleStoryWorker(store, {
+      run: async (input: ManagedPhaseInput) => input.phase === "DESIGN"
+        ? { sessionId: "session-design", artifacts: [{ kind: "design-summary", body: "Design" }, { kind: "dod", body: DOD }] }
+        : { sessionId: "session-code-1", artifacts: [{ kind: "implementation", body: "First" }] },
+    }, {
+      run: async () => ({ sessionId: "session-verify-1", verdict: "rejected", failedScenarios: ["S-EPIC1-01-a"], artifact: "Failed" }),
+    }, { deliver: async () => { throw new Error("delivery must not run"); } }, { enqueue: async () => undefined },
+    { maxInnerLoopRounds: 1, runId: (_cardId, phase, round) => `first-${phase}-${round}` });
+    await expect(first.run("S-EPIC1-01")).resolves.toMatchObject({ state: "NEEDS_INPUT", rounds: 1 });
+    for (let round = 2; round <= 6; round++) {
+      await client.execute({
+        sql: `INSERT INTO verify_records (card_id, round, code_session_id, verify_session_id, verdict, failed_scenarios, evidence_dir, created_at)
+              VALUES ('S-EPIC1-01', ?, ?, ?, 'rejected', '["S-EPIC1-01-a"]', '/ev', 100)`,
+        args: [round, `code-${round}`, `verify-${round}`],
+      });
+    }
+    await client.execute("UPDATE stories SET inner_loop_rounds = 6 WHERE id = 'S-EPIC1-01'");
+    await store.transition("S-EPIC1-01", "NEEDS_INPUT", "CODE", "human", "human-reopen");
+  }
+
+  it("stops cleanly when the Epic head bounces a Story whose inner loop is already spent", async () => {
+    await spendInnerLoop();
+    const worker = new SingleStoryWorker(store, {
+      run: async () => { throw new Error("no phase may run with the budget spent"); },
+    }, { run: async () => { throw new Error("no verification may run"); } }, {
+      deliver: async () => { throw new Error("delivery must not run"); },
+    }, { enqueue: async () => undefined }, { runId: (_cardId, phase, round) => `run-${phase}-${round}` });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toEqual({
+      state: "NEEDS_INPUT",
+      rounds: 6,
+      mrUrl: null,
+      stopReason: "verify_loop_exceeded",
+    });
+  });
+
+  it("grants a fresh inner loop after a person acted on the card, numbering rounds onward", async () => {
+    await spendInnerLoop();
+    await client.execute("UPDATE stories SET last_human_action_at = 9000000000000 WHERE id = 'S-EPIC1-01'");
+    const seenRounds: number[] = [];
+    const phases = {
+      run: async (input: ManagedPhaseInput) => {
+        seenRounds.push(input.round);
+        return {
+          sessionId: `session-${input.phase.toLowerCase()}-${input.round}`,
+          artifacts: [{ kind: input.phase === "MERGE" ? "delivery-report" : "implementation", body: "Done" }],
+        };
+      },
+    };
+    const verifier: StoryVerifyPort = {
+      run: async (input) => ({ sessionId: `verify-${input.round}`, verdict: "accepted", failedScenarios: [], artifact: "Fine" }),
+    };
+    const worker = new SingleStoryWorker(store, phases, verifier, {
+      deliver: async () => ({ mrUrl: "https://example.test/mr/7" }),
+    }, { enqueue: async () => undefined }, { runId: (_cardId, phase, round) => `run-${phase}-${round}` });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED", rounds: 7 });
+    expect(seenRounds[0]).toBe(7);
   });
 
   it("resumes a reopened CODE state from central DoD and verification history", async () => {

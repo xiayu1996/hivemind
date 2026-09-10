@@ -21,6 +21,11 @@ export const processGitCommand: GitCommandPort = {
   },
 };
 
+function epicBranch(epicId: string): string {
+  if (!/^[A-Za-z0-9._-]+$/.test(epicId)) throw new Error("Epic id cannot be used in a branch name");
+  return `epic/${epicId}`;
+}
+
 export interface GitMrDeliveryOptions {
   worktreePath: string;
   targetBranch?: string;
@@ -29,9 +34,14 @@ export interface GitMrDeliveryOptions {
 }
 
 /**
- * Publishes a clean Story branch. A Story that belongs to an Epic is delivered
- * by the Epic MR; a standalone Story opens its own, which is the degenerate
- * single-Story path every card takes until Epic execution is wired up.
+ * Publishes a clean Story branch and opens its review request.
+ *
+ * A Story inside an Epic opens a draft MR onto the Epic branch, not onto the
+ * target branch: the Epic MR stays the only way work reaches main, but a Story
+ * whose only visible trace was a row in a database was, in practice, a Story
+ * nobody could look at. The draft is the deliverable a person can read, review
+ * and comment on while the Epic is still filling up. A standalone Story opens
+ * a normal MR onto the target branch.
  */
 export class GitMrStoryDelivery implements StoryDeliveryPort {
   private readonly git: GitCommandPort;
@@ -58,13 +68,16 @@ export class GitMrStoryDelivery implements StoryDeliveryPort {
     if (status.trim() !== "") throw new Error("worktree has uncommitted changes at delivery");
     await this.git.run(this.options.worktreePath, ["push", "--set-upstream", "origin", story.branch]);
     await this.recordActualFootprint(story.id, story.branch);
-    if (story.epicId) return { mrUrl: null };
     const result = await this.mr.create({
       repository: story.repo,
       sourceBranch: story.branch,
-      targetBranch: this.options.targetBranch ?? story.targetBranch ?? "main",
+      // A Story in an Epic stacks onto the Epic branch it was just merged into.
+      targetBranch: story.epicId
+        ? epicBranch(story.epicId)
+        : this.options.targetBranch ?? story.targetBranch ?? "main",
       title: `[${story.id}] ${story.title}`,
       body: input.mergeArtifact,
+      ...(story.epicId ? { draft: true } : {}),
     });
     return { mrUrl: result.url };
   }

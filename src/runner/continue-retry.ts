@@ -1,5 +1,5 @@
 import { classifyError } from "./classify.js";
-import type { PiRunner, PromptResult } from "./types.js";
+import { RunnerTimeoutError, type PiRunner, type PromptImage, type PromptResult } from "./types.js";
 
 export class RetryLimitExceededError extends Error {
   readonly stopReason = "retry_limit_exceeded" as const;
@@ -25,6 +25,39 @@ export interface RunOutcome extends PromptResult {
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const defaultBackoff = (attempt: number) => Math.min(30_000, 1_000 * 2 ** (attempt - 1));
 
+const NO_USAGE = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, costUsd: 0 } as const;
+
+/**
+ * A prompt that never settles is an interruption, not a verdict on the work.
+ * The process and its in-memory session are still there, so the turn is
+ * abandoned and resumed like any other broken stream; replaying the whole phase
+ * would throw away everything the session had already done, which for a long
+ * CODE phase is most of the round.
+ */
+async function promptOnce(
+  runner: PiRunner,
+  message: string,
+  timeoutMs?: number,
+  images?: readonly PromptImage[],
+): Promise<PromptResult> {
+  try {
+    return await runner.prompt(message, timeoutMs, images);
+  } catch (cause) {
+    if (!(cause instanceof RunnerTimeoutError) || !runner.alive) throw cause;
+    // pi keeps the steering and follow-up queue across an abort and continues it
+    // afterwards, so a turn abandoned here would otherwise resume under
+    // instructions written for the stream that just broke.
+    await runner.clearQueue().catch(() => undefined);
+    await runner.abort().catch(() => undefined);
+    return {
+      settled: false,
+      failure: { errorMessage: cause.message, willRetry: null },
+      usage: { ...NO_USAGE },
+      events: [],
+    };
+  }
+}
+
 /**
  * Sends a prompt and rides out stream interruptions.
  *
@@ -41,11 +74,13 @@ export async function promptWithContinueRetry(
   message: string,
   options: ContinueRetryOptions,
   timeoutMs?: number,
+  /** Sent with the first prompt only; a resumed session already holds them. */
+  images?: readonly PromptImage[],
 ): Promise<RunOutcome> {
   const sleep = options.sleep ?? defaultSleep;
   const backoff = options.backoffMs ?? defaultBackoff;
 
-  let result = await runner.prompt(message, timeoutMs);
+  let result = await promptOnce(runner, message, timeoutMs, images);
   let attempts = 0;
 
   while (result.failure) {
@@ -64,7 +99,7 @@ export async function promptWithContinueRetry(
     attempts++;
     options.onRetry?.(attempts, result.failure.errorMessage);
     await sleep(backoff(attempts));
-    result = await runner.prompt("continue", timeoutMs);
+    result = await promptOnce(runner, "continue", timeoutMs);
   }
 
   return { ...result, continueRetries: attempts };

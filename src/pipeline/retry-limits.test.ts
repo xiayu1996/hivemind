@@ -5,7 +5,7 @@ import { migrate } from "../persistence/migrate.js";
 import { diagnoseRetryLimit, renderRetryReport, retryLimits } from "./retry-limits.js";
 
 describe("retryLimits", () => {
-  it("reads all four ceilings from config so no call site keeps its own default", async () => {
+  it("reads every ceiling from config so no call site keeps its own default", async () => {
     const client = createClient({ url: ":memory:" });
     await migrate(client);
     const config = await ConfigStore.load(client);
@@ -15,6 +15,7 @@ describe("retryLimits", () => {
       maxPhaseReentries: 3,
       maxContinueRetries: 8,
       maxRegressionReopens: 2,
+      promptTimeoutMs: 900_000,
     });
 
     await config.set("retry.maxInnerLoopRounds", 3, "test");

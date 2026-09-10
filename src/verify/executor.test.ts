@@ -37,6 +37,8 @@ function runner(options: { session?: string; content?: string; events?: RpcEvent
     stop: vi.fn(async () => undefined),
     steer: vi.fn(async () => undefined),
     abort: vi.fn(async () => undefined),
+    clearQueue: vi.fn(async () => ({ steering: [], followUp: [] })),
+    waitingOnUser: [],
     getMessages: vi.fn(async () => []),
     kill: vi.fn(async () => undefined),
   };
@@ -93,8 +95,9 @@ describe("BlindVerifyExecutor", () => {
     const withHosts = runner();
     await new BlindVerifyExecutor({ create: () => withHosts }, { insert: async () => undefined }, pins()).run(input());
     expect(withHosts.prompts[0]).toContain("playwright-cli");
-    expect(withHosts.prompts[0]).toContain("-s=story-1");
+    expect(withHosts.prompts[0]).toContain("-s=story-1-verify-1");
     expect(withHosts.prompts[0]).toContain("these hosts: localhost;");
+    expect(withHosts.prompts[0]).toContain("$HIVEMIND_EVIDENCE_DIR/service.log");
 
     const withoutHosts = runner();
     await new BlindVerifyExecutor({ create: () => withoutHosts }, { insert: async () => undefined }, pins())
@@ -127,6 +130,79 @@ describe("BlindVerifyExecutor", () => {
     expect(result.treeChanged).toBe(true);
     expect(result.record.verdict).toBe("rejected");
     expect(pin.quarantine).toHaveBeenCalledOnce();
+  });
+
+  it("calls a round the box lost inconclusive instead of spending an inner-loop round on it", async () => {
+    // The 2026-09-05 run spent four rounds on a dev server that was not up.
+    const instance = runner({
+      events: [assistant(JSON.stringify({
+        scenarios: [{ id: "S-EPIC-01-unit", status: "failed", reason: "connection refused on http://localhost:5173" }],
+      }))],
+    });
+    const executor = new BlindVerifyExecutor(
+      { create: () => instance },
+      { insert: async () => undefined },
+      pins(),
+    );
+
+    const result = await executor.run(input());
+    expect(result.record.verdict).toBe("inconclusive");
+    expect(result.record.failedScenarios).toEqual(["S-EPIC-01-unit"]);
+  });
+
+  it("keeps the verifier's reason for every scenario that did not pass", async () => {
+    const events = [
+      { type: "test_result", scenarioId: "S-EPIC-01-unit", status: "failed" },
+      assistant(JSON.stringify({ scenarios: [
+        { id: "S-EPIC-01-unit", status: "failed", reason: "vitest reported 1 failed: expected 2 to be 3" },
+      ] })),
+    ];
+    const result = await new BlindVerifyExecutor(
+      { create: () => runner({ events }) },
+      { insert: async () => undefined },
+      pins(),
+    ).run(input());
+    expect(result.record.verdict).toBe("rejected");
+    expect(result.reasons).toEqual([
+      { scenarioId: "S-EPIC-01-unit", reason: "vitest reported 1 failed: expected 2 to be 3" },
+    ]);
+  });
+
+  it("counts a scenario whose evidence claim was refused as failed, so the loop sees it", async () => {
+    const events = [
+      { type: "test_result", scenarioId: "S-EPIC-01-unit", status: "passed" },
+      assistant(JSON.stringify({ scenarios: [
+        { id: "S-EPIC-01-unit", status: "passed", url: "http://127.0.0.1:<port>/x", screenshots: ["missing.png"] },
+      ] })),
+    ];
+    const result = await new BlindVerifyExecutor(
+      { create: () => runner({ events }) },
+      { insert: async () => undefined },
+      pins(),
+    ).run(input());
+    expect(result.record.verdict).toBe("rejected");
+    expect(result.record.failedScenarios).toEqual(["S-EPIC-01-unit"]);
+    expect(result.validationErrors).toEqual(expect.arrayContaining([
+      "S-EPIC-01-unit: URL is invalid",
+      "S-EPIC-01-unit: screenshot does not exist (missing.png)",
+    ]));
+  });
+
+  it("raises a provider failure instead of recording it as a rejected round", async () => {
+    const failing = runner();
+    failing.prompt = vi.fn(async (): Promise<PromptResult> => ({
+      settled: false,
+      failure: { errorMessage: "WebSocket closed 1006 Connection ended", willRetry: false },
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, costUsd: 0 },
+      events: [],
+    }));
+    const inserted: VerifyRecord[] = [];
+    await expect(new BlindVerifyExecutor(
+      { create: () => failing },
+      { insert: async (record) => { inserted.push(record); } },
+      pins(),
+    ).run({ ...input(), maxContinueRetries: 0 })).rejects.toThrow(/VERIFY provider failure: .*WebSocket closed/);
+    expect(inserted).toHaveLength(0);
   });
 
   it("fails closed on malformed model output", async () => {

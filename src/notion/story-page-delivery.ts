@@ -92,9 +92,26 @@ function parseSpec(content: string): { id: string; status: string; text: string 
   return match ? { id: match[1]!, status: match[2]!, text: match[3] ?? "" } : undefined;
 }
 
+/** How long a round toggle recorded in the database is trusted to exist on the
+ * page even when a listing does not show it yet. */
+const RECENT_INSERT_MS = 10 * 60_000;
+
 function parseRound(content: string): { round: number; summary: string } | undefined {
   const match = /^Round (\d+):(?: (.*))?$/.exec(content);
   return match ? { round: Number(match[1]), summary: match[2] ?? "" } : undefined;
+}
+
+/** Identifies an insert so a repeated plan for the same content is recognised;
+ * edits and archives carry their block id and never collide. */
+function insertKey(operation: StoryPageOperation): string {
+  switch (operation.type) {
+    case "insert_content": return `content:${operation.section}`;
+    case "insert_verification_round": return `round:${operation.round}`;
+    case "insert_spec": return `spec:${operation.specId}`;
+    case "insert_metadata": return "metadata";
+    case "create_section": return `section:${operation.section}`;
+    default: return `${operation.type}:${JSON.stringify(operation)}`;
+  }
 }
 
 /** Replays desired Story page projections through the orchestrator's sole Notion gateway. */
@@ -114,11 +131,17 @@ export class NotionStoryPageDelivery implements NotionOutboxDelivery {
   async send(record: NotionOutboxRecord): Promise<void> {
     const payload = this.payload(record);
     const desired = this.desired(payload.desired);
+    // Notion's children listing can lag a just-completed append. An insert
+    // planned again for something this send already inserted is that lag, not
+    // missing content; inserting again would leave a duplicate on the page.
+    const inserted = new Set<string>();
     for (let pass = 0; pass < 8; pass++) {
       const remote = await this.readPage(payload.cardId, payload.pageId);
-      const operations = planStoryPageUpdate(remote.snapshot, desired);
+      const operations = planStoryPageUpdate(remote.snapshot, desired)
+        .filter((operation) => !inserted.has(insertKey(operation)));
       if (operations.length === 0) return;
       await this.applyOperations(payload.cardId, payload.pageId, desired, remote, operations);
+      for (const operation of operations) inserted.add(insertKey(operation));
     }
     throw new Error(`Notion Story page did not converge: ${payload.pageId}`);
   }
@@ -279,6 +302,14 @@ export class NotionStoryPageDelivery implements NotionOutboxDelivery {
       } else if (operation.type === "insert_spec") {
         await this.insertSpec(cardId, pageId, desired, remote.snapshot, operation);
       } else if (operation.type === "insert_verification_round") {
+        // A round this process inserted moments ago may not be listed yet;
+        // the page, not the outbox row, is what must hold exactly one toggle.
+        const known = (await this.client.execute({
+          sql: `SELECT toggle_block_id, created_at FROM notion_verification_rounds
+                WHERE story_id = ? AND round = ? AND archived_page_id IS NULL`,
+          args: [cardId, operation.round],
+        })).rows[0];
+        if (known && this.now() - Number(known.created_at) < RECENT_INSERT_MS) continue;
         const [created] = await this.append(pageId, [
           notionBlock("toggle", `Round ${operation.round}: ${operation.summary}`),
         ], operation.afterBlockId);

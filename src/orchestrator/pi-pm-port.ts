@@ -50,6 +50,8 @@ export interface PiPmPortOptions {
   promptRoot: string;
   cwd: string;
   extensions?: string[];
+  /** Extra variables for the pi spawn; an API-key provider needs its key here. */
+  env?: Record<string, string>;
   createRunner?: (config: RpcRunnerConfig) => PiRunner;
 }
 
@@ -81,6 +83,7 @@ export class PiPmPort implements ClarifyPort, PrdPort, RequirementDecomposePort 
       tools: ["read", "grep", "find", "ls"],
       contextFiles: "explicit",
       ...(this.options.extensions ? { extensions: this.options.extensions } : {}),
+      ...(this.options.env ? { env: this.options.env } : {}),
       systemPrompt: { mode: "replace", text: layers.combined },
     });
 

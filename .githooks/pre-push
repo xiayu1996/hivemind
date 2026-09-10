@@ -1,0 +1,30 @@
+#!/bin/sh
+# Refuses a push to the default branch. main only moves through a reviewed pull
+# request; a local commit that lands there directly skips review and CI on the
+# branch, and the history cannot be rewritten afterwards without a force push
+# the server ruleset also refuses.
+#
+# The server-side ruleset on GitHub is the real gate; this hook exists so the
+# refusal arrives before the network call, with an explanation of what to do
+# instead. Escaping it deliberately is `git push --no-verify`.
+#
+# Installed by `npm run prepare` (core.hooksPath=.githooks).
+
+protected=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
+[ -n "$protected" ] || protected=main
+
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  case "$remote_ref" in
+    "refs/heads/$protected")
+      printf '%s\n' \
+        "refusing to push to $protected: it only moves through a pull request." \
+        "" \
+        "  git switch -c <branch>   # carry these commits onto a branch" \
+        "  git push -u origin HEAD" \
+        "  gh pr create --base $protected" >&2
+      exit 1
+      ;;
+  esac
+done
+
+exit 0

@@ -1,4 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { pendingUiPrompts, type PendingUiPrompt } from "./activity.js";
+import { PI_AUTH_LOCK_STALE_MS, piAuthLockPath, reapStalePiAuthLock, type AuthLockReap } from "./auth-lock.js";
 import { JsonlDecoder, encodeCommand } from "./jsonl.js";
 import { extractFailure, sumUsage } from "./failure.js";
 import {
@@ -6,13 +8,18 @@ import {
   RunnerHandshakeError,
   RunnerTimeoutError,
   type PiRunner,
+  type PromptImage,
   type PromptResult,
+  type QueuedMessages,
   type RpcEvent,
   type RpcResponse,
   type RunnerSpawnOptions,
 } from "./types.js";
 
-const DEFAULT_HANDSHAKE_TIMEOUT_MS = 20_000;
+// Above pi's 30s credential-lock staleness window: a spawn that queues behind a
+// peer worker's refresh has to be able to outwait it, or a healthy pi is killed
+// for a lock it was correctly respecting.
+const DEFAULT_HANDSHAKE_TIMEOUT_MS = PI_AUTH_LOCK_STALE_MS + 15_000;
 const COMMAND_TIMEOUT_MS = 30_000;
 const DEFAULT_PROMPT_TIMEOUT_MS = 900_000;
 const SIGKILL_GRACE_MS = 5_000;
@@ -23,6 +30,8 @@ export interface RpcRunnerConfig extends RunnerSpawnOptions {
   binaryArgs?: string[];
   /** How long the startup round trip may take before the process is killed. */
   handshakeTimeoutMs?: number;
+  /** pi's credential lock, overridden by tests. Defaults to pi's own location. */
+  authLockPath?: string;
 }
 
 /**
@@ -42,11 +51,26 @@ export class RpcPiRunner implements PiRunner {
   #stderr = "";
   #exit: { code: number | null; signal: string | null } | null = null;
   #nextId = 1;
+  // Nothing answers extension dialogs yet, so this stays empty and every dialog
+  // reads as still open. Deciding what an unattended run should answer is a
+  // guard-policy question, not a transport one.
+  #answeredUiRequests = new Set<string>();
+  #authLock: AuthLockReap = { reaped: false, ageMs: null };
 
   constructor(private readonly config: RpcRunnerConfig) {}
 
   get alive(): boolean {
     return this.#proc !== null && this.#exit === null;
+  }
+
+  /** Extension dialogs awaiting an answer; see `pendingUiPrompts`. */
+  get waitingOnUser(): readonly PendingUiPrompt[] {
+    return pendingUiPrompts(this.#events, this.#answeredUiRequests);
+  }
+
+  /** What the pre-spawn credential-lock check found, for the canonical log. */
+  get authLock(): AuthLockReap {
+    return this.#authLock;
   }
 
   get stderr(): string {
@@ -56,11 +80,22 @@ export class RpcPiRunner implements PiRunner {
   async start(): Promise<void> {
     if (this.#proc) throw new Error("runner already started");
 
+    // A pi killed mid-refresh leaves its credential lock behind, and the next
+    // spawn then blocks on it for longer than the handshake waits. Recovery
+    // after a kill is a routine path here, so the abandoned lock is cleared
+    // before the spawn rather than diagnosed afterwards.
+    this.#authLock = await reapStalePiAuthLock(this.config.authLockPath ?? piAuthLockPath());
+
     this.#proc = spawn(
       this.config.binary,
       [...(this.config.binaryArgs ?? []), "--mode", "rpc", ...buildArgs(this.config)],
       {
       cwd: this.config.cwd,
+      // The child sees the orchestrator's whole environment, which includes
+      // credentials it has no business with (NOTION_TOKEN among them). Passing
+      // only a base set plus the active provider's key is a deliberate later
+      // step, not an oversight: several extensions read host variables today
+      // and narrowing this without auditing them would break them silently.
       env: { ...process.env, ...this.config.env },
       stdio: ["pipe", "pipe", "pipe"],
       },
@@ -92,11 +127,27 @@ export class RpcPiRunner implements PiRunner {
     }
   }
 
-  async prompt(message: string, timeoutMs = DEFAULT_PROMPT_TIMEOUT_MS): Promise<PromptResult> {
+  async prompt(
+    message: string,
+    timeoutMs = DEFAULT_PROMPT_TIMEOUT_MS,
+    images: readonly PromptImage[] = [],
+  ): Promise<PromptResult> {
     const from = this.#events.length;
     const settledBefore = this.#count("agent_settled");
 
-    const response = await this.#request({ type: "prompt", message }, COMMAND_TIMEOUT_MS);
+    if (images.length > 0 && this.config.model.images !== true) {
+      // pi forwards the image to the provider regardless, and the provider then
+      // fails with a message about content types that names neither the model
+      // nor the caller's mistake.
+      throw new Error(`model ${this.config.model.id} does not accept image input`);
+    }
+    const response = await this.#request({
+      type: "prompt",
+      message,
+      ...(images.length > 0
+        ? { images: images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType })) }
+        : {}),
+    }, COMMAND_TIMEOUT_MS);
     if (!response.success) {
       // Command-level rejection: the run never started, so there is no event to read.
       throw new Error(`prompt rejected: ${response.error ?? "unknown reason"}`);
@@ -124,6 +175,15 @@ export class RpcPiRunner implements PiRunner {
 
   async abort(): Promise<void> {
     await this.#request({ type: "abort" }, COMMAND_TIMEOUT_MS);
+  }
+
+  async clearQueue(): Promise<QueuedMessages> {
+    const response = await this.#request({ type: "clear_queue" }, COMMAND_TIMEOUT_MS);
+    if (!response.success) throw new Error(`clear_queue rejected: ${response.error ?? "unknown reason"}`);
+    return {
+      steering: stringList(response.data?.steering),
+      followUp: stringList(response.data?.followUp),
+    };
   }
 
   async setAutoRetry(enabled: boolean): Promise<void> {
@@ -236,10 +296,18 @@ export class RpcPiRunner implements PiRunner {
   }
 }
 
-function buildArgs(config: RpcRunnerConfig): string[] {
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+/** Exported for the spawn-argument tests; the runner is the only caller. */
+export function buildArgs(config: RpcRunnerConfig): string[] {
   const args = ["--provider", config.provider, "--model", config.model.id];
 
-  if (config.thinking) args.push("--thinking", config.thinking);
+  // An explicit spawn option wins; otherwise the level the model policy chose
+  // for this purpose travels with the model itself, so no port has to relay it.
+  const thinking = config.thinking ?? config.model.thinkingLevel;
+  if (thinking) args.push("--thinking", thinking);
   if (config.sessionDir) args.push("--session-dir", config.sessionDir);
   if (config.sessionFile) args.push("--session", config.sessionFile);
   for (const ext of config.extensions ?? []) args.push("-e", ext);

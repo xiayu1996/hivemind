@@ -27,6 +27,10 @@ function plainText(items: unknown): unknown[] {
 class FakeNotion {
   readonly children = new Map<string, FakeBlock[]>();
   readonly properties: Record<string, unknown> = {};
+  /** When set, a listing right after an append still shows the page as it was
+   * before that append, the way Notion's children endpoint can lag. */
+  lagAppends = false;
+  private stale = new Map<string, FakeBlock[]>();
   private nextId = 1;
 
   constructor(pageId: string) {
@@ -81,6 +85,11 @@ class FakeNotion {
   }
 
   private list(parentId: string) {
+    const stale = this.stale.get(parentId);
+    if (stale) {
+      this.stale.delete(parentId);
+      return { object: "list", results: stale.filter((item) => !item.archived), has_more: false, next_cursor: null };
+    }
     return { object: "list", results: this.visible(parentId), has_more: false, next_cursor: null };
   }
 
@@ -88,6 +97,7 @@ class FakeNotion {
     const body = request.body as { children: Record<string, unknown>[]; after?: string };
     const target = this.children.get(parentId);
     if (!target) throw new Error(`unknown fake parent: ${parentId}`);
+    if (this.lagAppends) this.stale.set(parentId, [...target]);
     const created = body.children.map((item) => this.create(item));
     const index = body.after ? target.findIndex((item) => item.id === body.after) + 1 : target.length;
     target.splice(index, 0, ...created);
@@ -185,6 +195,42 @@ describe("NotionStoryPageDelivery", () => {
     const sent = await client.execute("SELECT COUNT(*) AS count FROM notion_outbox WHERE state = 'sent'");
     expect(Number(sent.rows[0]?.count)).toBe(18);
     expect(Object.keys(fake.properties)).toContain("\u540c\u6b65\u6307\u7eb9");
+    client.close();
+  });
+
+  it("does not duplicate a round toggle or the stop text when Notion lists the page late", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, () => 10);
+    await store.createStory({ id: "S-EPIC1-01", notionPageId: "page-1", title: "Story", requirement: "Requirement" });
+    await store.freezeDefinitionOfDone("S-EPIC1-01", parseDoD(DOD));
+    await client.execute({
+      sql: `INSERT INTO verify_records (card_id, round, code_session_id, verify_session_id, verdict, failed_scenarios, created_at)
+            VALUES ('S-EPIC1-01', 1, 'code-1', 'verify-1', 'rejected', '["S-EPIC1-01-a"]', 20)`,
+    });
+    await client.execute("UPDATE stories SET state = 'NEEDS_INPUT', stop_reason = 'verify_loop_exceeded', resume_state = 'VERIFY' WHERE id = 'S-EPIC1-01'");
+
+    const fake = new FakeNotion("page-1");
+    fake.lagAppends = true;
+    const gateway = new NotionGateway({ transport: fake.transport, ratePerSecond: 1_000_000, mergeWindowMs: 0 });
+    const delivery = new NotionStoryDelivery(
+      new NotionStoryPageDelivery(client, gateway, () => 20),
+      new NotionStoryPropertyDelivery(gateway, client, () => 20),
+    );
+    const outbox = new NotionOutbox(client, () => 20);
+    await new NotionStoryProjection(client, () => 20).enqueue("S-EPIC1-01");
+    await expect(outbox.replay(delivery)).resolves.toEqual({ sent: 2, failed: 0 });
+    // A second projection of the same state must find the page complete.
+    await client.execute("UPDATE notion_outbox SET state = 'pending'");
+    await expect(outbox.replay(delivery)).resolves.toEqual({ sent: 2, failed: 0 });
+
+    const page = fake.visible("page-1");
+    expect(page.filter((item) => item.type === "toggle")).toHaveLength(1);
+    const texts = page.map((item) => {
+      const payload = item[item.type] as { rich_text?: Array<{ plain_text?: string }> } | undefined;
+      return payload?.rich_text?.map((run) => run.plain_text ?? "").join("") ?? "";
+    });
+    expect(texts.filter((text) => text.startsWith("Execution stopped"))).toHaveLength(1);
     client.close();
   });
 });
