@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MissingProviderKeyError, defaultApiKeyEnvVar, needsApiKeyEnv, providerKeyEnv } from "./provider-env.js";
+import { MissingProviderKeyError, defaultApiKeyEnvVar, isMeteredProvider, needsApiKeyEnv, providerKeyEnv } from "./provider-env.js";
 
 const SECRETS_PATH = "/home/agent/.hivemind/secrets.env";
 
@@ -53,5 +53,17 @@ describe("needsApiKeyEnv", () => {
   it("is false for oauth, whose credential lives in pi's auth file", () => {
     expect(needsApiKeyEnv({ authType: "oauth" })).toBe(false);
     expect(needsApiKeyEnv({ authType: "api_key" })).toBe(true);
+  });
+});
+
+describe("isMeteredProvider", () => {
+  it("follows the profile when it declares its billing", () => {
+    expect(isMeteredProvider({ authType: "oauth", billing: "metered" })).toBe(true);
+    expect(isMeteredProvider({ authType: "api_key", billing: "subscription" })).toBe(false);
+  });
+
+  it("falls back to the credential kind, which is right for both providers configured today", () => {
+    expect(isMeteredProvider({ authType: "api_key" })).toBe(true);
+    expect(isMeteredProvider({ authType: "oauth" })).toBe(false);
   });
 });

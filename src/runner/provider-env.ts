@@ -52,3 +52,12 @@ export function providerKeyEnv(input: ProviderKeyInput): Record<string, string> 
 export function needsApiKeyEnv(profile: Pick<ProviderProfile, "authType">): boolean {
   return profile.authType === "api_key";
 }
+
+/**
+ * Whether a card's turns on this provider are billed as they are spent, which
+ * is what the per-card cost ceiling counts. The profile may say so outright;
+ * without it, an API key is metered and an OAuth credential is a subscription.
+ */
+export function isMeteredProvider(profile: Pick<ProviderProfile, "authType" | "billing">): boolean {
+  return (profile.billing ?? (profile.authType === "api_key" ? "metered" : "subscription")) === "metered";
+}
