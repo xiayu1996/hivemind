@@ -112,6 +112,22 @@ Codex 订阅额度接近耗尽，本轮不跑 pi agent，卡片回归等配额�
 
 走查 3 个 inconclusive 指向下一个系统侧缺口：走查道需要按 DoD 的 given 造样本数据，否则只能看空页面。
 
+## 闭环整改后的首次完整链路（2026-09-10 晚）
+
+依据 D32–D36。orchestrator 用 `634aa6a` 及后续三个修复重启，三张停牌卡由 `resume-parked-story.ts` 恢复，其余 Story 由系统自行派发，人未再介入。
+
+| 卡 | 结果 | 轮次 | 备注 |
+|---|---|---|---|
+| S-E1ACTION-01 | DELIVERED，draft PR #20 → `epic/E1ACTION`，ff 合入后 GitHub 标 MERGED | 8（重设计后 1 轮 CODE+VERIFY） | 旧 DoD 不合规 → 系统自动回 DESIGN（D35）；走查 6/6 各有独立截图，3 条 finding 不否决 |
+| S-E1ACTION-02..06 | DELIVERED，PR #21–#25 | 各 1–2 轮 | 03 前两次 DESIGN 的 DoD YAML 无效（字面 `\n`、句中「: 」），第三次过；由此补了 DESIGN 重试回喂被拒原因 + YAML 宽容解析（`20f670a`） |
+| S-E1ACTION-04..06 | 在 deepseek 上完成 | — | codex 订阅撞用量窗口，断路器打开，链路自动切到计费 provider；04 计费 $0.058、05 $0.072、06 $0.131 |
+| Epic E1ACTION | EPIC_ACCEPT，Epic MR #26 `epic/E1ACTION → main` 已开，描述按 Story 分章、逐场景红绿证据 | — | 首次由系统自己走到「等人合并」这一步 |
+| S-E3OVERVIEW-01 | DELIVERED（mrUrl 空：分支已在 Epic 头，按 D33 不开空 MR） | 9 | 从 MERGE 恢复，MERGE r1 复用 |
+
+其间暴露并当场修掉的缺口：Epic 分支刷新时 `git fetch` 网络失败会打断整个周期（`b92f356`）；outbox 失败原因在重试成功后被清掉、日志只剩计数（`8a2a1e4`）。
+
+仍开放：调度不区分「已开工」与新卡，E3OVERVIEW-01 在 MERGE 状态排队约 100 分钟等 E1ACTION 新卡跑完；Epic 页面没有 MR 链接、没有 EPIC_ACCEPT / BLOCKED 的看板状态选项（Epic 状态列只有 4 个选项）。
+
 ## 尚未发生
 
 - Linux 主机上执行 `deploy/linux/install.sh` → `npm run preflight` → 两个 systemd 单元起来；同机重跑 `smoke-browser-e2e`。
