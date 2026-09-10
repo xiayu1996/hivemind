@@ -4,6 +4,11 @@ hivemind 是 7x24 自主编码 agent 服务：从 Notion 看板接单，拆解�
 改动任何 `src/` 之前先读 [docs/design/00-overview.md](docs/design/00-overview.md)（架构、决策、路线图）；
 实施任务与验收判据见 [docs/plan/tasks.md](docs/plan/tasks.md)，设计与清单冲突时以设计文档为准并回写清单。
 
+## 分支门禁
+
+`main` 只经 PR 推进,两层门禁都已生效:GitHub 的 ruleset(仓库侧,唯一挡得住的一层，禁止直推、强推与删除)与 `.githooks/pre-push`(本地,由 `npm run prepare` 设 `core.hooksPath` 装上,让拒绝发生在网络调用之前并给出改法)。
+直接在 `main` 上提交后再想推,唯一的出路是 `git switch -c <branch>` 把提交带到分支上；不要用 `--no-verify` 绕本地钩子——仓库侧照样拒。
+
 ## 预发布立场：地基优先于兼容
 
 **首次真实部署后删除本节。** 当前没有任何部署实例、没有外部使用者，因此优先把地基做对，而不是维护兼容层：
