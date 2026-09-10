@@ -8,8 +8,20 @@ const data: ConsoleDataSource = {
   config: async () => [{ key: "pipeline.maxRounds", value: 6 }],
   stats: async () => ({ footprintDeviation: { stories: 0, deviationRate: 0, unpredictedStoryRate: 0, perStory: [] } }),
   providers: async () => [{ provider: "openai-codex", state: "closed" }],
-  overview: async () => ({ questions: [], active: [], events: [] }),
+  overview: async () => ({ questions: [], active: [], events: [], costs: [{ ts: 1, modelId: "mock-1", costUsd: 0.1 }] }),
 };
+
+describe("S-E3OVERVIEW-02-summary", () => {
+  it("serves the cost records read-only", async () => {
+    const app = await createConsoleServer(data, { serveUi: false });
+    const response = await app.inject({ method: "GET", url: "/api/overview" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().costs).toEqual([{ ts: 1, modelId: "mock-1", costUsd: 0.1 }]);
+    const write = await app.inject({ method: "POST", url: "/api/overview", payload: { costUsd: 0 } });
+    expect(write.statusCode).toBe(405);
+    await app.close();
+  });
+});
 
 describe("read-only console", () => {
   it("serves four real-data API views and health", async () => {

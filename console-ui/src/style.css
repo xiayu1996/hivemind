@@ -27,3 +27,17 @@ article { margin-top: 12px; border-radius: 9px; background: #091019; padding: 12
 .overview-item span { color: #a9b8c8; }
 pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .error { color: #ff8f8f; }
+
+/* The cost region is the one place on the home page with numbers. */
+.cost-region { margin-top: 12px; }
+.cost-totals { display: flex; align-items: baseline; gap: 20px; margin: 10px 0 18px; }
+.cost-amount { font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+.cost-updated { color: #8091a5; margin-left: auto; }
+.cost-chart { list-style: none; display: flex; align-items: flex-end; gap: 12px; margin: 0; padding: 0; }
+.cost-bar { display: flex; flex-direction: column; align-items: center; gap: 6px; flex: 1; }
+.cost-bar-amount { color: #a9b8c8; font-size: 0.78rem; font-variant-numeric: tabular-nums; }
+.cost-bar-track { display: flex; align-items: flex-end; width: 100%; height: 120px; border-radius: 6px; background: #0b1118; }
+.cost-bar-fill { display: block; width: 100%; border-radius: 6px; background: #61d6c1; }
+.cost-bar-date { color: #8091a5; font-size: 0.75rem; }
+.cost-models { list-style: none; margin: 20px 0 0; padding: 0; }
+.cost-models li { padding: 6px 0; border-top: 1px solid #1a2735; color: #cdd8e3; font-variant-numeric: tabular-nums; }

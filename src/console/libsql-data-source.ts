@@ -10,6 +10,9 @@ function plain(row: Row): Record<string, unknown> {
   return Object.fromEntries(Object.entries(row));
 }
 
+/** A month can start 30 days ago; 32 days covers it and the 7-day chart. */
+const COST_WINDOW_MS = 32 * 24 * 60 * 60 * 1000;
+
 export class LibsqlConsoleDataSource implements ConsoleDataSource {
   constructor(
     private readonly client: Client,
@@ -179,8 +182,21 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
       }];
     });
 
-    return { questions, active, events };
+    return { questions, active, events, costs: await costRows(this.client) };
   }
+}
+
+/** Only the three fields the cost region reads; the rest stays out of the payload. */
+async function costRows(client: Client): Promise<Array<{ ts: number; modelId: string | null; costUsd: number }>> {
+  const rows = (await client.execute({
+    sql: "SELECT ts, model_id, cost_usd FROM cost_entries WHERE ts >= ? ORDER BY ts DESC",
+    args: [Date.now() - COST_WINDOW_MS],
+  })).rows;
+  return rows.map((row) => ({
+    ts: Number(row.ts),
+    modelId: row.model_id === null || row.model_id === undefined ? null : String(row.model_id),
+    costUsd: Number(row.cost_usd),
+  }));
 }
 
 async function stoppedDetail(client: Client, cardId: string): Promise<string | null> {

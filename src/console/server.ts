@@ -56,7 +56,7 @@ export async function createConsoleServer(
   app.get("/api/config", async () => data.config());
   app.get("/api/stats", async () => data.stats());
   app.get("/api/providers", async () => data.providers());
-  app.get("/api/overview", async () => data.overview?.() ?? ({ questions: [], active: [], events: [] }));
+  app.get("/api/overview", async () => data.overview?.() ?? ({ questions: [], active: [], events: [], costs: [] }));
 
   const writer = options.configWriter;
   if (writer) {

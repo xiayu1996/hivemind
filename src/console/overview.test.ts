@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import { formatOverviewItem, formatRelativeTime, overviewGroups, overviewSections, type OverviewData } from "./overview.js";
 
 /** The DoD seed: five cost records across today, this month and last month. */
+const at = (monthIndex: number, day: number, hour: number) => new Date(2026, monthIndex, day, hour).getTime();
+
 function costSeed(): OverviewData {
-  const at = (monthIndex: number, day: number, hour: number) => new Date(2026, monthIndex, day, hour).getTime();
   return {
     questions: [],
     active: [],
