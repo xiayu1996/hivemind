@@ -1,10 +1,38 @@
 import { describe, expect, it } from "vitest";
-import { formatRelativeTime, overviewGroups } from "./overview.js";
+import { formatOverviewItem, formatRelativeTime, overviewGroups } from "./overview.js";
 
 describe("S-E3OVERVIEW-01-active", () => {
   it("formats the latest activity time relative to the browser clock", () => {
     expect(formatRelativeTime(1_000, 181_000)).toBe("3 minutes ago");
     expect(formatRelativeTime(181_000, 181_000)).toBe("just now");
+  });
+
+  it("formats activity without exposing its internal state", () => {
+    expect(formatOverviewItem({ title: "Implement dashboard", state: "CODE", summary: "Writing code", timestamp: 1_000, taskPath: "/tasks" }, 181_000))
+      .toBe("Writing code · 3 minutes ago");
+    expect(formatOverviewItem({ title: "New request", state: "QUEUED", summary: "Just created, not started yet", taskPath: "/tasks" }, 181_000))
+      .toBe("Just created, not started yet");
+  });
+});
+
+describe("S-E3OVERVIEW-01-questions", () => {
+  it("formats a question without exposing its internal state", () => {
+    expect(formatOverviewItem({ title: "Repository decision", state: "CLARIFY", summary: "Which repository should this use?", taskPath: "/tasks" }, 181_000))
+      .toBe("Which repository should this use?");
+  });
+});
+
+describe("S-E3OVERVIEW-01-delivery", () => {
+  it("formats delivery without exposing its internal state", () => {
+    expect(formatOverviewItem({ title: "Release dashboard", state: "DELIVERED", summary: "Delivered", timestamp: 1_000, taskPath: "/tasks" }, 181_000))
+      .toBe("Delivered · 3 minutes ago");
+  });
+});
+
+describe("S-E3OVERVIEW-01-failure", () => {
+  it("formats a failure reason without exposing its internal state", () => {
+    expect(formatOverviewItem({ title: "Deploy dashboard", state: "FAILED", summary: "Tests failed", timestamp: 1_000, taskPath: "/tasks" }, 181_000))
+      .toBe("Tests failed · 3 minutes ago");
   });
 });
 
