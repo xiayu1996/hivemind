@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Client } from "@notionhq/client";
 import schema from "./notion-schema.json" with { type: "json" };
-import { bootstrapNotion, bootstrapRequirements } from "./bootstrap.js";
+import { bootstrapNotion, bootstrapRequirements, upgradeEpicBoard } from "./bootstrap.js";
 
 describe("bootstrapNotion", () => {
   it("creates Epics before the databases that relate to it, then adds rollups", async () => {
@@ -98,5 +98,30 @@ describe("bootstrapNotion", () => {
     ] as const) {
       expect(properties[schema.propertyNames[key]], key).toBeDefined();
     }
+  });
+
+  it("upgrades a live Epics board without recolouring the options it already has", async () => {
+    const updates: Array<Record<string, unknown>> = [];
+    const client = {
+      databases: { create: async () => { throw new Error("nothing is created on upgrade"); }, retrieve: async () => { throw new Error("unexpected"); } },
+      dataSources: {
+        retrieve: async () => ({
+          properties: {
+            [schema.propertyNames.epicStatus]: { select: { options: schema.options.epicStatus.slice(0, 4).map((name) => ({ name, color: "gray" })) } },
+          },
+        }),
+        update: async (input: Record<string, unknown>) => { updates.push(input); return { id: "ds-1" }; },
+      },
+    } as unknown as Pick<Client, "databases" | "dataSources">;
+
+    await upgradeEpicBoard(client, "epics-ds");
+
+    const properties = updates[0]!.properties as Record<string, any>;
+    const options = properties[schema.propertyNames.epicStatus].select.options as Array<{ name: string; color?: string }>;
+    expect(options.map((option) => option.name)).toEqual(schema.options.epicStatus);
+    expect(options.slice(0, 4).every((option) => option.color === undefined)).toBe(true);
+    expect(options.slice(4).every((option) => option.color !== undefined)).toBe(true);
+    expect(properties[schema.propertyNames.mergeRequest]).toEqual({ url: {} });
+    expect(properties[schema.propertyNames.waitingOnHuman].formula.expression).toContain("验收中");
   });
 });

@@ -206,10 +206,18 @@ export async function bootstrapRequirements(
  */
 export async function upgradeEpicBoard(client: BootstrapClient, epicsDataSourceId: string): Promise<void> {
   const names = schema.propertyNames;
+  // Notion refuses a colour on an option that already exists, even the colour it
+  // has; existing options travel by name only and new ones bring their colour.
+  const current = await client.dataSources.retrieve({ data_source_id: epicsDataSourceId });
+  const statusProperty = current.properties[names.epicStatus];
+  const existing = new Set(
+    statusProperty && "select" in statusProperty ? statusProperty.select.options.map((option) => option.name) : [],
+  );
+  const options = selectOptions("epicStatus").map((option) => (existing.has(option.name) ? { name: option.name } : option));
   await client.dataSources.update({
     data_source_id: epicsDataSourceId,
     properties: {
-      [names.epicStatus]: { select: { options: selectOptions("epicStatus") } },
+      [names.epicStatus]: { select: { options } },
       [names.mergeRequest]: { url: {} },
       [names.waitingOnHuman]: { formula: { expression: waitingFormula(names.epicStatus, "epicStatus") } },
     },
