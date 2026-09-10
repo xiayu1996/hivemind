@@ -1,7 +1,7 @@
-import type { DefinitionOfDone } from "../pipeline/dod.js";
+import { refusableStatements, screenScenarios, type DefinitionOfDone, type DoDScenario } from "../pipeline/dod.js";
 import { splitScenarioFailures } from "../pipeline/failure-classification.js";
 import type { UiReviewExecutor, UiReviewReference, UiReviewResult } from "../verify/ui-review.js";
-import { renderUiFindings } from "../verify/ui-review.js";
+import { renderDodAmendments, renderUiFindings } from "../verify/ui-review.js";
 import type {
   ManagedVerifyInput,
   ManagedVerifyResult,
@@ -10,12 +10,12 @@ import type {
 
 /** Scenarios a person can look at. Anything else has no interface to accept. */
 export function reviewableScenarios(dod: DefinitionOfDone): DefinitionOfDone["scenarios"] {
-  return dod.scenarios.filter((scenario) =>
-    scenario.layers.includes("ui") || scenario.layers.includes("e2e"));
+  return screenScenarios(dod);
 }
 
-function statementOf(scenario: DefinitionOfDone["scenarios"][number]): string {
-  return `${scenario.given}；${scenario.when}；${scenario.then}`;
+function statementOf(scenario: DoDScenario): string {
+  const source = scenario.source ? `；数据来源：${scenario.source}` : "";
+  return `${scenario.given}；${scenario.when}；${scenario.then}${source}`;
 }
 
 export interface UiReviewedVerifyPortOptions {
@@ -71,7 +71,13 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
       round: input.round,
       storyTitle: story.title,
       businessGoal: story.businessGoal,
-      scenarios: scenarios.map((scenario) => ({ id: scenario.id, statement: statementOf(scenario) })),
+      scenarios: scenarios.map((scenario) => ({
+        id: scenario.id,
+        statement: statementOf(scenario),
+        refusable: refusableStatements(scenario),
+      })),
+      outOfScope: input.definitionOfDone.out_of_scope,
+      reliesOn: input.definitionOfDone.relies_on,
       screenshots: (functional.screenshots ?? []).filter((shot) => reviewable.has(shot.scenarioId)),
       ...(this.options.references ? { references: await this.options.references(input.context.cardId) } : {}),
       worktreePath: this.options.worktreePath,
@@ -81,7 +87,8 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
       ...(this.options.chromiumSandbox === undefined ? {} : { chromiumSandbox: this.options.chromiumSandbox }),
     });
 
-    const findingsText = renderUiFindings(result.findings);
+    const amendmentsText = renderDodAmendments(result.amendments);
+    const findingsText = [renderUiFindings(result.findings), amendmentsText].filter(Boolean).join("\n\n");
     if (this.options.publishFindings) {
       await this.options.publishFindings({
         cardId: input.context.cardId,
@@ -99,6 +106,7 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
         verdict: result.verdict,
         acceptance: result.acceptance,
         findings: result.findings,
+        amendments: result.amendments,
         findingsText,
         validationErrors: result.validationErrors,
         runnerFailure: result.runnerFailure,

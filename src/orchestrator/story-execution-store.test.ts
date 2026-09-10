@@ -74,6 +74,30 @@ describe("StoryExecutionStore", () => {
     expect(first).toContain("DESIGN / design-summary");
     expect(first).toContain("Use the central artifact ledger.");
 
+    // Two CODE rounds and two verdicts later, the next prompt carries the
+    // newest account of each kind only, plus why the last verdict refused.
+    await store.beginPhase({ runId: "run-code-1", cardId: "S-EPIC1-01", phase: "CODE", round: 1, prompt: "code" });
+    await store.completePhase({ runId: "run-code-1", sessionId: "s-code-1", artifacts: [{ kind: "implementation", body: "First attempt." }] });
+    await store.transition("S-EPIC1-01", "CODE", "VERIFY", "system", "run-verify-1");
+    await store.beginPhase({ runId: "run-verify-1", cardId: "S-EPIC1-01", phase: "VERIFY", round: 1, prompt: "verify" });
+    await store.completePhase({ runId: "run-verify-1", sessionId: "s-verify-1", artifacts: [{ kind: "verification", body: JSON.stringify({ reasons: [{ scenarioId: "S-EPIC1-01-a", reason: "old reason" }] }) }] });
+    await store.transition("S-EPIC1-01", "VERIFY", "CODE", "system", "run-verify-1");
+    await store.beginPhase({ runId: "run-code-2", cardId: "S-EPIC1-01", phase: "CODE", round: 2, prompt: "code" });
+    await store.completePhase({ runId: "run-code-2", sessionId: "s-code-2", artifacts: [{ kind: "implementation", body: "Second attempt." }] });
+    await store.transition("S-EPIC1-01", "CODE", "VERIFY", "system", "run-verify-2");
+    await store.beginPhase({ runId: "run-verify-2", cardId: "S-EPIC1-01", phase: "VERIFY", round: 2, prompt: "verify" });
+    await store.completePhase({ runId: "run-verify-2", sessionId: "s-verify-2", artifacts: [{ kind: "verification", body: JSON.stringify({
+      reasons: [{ scenarioId: "S-EPIC1-01-a", reason: "expected 2, received 1" }],
+      uiReview: { acceptance: [{ id: "S-EPIC1-01-a", status: "failed", reason: "the total is missing", cites: "the total is shown" }] },
+    }) }] });
+    const third = await store.buildPhaseInput("S-EPIC1-01", "CODE", 3);
+    expect(third.artifacts.filter((item) => item.kind === "implementation").map((item) => item.body)).toEqual(["Second attempt."]);
+    expect(third.artifacts.filter((item) => item.kind === "verification")).toHaveLength(1);
+    expect(third.scenarioFailures).toEqual([
+      { scenarioId: "S-EPIC1-01-a", reason: "expected 2, received 1", source: "tests" },
+      { scenarioId: "S-EPIC1-01-a", reason: "the total is missing (the DoD says: the total is shown)", source: "screen" },
+    ]);
+
     const run = await client.execute(
       "SELECT status, session_id, length(prompt_sha256) AS hash_length FROM phase_runs WHERE run_id = 'run-design'",
     );
@@ -289,6 +313,17 @@ describe("StoryExecutionStore phase input", () => {
     });
     const design = await store.buildPhaseInput("S-EPIC1-01", "DESIGN", 2);
     expect(design.previousRejections).toEqual([]);
+
+    // A CODE round that completed after the refusal has answered it, and a
+    // round the provider killed was never refused for its approach.
+    const current = (await store.getStory("S-EPIC1-01")).state;
+    if (current !== "CODE") await store.transition("S-EPIC1-01", current, "CODE", "system", "run-back");
+    await store.beginPhase({ runId: "run-code-2", cardId: "S-EPIC1-01", phase: "CODE", round: 2, prompt: "code" });
+    await store.completePhase({ runId: "run-code-2", sessionId: "s-code-2", artifacts: [{ kind: "implementation", body: "Whitespace fixed." }] });
+    await store.beginPhase({ runId: "run-code-3", cardId: "S-EPIC1-01", phase: "CODE", round: 3, prompt: "code" });
+    await store.failPhase("run-code-3", "OAuth refresh failed for openai-codex: token refresh failed (401)");
+    const afterwards = await store.buildPhaseInput("S-EPIC1-01", "CODE", 4);
+    expect(afterwards.previousRejections).toEqual([]);
     client.close();
   });
 });

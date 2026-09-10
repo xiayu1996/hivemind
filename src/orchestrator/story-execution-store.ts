@@ -6,8 +6,9 @@ import {
   type StoryStopReason,
   type TransitionActor,
 } from "./state-machine.js";
-import type { Phase, PhaseInput } from "../pipeline/phase-input.js";
+import type { Phase, PhaseInput, ScenarioFailure } from "../pipeline/phase-input.js";
 import { parseDoD, type DefinitionOfDone } from "../pipeline/dod.js";
+import { isProviderFault } from "../pipeline/failure-classification.js";
 
 export type StoryPhase = Exclude<Phase, "DECOMPOSE">;
 
@@ -781,14 +782,27 @@ export class StoryExecutionStore {
 
   async buildPhaseInput(cardId: string, phase: StoryPhase, round: number): Promise<PhaseInput> {
     const story = await this.getStory(cardId);
+    // A rejection an already-completed CODE round has answered is history, not
+    // a task: only what was refused since CODE last finished is still open.
+    const lastCodeEnd = Number((await this.client.execute({
+      sql: `SELECT COALESCE(MAX(ended_at), 0) AS at FROM phase_runs
+            WHERE card_id = ? AND phase = 'CODE' AND status = 'completed'`,
+      args: [cardId],
+    })).rows[0]?.at ?? 0);
     const [specResult, artifactResult, feedbackResult, verifyResult, rejectionResult, bounceResult] = await Promise.all([
       this.client.execute({
         sql: "SELECT spec_id, status, text FROM story_specs WHERE story_id = ? ORDER BY spec_id",
         args: [cardId],
       }),
+      // Only the newest artifact of each kind: every earlier one is a superseded
+      // account of the same thing, and six of them buried the one line a
+      // person wrote under 18KB the model had to read first.
       this.client.execute({
-        sql: `SELECT phase, kind, body FROM phase_artifacts
-              WHERE card_id = ? ORDER BY phase, kind, round`,
+        sql: `SELECT a.phase, a.kind, a.body FROM phase_artifacts a
+              WHERE a.card_id = ?
+                AND a.id = (SELECT MAX(b.id) FROM phase_artifacts b
+                            WHERE b.card_id = a.card_id AND b.phase = a.phase AND b.kind = a.kind)
+              ORDER BY a.phase, a.kind`,
         args: [cardId],
       }),
       this.client.execute({
@@ -810,17 +824,18 @@ export class StoryExecutionStore {
         // otherwise leave to SQLite.
         sql: `SELECT phase, failure FROM phase_runs
               WHERE card_id = ? AND phase IN (?, ?) AND status = 'failed' AND failure IS NOT NULL
+                AND COALESCE(ended_at, started_at) > ?
               ORDER BY ended_at DESC, started_at DESC, run_id DESC LIMIT 5`,
-        args: [cardId, phase, phase === "CODE" ? "MERGE" : phase],
+        args: [cardId, phase, phase === "CODE" ? "MERGE" : phase, lastCodeEnd],
       }),
       // The Epic head bouncing the branch (a rebase conflict, a failed subset
       // re-verification) is recorded as an event, not a phase run; it is the
       // most recent reason a CODE round exists at all.
       this.client.execute({
         sql: `SELECT type, data FROM event_log
-              WHERE card_id = ? AND type IN ('merge.verification_failed', 'merge.conflict')
+              WHERE card_id = ? AND type IN ('merge.verification_failed', 'merge.conflict') AND ts > ?
               ORDER BY id DESC LIMIT ?`,
-        args: [cardId, phase === "CODE" ? 2 : 0],
+        args: [cardId, lastCodeEnd, phase === "CODE" ? 2 : 0],
       }),
     ]);
 
@@ -829,6 +844,8 @@ export class StoryExecutionStore {
       ? parseStringArray(latestVerify.failed_scenarios, "failed scenarios")
       : [];
     const evidenceDir = latestVerify ? optionalString(latestVerify.evidence_dir) : null;
+    const verification = artifactResult.rows.find((row) => row.phase === "VERIFY" && row.kind === "verification");
+    const scenarioFailures = verification ? scenarioFailuresOf(stringValue(verification.body, "verification artifact")) : [];
 
     return {
       cardId,
@@ -862,11 +879,15 @@ export class StoryExecutionStore {
         ? failedScenarios.map((scenarioId) => ({ scenarioId, path: evidenceDir }))
         : [],
       failedScenarios,
+      scenarioFailures,
       previousRejections: [
-        ...rejectionResult.rows.map((row) => ({
-          phase: stringValue(row.phase, "rejected phase"),
-          reason: stringValue(row.failure, "rejection reason").slice(0, 800),
-        })),
+        ...rejectionResult.rows
+          .map((row) => ({
+            phase: stringValue(row.phase, "rejected phase"),
+            reason: stringValue(row.failure, "rejection reason").slice(0, 800),
+          }))
+          // A round the provider killed was not refused for its approach.
+          .filter((rejection) => !isProviderFault(rejection.reason)),
         ...bounceResult.rows.map((row) => ({
           phase: "MERGE",
           reason: `${String(row.type) === "merge.conflict" ? "rebase onto the Epic head conflicted" : "re-verification on the Epic head failed"}: ${
@@ -876,6 +897,37 @@ export class StoryExecutionStore {
       ],
     };
   }
+}
+
+/**
+ * Why each scenario was refused, from both lanes of the verification artifact:
+ * the tests' reasons and what the person looking at the screen wrote. The
+ * failed set alone told CODE what to fix; this tells it what was wrong.
+ */
+function scenarioFailuresOf(body: string): ScenarioFailure[] {
+  let parsed: {
+    reasons?: Array<{ scenarioId?: unknown; reason?: unknown }>;
+    uiReview?: { acceptance?: Array<{ id?: unknown; status?: unknown; reason?: unknown; cites?: unknown }> };
+  };
+  try {
+    parsed = JSON.parse(body) as typeof parsed;
+  } catch {
+    // An artifact that is not JSON came from a verifier that never reached a
+    // verdict; it has no per-scenario reasons to offer.
+    return [];
+  }
+  const failures: ScenarioFailure[] = [];
+  for (const item of parsed.reasons ?? []) {
+    if (typeof item.scenarioId === "string" && typeof item.reason === "string") {
+      failures.push({ scenarioId: item.scenarioId, reason: item.reason, source: "tests" });
+    }
+  }
+  for (const entry of parsed.uiReview?.acceptance ?? []) {
+    if (entry.status !== "failed" || typeof entry.id !== "string" || typeof entry.reason !== "string") continue;
+    const cites = typeof entry.cites === "string" ? ` (the DoD says: ${entry.cites})` : "";
+    failures.push({ scenarioId: entry.id, reason: `${entry.reason}${cites}`, source: "screen" });
+  }
+  return failures;
 }
 
 function phaseForState(state: StoryState): StoryPhase | null {

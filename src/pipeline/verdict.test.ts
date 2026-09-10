@@ -55,6 +55,29 @@ describe("validateVerdict", () => {
     expect(result.errors.some((error) => error.includes("mtime"))).toBe(true);
   });
 
+  it("refuses a screen scenario judged without a page or a screenshot of its own", async () => {
+    const { input, screenshot } = fixture();
+    input.screenScenarioIds = ["S-EPIC12-03-a", "S-EPIC12-03-b"];
+    input.declaredScenarioIds = ["S-EPIC12-03-a", "S-EPIC12-03-b"];
+    input.trajectory.push({ type: "test_result", scenarioId: "S-EPIC12-03-b", status: "passed" });
+    // The same file under both scenarios is one look, not two.
+    input.verdict.scenarios.push({ id: "S-EPIC12-03-b", status: "passed", screenshots: [screenshot] });
+    const result = await validateVerdict(input);
+    expect(result.unproven).toEqual(["S-EPIC12-03-a", "S-EPIC12-03-b"]);
+    expect(result.errors).toContain(
+      "S-EPIC12-03-b: no screen evidence of its own was left for this scenario (no page was reported; no screenshot belongs to it alone)",
+    );
+  });
+
+  it("leaves a screen scenario alone when it has its own page and screenshot, or was inconclusive", async () => {
+    const { input } = fixture();
+    input.screenScenarioIds = ["S-EPIC12-03-a", "S-EPIC12-03-b"];
+    input.declaredScenarioIds = ["S-EPIC12-03-a", "S-EPIC12-03-b"];
+    input.verdict.scenarios.push({ id: "S-EPIC12-03-b", status: "inconclusive", reason: "the page never loaded" });
+    const result = await validateVerdict(input);
+    expect(result.unproven).toEqual([]);
+  });
+
   it("accepts real evidence but escalates when no red baseline can be mined", async () => {
     const { input } = fixture();
     const result = await validateVerdict(input);

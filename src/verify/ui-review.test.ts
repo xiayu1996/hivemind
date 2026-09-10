@@ -6,9 +6,12 @@ import type { GuardPolicy } from "../guard/policy.js";
 import type { PiRunner, PromptImage, PromptResult, RpcEvent } from "../runner/types.js";
 import {
   loadScreenshotImages,
+  promptFor,
   renderUiFindings,
   UiReviewExecutor,
   validateUiReview,
+  splitRefusals,
+  renderDodAmendments,
   type UiReviewInput,
 } from "./ui-review.js";
 
@@ -61,7 +64,7 @@ function input(overrides: Partial<UiReviewInput> = {}): UiReviewInput {
     round: 1,
     storyTitle: "买家可以在结算页看到运费",
     businessGoal: "买家下单前知道总价",
-    scenarios: [{ id: "S-EPIC-01-ui", statement: "结算页显示运费金额" }],
+    scenarios: [{ id: "S-EPIC-01-ui", statement: "结算页显示运费金额", refusable: ["看到运费金额", "运费 ¥12.00"] }],
     screenshots: [{ scenarioId: "S-EPIC-01-ui", path: png("shots/checkout.png") }],
     worktreePath: join(scratch, "work"),
     evidencePath: join(scratch, "evidence"),
@@ -118,7 +121,51 @@ describe("validateUiReview", () => {
   });
 });
 
+describe("splitRefusals", () => {
+  const scenarios = [{ id: "a", statement: "看到运费", refusable: ["看到运费金额", "运费 ¥12.00"] }];
+
+  it("keeps a refusal that cites a DoD sentence and turns an uncited one into an amendment", () => {
+    const result = splitRefusals([
+      { id: "a", status: "failed", reason: "页面没有运费", cites: "看到运费金额" },
+      { id: "a", status: "failed", reason: "运费应该用红色", cites: "运费要醒目" },
+      { id: "a", status: "failed", reason: "没有说明配送时间" },
+    ], scenarios);
+    expect(result.supported.map((entry) => entry.reason)).toEqual(["页面没有运费"]);
+    expect(result.amendments).toEqual([
+      { scenarioId: "a", observation: "运费应该用红色", cites: "运费要醒目" },
+      { scenarioId: "a", observation: "没有说明配送时间" },
+    ]);
+  });
+
+  it("matches a cite that quotes the DoD sentence with different spacing or as a fragment", () => {
+    const result = splitRefusals([
+      { id: "a", status: "failed", reason: "x", cites: "  运费  ¥12.00 " },
+    ], scenarios);
+    expect(result.supported).toHaveLength(1);
+  });
+});
+
 describe("UiReviewExecutor", () => {
+  it("does not reject the Story for a refusal the DoD never asked for, but tells the person", async () => {
+    const reply = JSON.stringify({
+      acceptance: [{ id: "S-EPIC-01-ui", status: "failed", reason: "没有显示配送时间", url: "http://127.0.0.1:4173/", screenshots: ["checkout.png"] }],
+      findings: [],
+    });
+    const result = await new UiReviewExecutor({ create: () => runner(reply) }).run(input());
+    expect(result.verdict).toBe("accepted");
+    expect(result.failedScenarios).toEqual([]);
+    expect(result.amendments).toEqual([{ scenarioId: "S-EPIC-01-ui", observation: "没有显示配送时间" }]);
+    expect(result.findings[0]?.note).toContain("没有显示配送时间");
+    expect(renderDodAmendments(result.amendments)).toContain("S-EPIC-01-ui: 没有显示配送时间");
+  });
+
+  it("tells the reviewer what it may cite, what is out of scope and what the Story relies on", () => {
+    const prompt = promptFor(input({ outOfScope: ["375px 导航栏布局"], reliesOn: ["/tasks 页面"] }), { images: [], names: [], skipped: [] });
+    expect(prompt).toContain("  - 看到运费金额");
+    expect(prompt).toContain("375px 导航栏布局");
+    expect(prompt).toContain("/tasks 页面");
+  });
+
   it("sends the screenshots as images with the first prompt", async () => {
     const fake = runner(PASSED);
     const result = await new UiReviewExecutor({ create: () => fake }).run(input());
@@ -140,7 +187,7 @@ describe("UiReviewExecutor", () => {
 
   it("rejects a scenario whose function is not on the screen", async () => {
     const reply = JSON.stringify({
-      acceptance: [{ id: "S-EPIC-01-ui", status: "failed", reason: "结算页没有任何运费字段" }],
+      acceptance: [{ id: "S-EPIC-01-ui", status: "failed", reason: "结算页没有任何运费字段", cites: "看到运费金额" }],
       findings: [],
     });
     const result = await new UiReviewExecutor({ create: () => runner(reply) }).run(input());

@@ -125,7 +125,11 @@ scenarios:
     layers: [integration]
 baseline:
   type: acceptance_test
-acceptance_criteria: [The page is complete.]
+acceptance_criteria:
+  - text: The page is complete.
+    scenarios: [S-EPIC1-01-a]
+out_of_scope: []
+relies_on: []
 predicted_footprint: [src]
 depends_on: []
 `;

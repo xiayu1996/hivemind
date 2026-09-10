@@ -25,6 +25,25 @@ function facts(overrides: Partial<CodeExitFacts> = {}): CodeExitFacts {
 }
 
 describe("evaluateCodeExit", () => {
+  it("refuses an artifact that leaves a round task unaccounted for, and names the tag", () => {
+    const verdict = evaluateCodeExit(facts({
+      roundTags: ["[answer:c-1]", "[scenario:S-DEMO-01-listing]"],
+      artifactText: "Done.\naddressed [scenario:S-DEMO-01-listing]: the list now sorts by the latest event",
+    }));
+    expect(verdict.passed).toBe(false);
+    expect(verdict.findings).toHaveLength(1);
+    expect(verdict.findings[0]).toContain("[answer:c-1]");
+    expect(verdict.findings[0]).not.toContain("[scenario:S-DEMO-01-listing]");
+  });
+
+  it("passes when every tag has its addressed line, whatever the case", () => {
+    const verdict = evaluateCodeExit(facts({
+      roundTags: ["[answer:c-1]"],
+      artifactText: "Addressed [Answer:c-1]: used the latest event as the person asked",
+    }));
+    expect(verdict.passed).toBe(true);
+  });
+
   it("passes a phase that committed everything with red/green evidence per scenario", () => {
     expect(evaluateCodeExit(facts())).toEqual({ passed: true, findings: [] });
   });

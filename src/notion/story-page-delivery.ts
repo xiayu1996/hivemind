@@ -97,7 +97,7 @@ function parseSpec(content: string): { id: string; status: string; text: string 
 const RECENT_INSERT_MS = 10 * 60_000;
 
 function parseRound(content: string): { round: number; summary: string } | undefined {
-  const match = /^Round (\d+):(?: (.*))?$/.exec(content);
+  const match = /^Round (\d+):(?: ([\s\S]*))?$/.exec(content);
   return match ? { round: Number(match[1]), summary: match[2] ?? "" } : undefined;
 }
 

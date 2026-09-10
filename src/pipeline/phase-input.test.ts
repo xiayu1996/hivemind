@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assemblePhasePrompt, type PhaseInput } from "./phase-input.js";
+import { assemblePhasePrompt, roundTasks, type PhaseInput } from "./phase-input.js";
 
 const base: PhaseInput = {
   cardId: "S-12",
@@ -104,15 +104,51 @@ describe("optional sections", () => {
   it("omits sections that have no content instead of leaving empty headings", () => {
     const prompt = assemblePhasePrompt(minimal);
     expect(prompt).toContain("## Requirement");
-    for (const heading of ["## Specification", "## Human feedback", "## Evidence", "## Scenarios still failing", "Repository:"]) {
+    for (const heading of ["## Specification", "## What this round must do", "## Evidence", "Repository:"]) {
       expect(prompt).not.toContain(heading);
     }
   });
 
   it("still assembles when only some optional data is present", () => {
     const prompt = assemblePhasePrompt({ ...minimal, failedScenarios: ["S-1"] });
-    expect(prompt).toContain("## Scenarios still failing");
+    expect(prompt).toContain("## What this round must do");
+    expect(prompt).toContain("[scenario:S-1]");
     expect(prompt).not.toContain("## Specification");
+  });
+});
+
+describe("what this round must do", () => {
+  it("puts the round's tasks before the history and tags each one", () => {
+    const prompt = assemblePhasePrompt({
+      ...base,
+      scenarioFailures: [
+        { scenarioId: "S-EPIC3-02", reason: "the tax line still shows $9.00", source: "screen" },
+        { scenarioId: "S-EPIC3-02", reason: "expected 8.1, received 9", source: "tests" },
+      ],
+    });
+    const tasks = prompt.indexOf("## What this round must do");
+    expect(tasks).toBeGreaterThan(0);
+    expect(tasks).toBeLessThan(prompt.indexOf("## Evidence from earlier rounds"));
+    expect(tasks).toBeLessThan(prompt.indexOf("## Output of earlier phases"));
+    expect(prompt).toContain("- [answer:c-1] ryan answered: Do not change the tests.");
+    expect(prompt).toContain("- [answer:c-2] ryan answered on S-EPIC3-02: Watch the rounding.");
+    expect(prompt).toContain("- [rejected:CODE] CODE refused the last attempt: commits are not named");
+    expect(prompt).toContain("- [scenario:S-EPIC3-02] still failing. the person looking at the screen: the tax line still shows $9.00 the tests: expected 8.1, received 9");
+    expect(prompt).toContain("- [scenario:S-EPIC3-01] still failing. No reason was recorded");
+    expect(prompt).toContain("addressed <tag>: <what you changed>");
+  });
+
+  it("orders tags by stable ids so the same input yields the same tags", () => {
+    const tags = roundTasks(base).map((task) => task.tag);
+    expect(tags).toEqual([
+      "[answer:c-1]",
+      "[answer:c-2]",
+      "[rejected:CODE]",
+      "[rejected:CODE]",
+      "[scenario:S-EPIC3-01]",
+      "[scenario:S-EPIC3-02]",
+    ]);
+    expect(roundTasks({ ...base, feedback: base.feedback.toReversed() }).map((task) => task.tag)).toEqual(tags);
   });
 });
 

@@ -62,12 +62,15 @@ npx tsx scripts/smoke-runner.ts            # 真实 pi 子进程冒烟
 npx tsx scripts/smoke-context-isolation.ts # 验证 context 文件不泄漏
 npx tsx scripts/smoke-crash-recovery.ts    # SIGKILL 后从 checkpoint 续跑
 npx tsx scripts/smoke-browser-e2e.ts       # 真实 headless 浏览器 + 三层红线
+
+npx tsx scripts/inspect-round.ts --card-id <id> [--round N] [--prompt] [--tools]   # 一轮一屏：prompt 分段、工具、自述、commit、两条道的逐场景结论
+npx tsx scripts/replay-phase.ts --card-id <id> --phase CODE --print-prompt        # 用中央状态重组一个 phase 的 prompt；给 --worktree 则真跑，不写库不动状态机
 ```
 
 Node `>=26`，ESM，包管理用 npm。部署只有 Linux 一条路：Windows 主机跑在 WSL2 Ubuntu 里，不再有原生 Windows 路径。
 `deploy/linux/install.sh` 是唯一入口，每个阶段先查再做，人工步骤（凭据、pi 登录、gh 登录）原地停下、重跑续接；见 [docs/runbooks/linux-single-node.md](docs/runbooks/linux-single-node.md)。
 pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src/runner/pi-binary.ts` 取，shell 经 `node -p` 取，不得再出现字面版本号。
-`scripts/` 只放长期入口（run-* / smoke-* / preflight / notion-bootstrap / install-pi / pi-login / catalog-snapshot / provider-add）；一次性排障脚本用完即删，不进仓库。
+`scripts/` 只放长期入口（run-* / smoke-* / preflight / notion-bootstrap / install-pi / pi-login / catalog-snapshot / provider-add / inspect-round / replay-phase）；一次性排障脚本用完即删，不进仓库。
 
 ### 本地验证顺序
 

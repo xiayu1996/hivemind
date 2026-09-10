@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DoDValidationError, parseDoD, scanScenarioCoverage } from "./dod.js";
+import { DoDValidationError, LAYER_OWNER, hasScreen, parseDoD, refusableStatements, scanScenarioCoverage } from "./dod.js";
 
 const yaml = `
 story_id: S-EPIC12-03
@@ -13,7 +13,12 @@ scenarios:
 baseline:
   type: acceptance_test
 acceptance_criteria:
-  - Tax is calculated from the discounted subtotal
+  - text: Tax is calculated from the discounted subtotal
+    scenarios: [S-EPIC12-03-a]
+  - text: The cart page stays read-only
+    constraint: the guard policy denies write tools in VERIFY
+out_of_scope: []
+relies_on: []
 predicted_footprint: [src/cart]
 depends_on: []
 `;
@@ -34,6 +39,35 @@ describe("parseDoD", () => {
     layers: [unit]
 baseline:`);
     expect(() => parseDoD(duplicate)).toThrow(/duplicate scenario id/);
+  });
+
+  it("rejects a criterion with no scenario and no constraint, or naming an undeclared scenario", () => {
+    const orphan = yaml.replace("    scenarios: [S-EPIC12-03-a]\n", "");
+    expect(() => parseDoD(orphan)).toThrow(DoDValidationError);
+    const undeclared = yaml.replace("scenarios: [S-EPIC12-03-a]", "scenarios: [S-EPIC12-03-zz]");
+    expect(() => parseDoD(undeclared)).toThrow(/undeclared scenario S-EPIC12-03-zz/);
+  });
+
+  it("requires a shows and an excludes example plus a source for any scenario judged on a screen", () => {
+    const onScreen = yaml.replace("layers: [unit, integration]", "layers: [unit, ui]");
+    expect(() => parseDoD(onScreen)).toThrow(/needs at least one "shows" and one "excludes" example/);
+    expect(() => parseDoD(onScreen)).toThrow(/needs a source/);
+    const complete = onScreen.replace("layers: [unit, ui]", `layers: [unit, ui]
+    source: carts.discounted_subtotal
+    examples:
+      - kind: shows
+        text: "Tax: $8.10 on $90.00"
+      - kind: excludes
+        text: "Tax: $9.00 on $100.00"`);
+    const dod = parseDoD(complete);
+    expect(hasScreen(dod.scenarios[0]!)).toBe(true);
+    expect(refusableStatements(dod.scenarios[0]!)).toEqual([
+      "Tax uses the discounted subtotal",
+      "Tax: $8.10 on $90.00",
+      "Tax: $9.00 on $100.00",
+    ]);
+    expect(LAYER_OWNER.ui).toBe("verify");
+    expect(LAYER_OWNER.unit).toBe("code");
   });
 
   it("requires a reason when a test baseline is exempt", () => {

@@ -25,6 +25,20 @@ export interface CodeExitFacts {
   markedScenarioIds: readonly string[];
   dodScenarioIds: readonly string[];
   projectChecks: readonly ProjectCheckResult[];
+  /** Tags of the round's tasks (a person's answer, a rejection, a failing scenario), from the prompt. */
+  roundTags?: readonly string[];
+  /** The implementation artifact, where each tag must be accounted for. */
+  artifactText?: string;
+}
+
+/**
+ * Tags the artifact never accounts for. The prompt asks for one line per tag,
+ * `addressed <tag>: <what you changed>`; a round that read a person's answer
+ * and wrote nothing about it is the round that did the smallest thing again.
+ */
+export function unaddressedTags(artifactText: string, roundTags: readonly string[]): string[] {
+  const text = artifactText.toLowerCase();
+  return roundTags.filter((tag) => !text.includes(`addressed ${tag.toLowerCase()}`));
 }
 
 export interface CodeExitVerdict {
@@ -92,6 +106,11 @@ export function evaluateCodeExit(facts: CodeExitFacts): CodeExitVerdict {
 
   for (const check of facts.projectChecks) {
     if (!check.passed) findings.push(`${check.name} failed: ${check.detail}`);
+  }
+
+  const unaddressed = unaddressedTags(facts.artifactText ?? "", facts.roundTags ?? []);
+  if (unaddressed.length > 0) {
+    findings.push(`The artifact does not account for: ${unaddressed.join(", ")}. For each, do the work it asks for and write one line \`addressed <tag>: <what you changed>\` in the artifact; a tag you deliberately did not act on still needs that line, saying why.`);
   }
 
   return { passed: findings.length === 0, findings };

@@ -25,7 +25,10 @@ scenarios:
 baseline:
   type: acceptance_test
 acceptance_criteria:
-  - The Story reaches delivered only after an accepted blind verdict.
+  - text: The Story reaches delivered only after an accepted blind verdict.
+    scenarios: [S-EPIC1-01-a, S-EPIC1-01-b]
+out_of_scope: []
+relies_on: []
 predicted_footprint: [src/orchestrator]
 depends_on: []
 `;

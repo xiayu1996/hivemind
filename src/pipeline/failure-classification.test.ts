@@ -51,3 +51,11 @@ describe("splitScenarioFailures", () => {
     expect(splitScenarioFailures(["S-1-c"], reasons)).toEqual({ code: ["S-1-c"], environment: [] });
   });
 });
+
+describe("reasons that describe the reviewer's own harness", () => {
+  it("treats a route the Story adds being not found, or a stale page, as the environment", () => {
+    expect(isEnvironmentFailure("its /api/overview request returned Route GET:/api/overview not found, so the worktree UI could not be reproduced.")).toBe(true);
+    expect(isEnvironmentFailure("Browser showed the pre-existing nodes view instead of the Story's page")).toBe(true);
+    expect(isEnvironmentFailure("the total is missing from the checkout page")).toBe(false);
+  });
+});

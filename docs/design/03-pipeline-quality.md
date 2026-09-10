@@ -147,6 +147,8 @@ DoD 每条业务场景带全局唯一 `scenario_id`（如 S-EPIC12-03）；测�
 
 DESIGN 阶段产出**测试矩阵声明**冻结进 Story DoD；VERIFY 按声明核对；豁免走 exempt + 理由留痕。
 
+**层有归属，且由系统固定而非 DoD 声明（2026-09-10）**：unit / integration / snapshot 归 CODE，用测试证明；e2e / ui 归 VERIFY，在真实浏览器里证明。CODE 是 TDD 驱动、要快，不买慢的浏览器轮；VERIFY 不采信 CODE 对屏幕的自述。CODE 出口只查 CODE 归属层的红绿证据；VERIFY 对每个 e2e / ui 场景要求**属于该场景独有的截图 + 到达的页面**，由 verdict 代码校验——S-E3OVERVIEW-01 曾用同一张截图通过四个场景。缺失记 `inconclusive`（§9.3），不进 failed 集合。
+
 | 层 | 触发条件（按改动性质） | 证据形态 |
 |---|---|---|
 | 单测 | 永远（任何逻辑变更的底线层） | 轨迹中 test 工具事件：红输出 hash → 绿输出 |
@@ -204,13 +206,27 @@ story_id: S-EPIC12-03
 design_summary: <一页纸核心设计，业务语言>
 scenarios:
   - id: S-EPIC12-03-a
-    given/when/then: <业务语言>
-    layers: [unit, e2e]          # 测试矩阵声明（§2.2 裁剪结果）
+    given/when/then: <业务语言；then 点名可观察物与边界>
+    layers: [unit, e2e]          # 测试矩阵声明（§2.2 裁剪结果；层归属由系统固定）
+    source: <含 e2e/ui 层时必填：数据从哪张表、哪类事件、哪个既有接口来>
+    examples:                    # 含 e2e/ui 层时必填：至少一条 shows 与一条 excludes
+      - kind: shows
+        text: <用户看到的字面文本>
+      - kind: excludes
+        text: <不得出现的内容>
 baseline: acceptance_test | bug_repro | exempt(reason)
-acceptance_criteria: [<人可勾选的验收条目>]
+acceptance_criteria:             # 每条必须有归宿
+  - text: <人可勾选的验收条目>
+    scenarios: [S-EPIC12-03-a]   # 由这些场景的测试证明
+  - text: <约束型条目>
+    constraint: <由什么代码检查兜底>
+out_of_scope: [<走查不得据以否决的事项；可为空但必须写>]
+relies_on: [<依赖其正常工作的既有页面/路由/服务；它们坏了不算本卡失败>]
 predicted_footprint: [module/dir]
 depends_on: [story_id]
 ```
+
+**DoD 写到什么程度（2026-09-10）**：只读代码的 CODE 与只看屏幕的走查，对着同一条 `then` 必须得出同一个结论。「简洁」「清晰」「摘要」这类词必须由 `examples` 的字面样例定义；schema（`src/pipeline/dod.ts`）在 DESIGN 出口强制上述字段，含糊的 DoD 出不了 DESIGN。依据：S-E3OVERVIEW-01 八轮中两轮（第 6、7 轮）源于 `then` 只写「简洁活动摘要」，CODE 按最小解释做、走查按用户语义打回，两边都没错，错在 DoD 允许两种解释；另有三条验收标准无任何场景归宿，只能靠评审人眼发现。
 
 **Epic 完成判定**（可代码判定，非 agent 自报）：全部 Story delivered ∧ epic 回归池连续 K 轮全绿（或 24h 无新增 regression 卡）∧ MR 合并 ∧ Notion 人工验收勾选。
 
@@ -317,6 +333,10 @@ usage limit、限流、超时、传输中断、OAuth 刷新失败只进熔断器
 - **只看 `ui` / `e2e` 层的 scenario**。没有界面的 scenario 没有可看的东西。
 - **原型图是参考不是判据**。原型画在实现之前,不要求像素级一致,与它的差异最多是一条 finding;只有需求用文字写明"必须与原型一致",差异才算功能验收不通过。
 
+### 9.2a 否决必须回指 DoD（2026-09-10）
+
+走查每条 `failed` 必须带 `cites`：所违反的 scenario `then` 或 `examples` 原句，代码校验引用真存在于 DoD（`splitRefusals`）。引不到的观察**不否决**：记为 finding，同时作为「DoD 修订建议」写到 Notion 卡上，由人批准后成为下一轮 `[answer:]` 任务。理由与 9.1 同源：一个可以凭任何用户语义否决的评审，就是一个每轮加需求、无上限的产品经理，`failed(N) ⊊ failed(N-1)` 对它不成立。DoD 的 `out_of_scope` 与 `relies_on` 随 prompt 下发：前者不得据以否决，后者坏了记 `inconclusive` 并点名依赖而非本卡。
+
 ### 9.3 跑不起来不占预算
 
 走查自身失败(浏览器起不来、回复不是要求的 JSON)记 `inconclusive`:卡照常交付,按 §8.6 不进 failed 集合、不消耗轮次,但作为系统侧 friction 物化——它是我们的缺陷,不是这张卡的。同理,目录里没有宣告图片输入的模型不会被派去看界面:那是演戏,该道直接跳过并明说。
@@ -325,4 +345,26 @@ usage limit、限流、超时、传输中断、OAuth 刷新失败只进熔断器
 
 - **余额不做预警,假设充足**。DeepSeek 没有余额查询 API,靠累计估算去猜只会得到一个不可信的数;真的耗尽时 API 自己会返回错误码,分类器已认得(QUOTA → 停牌叫人,充值只有人能做)。唯一有业务意义的护栏是**单任务消耗上限**(`cost.perCardUsdCeiling`,§1.5),它管的是"一张卡不能花过头",而不是"账户还剩多少"。
 - **等人不做二次提醒**。停点首次告警之后不再重复推送,卡可以无限期停在等人。这是明确接受的:重复提醒的价值低于它带来的噪音,人什么时候回是人的节奏。
+
+## 10. 增补（2026-09-10）：轮次为什么会烧掉——一张卡八轮的归因与可迭代性
+
+依据 S-E3OVERVIEW-01 全部 8 轮（17 个 phase run，$4.73）的逐轮展开（`scripts/inspect-round.ts`）。归因：2 轮真 bug；1 轮门禁放错位置（尾随空白到 MERGE 才查）；3 轮含环境失败（评审打到旧服务、OAuth 401、评审自建服务 500）；2 轮 DoD 含糊（§5 修订）。此外第 7 轮 CODE 的 prompt 15.9KB，人的回答缺失、三段可执行内容全在最后 1KB；第 8 轮 21.1KB 中 18.6KB 是 6 份重复旧产物。结论：轮次不是被模型「偷懒」烧掉的，是被契约漏洞烧掉的，而工具不足让漏洞看不见。
+
+### 10.1 prompt 结构：该做的事在前，历史在后，只注入最新产物
+
+`assemblePhasePrompt` 在 `## Specification` 之后紧接 `## What this round must do`：每项带 tag——`[answer:<feedbackId>]`（人的回答）、`[rejected:<phase>]`（上一次被拒的原因）、`[scenario:<id>]`（仍失败的场景，附两条道各自的原因）。`## Evidence from earlier rounds` 与 `## Output of earlier phases` 排最后，且每个 (phase, kind) 只注入最新一份产物。纯函数与稳定排序不变，跨机重建仍逐字节相同。
+
+### 10.2 CODE 出口增加「逐条回应」检查
+
+CODE 的 artifact 必须为每个注入的 tag 写一行 `addressed <tag>: <what you changed>`；缺的 tag 作为 gate finding 喂回同一 session（不计轮次、不计重入，与 §8.1 其他检查同性质）。检查的是「有没有对它作出回应」，不是「回应对不对」——后者是 VERIFY 的事。
+
+### 10.3 可观察与可重放
+
+- `scripts/inspect-round.ts`：一轮一屏——prompt 分段体积与 tag 到达位置、工具调用统计、模型自述、该 run 窗口内的 commit、verdict 与两条道的逐场景原因；VERIFY 与走查的 session 按时间窗口从各自 lane 目录找到。
+- `scripts/replay-phase.ts`：用某轮存下的输入单跑一个 phase，不写库、不动状态机、不发 Notion；改 prompt 后直接对比产物。
+- 轮次账本：`round` 是永不重置的流水号；预算按 `last_human_action_at` 之后被拒的轮数计，Notion 显示 `Budget x/6`。
+
+### 10.4 人的回答可见
+
+Story 页「待人回答」区列出已应用的回答：谁、何时、针对哪条、原文，以及用于第几轮。运维代答按实际来源署名，不冒充看板上的人。
 

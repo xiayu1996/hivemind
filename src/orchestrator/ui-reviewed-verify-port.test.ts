@@ -15,9 +15,13 @@ function dod(layers: Array<DefinitionOfDone["scenarios"][number]["layers"]>): De
       // oxlint-disable-next-line unicorn/no-thenable -- Given/When/Then is the external DoD contract.
       then: "看到运费金额",
       layers: given,
+      source: "orders.shipping_fee",
+      examples: [{ kind: "shows", text: "运费 ¥12.00" }, { kind: "excludes", text: "运费 --" }],
     })),
     baseline: { type: "acceptance_test" },
-    acceptance_criteria: ["买家看到运费"],
+    acceptance_criteria: [{ text: "买家看到运费", scenarios: layers.map((_, index) => `S-EPIC-01-s${index}`) }],
+    out_of_scope: [],
+    relies_on: [],
     predicted_footprint: ["src/checkout"],
     depends_on: [],
   };
@@ -52,6 +56,7 @@ function reviewResult(overrides: Partial<UiReviewResult> = {}): UiReviewResult {
     failedScenarios: [],
     acceptance: [{ id: "S-EPIC-01-s0", status: "passed" }],
     findings: [{ area: "layout", severity: "major", note: "运费与总价没有对齐" }],
+    amendments: [],
     validationErrors: [],
     runnerFailure: null,
     reviewSessionId: "ui-review.jsonl",
@@ -147,7 +152,7 @@ describe("UiReviewedVerifyPort", () => {
       review: reviewResult({
         verdict: "rejected",
         failedScenarios: ["S-EPIC-01-s0"],
-        acceptance: [{ id: "S-EPIC-01-s0", status: "failed", reason: "结算页没有运费字段" }],
+        acceptance: [{ id: "S-EPIC-01-s0", status: "failed", reason: "结算页没有运费字段", cites: "看到运费金额" }],
       }),
     });
     const result = await instance.run(verifyInput(dod([["ui"]])));
@@ -168,8 +173,8 @@ describe("UiReviewedVerifyPort", () => {
         verdict: "rejected",
         failedScenarios: ["S-EPIC-01-s0", "S-EPIC-01-s1"],
         acceptance: [
-          { id: "S-EPIC-01-s0", status: "failed", reason: "结算页没有运费字段" },
-          { id: "S-EPIC-01-s1", status: "failed", reason: "点击入口后看到 HTTP 500" },
+          { id: "S-EPIC-01-s0", status: "failed", reason: "结算页没有运费字段", cites: "看到运费金额" },
+          { id: "S-EPIC-01-s1", status: "failed", reason: "点击入口后看到 HTTP 500", cites: "看到运费金额" },
         ],
       }),
       friction: async (input) => {
@@ -190,7 +195,7 @@ describe("UiReviewedVerifyPort", () => {
       review: reviewResult({
         verdict: "rejected",
         failedScenarios: ["S-EPIC-01-s0"],
-        acceptance: [{ id: "S-EPIC-01-s0", status: "failed", reason: "页面返回 HTTP 503，服务没起来" }],
+        acceptance: [{ id: "S-EPIC-01-s0", status: "failed", reason: "页面返回 HTTP 503，服务没起来", cites: "看到运费金额" }],
       }),
       friction: async (input) => {
         friction.push(input);
