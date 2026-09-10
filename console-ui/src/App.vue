@@ -1,5 +1,6 @@
 <script setup>
 import { ref, watchEffect } from "vue";
+import { formatStartedWaiting, formatWaitingDuration } from "../../src/console/work-status-time.js";
 
 const views = ["work-status", "nodes", "tasks", "costs", "config", "stats", "providers"];
 const current = ref(views.includes(location.pathname.slice(1)) ? location.pathname.slice(1) : "work-status");
@@ -28,20 +29,6 @@ function navigate(view) {
   current.value = view;
 }
 
-function formatStartedWaiting(timestamp) {
-  return new Date(timestamp).toISOString().slice(0, 16).replace("T", " ");
-}
-
-function formatWaitingDuration(minutes) {
-  const days = Math.floor(minutes / 1440);
-  const hours = Math.floor((minutes % 1440) / 60);
-  const remainingMinutes = minutes % 60;
-  const parts = [];
-  if (days) parts.push(`${days} ${days === 1 ? "day" : "days"}`);
-  if (hours) parts.push(`${hours} ${hours === 1 ? "hour" : "hours"}`);
-  if (remainingMinutes || parts.length === 0) parts.push(`${remainingMinutes} ${remainingMinutes === 1 ? "minute" : "minutes"}`);
-  return parts.join(" ");
-}
 </script>
 
 <template>
