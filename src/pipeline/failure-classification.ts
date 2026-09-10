@@ -15,7 +15,15 @@ const ENVIRONMENT_REASON = [
   /address already in use|port \d+ is (?:already )?in use/i,
   /(?:service|server|dev server|app|site|page)\b[^.]{0,40}?\bnot (?:running|reachable|up|started|available|serving)/i,
   /\bnot (?:running|started|up)\b[^.]{0,20}\b(?:service|server|app)\b/i,
+  // Every 5xx, not only the gateway family. The reviewer stands its own
+  // harness up to look at a screen, so a 500 it meets is as likely to come
+  // from that scaffolding as from the Story: S-E3OVERVIEW-01 was parked by a
+  // 500 raised inside the stub the reviewer itself had written. A real defect
+  // in the code still fails a test, which is the lane that judges code.
   /\b(?:502|503|504)\b/,
+  /\bhttp\s*5\d{2}\b/i,
+  /\b(?:status|status code|code)\s*[:=]?\s*5\d{2}\b/i,
+  /\b5\d{2}\b[^.]{0,30}(?:internal server error|server error)|internal server error/i,
   /screenshot (?:does not exist|is not a file|escapes the evidence root)/i,
   /browser (?:failed to launch|could not be launched|crashed)|chromium.*(?:not found|failed to launch)/i,
   /playwright.*(?:not installed|missing)/i,

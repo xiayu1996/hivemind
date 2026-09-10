@@ -11,6 +11,15 @@ describe("isEnvironmentFailure", () => {
     expect(isEnvironmentFailure("chromium failed to launch")).toBe(true);
   });
 
+  it("reads a 500 the reviewer's own harness raised as environmental", () => {
+    // The wording S-E3OVERVIEW-01 was parked by on 2026-09-10: the 500 came
+    // from the stub server the reviewer had written itself, in Chinese because
+    // the reviewer answers in the language of the board.
+    expect(isEnvironmentFailure("首页最后一组正确显示昨日失败及原因，但点击该事项的任务入口后在 /tasks 页面看到 HTTP 500，入口不可用。")).toBe(true);
+    expect(isEnvironmentFailure("the task page answered with status 500")).toBe(true);
+    expect(isEnvironmentFailure("Internal Server Error on /api/tasks")).toBe(true);
+  });
+
   it("keeps a real defect out of the environmental bucket", () => {
     expect(isEnvironmentFailure("the total is 0 where the coupon should have deducted 5")).toBe(false);
     expect(isEnvironmentFailure("the delete button is missing from the row")).toBe(false);

@@ -157,6 +157,50 @@ describe("UiReviewedVerifyPort", () => {
     expect(result.codeFailedScenarios).toEqual(["S-EPIC-01-s0"]);
   });
 
+  it("keeps a scenario the reviewer lost to a 500 out of the failed set", async () => {
+    // S-E3OVERVIEW-01, 2026-09-10: two of three refusals named a 500 raised by
+    // the stub server the reviewer had written itself, and the failed set grew
+    // enough to break convergence and park a card whose code had not regressed.
+    const friction: Array<{ cardId: string; runId: string; kind: string; detail: string }> = [];
+    const { instance } = port({
+      functional: functionalResult(),
+      review: reviewResult({
+        verdict: "rejected",
+        failedScenarios: ["S-EPIC-01-s0", "S-EPIC-01-s1"],
+        acceptance: [
+          { id: "S-EPIC-01-s0", status: "failed", reason: "结算页没有运费字段" },
+          { id: "S-EPIC-01-s1", status: "failed", reason: "点击入口后看到 HTTP 500" },
+        ],
+      }),
+      friction: async (input) => {
+        friction.push(input);
+      },
+    });
+    const result = await instance.run(verifyInput(dod([["ui"], ["ui"]])));
+    expect(result.verdict).toBe("rejected");
+    expect(result.failedScenarios).toEqual(["S-EPIC-01-s0"]);
+    expect(result.codeFailedScenarios).toEqual(["S-EPIC-01-s0"]);
+    expect(friction).toEqual([]);
+  });
+
+  it("accepts the round when every refusal was the environment, and records it as friction", async () => {
+    const friction: Array<{ cardId: string; runId: string; kind: string; detail: string }> = [];
+    const { instance } = port({
+      functional: functionalResult(),
+      review: reviewResult({
+        verdict: "rejected",
+        failedScenarios: ["S-EPIC-01-s0"],
+        acceptance: [{ id: "S-EPIC-01-s0", status: "failed", reason: "页面返回 HTTP 503，服务没起来" }],
+      }),
+      friction: async (input) => {
+        friction.push(input);
+      },
+    });
+    const result = await instance.run(verifyInput(dod([["ui"]])));
+    expect(result.verdict).toBe("accepted");
+    expect(friction).toMatchObject([{ kind: "ui_review_environment" }]);
+  });
+
   it("records a review that could not run as our friction, not as the Story's failure", async () => {
     const friction: Array<{ cardId: string; runId: string; kind: string; detail: string }> = [];
     const { instance } = port({

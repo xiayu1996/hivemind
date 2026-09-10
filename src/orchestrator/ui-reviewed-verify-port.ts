@@ -1,4 +1,5 @@
 import type { DefinitionOfDone } from "../pipeline/dod.js";
+import { splitScenarioFailures } from "../pipeline/failure-classification.js";
 import type { UiReviewExecutor, UiReviewReference, UiReviewResult } from "../verify/ui-review.js";
 import { renderUiFindings } from "../verify/ui-review.js";
 import type {
@@ -106,16 +107,36 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
       },
     });
 
-    if (result.verdict === "rejected") {
+    // What the reviewer could not see because the box misbehaved is not a
+    // failure of the code, and the reviewer stands its own harness up: a 500 it
+    // meets may well be its own. The same split the functional lane applies.
+    const split = splitScenarioFailures(
+      result.failedScenarios,
+      result.acceptance
+        .filter((entry) => entry.status !== "passed" && entry.reason)
+        .map((entry) => ({ scenarioId: entry.id, reason: entry.reason! })),
+    );
+    if (result.verdict === "rejected" && split.code.length > 0) {
       return {
         ...functional,
         verdict: "rejected",
-        failedScenarios: result.failedScenarios,
+        failedScenarios: split.code,
         // A function the reviewer could not find on the screen is a failure in
         // the code, so it counts against convergence like any other.
-        codeFailedScenarios: result.failedScenarios,
+        codeFailedScenarios: split.code,
         artifact,
       };
+    }
+    if (result.verdict === "rejected" && this.options.recordFriction) {
+      // Every scenario the reviewer refused, it refused because of the box.
+      // The round accepts on the functional lane and the reason is recorded,
+      // so nobody has to read a rejection that says nothing about the code.
+      await this.options.recordFriction({
+        cardId: input.context.cardId,
+        runId: input.runId,
+        kind: "ui_review_environment",
+        detail: `the review failed only on the environment: ${split.environment.join(", ")}`,
+      });
     }
     if (result.verdict === "inconclusive" && this.options.recordFriction) {
       // A review that never happened must not park the card: 03 section 8.6
