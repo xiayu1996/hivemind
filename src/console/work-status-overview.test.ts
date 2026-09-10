@@ -103,6 +103,28 @@ describe("S-E1ACTION-01-ignorecomments", () => {
     await expect(readFile("console-ui/src/App.vue", "utf8")).resolves.toContain("Context");
   });
 
+  // @scenario S-E1ACTION-02-duration
+  it("uses gate creation, not a later update, as the non-negative waiting-duration start", async () => {
+    const createdAt = Date.UTC(2026, 8, 2, 10, 0);
+    const now = createdAt + (125 * 60 * 1000);
+    await client.batch([
+      { sql: `INSERT INTO requirements (id, notion_page_id, title, state, original_request, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?)`, args: ["requirement-1", "requirement-page-1", "Export invoices", "EXECUTING", "Export invoices", 1, 1] },
+      { sql: `INSERT INTO human_gates (id, object_type, object_id, required_action, phase, context, navigation_target, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, args: ["gate-duration", "requirement", "requirement-1", "Answer", "DESIGN", "Invoice context", "/requirements/requirement-1", createdAt, now - 60_000] },
+    ], "write");
+
+    const source = new LibsqlConsoleDataSource(client, async () => [], () => now);
+    await expect(source.workStatus()).resolves.toMatchObject({
+      pendingResponses: [{
+        startedWaitingAt: createdAt,
+        waitingDurationMinutes: 125,
+      }],
+    });
+    await expect(readFile("console-ui/src/App.vue", "utf8")).resolves.toContain("Started waiting:");
+    await expect(readFile("console-ui/src/App.vue", "utf8")).resolves.toContain("Waiting for");
+  });
+
   // @scenario S-E1ACTION-01-readfailure
   it("returns an observable loading failure rather than empty sections when projection fails", async () => {
     const failingData: ConsoleDataSource = {
