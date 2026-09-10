@@ -24,5 +24,12 @@ button, nav a {
 button.active { color: #05131a; background: #61d6c1; border-color: #61d6c1; }
 section { border: 1px solid #223043; border-radius: 14px; padding: 22px; background: #0f1823; }
 article { margin-top: 12px; border-radius: 9px; background: #091019; padding: 12px; }
+/* A link inside a card is a control on a touch screen, and a finger needs 24x24. */
+article a {
+  display: inline-flex;
+  align-items: center;
+  min-width: 24px;
+  min-height: 24px;
+}
 pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .error { color: #ff8f8f; }
