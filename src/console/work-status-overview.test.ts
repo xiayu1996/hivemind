@@ -20,15 +20,29 @@ async function insertOpenGate(client: ReturnType<typeof createClient>, overrides
     { sql: `INSERT INTO requirements (id, notion_page_id, title, state, original_request, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO NOTHING`, args: ["requirement-exports", "requirement-page-exports", "Export customers", "EXECUTING", "Export customers", 1, 1] },
-    { sql: `INSERT INTO human_gates (
-              id, object_type, object_id, required_action, phase, recommended_choice,
-              recommendation_reason, other_options, confirmation_reason, navigation_target, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, args: [
-      "gate-exports", "requirement", "requirement-exports", "Which customers should be exported?", "DESIGN",
-      values.recommendedChoice, values.recommendationReason, values.otherOptions, values.confirmationReason,
-      "/requirements/requirement-exports", 1, 1,
-    ] },
+    gateRow("gate-exports", "requirement", "requirement-exports", "Which customers should be exported?", "/requirements/requirement-exports", values),
   ], "write");
+}
+
+function gateRow(
+  id: string,
+  objectType: "requirement" | "epic" | "story",
+  objectId: string,
+  requiredAction: string,
+  navigationTarget: string,
+  overrides: Partial<typeof decision> = {},
+) {
+  const values = { ...decision, ...overrides };
+  return {
+    sql: `INSERT INTO human_gates (
+            id, object_type, object_id, required_action, phase, recommended_choice,
+            recommendation_reason, other_options, confirmation_reason, navigation_target, created_at, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    args: [
+      id, objectType, objectId, requiredAction, "DESIGN", values.recommendedChoice,
+      values.recommendationReason, values.otherOptions, values.confirmationReason, navigationTarget, 1, 1,
+    ],
+  };
 }
 
 describe("work status", () => {
@@ -308,6 +322,53 @@ describe("work status", () => {
     for (const control of ["Edit requirement", "Save changes", "Stop task"]) {
       expect(ui).not.toContain(control);
     }
+  });
+
+  // @scenario S-E1ACTION-05-waiting
+  it("S-E1ACTION-05-waiting opens the object the question is about and keeps the handling link", async () => {
+    const pageId = "3ce20688-7a32-81b8-9a5c-4f2e1d0c9b8a";
+    await client.batch([
+      { sql: `INSERT INTO requirements (id, notion_page_id, title, state, original_request, created_at, updated_at)
+              VALUES ('requirement-waiting', ?, 'Export customers', 'EXECUTING', 'Export customers', 1, 1)`, args: [pageId] },
+      gateRow("gate-waiting", "requirement", "requirement-waiting", "Which customers should be exported?", "/requirements/requirement-waiting"),
+    ], "write");
+
+    const source = new LibsqlConsoleDataSource(client, async () => []);
+    await expect(source.workStatus()).resolves.toMatchObject({
+      pendingResponses: [{
+        requiredAction: "Which customers should be exported?",
+        navigationTarget: "/requirements/requirement-waiting",
+        notionUrl: "https://www.notion.so/3ce206887a3281b89a5c4f2e1d0c9b8a",
+      }],
+    });
+
+    const ui = await readFile("console-ui/src/App.vue", "utf8");
+    expect(ui).toContain("Open in Notion");
+    expect(ui).toContain("Open handling location");
+    for (const control of ["Submit answer", "Save answer", "Approve", "<input", "<select", "<textarea"]) {
+      expect(ui).not.toContain(control);
+    }
+  });
+
+  // @scenario S-E1ACTION-05-waiting
+  it("S-E1ACTION-05-waiting routes an Epic or Story question to that object's own page", async () => {
+    await client.batch([
+      { sql: `INSERT INTO requirements (id, notion_page_id, title, state, original_request, created_at, updated_at)
+              VALUES ('requirement-routing', 'requirement-page-routing', 'Export customers', 'EXECUTING', 'Export customers', 1, 1)` },
+      { sql: `INSERT INTO epics (id, notion_page_id, title, state, requirement_id, created_at, updated_at)
+              VALUES ('EPIC-routing', '4ce20688-7a32-81b8-9a5c-4f2e1d0c9b8a', 'Export', 'EXECUTING', 'requirement-routing', 1, 1)` },
+      { sql: `INSERT INTO stories (id, epic_id, notion_page_id, title, requirement, state, phase, phase_started_at, created_at, updated_at)
+              VALUES ('S-ROUTING-01', 'EPIC-routing', '5ce20688-7a32-81b8-9a5c-4f2e1d0c9b8a', 'Export activity', 'Export customers', 'CODE', 'CODE', 1, 1, 1)` },
+      gateRow("gate-epic-routing", "epic", "EPIC-routing", "Epic question?", "/requirements/requirement-routing"),
+      gateRow("gate-story-routing", "story", "S-ROUTING-01", "Story question?", "/tasks/S-ROUTING-01"),
+    ], "write");
+
+    const source = new LibsqlConsoleDataSource(client, async () => []);
+    const status = await source.workStatus() as { pendingResponses: Array<{ requiredAction: string; notionUrl: string }> };
+    expect(Object.fromEntries(status.pendingResponses.map((gate) => [gate.requiredAction, gate.notionUrl]))).toEqual({
+      "Epic question?": "https://www.notion.so/4ce206887a3281b89a5c4f2e1d0c9b8a",
+      "Story question?": "https://www.notion.so/5ce206887a3281b89a5c4f2e1d0c9b8a",
+    });
   });
 
   // @scenario S-E1ACTION-01-ignorecomments
