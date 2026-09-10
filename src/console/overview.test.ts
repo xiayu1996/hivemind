@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { overviewGroups } from "./overview.js";
+import { formatRelativeTime, overviewGroups } from "./overview.js";
+
+describe("S-E3OVERVIEW-01-active", () => {
+  it("formats the latest activity time relative to the browser clock", () => {
+    expect(formatRelativeTime(1_000, 181_000)).toBe("3 minutes ago");
+    expect(formatRelativeTime(181_000, 181_000)).toBe("just now");
+  });
+});
 
 describe("S-E3OVERVIEW-01-delivery", () => {
   it("does not treat the first half hour after a DST change as part of the prior day", () => {
