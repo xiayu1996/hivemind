@@ -56,6 +56,14 @@ export class PlanApprovalStore {
      * rather than read here so the gate and DECOMPOSE judge the same plan by
      * the same number. */
     private readonly limits: DecompositionLimits = {},
+    /**
+     * Runs once the Stories exist and the Epic is EXECUTING. The instance that
+     * manages the repository publishes the Epic's integration branch here, so
+     * every Story's draft MR has a real target from its first delivery. A
+     * failure is reported, not thrown: the approval already happened, and the
+     * dispatcher publishes again before it cuts the first Story worktree.
+     */
+    private readonly onApproved?: (epicId: string) => Promise<void>,
   ) {}
 
   async present(input: PresentPlanInput): Promise<void> {
@@ -166,6 +174,8 @@ export class PlanApprovalStore {
     });
     statements.push(epicStatusStatement(input.epicId, EPIC_BOARD_STATUS.executing, time, "EXECUTING"));
     const result = await this.client.batch(statements, "write");
-    return result.at(-2)?.rowsAffected === 1;
+    const approved = result.at(-2)?.rowsAffected === 1;
+    if (approved && this.onApproved) await this.onApproved(input.epicId);
+    return approved;
   }
 }

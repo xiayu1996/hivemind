@@ -67,6 +67,8 @@ import { StoryExecutionStore } from "../src/orchestrator/story-execution-store.j
 import { openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
 import { createWorktree, locateWorktree, worktreeLayout } from "../src/vcs/worktree.js";
+import { publishEpicBranch } from "../src/vcs/epic-branch.js";
+import { processGitCommand } from "../src/vcs/story-delivery.js";
 
 const execFileAsync = promisify(execFile);
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -118,6 +120,16 @@ async function main(): Promise<void> {
 
   const repositoryPath = resolve(required("--repository-path"));
   const repositoryId = required("--repository-id");
+  // The Epic's integration branch goes to origin the moment its Stories exist:
+  // every Story's draft MR targets it and delivery reads it from origin.
+  const publishEpicBranchFor = async (epicId: string): Promise<void> => {
+    try {
+      const result = await publishEpicBranch({ git: processGitCommand, repositoryPath, epicId });
+      if (result.pushed) console.log(`Published ${result.branch} to origin`);
+    } catch (error) {
+      console.error(`Publishing epic/${epicId} failed; delivery will retry before the first Story worktree is cut:`, (error as Error).message);
+    }
+  };
   // Cards declare the target repository as an owner/name slug; only cards
   // matching this checkout's origin are dispatched by this instance.
   const remoteUrl = (await execFileAsync("git", ["remote", "get-url", "origin"], {
@@ -198,7 +210,7 @@ async function main(): Promise<void> {
     comments,
     new PlanApprovalStore(handle.client, Date.now, {
       maxStories: config.get("decompose.maxStoriesPerEpic"),
-    }),
+    }, publishEpicBranchFor),
   );
   const media = new NotionMediaReconciler(
     handle.client,
@@ -331,7 +343,7 @@ async function main(): Promise<void> {
     const decompositionLimits = { maxStories: config.get("decompose.maxStoriesPerEpic") };
     const decomposer = new EpicDecomposer(
       handle.client,
-      new PlanApprovalStore(handle.client, Date.now, decompositionLimits),
+      new PlanApprovalStore(handle.client, Date.now, decompositionLimits, publishEpicBranchFor),
       new PiDecomposePort({
         binary: piBinary,
         model: await modelPolicy.resolve("decompose", provider),
@@ -411,6 +423,9 @@ async function main(): Promise<void> {
       if (epicId) {
         const integrationCard = `epic-${epicId}`;
         const epicBranch = `epic/${epicId}`;
+        // Normally already done at approval; this is the retry for an approval
+        // whose push failed, and it must succeed before a Story stacks on it.
+        await publishEpicBranch({ git: processGitCommand, repositoryPath, epicId });
         let integration = locateWorktree(repositoryId, integrationCard, layout);
         if (!(await exists(integration.worktreePath))) {
           integration = await createWorktree({

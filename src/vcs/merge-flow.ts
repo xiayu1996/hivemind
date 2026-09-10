@@ -128,6 +128,9 @@ export class EpicMergeFlow {
       });
     }
     await this.git.run(this.options.integrationWorktree, ["merge", "--ff-only", input.story.branch]);
+    // The Story's draft MR stacks onto this branch on origin, so origin has to
+    // hold the head the Story was merged into, not the one it was cut from.
+    await this.git.run(this.options.integrationWorktree, ["push", "--set-upstream", "origin", target]);
     if (this.options.actualFootprints) await this.options.actualFootprints.apply(input.story.id);
     return { kind: "merged", integrationBranch: target, scenarioIds };
   }

@@ -34,7 +34,9 @@ describe("EpicMergeFlow", () => {
       { cwd: "story", args: ["rebase", "epic/E-1"] },
       { cwd: "integration", args: ["merge", "--ff-only", story.branch] },
     ]));
-    expect(calls.some(({ args }) => args.includes("push") || args.includes("main") && args[0] === "merge")).toBe(false);
+    expect(calls).toContainEqual({ cwd: "integration", args: ["push", "--set-upstream", "origin", "epic/E-1"] });
+    expect(calls.some(({ args }) => args[0] === "push" && args.includes("main"))).toBe(false);
+    expect(calls.some(({ args }) => args[0] === "merge" && args.includes("main"))).toBe(false);
   });
 
   it("S-M2-05-revision refuses to merge a revision the re-verification never saw", async () => {
