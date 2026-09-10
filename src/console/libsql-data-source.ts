@@ -116,8 +116,16 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
                              JOIN epics e ON e.requirement_id = r.id
                              JOIN stories s ON s.epic_id = e.id
                             WHERE r.state = 'EXECUTING'
-                              AND s.state IN ('QUEUED', 'DESIGN', 'CODE', 'VERIFY', 'MERGE', 'REGRESSION_FIX')
-                              AND s.phase_started_at IS NOT NULL
+                              AND s.id = (
+                                SELECT candidate.id
+                                  FROM stories candidate
+                                  JOIN epics candidate_epic ON candidate_epic.id = candidate.epic_id
+                                 WHERE candidate_epic.requirement_id = r.id
+                                   AND candidate.state IN ('QUEUED', 'DESIGN', 'CODE', 'VERIFY', 'MERGE', 'REGRESSION_FIX')
+                                   AND candidate.phase_started_at IS NOT NULL
+                                 ORDER BY candidate.phase_started_at DESC, candidate.id ASC
+                                 LIMIT 1
+                              )
                             ORDER BY r.updated_at DESC, r.id`),
     ]);
     const pendingResponses = gates.rows.map((gate) => {
