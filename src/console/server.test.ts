@@ -1,3 +1,6 @@
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createConsoleServer, listenConsole, type ConsoleDataSource } from "./server.js";
 
@@ -41,6 +44,17 @@ describe("read-only console", () => {
     const response = await app.inject({ method: "GET", url: "/queues" });
     expect(response.statusCode).toBe(200);
     expect(response.body).toContain("Bull Dashboard");
+    await app.close();
+  });
+
+  // @scenario S-E1ACTION-02-summary
+  it("serves the console application at a pending response task handling location", async () => {
+    const uiRoot = await mkdtemp(join(tmpdir(), "hivemind-console-"));
+    await writeFile(join(uiRoot, "index.html"), "<main>console application</main>");
+    const app = await createConsoleServer(data, { uiRoot });
+    const response = await app.inject({ method: "GET", url: "/tasks/story-exports" });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain("console application");
     await app.close();
   });
 });
