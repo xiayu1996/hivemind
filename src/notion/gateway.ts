@@ -187,7 +187,11 @@ export class NotionGateway {
       response = await this.#transport(request);
     }
     if (response.status < 200 || response.status >= 300) {
-      throw new NotionGatewayError(`${request.method} ${request.path} failed with status ${response.status}`, response.status);
+      // Notion says why in the body; without it a 400 in the outbox is a
+      // number nobody can act on. The body carries no credential.
+      const detail = response.data === undefined ? "" : `: ${JSON.stringify(response.data).slice(0, 400)}`;
+      const sent = request.body === undefined ? "" : ` (request body: ${JSON.stringify(request.body).slice(0, 300)})`;
+      throw new NotionGatewayError(`${request.method} ${request.path} failed with status ${response.status}${detail}${sent}`, response.status);
     }
     return response;
   }

@@ -53,6 +53,14 @@ class FakeNotion {
     if (request.method === "PATCH" && blockMatch) {
       return { status: 200, data: this.patch(decodeURIComponent(blockMatch[1]!), request.body) };
     }
+    if (request.method === "POST" && path === "/v1/pages") {
+      const body = request.body as { parent: { page_id: string }; properties: { title: { title: Array<{ text: { content: string } }> } } };
+      const created = this.create({ object: "block", type: "child_page", child_page: { title: body.properties.title.title[0]!.text.content } });
+      const parent = this.children.get(body.parent.page_id);
+      if (!parent) throw new Error(`unknown fake parent: ${body.parent.page_id}`);
+      parent.push(created);
+      return { status: 200, data: { object: "page", id: created.id } };
+    }
     const pageMatch = /^\/v1\/pages\/([^/]+)$/.exec(path);
     if (request.method === "GET" && pageMatch) {
       return { status: 200, data: { object: "page", id: decodeURIComponent(pageMatch[1]!), properties: this.properties } };

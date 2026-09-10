@@ -365,9 +365,21 @@ export class NotionStoryPageDelivery implements NotionOutboxDelivery {
   ): Promise<void> {
     let historyPageId = remote.historyPageId;
     if (!historyPageId) {
-      const response = await this.append(pageId, [{ object: "block", type: "child_page", child_page: { title: HISTORY_TITLE } }]);
-      historyPageId = response[0]?.id;
-      if (!historyPageId) throw new Error("Notion did not return the verification history page");
+      // A child page is created as a page with this page as its parent; the
+      // API refuses a `child_page` block appended through children (400), and
+      // every retry of that refusal kept the whole Story page from updating.
+      const response = await this.gateway.request({
+        method: "POST",
+        path: "/v1/pages",
+        priority: "projection",
+        body: {
+          parent: { page_id: pageId },
+          properties: { title: { title: [{ type: "text", text: { content: HISTORY_TITLE } }] } },
+        },
+      });
+      const created = z.object({ id: z.string().min(1) }).passthrough().safeParse(response.data);
+      if (!created.success) throw new Error("Notion did not return the verification history page");
+      historyPageId = created.data.id;
     }
     const existing = new Set((await this.listChildren(historyPageId)).map(textOf));
     for (const item of rounds) {
