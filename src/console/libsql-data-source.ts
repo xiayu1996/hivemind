@@ -101,7 +101,8 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
   /** Only the central gate registry can create a pending response. */
   async workStatus(): Promise<unknown> {
     const [gates, requirements] = await Promise.all([
-      this.client.execute(`SELECT id, required_action AS requiredAction, phase AS whereThisArose,
+      this.client.execute(`SELECT id, object_type AS objectType, object_id AS objectId,
+                                  required_action AS requiredAction, phase AS whereThisArose,
                                   recommended_choice AS recommendedChoice,
                                   recommendation_reason AS recommendationReason,
                                   other_options AS otherOptions,
@@ -130,6 +131,7 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
                               )
                             ORDER BY r.updated_at DESC, r.id`),
     ]);
+    const gatePageIds = await this.resolveGatePageIds(gates.rows);
     const pendingResponses = gates.rows.map((gate) => {
       const response = plain(gate);
       const requiredText = [
@@ -154,7 +156,13 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
         || otherOptions.some((option) => option.trim() === recommendedChoice.trim())) {
         throw new Error("incomplete open human gate");
       }
-      return Object.assign(response, { otherOptions });
+      const pageId = gatePageIds.get(String(response.id)) ?? null;
+      delete response.objectType;
+      delete response.objectId;
+      return Object.assign(response, {
+        otherOptions,
+        notionUrl: pageId === null ? undefined : notionPageUrl(pageId),
+      });
     });
     const activeRequirements = requirements.rows.map((row) => {
       const phase = String(row.phase);
@@ -176,5 +184,27 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
       activeRequirementState: activeRequirements.length === 0 ? "no_active_requirements" : "available",
       activeRequirements,
     };
+  }
+
+  /**
+   * A human gate names the object it is about by type and id; the Notion page
+   * id lives with that object, never on the gate itself. Returning null keeps
+   * the failure decision with the caller instead of inventing a link.
+   */
+  private async resolveGatePageIds(rows: Row[]): Promise<Map<string, string | null>> {
+    const tables: Record<string, string> = { requirement: "requirements", epic: "epics", story: "stories" };
+    const pageIds = new Map<string, string | null>();
+    await Promise.all(rows.map(async (row) => {
+      const table = tables[String(row.objectType)];
+      // The table name comes from a closed map, never from the stored value.
+      const resolved = table
+        ? (await this.client.execute({
+          sql: `SELECT notion_page_id FROM ${table} WHERE id = ?`,
+          args: [String(row.objectId)],
+        })).rows[0]
+        : undefined;
+      pageIds.set(String(row.id), resolved ? String(resolved.notion_page_id) : null);
+    }));
+    return pageIds;
   }
 }
