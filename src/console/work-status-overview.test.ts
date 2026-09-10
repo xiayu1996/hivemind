@@ -149,6 +149,48 @@ describe("work status", () => {
     });
   });
 
+  // @scenario S-E1ACTION-04-selection
+  it("S-E1ACTION-04-selection summarizes a requirement by its most recently started active Story", async () => {
+    const older = 1_700_000_000_000;
+    const latest = 1_700_000_600_000;
+    await client.batch([
+      { sql: `INSERT INTO requirements (id, notion_page_id, title, state, original_request, created_at, updated_at)
+              VALUES ('requirement-selection', 'requirement-page-selection', 'Summarize current activity', 'EXECUTING', 'Summarize current activity', ?, ?)`, args: [older, older] },
+      { sql: `INSERT INTO epics (id, notion_page_id, title, state, requirement_id, created_at, updated_at)
+              VALUES ('EPIC-selection', 'epic-page-selection', 'Activity', 'EXECUTING', 'requirement-selection', ?, ?)`, args: [older, older] },
+      { sql: `INSERT INTO stories (id, epic_id, notion_page_id, title, requirement, state, phase, phase_started_at, created_at, updated_at)
+              VALUES ('S-OLDER-01', 'EPIC-selection', 'story-page-older', 'Verify activity card', 'Summarize current activity', 'VERIFY', 'VERIFY', ?, ?, ?)`, args: [older, older, older] },
+      { sql: `INSERT INTO stories (id, epic_id, notion_page_id, title, requirement, state, phase, phase_started_at, created_at, updated_at)
+              VALUES ('S-E1ACTION-04', 'EPIC-selection', 'story-page-code', 'Implement activity card', 'Summarize current activity', 'CODE', 'CODE', ?, ?, ?)`, args: [latest, latest, latest] },
+      { sql: `INSERT INTO stories (id, epic_id, notion_page_id, title, requirement, state, phase, phase_started_at, created_at, updated_at)
+              VALUES ('S-WAIT-01', 'EPIC-selection', 'story-page-wait', 'Waiting for human answer', 'Summarize current activity', 'NEEDS_INPUT', NULL, ?, ?, ?)`, args: [latest + 3000, latest + 3000, latest + 3000] },
+      { sql: `INSERT INTO stories (id, epic_id, notion_page_id, title, requirement, state, phase, phase_started_at, created_at, updated_at)
+              VALUES ('S-FAIL-01', 'EPIC-selection', 'story-page-fail', 'Failed export', 'Summarize current activity', 'FAILED', NULL, ?, ?, ?)`, args: [latest + 2000, latest + 2000, latest + 2000] },
+      { sql: `INSERT INTO stories (id, epic_id, notion_page_id, title, requirement, state, phase, phase_started_at, created_at, updated_at)
+              VALUES ('S-DONE-01', 'EPIC-selection', 'story-page-done', 'Delivered export', 'Summarize current activity', 'DELIVERED', NULL, ?, ?, ?)`, args: [latest + 1000, latest + 1000, latest + 1000] },
+    ], "write");
+
+    const source = new LibsqlConsoleDataSource(client, async () => [], () => latest);
+    const { activeRequirementState, activeRequirements } = await source.workStatus() as {
+      activeRequirementState: string;
+      activeRequirements: Array<Record<string, unknown>>;
+    };
+    expect(activeRequirementState).toBe("available");
+    expect(activeRequirements).toHaveLength(1);
+    expect(activeRequirements[0]).toMatchObject({
+      id: "requirement-selection",
+      title: "Summarize current activity",
+      storyId: "S-E1ACTION-04",
+      phase: "CODE",
+      workingOn: "Implement activity card",
+      latestProgress: "CODE started",
+    });
+    const projected = JSON.stringify(activeRequirements);
+    for (const excluded of ["Waiting for human answer", "Failed export", "Delivered export", "Verify activity card", "S-WAIT-01", "S-FAIL-01", "S-DONE-01", "S-OLDER-01"]) {
+      expect(projected).not.toContain(excluded);
+    }
+  });
+
   // @scenario S-E1ACTION-01-ignorecomments
   it("does not turn an unresolved Notion comment into a pending response", async () => {
     await client.execute({
