@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { classifyConvergence } from "../pipeline/convergence.js";
+import { costCeilingVerdict, renderCostCeilingReport, type CardSpend } from "../pipeline/cost-ceiling.js";
 import { parseDoD, type DefinitionOfDone } from "../pipeline/dod.js";
 import { assemblePhasePrompt, type PhaseInput } from "../pipeline/phase-input.js";
 import {
@@ -7,6 +8,7 @@ import {
   type StoryPhase,
   type StorySnapshot,
 } from "./story-execution-store.js";
+import type { StoryState } from "./state-machine.js";
 
 export interface ManagedPhaseInput {
   runId: string;
@@ -82,14 +84,31 @@ export interface StoryWorkerOptions {
   maxInconclusiveRounds?: number;
   integration?: StoryIntegrationPort;
   friction?: StoryFrictionPort;
+  spend?: StorySpendPort;
   runId?: (cardId: string, phase: StoryPhase, round: number) => string;
+}
+
+/**
+ * What one card has spent, and what it is allowed to spend.
+ *
+ * Optional because it only means anything where a provider is billed per token:
+ * a host running a flat-rate subscription has no money to cap, and giving it a
+ * port that always answers zero would read as a ceiling being enforced when
+ * nothing is.
+ */
+export interface StorySpendPort {
+  cardSpend(cardId: string): Promise<CardSpend>;
+  ceilingUsd(): Promise<number>;
+  spendByPhase?(cardId: string): Promise<ReadonlyMap<string, number>>;
 }
 
 export interface StoryWorkerResult {
   state: "DELIVERED" | "NEEDS_INPUT" | "CODE";
   rounds: number;
   mrUrl: string | null;
-  stopReason: "verify_loop_exceeded" | null;
+  stopReason: "verify_loop_exceeded" | "cost_ceiling_exceeded" | null;
+  /** Attached to the card when the run stopped; business language, no thresholds alone. */
+  stopReport?: string;
 }
 
 function artifact(result: ManagedPhaseResult, kind: string): string {
@@ -105,6 +124,7 @@ export class SingleStoryWorker {
   private readonly friction: StoryFrictionPort | undefined;
   private readonly createRunId: (cardId: string, phase: StoryPhase, round: number) => string;
   private readonly integration: StoryIntegrationPort | undefined;
+  private readonly spend: StorySpendPort | undefined;
 
   constructor(
     private readonly store: StoryExecutionStore,
@@ -116,6 +136,7 @@ export class SingleStoryWorker {
   ) {
     this.integration = options.integration;
     this.friction = options.friction;
+    this.spend = options.spend;
     this.maxInconclusiveRounds = options.maxInconclusiveRounds ?? 2;
     this.maxInnerLoopRounds = options.maxInnerLoopRounds ?? 6;
     if (!Number.isInteger(this.maxInnerLoopRounds) || this.maxInnerLoopRounds < 1) {
@@ -125,6 +146,42 @@ export class SingleStoryWorker {
       const safeCardId = cardId.replaceAll(/[^A-Za-z0-9._-]/g, "-");
       return `${safeCardId}-${phase.toLowerCase()}-${round}-${randomUUID()}`;
     });
+  }
+
+  /**
+   * Stops the card if it has already reached the money one card may spend.
+   *
+   * Checked at a phase boundary, which is the finest granularity available: a
+   * turn cannot be interrupted partway, and the spend of the turn about to start
+   * is unknown until it ends. So the ceiling is a floor on the overrun, not an
+   * exact cut — a card stops once it has crossed the line, not before it can.
+   *
+   * Deliberately separate from the round budget. Rounds answer whether the
+   * system is going in circles; this answers how much one card may cost. A
+   * spend stop says nothing about whether the work is achievable, and the report
+   * says so, because the two get confused by whoever reads the card.
+   */
+  async #costCeilingStop(
+    cardId: string,
+    fromState: StoryState,
+    round: number,
+  ): Promise<StoryWorkerResult | null> {
+    if (!this.spend) return null;
+    const spent = await this.spend.cardSpend(cardId);
+    const verdict = costCeilingVerdict(spent, await this.spend.ceilingUsd());
+    if (!verdict.exceeded) return null;
+
+    const byPhase = (await this.spend.spendByPhase?.(cardId)) ?? new Map<string, number>();
+    const runId = this.createRunId(cardId, "VERIFY", round);
+    await this.store.stopForInput(cardId, fromState, "cost_ceiling_exceeded", runId);
+    await this.projection.enqueue(cardId);
+    return {
+      state: "NEEDS_INPUT",
+      rounds: round,
+      mrUrl: null,
+      stopReason: "cost_ceiling_exceeded",
+      stopReport: renderCostCeilingReport(cardId, verdict, spent, byPhase),
+    };
   }
 
   async run(cardId: string): Promise<StoryWorkerResult> {
@@ -173,6 +230,14 @@ export class SingleStoryWorker {
       let spent = failureHistory.length;
       let inconclusiveStreak = 0;
       while (spent < this.maxInnerLoopRounds) {
+        // Before buying another CODE turn, not after: the ceiling exists to stop
+        // the next purchase, and a card resumed by a person who raised it starts
+        // the round it was stopped before.
+        // Every path into this loop has already transitioned the card to CODE,
+        // so the snapshot's own state is stale here and the guarded UPDATE
+        // would find no row.
+        const overspent = await this.#costCeilingStop(cardId, "CODE", round);
+        if (overspent) return overspent;
         round += 1;
         const codeRunId = this.createRunId(cardId, "CODE", round);
         const code = await this.runPhase(cardId, "CODE", round, codeRunId);

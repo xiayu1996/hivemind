@@ -290,6 +290,16 @@ export const CONFIG_KEYS = {
     description: "Usage-limit windows shorter than this are waited out; longer ones fail over to the next provider.",
   }),
 
+  // --- cost guardrails ---
+  "cost.perCardUsdCeiling": def({
+    schema: z.number().positive(),
+    default: 5,
+    scope: "global",
+    reload: "hot",
+    dangerous: true,
+    description: "Spend on metered providers that one card may reach before it stops and asks for more. USD, because that is what pi reports; 5 is roughly 35 CNY. Subscription usage is flat-rate and never counted. This is a spend limit, not a loop bound: the round ceilings in retry.* answer whether the system is going in circles, and neither question is a good proxy for the other.",
+  }),
+
   // --- cost guardrails (alert only, never block) ---
   "cost.dailyUsdWarn": def({
     schema: z.number().positive(),

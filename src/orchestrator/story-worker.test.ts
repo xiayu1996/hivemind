@@ -129,6 +129,55 @@ describe("SingleStoryWorker", () => {
     }));
   });
 
+  it("stops before buying another turn once the card has spent its allowance", async () => {
+    const phases = vi.fn(designAndCode);
+    const worker = new SingleStoryWorker(
+      store,
+      { run: phases },
+      { run: vi.fn(async () => { throw new Error("verification should never be reached"); }) },
+      { deliver: vi.fn(async () => ({ mrUrl: null })) },
+      { enqueue: vi.fn(async () => undefined) },
+      {
+        spend: {
+          cardSpend: async () => ({ billedUsd: 6, subscriptionUsd: 0 }),
+          ceilingUsd: async () => 5,
+          spendByPhase: async () => new Map([["CODE", 6]]),
+        },
+      },
+    );
+
+    const result = await worker.run("S-EPIC1-01");
+    expect(result).toMatchObject({ state: "NEEDS_INPUT", stopReason: "cost_ceiling_exceeded" });
+    // The point of checking before the round: no further turn is bought.
+    expect(phases).not.toHaveBeenCalledWith(expect.objectContaining({ phase: "CODE" }));
+    expect(result.stopReport).toContain("$6.00 of $5.00");
+  });
+
+  it("keeps going when only subscription allowance has been used, which is not money", async () => {
+    const worker = new SingleStoryWorker(
+      store,
+      { run: designAndCode },
+      {
+        run: vi.fn(async (input) => ({
+          sessionId: `session-verify-${input.round}`,
+          artifact: "{}",
+          verdict: "accepted" as const,
+          failedScenarios: [],
+        })),
+      },
+      { deliver: vi.fn(async () => ({ mrUrl: "https://example.invalid/mr/1" })) },
+      { enqueue: vi.fn(async () => undefined) },
+      {
+        spend: {
+          cardSpend: async () => ({ billedUsd: 0.2, subscriptionUsd: 400 }),
+          ceilingUsd: async () => 5,
+        },
+      },
+    );
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
+  });
+
   it("compares only the code-level failures between rounds", async () => {
     // Round 2 fails on the same code scenario plus one the box lost: as a raw
     // set that is not a proper subset, and the loop would stop on "expanded".

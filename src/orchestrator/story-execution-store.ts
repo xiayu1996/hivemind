@@ -3,6 +3,7 @@ import type { Client } from "@libsql/client";
 import {
   assertStoryTransition,
   type StoryState,
+  type StoryStopReason,
   type TransitionActor,
 } from "./state-machine.js";
 import type { Phase, PhaseInput } from "../pipeline/phase-input.js";
@@ -560,7 +561,7 @@ export class StoryExecutionStore {
   async stopForInput(
     cardId: string,
     expectedFrom: StoryState,
-    reason: "blocking_question" | "verify_loop_exceeded" | "retry_limit_exceeded",
+    reason: StoryStopReason,
     runId: string,
   ): Promise<void> {
     assertStoryTransition(expectedFrom, "NEEDS_INPUT", "system");

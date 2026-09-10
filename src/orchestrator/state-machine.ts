@@ -22,6 +22,21 @@ export type StoryState =
 
 export type TransitionActor = "system" | "human";
 
+/**
+ * The only ways a card legitimately stops for a person. The set is closed and
+ * the DB enforces it with a CHECK, so a new one is a design decision rather
+ * than a call site's improvisation (03 section 1.5).
+ *
+ * `cost_ceiling_exceeded` is the spend limit, not a loop bound: a card that
+ * reaches it has said nothing about whether its work is achievable, and the
+ * report attached to it says so.
+ */
+export type StoryStopReason =
+  | "blocking_question"
+  | "verify_loop_exceeded"
+  | "retry_limit_exceeded"
+  | "cost_ceiling_exceeded";
+
 export const EPIC_TRANSITIONS: Record<EpicState, readonly EpicState[]> = {
   INTAKE: ["DECOMPOSE", "BLOCKED", "FAILED"],
   DECOMPOSE: ["PLAN_APPROVAL", "BLOCKED", "FAILED"],
