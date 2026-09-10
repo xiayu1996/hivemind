@@ -109,7 +109,7 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
                             ORDER BY g.priority, g.created_at, g.id`),
       this.client.execute(`SELECT id, title, state AS phase, updated_at
                              FROM requirements
-                            WHERE state NOT IN ('DONE', 'FAILED', 'HUMAN_PARKED')
+                            WHERE state = 'EXECUTING'
                             ORDER BY updated_at DESC, id`),
     ]);
     const pendingResponses = gates.rows.map(plain);
