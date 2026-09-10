@@ -274,6 +274,42 @@ describe("work status", () => {
     }
   });
 
+  // @scenario S-E1ACTION-05-active
+  it("S-E1ACTION-05-active opens the running requirement's own Notion page without replacing its progress", async () => {
+    const started = 1_700_000_000_000;
+    const pageId = "3ce20688-7a32-81b8-9a5c-4f2e1d0c9b8a";
+    await client.batch([
+      { sql: `INSERT INTO requirements (id, notion_page_id, title, state, original_request, created_at, updated_at)
+              VALUES ('requirement-active', ?, 'Export customers', 'EXECUTING', 'Export customers', ?, ?)`, args: [pageId, started, started] },
+      { sql: `INSERT INTO epics (id, notion_page_id, title, state, requirement_id, created_at, updated_at)
+              VALUES ('EPIC-active', 'epic-page-active', 'Export', 'EXECUTING', 'requirement-active', ?, ?)`, args: [started, started] },
+      { sql: `INSERT INTO stories (id, epic_id, notion_page_id, title, requirement, state, phase, phase_started_at, created_at, updated_at)
+              VALUES ('S-ACTIVE-01', 'EPIC-active', 'story-page-active', 'Add activity summary', 'Export customers', 'CODE', 'CODE', ?, ?, ?)`, args: [started, started, started] },
+    ], "write");
+
+    const source = new LibsqlConsoleDataSource(client, async () => [], () => started);
+    await expect(source.workStatus()).resolves.toMatchObject({
+      activeRequirements: [{
+        id: "requirement-active",
+        title: "Export customers",
+        phase: "CODE",
+        workingOn: "Add activity summary",
+        activeFor: "0 minutes",
+        latestProgress: "CODE started",
+        notionUrl: "https://www.notion.so/3ce206887a3281b89a5c4f2e1d0c9b8a",
+      }],
+    });
+
+    const ui = await readFile("console-ui/src/App.vue", "utf8");
+    expect(ui).toContain("Open in Notion");
+    for (const label of ["Current phase", "Working on", "Active for", "Latest progress", "View details"]) {
+      expect(ui).toContain(label);
+    }
+    for (const control of ["Edit requirement", "Save changes", "Stop task"]) {
+      expect(ui).not.toContain(control);
+    }
+  });
+
   // @scenario S-E1ACTION-01-ignorecomments
   it("does not turn an unresolved Notion comment into a pending response", async () => {
     await client.execute({
