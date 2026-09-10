@@ -27,6 +27,21 @@ function navigate(view) {
   history.pushState({}, "", `/${view}`);
   current.value = view;
 }
+
+function formatStartedWaiting(timestamp) {
+  return new Date(timestamp).toISOString().slice(0, 16).replace("T", " ");
+}
+
+function formatWaitingDuration(minutes) {
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  const remainingMinutes = minutes % 60;
+  const parts = [];
+  if (days) parts.push(`${days} ${days === 1 ? "day" : "days"}`);
+  if (hours) parts.push(`${hours} ${hours === 1 ? "hour" : "hours"}`);
+  if (remainingMinutes || parts.length === 0) parts.push(`${remainingMinutes} ${remainingMinutes === 1 ? "minute" : "minutes"}`);
+  return parts.join(" ");
+}
 </script>
 
 <template>
@@ -54,6 +69,8 @@ function navigate(view) {
               <dt>Requirement</dt><dd>{{ gate.requirementTitle }}</dd>
               <dt>Current phase</dt><dd>{{ gate.currentPhase }}</dd>
               <dt>Context</dt><dd>{{ gate.context }}</dd>
+              <dt>Started waiting</dt><dd>Started waiting: {{ formatStartedWaiting(gate.startedWaitingAt) }}</dd>
+              <dt>Waiting duration</dt><dd>Waiting for {{ formatWaitingDuration(gate.waitingDurationMinutes) }}</dd>
             </dl>
             <a :href="gate.navigationTarget">Open handling location</a>
           </article>

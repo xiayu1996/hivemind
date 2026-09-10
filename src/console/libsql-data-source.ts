@@ -14,6 +14,7 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
   constructor(
     private readonly client: Client,
     private readonly nodeSnapshot: () => Promise<unknown[]>,
+    private readonly now: () => number = Date.now,
   ) {}
 
   nodes(): Promise<unknown[]> {
@@ -99,7 +100,7 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
   async workStatus(): Promise<unknown> {
     const [gates, requirements] = await Promise.all([
       this.client.execute(`SELECT g.id, g.required_action AS requiredAction, g.phase AS currentPhase,
-                                  g.context, g.navigation_target AS navigationTarget,
+                                  g.context, g.created_at AS startedWaitingAt, g.navigation_target AS navigationTarget,
                                   COALESCE(direct_requirement.title, epic_requirement.title, story_requirement.title) AS requirementTitle,
                                   COALESCE(direct_requirement.title, epic_requirement.title, story_requirement.title) AS relatedRequirementOrObject
                              FROM human_gates g
@@ -119,7 +120,14 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
                             WHERE state = 'EXECUTING'
                             ORDER BY updated_at DESC, id`),
     ]);
-    const pendingResponses = gates.rows.map(plain);
+    const readAt = this.now();
+    const pendingResponses = gates.rows.map((gate) => {
+      const response = plain(gate);
+      const startedWaitingAt = Number(response.startedWaitingAt);
+      return Object.assign(response, {
+        waitingDurationMinutes: Math.max(0, Math.floor((readAt - startedWaitingAt) / 60_000)),
+      });
+    });
     const activeRequirements = requirements.rows.map(plain);
     return {
       status: "success",
