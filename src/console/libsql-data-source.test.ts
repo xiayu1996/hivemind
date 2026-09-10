@@ -3,6 +3,24 @@ import { describe, expect, it } from "vitest";
 import { migrate } from "../persistence/migrate.js";
 import { LibsqlConsoleDataSource } from "./libsql-data-source.js";
 
+describe("S-E3OVERVIEW-02-summary", () => {
+  it("returns only the recent cost records the cost region needs", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const now = Date.now();
+    const old = now - 40 * 24 * 60 * 60 * 1000;
+    await client.batch([
+      `INSERT INTO cost_entries (run_id, provider, model_id, cost_usd, ts) VALUES ('r1','mock','mock-1',1.23,${now})`,
+      `INSERT INTO cost_entries (run_id, provider, model_id, cost_usd, ts) VALUES ('r1','mock','mock-1',9.99,${old})`,
+    ], "write");
+    const source = new LibsqlConsoleDataSource(client, async () => []);
+
+    const overview = await source.overview() as { costs: Array<{ ts: number; modelId: string | null; costUsd: number }> };
+    expect(overview.costs).toEqual([{ ts: now, modelId: "mock-1", costUsd: 1.23 }]);
+    client.close();
+  });
+});
+
 describe("LibsqlConsoleDataSource", () => {
   it("reads task timelines, costs, config and live node snapshots", async () => {
     const client = createClient({ url: ":memory:" });
