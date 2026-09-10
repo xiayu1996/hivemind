@@ -93,6 +93,39 @@ describe("work status", () => {
     expect(ui).toContain('<div v-if="error"');
   });
 
+  // @scenario S-E1ACTION-04-progress
+  it("S-E1ACTION-04-progress shows the selected Story phase, work, duration, and sanitized progress", async () => {
+    const phaseStartedAt = 1_700_000_000_000;
+    await client.batch([
+      { sql: `INSERT INTO requirements (id, notion_page_id, title, state, original_request, created_at, updated_at)
+              VALUES ('requirement-progress', 'requirement-page-progress', 'Show activity summary', 'EXECUTING', 'Show activity summary', ?, ?)`, args: [phaseStartedAt, phaseStartedAt] },
+      { sql: `INSERT INTO epics (id, notion_page_id, title, state, requirement_id, created_at, updated_at)
+              VALUES ('EPIC-progress', 'epic-page-progress', 'Activity', 'EXECUTING', 'requirement-progress', ?, ?)`, args: [phaseStartedAt, phaseStartedAt] },
+      { sql: `INSERT INTO stories (id, epic_id, notion_page_id, title, requirement, state, phase, phase_started_at, created_at, updated_at)
+              VALUES ('S-E1ACTION-04', 'EPIC-progress', 'story-page-progress', 'Add activity summary', 'Show activity summary', 'CODE', 'CODE', ?, ?, ?)`, args: [phaseStartedAt, phaseStartedAt, phaseStartedAt] },
+      { sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
+              VALUES ('code-run', 0, 'S-E1ACTION-04', 'CODE', 'rpc.tool_call', ?, '{"timestamp":1760000000000}')`, args: [phaseStartedAt] },
+    ], "write");
+
+    const source = new LibsqlConsoleDataSource(client, async () => [], () => phaseStartedAt + 125 * 60_000);
+    await expect(source.workStatus()).resolves.toMatchObject({
+      activeRequirementState: "available",
+      activeRequirements: [{
+        id: "requirement-progress",
+        title: "Show activity summary",
+        storyId: "S-E1ACTION-04",
+        phase: "CODE",
+        workingOn: "Add activity summary",
+        activeFor: "2 hours 5 minutes",
+        latestProgress: "CODE started",
+      }],
+    });
+
+    const ui = await readFile("console-ui/src/App.vue", "utf8");
+    for (const label of ["Working on", "Active for", "Latest progress", "View details"]) expect(ui).toContain(label);
+    for (const excluded of ["Last updated:", "rpc.tool_call", "updated_at"]) expect(ui).not.toContain(excluded);
+  });
+
   // @scenario S-E1ACTION-01-ignorecomments
   it("does not turn an unresolved Notion comment into a pending response", async () => {
     await client.execute({
