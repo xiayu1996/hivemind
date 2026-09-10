@@ -46,6 +46,21 @@ describe("S-E3OVERVIEW-01-delivery", () => {
   });
 });
 
+describe("S-E3OVERVIEW-01-failure", () => {
+  it("keeps the task view available when an unrelated event is malformed", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    await client.batch([
+      "INSERT INTO stories (id, notion_page_id, title, requirement, state, created_at, updated_at) VALUES ('s-failed','sp-failed','Failed story','Work','FAILED',1,2)",
+      "INSERT INTO event_log (run_id, seq, card_id, type, ts, data) VALUES ('run-failed',0,'s-failed','story.transition',3,'not json')",
+    ], "write");
+    const source = new LibsqlConsoleDataSource(client, async () => []);
+
+    await expect(source.tasks()).resolves.toMatchObject([{ id: "s-failed", events: [] }]);
+    client.close();
+  });
+});
+
 describe("S-E3OVERVIEW-01-active", () => {
   it("shows only recently active non-waiting requirements and stories", async () => {
     const client = createClient({ url: ":memory:" });
