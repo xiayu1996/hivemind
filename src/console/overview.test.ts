@@ -21,6 +21,33 @@ function costSeed(): OverviewData {
 
 const SEED_NOW = new Date(2026, 2, 15, 12).getTime();
 
+describe("S-E3OVERVIEW-02-chart", () => {
+  it("draws the last seven local days, oldest to newest, sized against the highest day", () => {
+    const sections = overviewSections(costSeed(), SEED_NOW);
+    const cost = sections.at(-1);
+    if (cost?.kind !== "cost") throw new Error("the last section is not the cost region");
+
+    expect(cost.chart.map((bar) => bar.dateLabel)).toEqual(["03-09", "03-10", "03-11", "03-12", "03-13", "03-14", "03-15"]);
+    expect(cost.chart.map((bar) => bar.amountLabel)).toEqual(["$0.00", "$0.00", "$0.00", "$0.50", "$0.00", "$0.00", "$3.23"]);
+    expect(cost.chart[6]?.heightPercent).toBe(100);
+    expect(cost.chart[3]?.heightPercent).toBeCloseTo((0.5 / 3.23) * 100, 6);
+    expect(cost.chart[0]?.heightPercent).toBe(0);
+    expect(cost.chart[1]?.heightPercent).toBe(0);
+  });
+
+  it("is the only chart on the page and brings no ratio analysis with it", () => {
+    const sections = overviewSections(costSeed(), SEED_NOW);
+
+    expect(sections.filter((section) => "chart" in section)).toHaveLength(1);
+    for (const section of sections) {
+      if (section.kind === "group") expect(Object.keys(section).sort()).toEqual(["items", "kind", "title"]);
+    }
+    const rendered = JSON.stringify(sections);
+    expect(rendered).not.toContain("Cache hit");
+    expect(rendered).not.toContain("subscription share");
+  });
+});
+
 describe("S-E3OVERVIEW-02-summary", () => {
   it("adds a cost region after the four recent-result groups with today and month totals", () => {
     const sections = overviewSections(costSeed(), SEED_NOW);
