@@ -24,8 +24,9 @@ watchEffect(async () => {
 const groups = computed(() => overviewGroups(overview.value));
 
 function itemSummary(item) {
-  if (!Number.isFinite(item.timestamp)) return item.summary;
-  return `${item.summary} · ${new Date(item.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  const time = item.timestamp ?? item.updatedAt;
+  if (!Number.isFinite(time)) return item.summary;
+  return `${item.summary} · ${new Date(time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
 }
 
 function navigate(view) {

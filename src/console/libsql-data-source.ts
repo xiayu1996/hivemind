@@ -127,14 +127,14 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
     });
 
     const activeRows = (await this.client.execute(
-      `SELECT id, title, state, state AS summary, updated_at FROM requirements
+      `SELECT id, title, state, 'Last updated' AS summary, updated_at FROM requirements
         WHERE state NOT IN ('DONE', 'FAILED', 'HUMAN_PARKED') AND stop_reason IS NULL
           AND NOT EXISTS (
             SELECT 1 FROM requirement_clarify_rounds c
              WHERE c.requirement_id = requirements.id AND c.answered_at IS NULL
           )
        UNION ALL
-       SELECT id, title, state, COALESCE(phase, state) AS summary, updated_at FROM stories
+       SELECT id, title, state, 'Last updated' AS summary, updated_at FROM stories
         WHERE state NOT IN ('DELIVERED', 'FAILED', 'HUMAN_PARKED', 'NEEDS_INPUT') AND stop_reason IS NULL
        ORDER BY updated_at DESC, id`,
     )).rows;
