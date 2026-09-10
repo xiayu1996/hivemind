@@ -6,8 +6,8 @@
       "api": "openai-completions",
       "models": [
         {
-          "id": "deepseek-v4.1-flash-expires-on-0910",
-          "name": "DeepSeek V4.1 Flash",
+          "id": "deepseek-flash",
+          "name": "DeepSeek Flash",
           "reasoning": true,
           "input": ["text", "image"],
           "contextWindow": 1000000,

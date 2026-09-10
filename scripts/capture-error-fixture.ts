@@ -17,15 +17,25 @@ import { RpcPiRunner } from "../src/runner/rpc-runner.js";
  * than from someone's memory of it: the classifier reads text, so a wording
  * nobody has seen is a recovery path nobody has tested.
  *
- *   # AUTH: ask with a key the provider will reject
- *   npx tsx scripts/capture-error-fixture.ts deepseek auth --expect AUTH --api-key invalid-on-purpose
- *
- *   # RATE_LIMIT: several turns at once until the provider throttles
- *   npx tsx scripts/capture-error-fixture.ts deepseek rate_limit --expect RATE_LIMIT --concurrency 12
+ *   # AUTH: ask with a key the provider will reject. Costs nothing: it is refused
+ *   # before any tokens are billed.
+ *   npx tsx scripts/capture-error-fixture.ts deepseek auth \
+ *     --expect AUTH --model deepseek-flash --api-key invalid-on-purpose
  *
  * The capture is written only when its classification matches `--expect`. A
  * fixture that lands as UNKNOWN, or as a different class than intended, is the
  * exact thing the gate exists to catch, so it is reported and not saved.
+ *
+ * There is deliberately no way to provoke a throttle or a spent balance from
+ * here. Both would mean paying a provider real money to refuse us, the spend
+ * buys nothing but a string, and a provider that queues instead of refusing
+ * (DeepSeek does) never yields the string anyway. Those wordings come from the
+ * provider's published error table and from pi's own provider adapters, as
+ * rules asserted in `classify.test.ts`.
+ *
+ * `--model` is required. Reading "whatever the catalogue lists first" once sent
+ * a run of long turns to a model nobody had chosen, on a provider being billed
+ * per token.
  */
 function optional(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -38,7 +48,7 @@ const name = positional[1] ?? "";
 const expect = optional("--expect") as ErrorClass | undefined;
 if (!provider || !name || provider.startsWith("--") || name.startsWith("--") || !expect) {
   console.error("usage: npx tsx scripts/capture-error-fixture.ts <provider> <fixture-name>" +
-    " --expect <AUTH|QUOTA|RATE_LIMIT|...> [--model id] [--api-key value] [--concurrency n] [--prompt text]");
+    " --expect <AUTH|...> --model <id> [--api-key value] [--prompt text]");
   process.exit(2);
 }
 
@@ -53,13 +63,14 @@ const envKey = Object.keys(realEnv)[0]!;
 const override = optional("--api-key");
 const env = override ? { [envKey]: override } : realEnv;
 
-const modelId = optional("--model")
-  ?? (await new PiModelCatalog({ binary, env: realEnv }).list(provider))[0]?.id;
-if (!modelId) throw new Error(`cannot list ${provider}; pass --model`);
+const modelId = optional("--model");
+if (!modelId) {
+  console.error("--model is required: a capture must name the model it spends on, never inherit a catalogue order");
+  process.exit(2);
+}
 const model = await resolveModel(new PiModelCatalog({ binary, env: realEnv }), provider, modelId);
 
 const prompt = optional("--prompt") ?? `trigger ${name}`;
-const concurrency = Number(optional("--concurrency") ?? "1");
 
 async function attempt(): Promise<{ runner: RpcPiRunner; errorMessage: string | null }> {
   const runner = new RpcPiRunner({ binary, provider, model, cwd: tmpdir(), tools: [], env });
@@ -70,13 +81,13 @@ async function attempt(): Promise<{ runner: RpcPiRunner; errorMessage: string | 
   return { runner, errorMessage: result?.failure?.errorMessage ?? null };
 }
 
-const attempts = await Promise.all(Array.from({ length: Math.max(1, concurrency) }, attempt));
-const captured = attempts.find((entry) => entry.errorMessage !== null);
+// One attempt. A capture that needs several tries is a capture that is paying
+// the provider to refuse it, which is what the published error tables are for.
+const captured = await attempt();
+await captured.runner.stop().catch(() => undefined);
 
-for (const entry of attempts) await entry.runner.stop().catch(() => undefined);
-
-if (!captured?.errorMessage) {
-  console.error(`no failure surfaced across ${attempts.length} attempt(s); the provider answered normally`);
+if (!captured.errorMessage) {
+  console.error("the provider answered normally; this fault was not induced");
   process.exit(1);
 }
 

@@ -100,7 +100,9 @@ pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src
 - **RPC 分帧只切 LF**，禁止使用 Node `readline`：它同时在 U+2028/U+2029 处切分，而这两个码点在 JSON 字符串里合法。
 - **握手是真实往返**（`get_state`），不是"进程起来了"。握手失败立即 SIGKILL，绝不复用可疑进程。
 - **错误提取只认单一契约**：assistant 消息的 `stopReason === "error"` + `errorMessage`。但 RPC 有**两条**错误面——命令级 `{type:"response", success:false, error}` 与运行期 `stopReason:"error"`，前者不走这条契约。
-- **分类规则顺序有载荷**：QUOTA 必须排在 RATE_LIMIT 之前。配额耗尽也是 429，读反了 worker 会永远等一个不会打开的窗口。
+- **分类规则顺序有载荷**：QUOTA 必须排在 RATE_LIMIT 之前。配额耗尽也是 429，读反了 worker 会永远等一个不会打开的窗口。pi 自己也这么挡（`status===429 && isTerminalRateLimitError → 不可重试`）。
+- **文案来源是 pi 的 provider 层，不是 provoke**：`isTerminalRateLimitError`（计费家族）与 `RETRYABLE_PROVIDER_ERROR_PATTERN`（约四十条瞬时文案）是 pi 跨所有 provider 攒出来的，逐条断言在 `classify.test.ts`，pi 升级新增文案即测试红。**不要用真实并发去压 429**：那是花钱买一个字符串，而且会排队的 provider（DeepSeek）根本不给。采集脚本只留能零成本触发的 AUTH，且 `--model` 必填——曾因默认取"目录第一个"把一串长 turn 花在没人选的模型上。
+- **UNKNOWN 必须 fail closed**（`needsHuman: true`，断路器 `retryAt: null`）：已知集合补全在前、兜底在后。若当瞬时故障处理，就是对着一个没人叫得出名字的错误安静重试到底——DeepSeek 余额耗尽（402 "Insufficient Balance"）曾正是如此。单条怪文案仍容忍，要连续到阈值才停牌。
 - **TokenUsage 四桶互斥**（`uncachedInput / output / cacheRead / cacheWrite`）。reasoning 是 output 的细分，**不重复累加**；cacheRead 与 cacheWrite 单价不同，折进 input 就永久失去准确定价能力。
 - **checkpoint 存 session JSONL 文件本身**，不存消息数组：RPC 有 `get_messages` 导出，但**没有任何载入命令**（0.85.0 的 `SessionManager.inMemory()` 只在库内 SDK 面，`AgentSession` 仍硬编码 JSONL，见 pi#9000）。
 - **checkpoint 必须以换行结尾**：向未终止的末行追加会把下一条记录并进去，两条一起丢（pi#8345，0.84.4 已修根因，我们仍强制，因为 checkpoint 活得比写它的 pi 版本长）。修复被触发即为异常，走 `onRepair` 进规范日志，不做静默字段。

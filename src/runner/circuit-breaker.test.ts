@@ -39,6 +39,25 @@ describe("provider circuit breaker", () => {
     expect(health).toMatchObject({ state: "closed", consecutiveFailures: 0, retryAt: null, lastErrorClass: null });
   });
 
+  it("tolerates one wording nothing recognises rather than parking on a single oddity", () => {
+    const health = fail(closedHealth("deepseek", NOW), "the flux capacitor disagreed");
+    expect(health).toMatchObject({ state: "closed", lastErrorClass: "UNKNOWN" });
+  });
+
+  it("parks a provider that keeps saying something nothing recognises, and tells a person", () => {
+    // No self-healing window: nothing knows what would have to change for the
+    // next attempt to differ, so reopening on a timer repeats the failure while
+    // telling nobody. This is how a spent DeepSeek balance used to behave.
+    let health = closedHealth("deepseek", NOW);
+    for (let attempt = 0; attempt < 3; attempt++) health = fail(health, "the flux capacitor disagreed");
+    expect(health).toMatchObject({
+      state: "open",
+      lastErrorClass: "UNKNOWN",
+      retryAt: null,
+      needsHuman: true,
+    });
+  });
+
   it("opens immediately on an authentication failure, which no amount of waiting fixes", () => {
     const health = fail(closedHealth("openai-codex", NOW), "401: invalid_api_key");
     expect(health).toMatchObject({ state: "open", lastErrorClass: "AUTH", needsHuman: true });

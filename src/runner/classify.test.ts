@@ -48,6 +48,81 @@ describe("captured fixtures classify as expected", () => {
   }
 });
 
+/**
+ * pi's own provider layer carries two accumulated wording lists:
+ * `isTerminalRateLimitError` for the billing family, and
+ * `RETRYABLE_PROVIDER_ERROR_PATTERN` for transient breakage. They were built up
+ * across every provider pi drives, so they are a far better source than
+ * provoking failures — provoking costs real money to be refused, and a provider
+ * that queues instead of refusing never yields the string at all.
+ *
+ * Every entry is asserted here. A pi upgrade that adds a wording then surfaces
+ * as a failing test rather than as an UNKNOWN in production.
+ */
+describe("wordings pi's provider layer already knows", () => {
+  // isTerminalRateLimitError: terminal, so QUOTA. Reading any of these as
+  // RATE_LIMIT parks a worker against a window that never reopens.
+  const TERMINAL_BILLING = [
+    "GoUsageLimitError",
+    "FreeUsageLimitError",
+    "Monthly usage limit reached",
+    "available balance",
+    "insufficient_quota",
+    "out of budget",
+    "quota exceeded",
+    "billing",
+  ];
+
+  it.each(TERMINAL_BILLING)("%s is QUOTA and needs a person", (wording) => {
+    const classification = classifyError(wording);
+    expect(classification.class).toBe("QUOTA");
+    expect(classification.needsHuman).toBe(true);
+  });
+
+  it.each(TERMINAL_BILLING)("%s stays QUOTA even carried on a 429, as pi itself guards", (wording) => {
+    // pi: `if (status === 429 && isTerminalRateLimitError(text)) return false`.
+    expect(classifyError(`429: {"message":"${wording}"}`).class).toBe("QUOTA");
+  });
+
+  // RETRYABLE_PROVIDER_ERROR_PATTERN: transient, so retryable in the same
+  // session. QUOTA and AUTH are deliberately absent from this list.
+  const RETRYABLE = [
+    "overloaded", "rate.limit", "rate limit", "too many requests", "429", "500", "502", "503",
+    "504", "524", "service unavailable", "server error", "internal error",
+    "provider returned error", "exceeded request buffer limit while retrying upstream",
+    "network error", "connection error", "connection refused", "connection lost",
+    "other side closed", "fetch failed", "getaddrinfo", "ENOTFOUND", "EAI_AGAIN",
+    "upstream connect", "reset before headers", "socket hang up",
+    "socket connection was closed", "timed out", "time out", "timeout", "terminated",
+    "websocket closed", "websocket error", "ended without",
+    "stream ended before message_stop", "stream ended before a terminal response event",
+    "http2 request did not get a response", "ResourceExhausted",
+  ];
+
+  it.each(RETRYABLE)("%s is recognised, never UNKNOWN", (wording) => {
+    expect(classifyError(wording).class).not.toBe("UNKNOWN");
+  });
+
+  it.each(RETRYABLE.filter((wording) => !/^(429|rate|too many|ResourceExhausted)/i.test(wording)))(
+    "%s is retryable in the same session", (wording) => {
+      expect(classifyError(wording).retryable).toBe(true);
+    });
+
+  // Published error tables, for wordings that cannot be provoked without paying
+  // a provider to refuse us.
+  const PUBLISHED: Array<[string, string, string]> = [
+    ["deepseek", '402: {"message":"Insufficient Balance"}', "QUOTA"],
+    ["deepseek", '429: {"message":"You are sending requests too quickly"}', "RATE_LIMIT"],
+    ["deepseek", '422: {"message":"Your request contains invalid parameters"}', "INVALID_REQUEST"],
+    ["deepseek", '503: {"message":"The server is overloaded due to high traffic"}', "SERVER"],
+    ["openai-codex", "You have hit your ChatGPT usage limit (plus plan). Try again in ~57 min.", "QUOTA"],
+  ];
+
+  it.each(PUBLISHED)("%s: %s -> %s", (_provider, wording, expected) => {
+    expect(classifyError(wording).class).toBe(expected);
+  });
+});
+
 describe("rule ordering", () => {
   it("reads a spent quota as QUOTA even though it is also a 429", () => {
     // Getting this backwards makes a worker wait for a window that never opens.

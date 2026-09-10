@@ -108,6 +108,12 @@ export function onProviderFailure(health: ProviderHealth, input: ProviderFailure
   }
   if (classification.class === "RATE_LIMIT") return opened(at + policy.rateLimitOpenMs, false);
   if (consecutiveFailures >= policy.failureThreshold) {
+    // An unrecognised wording gets no self-healing window: nothing knows what
+    // would have to change for the next attempt to differ, so reopening on a
+    // timer just repeats the failure while telling nobody. One odd string is
+    // still tolerated — it takes the same consecutive failures as any other
+    // fault to park the provider.
+    if (classification.class === "UNKNOWN") return opened(null, true);
     return opened(at + policy.transientOpenMs, classification.needsHuman);
   }
   return { ...base, state: health.state === "open" ? "open" : "closed" };
