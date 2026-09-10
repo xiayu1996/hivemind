@@ -71,6 +71,38 @@ describe("S-E1ACTION-01-ignorecomments", () => {
     });
   });
 
+  // @scenario S-E1ACTION-02-summary
+  it("projects an open gate's question, requirement, phase, context, and handling link", async () => {
+    await client.batch([
+      { sql: `INSERT INTO requirements (id, notion_page_id, title, state, original_request, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?)`, args: ["requirement-exports", "requirement-page-exports", "Export invoices", "EXECUTING", "Export invoices", 1, 1] },
+      { sql: `INSERT INTO epics (id, notion_page_id, title, state, requirement_id, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?)`, args: ["epic-exports", "epic-page-exports", "Invoice exports", "EXECUTING", "requirement-exports", 1, 1] },
+      { sql: `INSERT INTO stories (id, epic_id, notion_page_id, title, requirement, state, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, args: ["story-exports", "epic-exports", "story-page-exports", "Export monthly invoices", "Export invoices", "CODE", 1, 1] },
+      { sql: `INSERT INTO human_gates (id, object_type, object_id, required_action, phase, context, navigation_target, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, args: ["gate-exports", "story", "story-exports", "Which tax regions are required?", "DESIGN", "Customers need monthly invoice exports", "/tasks/story-exports", 1, 1] },
+    ], "write");
+
+    const source = new LibsqlConsoleDataSource(client, async () => []);
+    await expect(source.workStatus()).resolves.toMatchObject({
+      pendingResponses: [{
+        requiredAction: "Which tax regions are required?",
+        requirementTitle: "Export invoices",
+        currentPhase: "DESIGN",
+        context: "Customers need monthly invoice exports",
+        navigationTarget: "/tasks/story-exports",
+      }],
+    });
+    const app = await createConsoleServer(source, { serveUi: false });
+    await expect(app.inject({ method: "GET", url: "/api/work-status" }).then((response) => response.json())).resolves.toMatchObject({
+      pendingResponses: [{ requirementTitle: "Export invoices", context: "Customers need monthly invoice exports" }],
+    });
+    await app.close();
+    await expect(readFile("console-ui/src/App.vue", "utf8")).resolves.toContain("Requirement");
+    await expect(readFile("console-ui/src/App.vue", "utf8")).resolves.toContain("Context");
+  });
+
   // @scenario S-E1ACTION-01-readfailure
   it("returns an observable loading failure rather than empty sections when projection fails", async () => {
     const failingData: ConsoleDataSource = {
