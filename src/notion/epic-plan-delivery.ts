@@ -4,6 +4,8 @@ import type { NotionGateway } from "./gateway.js";
 import type { NotionOutboxDelivery, NotionOutboxRecord } from "./outbox.js";
 import { COMMENT_EPIC_PAGE } from "../orchestrator/epic-blocker.js";
 import { SYNC_EPIC_STATUS } from "../orchestrator/epic-status-projection.js";
+import { SYNC_EPIC_PAGE, renderEpicProgress, type EpicPagePayload } from "../orchestrator/epic-page-projection.js";
+import pageText from "../orchestrator/epic-page-text.json" with { type: "json" };
 import schema from "./notion-schema.json" with { type: "json" };
 
 const planSchema = z.object({
@@ -24,6 +26,22 @@ const statusSchema = z.object({
   at: z.number().int(),
 });
 
+const pageSchema = z.object({
+  epicId: z.string().min(1),
+  status: z.enum(schema.options.epicStatus),
+  mrUrl: z.string().nullable(),
+  targetBranch: z.string().min(1),
+  integrationBranch: z.string().nullable(),
+  blockedReason: z.string().nullable(),
+  stories: z.array(z.object({
+    id: z.string().min(1),
+    title: z.string(),
+    state: z.string().min(1),
+    stopReason: z.string().nullable(),
+    mrUrl: z.string().nullable(),
+  })),
+});
+
 const commentSchema = z.object({
   epicId: z.string().min(1),
   body: z.string().min(1),
@@ -31,10 +49,11 @@ const commentSchema = z.object({
 
 /** Every outbox operation this delivery owns, for the replay filter. */
 export const EPIC_OUTBOX_OPERATIONS = [
-  "present_epic_plan", "create_story_page", SYNC_EPIC_STATUS, COMMENT_EPIC_PAGE,
+  "present_epic_plan", "create_story_page", SYNC_EPIC_STATUS, COMMENT_EPIC_PAGE, SYNC_EPIC_PAGE,
 ] as const;
 
 const MARKER_PREFIX = "hivemind-plan:";
+const PROGRESS_MARKER_PREFIX = "hivemind-progress:";
 
 function encoded(id: string): string {
   return encodeURIComponent(id);
@@ -80,6 +99,11 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
       return this.planMarkerPresent(record.target, record.payloadHash);
     }
     if (record.operation === SYNC_EPIC_STATUS) return this.statusApplied(statusSchema.parse(record.payload));
+    if (record.operation === SYNC_EPIC_PAGE) {
+      const payload = pageSchema.parse(record.payload);
+      const pageId = String((await this.epicRow(payload.epicId)).notion_page_id);
+      return this.markerPresent(pageId, `${PROGRESS_MARKER_PREFIX}${record.payloadHash}`);
+    }
     if (record.operation === COMMENT_EPIC_PAGE) return this.commentPresent(commentSchema.parse(record.payload));
     if (record.operation === "create_story_page") {
       const payload = storyPageSchema.parse(record.payload);
@@ -95,8 +119,91 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
     if (record.operation === "present_epic_plan") return this.presentPlan(record);
     if (record.operation === "create_story_page") return this.createStoryPage(record);
     if (record.operation === SYNC_EPIC_STATUS) return this.syncStatus(statusSchema.parse(record.payload));
+    if (record.operation === SYNC_EPIC_PAGE) return this.syncPage(pageSchema.parse(record.payload), record.payloadHash);
     if (record.operation === COMMENT_EPIC_PAGE) return this.comment(commentSchema.parse(record.payload));
     throw new Error(`unsupported Epic plan operation: ${record.operation}`);
+  }
+
+  /**
+   * The page a person opens to see where the Epic stands: the board column,
+   * the review request link, and one line per Story. The progress section is
+   * rewritten in place under its heading; the plan above it is left alone.
+   */
+  private async syncPage(payload: EpicPagePayload, payloadHash: string): Promise<void> {
+    const epic = await this.epicRow(payload.epicId);
+    const pageId = String(epic.notion_page_id);
+    const properties: Record<string, unknown> = {
+      [schema.propertyNames.mergeRequest]: { url: payload.mrUrl },
+    };
+    // A column a person just dragged keeps their word until the human-wins
+    // window closes, exactly as the status-only projection does.
+    const humanWins = Number(epic.human_wins_until ?? 0) > this.now();
+    if (!humanWins) properties[schema.propertyNames.epicStatus] = { select: { name: payload.status } };
+    await this.gateway.request({
+      method: "PATCH",
+      path: `/v1/pages/${encoded(pageId)}`,
+      priority: "projection",
+      body: { properties },
+    });
+    if (!humanWins) await this.rememberStatus(payload.epicId, payload.status);
+
+    for (const blockId of await this.progressSectionBlocks(pageId)) {
+      await this.gateway.request({ method: "DELETE", path: `/v1/blocks/${encoded(blockId)}`, priority: "projection" });
+    }
+    const progress = renderEpicProgress(payload);
+    await this.gateway.request({
+      method: "PATCH",
+      path: `/v1/blocks/${encoded(pageId)}/children`,
+      priority: "projection",
+      body: {
+        children: [
+          heading(pageText.heading),
+          ...progress.lead.map((line) => paragraph(line)),
+          ...progress.stories.map((line) => bullet(line)),
+          paragraph(`${PROGRESS_MARKER_PREFIX}${payloadHash}`),
+        ],
+      },
+    });
+  }
+
+  /** The progress heading and every block after it up to the next heading. */
+  private async progressSectionBlocks(pageId: string): Promise<string[]> {
+    const ids: string[] = [];
+    let inside = false;
+    for (const block of await this.children(pageId)) {
+      const type = String(block.type ?? "");
+      if (type === "heading_2") {
+        inside = plainText(block.heading_2) === pageText.heading;
+        if (!inside) continue;
+      }
+      if (inside) ids.push(String(block.id));
+    }
+    return ids;
+  }
+
+  private async children(pageId: string): Promise<Array<Record<string, unknown>>> {
+    const blocks: Array<Record<string, unknown>> = [];
+    let cursor: string | undefined;
+    do {
+      const suffix = cursor ? `?page_size=100&start_cursor=${encoded(cursor)}` : "?page_size=100";
+      const response = await this.gateway.request({
+        method: "GET",
+        path: `/v1/blocks/${encoded(pageId)}/children${suffix}`,
+        priority: "projection",
+      });
+      const page = z.object({
+        results: z.array(z.record(z.string(), z.unknown())),
+        has_more: z.boolean().optional(),
+        next_cursor: z.string().nullable().optional(),
+      }).parse(response.data);
+      blocks.push(...page.results);
+      cursor = page.has_more ? page.next_cursor ?? undefined : undefined;
+    } while (cursor);
+    return blocks;
+  }
+
+  private async markerPresent(pageId: string, marker: string): Promise<boolean> {
+    return (await this.children(pageId)).some((block) => plainText(block.paragraph) === marker);
   }
 
   /** The comment's own text is the replay marker: the page either carries it or it does not. */
@@ -244,26 +351,8 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
     await this.rememberPageId(payload.storyId, pageId);
   }
 
-  private async planMarkerPresent(pageId: string, payloadHash: string): Promise<boolean> {
-    let cursor: string | undefined;
-    do {
-      const suffix = cursor ? `?page_size=100&start_cursor=${encoded(cursor)}` : "?page_size=100";
-      const response = await this.gateway.request({
-        method: "GET",
-        path: `/v1/blocks/${encoded(pageId)}/children${suffix}`,
-        priority: "projection",
-      });
-      const page = z.object({
-        results: z.array(z.record(z.string(), z.unknown())),
-        has_more: z.boolean().optional(),
-        next_cursor: z.string().nullable().optional(),
-      }).parse(response.data);
-      for (const block of page.results) {
-        if (plainText(block.paragraph) === `${MARKER_PREFIX}${payloadHash}`) return true;
-      }
-      cursor = page.has_more ? page.next_cursor ?? undefined : undefined;
-    } while (cursor);
-    return false;
+  private planMarkerPresent(pageId: string, payloadHash: string): Promise<boolean> {
+    return this.markerPresent(pageId, `${MARKER_PREFIX}${payloadHash}`);
   }
 
   private async findStoryPage(storyId: string): Promise<string | null> {

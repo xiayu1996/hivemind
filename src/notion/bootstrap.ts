@@ -57,6 +57,7 @@ function epicProperties(): Properties {
   return {
     [names.title]: { title: {} },
     [names.epicStatus]: { select: { options: selectOptions("epicStatus") } },
+    [names.mergeRequest]: { url: {} },
     [names.targetDate]: { date: {} },
     [names.creator]: { created_by: {} },
     [names.lastEdited]: { last_edited_time: {} },
@@ -195,6 +196,24 @@ export async function bootstrapRequirements(
     requirementsDatabaseId: requirements.id,
     requirementsDataSourceId: await dataSourceId(client, requirements.id, requirements),
   };
+}
+
+/**
+ * Brings a live Epics database up to the current schema: new status options,
+ * the review request column and the waiting formula that mentions them. Notion
+ * keeps existing options (their colours included) and adds the missing ones,
+ * so this is safe to run on every board and does nothing on a current one.
+ */
+export async function upgradeEpicBoard(client: BootstrapClient, epicsDataSourceId: string): Promise<void> {
+  const names = schema.propertyNames;
+  await client.dataSources.update({
+    data_source_id: epicsDataSourceId,
+    properties: {
+      [names.epicStatus]: { select: { options: selectOptions("epicStatus") } },
+      [names.mergeRequest]: { url: {} },
+      [names.waitingOnHuman]: { formula: { expression: waitingFormula(names.epicStatus, "epicStatus") } },
+    },
+  });
 }
 
 /** Creates the three code-managed databases; board view setup remains manual. */

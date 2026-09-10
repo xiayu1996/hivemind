@@ -1,5 +1,5 @@
 import { Client } from "@notionhq/client";
-import { bootstrapNotion, bootstrapRequirements } from "../src/notion/bootstrap.js";
+import { bootstrapNotion, bootstrapRequirements, upgradeEpicBoard } from "../src/notion/bootstrap.js";
 import { loadSecretsFile, upsertSecretFile } from "../src/config/secrets-file.js";
 
 function argument(name: string): string | undefined {
@@ -27,6 +27,17 @@ async function main(): Promise<void> {
     await upsertSecretFile("HIVEMIND_NOTION_REQUIREMENTS_DATA_SOURCE_ID", requirements.requirementsDataSourceId);
     console.log(JSON.stringify(requirements, null, 2));
     console.log("Requirements database created. Complete the board view steps in docs/runbooks/notion-bootstrap.md.");
+    return;
+  }
+
+  // A live board gains the Epic columns and options added since it was
+  // created; nothing is recreated and nothing already on it is touched.
+  if (process.argv.includes("--upgrade-epics")) {
+    const epicsDataSourceId = argument("--epics-data-source") ??
+      process.env.HIVEMIND_NOTION_EPICS_DATA_SOURCE_ID ?? stored.get("HIVEMIND_NOTION_EPICS_DATA_SOURCE_ID");
+    if (!epicsDataSourceId) throw new Error("pass --epics-data-source or set HIVEMIND_NOTION_EPICS_DATA_SOURCE_ID");
+    await upgradeEpicBoard(client, epicsDataSourceId);
+    console.log("Epics database upgraded: status options, review request column and waiting formula are current.");
     return;
   }
 

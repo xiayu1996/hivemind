@@ -216,4 +216,66 @@ describe("NotionEpicPlanDelivery", () => {
       expect(await again.isApplied(record("comment_epic_page", payload))).toBe(true);
     });
   });
+
+  describe("sync_epic_page", () => {
+    const payload = {
+      epicId: "M2",
+      status: "验收中",
+      mrUrl: "https://example.test/pull/26",
+      targetBranch: "main",
+      integrationBranch: "epic/M2",
+      blockedReason: null,
+      stories: [
+        { id: "S-M2-01", title: "Split", state: "DELIVERED", stopReason: null, mrUrl: "https://example.test/pull/20" },
+        { id: "S-M2-02", title: "Approve", state: "CODE", stopReason: null, mrUrl: null },
+      ],
+    };
+
+    it("moves the column, links the review request and rewrites the progress section in place", async () => {
+      await client.execute("INSERT INTO epics (id, notion_page_id, title, state, created_at, updated_at) VALUES ('M2', 'epic-page', 'M2', 'EPIC_ACCEPT', 1, 1)");
+      children = [
+        { id: "b-plan", type: "heading_2", heading_2: { rich_text: [{ plain_text: "拆解方案" }] } },
+        { id: "b-goal", type: "paragraph", paragraph: { rich_text: [{ plain_text: "goal" }] } },
+        { id: "b-progress", type: "heading_2", heading_2: { rich_text: [{ plain_text: "进展" }] } },
+        { id: "b-old-1", type: "bulleted_list_item", bulleted_list_item: { rich_text: [{ plain_text: "S-M2-01 Split — 开发中" }] } },
+        { id: "b-old-marker", type: "paragraph", paragraph: { rich_text: [{ plain_text: "hivemind-progress:old" }] } },
+      ];
+      const delivery = new NotionEpicPlanDelivery(gateway(), client, "stories-ds", () => 10);
+
+      expect(await delivery.isApplied(record("sync_epic_page", payload, { payloadHash: "new" }))).toBe(false);
+      await delivery.send(record("sync_epic_page", payload, { payloadHash: "new" }));
+
+      const properties = requests.find((request) => request.method === "PATCH" && request.path === "/v1/pages/epic-page");
+      expect(JSON.stringify(properties?.body)).toContain("验收中");
+      expect(JSON.stringify(properties?.body)).toContain("https://example.test/pull/26");
+      expect(requests.filter((request) => request.method === "DELETE").map((request) => request.path)).toEqual([
+        "/v1/blocks/b-progress", "/v1/blocks/b-old-1", "/v1/blocks/b-old-marker",
+      ]);
+      const appended = requests.find((request) => request.method === "PATCH" && request.path.endsWith("/children"));
+      const body = JSON.stringify(appended?.body);
+      expect(body).toContain("进展");
+      expect(body).toContain("S-M2-01 Split — 已交付，MR https://example.test/pull/20");
+      expect(body).toContain("S-M2-02 Approve — 开发中");
+      expect(body).toContain("hivemind-progress:new");
+      expect(body).not.toContain("goal");
+      const row = (await client.execute("SELECT notion_status_shadow FROM epics WHERE id = 'M2'")).rows[0];
+      expect(row?.notion_status_shadow).toBe("验收中");
+    });
+
+    it("recognises a page that already shows this progress", async () => {
+      await client.execute("INSERT INTO epics (id, notion_page_id, title, state, created_at, updated_at) VALUES ('M2', 'epic-page', 'M2', 'EPIC_ACCEPT', 1, 1)");
+      children = [{ id: "m", type: "paragraph", paragraph: { rich_text: [{ plain_text: "hivemind-progress:same" }] } }];
+      const delivery = new NotionEpicPlanDelivery(gateway(), client, "stories-ds", () => 10);
+      expect(await delivery.isApplied(record("sync_epic_page", payload, { payloadHash: "same" }))).toBe(true);
+    });
+
+    it("leaves the column alone while a person's drag still stands, but still updates the page", async () => {
+      await client.execute("INSERT INTO epics (id, notion_page_id, title, state, human_wins_until, created_at, updated_at) VALUES ('M2', 'epic-page', 'M2', 'EPIC_ACCEPT', 1000, 1, 1)");
+      const delivery = new NotionEpicPlanDelivery(gateway(), client, "stories-ds", () => 10);
+      await delivery.send(record("sync_epic_page", payload, { payloadHash: "new" }));
+      const properties = requests.find((request) => request.method === "PATCH" && request.path === "/v1/pages/epic-page");
+      expect(JSON.stringify(properties?.body)).not.toContain("验收中");
+      expect(JSON.stringify(properties?.body)).toContain("https://example.test/pull/26");
+    });
+  });
 });

@@ -57,6 +57,7 @@ import { surfaceBlockedEpics } from "../src/orchestrator/epic-blocker.js";
 import { EpicCompletion } from "../src/orchestrator/epic-completion.js";
 import { EpicMrDelivery } from "../src/vcs/epic-delivery.js";
 import { escalateParkedStories } from "../src/orchestrator/epic-escalation.js";
+import { enqueueEpicPages } from "../src/orchestrator/epic-page-projection.js";
 import { epicRegressionClean } from "../src/regression/epic-gate.js";
 import { discoverMRPort } from "../src/vcs/mr/adapters.js";
 import { NotionStoryProjection } from "../src/notion/story-projection.js";
@@ -272,6 +273,10 @@ async function main(): Promise<void> {
       console.warn(`Epic ${change.epicId} ${change.kind}: Stories ${change.storyIds.join(", ")}`);
     }
     await surfaceBlockedEpics(handle.client);
+    // The Epic page is where a person sees the review request and each
+    // Story's state; it is derived from the database every cycle and only
+    // travels when something on it changed.
+    await enqueueEpicPages(handle.client, targetBranchDefault);
     const stories = (await handle.client.execute("SELECT id FROM stories ORDER BY id")).rows;
     for (const story of stories) await projection.enqueue(String(story.id));
     // The requirement loop shares this outbox; each side replays only its own rows.
