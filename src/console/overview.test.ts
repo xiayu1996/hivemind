@@ -48,6 +48,42 @@ describe("S-E3OVERVIEW-02-chart", () => {
   });
 });
 
+describe("S-E3OVERVIEW-02-models", () => {
+  it("lists each model with its own today and month totals, biggest month first", () => {
+    const cost = overviewSections(costSeed(), SEED_NOW).at(-1);
+    if (cost?.kind !== "cost") throw new Error("the last section is not the cost region");
+
+    expect(cost.models).toEqual([
+      { modelId: "mock-1", text: "mock-1 \u00b7 Today $1.23 \u00b7 This month $4.23" },
+      { modelId: "deepseek-chat", text: "deepseek-chat \u00b7 Today $2.00 \u00b7 This month $2.50" },
+    ]);
+  });
+
+  it("shows $0.00 for an empty side and keeps records without a model id out of the list", () => {
+    const data: OverviewData = {
+      questions: [],
+      active: [],
+      events: [],
+      costs: [
+        { ts: at(2, 1, 12), modelId: "month-only", costUsd: 3 },
+        { ts: at(2, 15, 10), modelId: null, costUsd: 5 },
+      ],
+    };
+
+    const cost = overviewSections(data, SEED_NOW).at(-1);
+    if (cost?.kind !== "cost") throw new Error("the last section is not the cost region");
+    expect(cost.models).toEqual([{ modelId: "month-only", text: "month-only \u00b7 Today $0.00 \u00b7 This month $3.00" }]);
+    expect(cost.todayLabel).toBe("Today $5.00");
+    expect(cost.monthLabel).toBe("This month $8.00");
+  });
+
+  it("does not leak token or cache usage details", () => {
+    const rendered = JSON.stringify(overviewSections(costSeed(), SEED_NOW).at(-1));
+    expect(rendered).not.toContain("tokens");
+    expect(rendered).not.toContain("cache_read");
+  });
+});
+
 describe("S-E3OVERVIEW-02-summary", () => {
   it("adds a cost region after the four recent-result groups with today and month totals", () => {
     const sections = overviewSections(costSeed(), SEED_NOW);
