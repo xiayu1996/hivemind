@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS human_gates (
   object_id         TEXT NOT NULL,
   required_action   TEXT NOT NULL,
   phase             TEXT NOT NULL,
+  context           TEXT,
   navigation_target TEXT NOT NULL,
   priority          INTEGER NOT NULL DEFAULT 2,
   state             TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open','resolved','cancelled')),

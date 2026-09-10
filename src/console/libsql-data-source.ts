@@ -99,12 +99,19 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
   async workStatus(): Promise<unknown> {
     const [gates, requirements] = await Promise.all([
       this.client.execute(`SELECT g.id, g.required_action AS requiredAction, g.phase AS currentPhase,
-                                  g.navigation_target AS navigationTarget,
-                                  COALESCE(r.title, e.title, s.title, g.object_id) AS relatedRequirementOrObject
+                                  g.context, g.navigation_target AS navigationTarget,
+                                  COALESCE(direct_requirement.title, epic_requirement.title, story_requirement.title) AS requirementTitle,
+                                  COALESCE(direct_requirement.title, epic_requirement.title, story_requirement.title) AS relatedRequirementOrObject
                              FROM human_gates g
-                             LEFT JOIN requirements r ON g.object_type = 'requirement' AND g.object_id = r.id
-                             LEFT JOIN epics e ON g.object_type = 'epic' AND g.object_id = e.id
-                             LEFT JOIN stories s ON g.object_type = 'story' AND g.object_id = s.id
+                             LEFT JOIN requirements direct_requirement
+                               ON g.object_type = 'requirement' AND g.object_id = direct_requirement.id
+                             LEFT JOIN epics gate_epic
+                               ON g.object_type = 'epic' AND g.object_id = gate_epic.id
+                             LEFT JOIN requirements epic_requirement ON gate_epic.requirement_id = epic_requirement.id
+                             LEFT JOIN stories gate_story
+                               ON g.object_type = 'story' AND g.object_id = gate_story.id
+                             LEFT JOIN epics story_epic ON gate_story.epic_id = story_epic.id
+                             LEFT JOIN requirements story_requirement ON story_epic.requirement_id = story_requirement.id
                             WHERE g.state = 'open'
                             ORDER BY g.priority, g.created_at, g.id`),
       this.client.execute(`SELECT id, title, state AS phase, updated_at

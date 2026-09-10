@@ -51,8 +51,9 @@ function navigate(view) {
           <article v-for="gate in overview.pendingResponses" :key="gate.id">
             <strong>{{ gate.requiredAction }}</strong>
             <dl>
-              <dt>Related object</dt><dd>{{ gate.relatedRequirementOrObject }}</dd>
+              <dt>Requirement</dt><dd>{{ gate.requirementTitle }}</dd>
               <dt>Current phase</dt><dd>{{ gate.currentPhase }}</dd>
+              <dt>Context</dt><dd>{{ gate.context }}</dd>
             </dl>
             <a :href="gate.navigationTarget">Open handling location</a>
           </article>

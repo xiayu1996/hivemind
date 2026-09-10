@@ -66,6 +66,7 @@ export const humanGates = sqliteTable("human_gates", {
   objectId: text("object_id").notNull(),
   requiredAction: text("required_action").notNull(),
   phase: text("phase").notNull(),
+  context: text("context"),
   navigationTarget: text("navigation_target").notNull(),
   priority: integer("priority").notNull().default(2),
   state: text("state").notNull().default("open"),
