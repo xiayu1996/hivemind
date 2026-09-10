@@ -29,13 +29,19 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
         sql: "SELECT run_id, type, seq, ts, data FROM event_log WHERE card_id = ? ORDER BY ts, run_id, seq",
         args: [String(story.id)],
       })).rows;
-      const events = eventRows.map((event) => ({
-        runId: String(event.run_id),
-        type: String(event.type),
-        seq: Number(event.seq),
-        time: Number(event.ts),
-        data: JSON.parse(String(event.data)),
-      }));
+      const events = eventRows.flatMap((event) => {
+        try {
+          return [{
+            runId: String(event.run_id),
+            type: String(event.type),
+            seq: Number(event.seq),
+            time: Number(event.ts),
+            data: JSON.parse(String(event.data)),
+          }];
+        } catch {
+          return [];
+        }
+      });
       const byRun = new Map<string, typeof events>();
       for (const event of events) {
         const group = byRun.get(event.runId) ?? [];
