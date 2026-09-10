@@ -2,7 +2,7 @@ import { createBullBoard } from "@bull-board/api";
 import { BullMQAdapter } from "@bull-board/api/bullMQAdapter";
 import { FastifyAdapter } from "@bull-board/fastify";
 import fastifyStatic from "@fastify/static";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import type { Queue } from "bullmq";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -113,10 +113,13 @@ export async function createConsoleServer(
       prefix: "/assets/",
     });
     const index = await readFile(join(uiRoot, "index.html"), "utf8");
-    app.get("/", async (_request, reply) => reply.type("text/html").send(index));
+    const serveApplication = async (_request: FastifyRequest, reply: FastifyReply) =>
+      reply.type("text/html").send(index);
+    app.get("/", serveApplication);
     for (const route of ["/nodes", "/tasks", "/costs", "/config", "/stats", "/providers", "/work-status"]) {
-      app.get(route, async (_request, reply) => reply.type("text/html").send(index));
+      app.get(route, serveApplication);
     }
+    app.get("/tasks/:taskId", serveApplication);
   }
   return app;
 }

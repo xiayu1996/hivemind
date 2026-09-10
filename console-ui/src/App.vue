@@ -1,10 +1,15 @@
 <script setup>
-import { ref, watchEffect } from "vue";
+import { computed, ref, watchEffect } from "vue";
 import { formatStartedWaiting, formatWaitingDuration } from "../../src/console/work-status-time.js";
 
 const views = ["work-status", "nodes", "tasks", "costs", "config", "stats", "providers"];
-const current = ref(views.includes(location.pathname.slice(1)) ? location.pathname.slice(1) : "work-status");
+const taskPath = /^\/tasks\/([^/]+)$/.exec(location.pathname);
+const current = ref(taskPath ? "tasks" : views.includes(location.pathname.slice(1)) ? location.pathname.slice(1) : "work-status");
+const handlingTaskId = ref(taskPath?.[1] ?? null);
 const rows = ref([]);
+const displayedRows = computed(() => handlingTaskId.value
+  ? rows.value.filter((row) => row.id === handlingTaskId.value)
+  : rows.value);
 const overview = ref(null);
 const error = ref("");
 
@@ -27,6 +32,7 @@ watchEffect(load);
 function navigate(view) {
   history.pushState({}, "", `/${view}`);
   current.value = view;
+  handlingTaskId.value = null;
 }
 
 </script>
@@ -76,8 +82,8 @@ function navigate(view) {
     <section v-else>
       <h2>{{ current }}</h2>
       <p v-if="error" class="error">{{ error }}</p>
-      <p v-else-if="rows.length === 0" class="empty">No records</p>
-      <article v-for="(row, index) in rows" :key="row.id || row.key || row.runId || index">
+      <p v-else-if="displayedRows.length === 0" class="empty">No records</p>
+      <article v-for="(row, index) in displayedRows" :key="row.id || row.key || row.runId || index">
         <pre>{{ JSON.stringify(row, null, 2) }}</pre>
       </article>
     </section>
