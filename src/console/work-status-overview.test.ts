@@ -239,6 +239,41 @@ describe("work status", () => {
     expect(ui).not.toContain("Save changes");
   });
 
+  // @scenario S-E1ACTION-05-readonly
+  it("S-E1ACTION-05-readonly keeps the overview to navigation, jump links, and retry", async () => {
+    await insertOpenGate(client);
+    await client.batch([
+      { sql: `INSERT INTO epics (id, notion_page_id, title, state, requirement_id, created_at, updated_at)
+              VALUES ('EPIC-readonly', 'epic-page-readonly', 'Export activity', 'EXECUTING', 'requirement-exports', 1, 1)` },
+      { sql: `INSERT INTO stories (id, epic_id, notion_page_id, title, requirement, state, phase, phase_started_at, created_at, updated_at)
+              VALUES ('S-READONLY-01', 'EPIC-readonly', 'story-page-readonly', 'Add export activity', 'Export activity', 'CODE', 'CODE', 1, 1, 1)` },
+    ], "write");
+
+    const source = new LibsqlConsoleDataSource(client, async () => [], () => 1);
+    const app = await createConsoleServer(source, { serveUi: false });
+    const status = await app.inject({ method: "GET", url: "/api/work-status" });
+    expect(status.statusCode).toBe(200);
+    expect(status.json()).toMatchObject({ pendingResponses: [{}], activeRequirements: [{}] });
+
+    // Every write surface on the read-only overview is refused by the server, not the UI.
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+      const write = await app.inject({ method, url: "/api/work-status" });
+      expect(write.statusCode).toBe(405);
+      expect(write.json()).toEqual({ error: "console is read-only" });
+    }
+    await app.close();
+
+    const ui = await readFile("console-ui/src/App.vue", "utf8");
+    expect(ui).toContain("Open in Notion");
+    expect(ui).toContain("Retry");
+    for (const control of [
+      "<input", "<select", "<textarea", "checkbox",
+      "Submit answer", "Save answer", "Save changes", "Approve", "Edit requirement", "Stop task",
+    ]) {
+      expect(ui).not.toContain(control);
+    }
+  });
+
   // @scenario S-E1ACTION-01-ignorecomments
   it("does not turn an unresolved Notion comment into a pending response", async () => {
     await client.execute({
