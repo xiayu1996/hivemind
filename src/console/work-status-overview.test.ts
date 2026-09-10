@@ -16,7 +16,8 @@ async function insertOpenGate(client: ReturnType<typeof createClient>, overrides
   const values = { ...decision, ...overrides };
   await client.batch([
     { sql: `INSERT INTO requirements (id, notion_page_id, title, state, original_request, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)`, args: ["requirement-exports", "requirement-page-exports", "Export customers", "EXECUTING", "Export customers", 1, 1] },
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO NOTHING`, args: ["requirement-exports", "requirement-page-exports", "Export customers", "EXECUTING", "Export customers", 1, 1] },
     { sql: `INSERT INTO human_gates (
               id, object_type, object_id, required_action, phase, recommended_choice,
               recommendation_reason, other_options, confirmation_reason, navigation_target, created_at, updated_at
@@ -64,7 +65,7 @@ describe("work status", () => {
     for (const label of ["Recommended choice", "Why this is recommended", "Other options", "Where this arose", "Why you need to confirm", "Open handling location"]) {
       expect(ui).toContain(label);
     }
-    for (const excluded of ["Started waiting:", "Waiting for", "Context", "JSON.stringify", "gate.id"]) {
+    for (const excluded of ["Started waiting:", "Waiting for", "Context", "{{ gate.otherOptions }}", "{{ gate.id }}"]) {
       expect(ui).not.toContain(excluded);
     }
   });
@@ -79,6 +80,7 @@ describe("work status", () => {
     const response = await app.inject({ method: "GET", url: "/api/work-status" });
     expect(response.statusCode).toBe(503);
     expect(response.json()).toEqual({ error: "work_status_unavailable", retry: true });
+    expect(response.json()).not.toHaveProperty("pendingResponses");
     await app.close();
 
     await client.execute("DELETE FROM human_gates");
@@ -88,7 +90,7 @@ describe("work status", () => {
     const ui = await readFile("console-ui/src/App.vue", "utf8");
     expect(ui).toContain("Unable to load work status: {{ error }}");
     expect(ui).toContain("Retry");
-    expect(ui).not.toContain("<dt>Recommended choice</dt>");
+    expect(ui).toContain('<div v-if="error"');
   });
 
   // @scenario S-E1ACTION-01-ignorecomments

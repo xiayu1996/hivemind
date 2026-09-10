@@ -1,6 +1,5 @@
 <script setup>
 import { computed, ref, watchEffect } from "vue";
-import { formatStartedWaiting, formatWaitingDuration } from "../../src/console/work-status-time.js";
 
 const views = ["work-status", "nodes", "tasks", "costs", "config", "stats", "providers"];
 const taskPath = /^\/tasks\/([^/]+)$/.exec(location.pathname);
@@ -56,14 +55,15 @@ function navigate(view) {
         <section class="overview-section">
           <h3>Pending responses</h3>
           <p v-if="overview.pendingResponseState === 'no_pending_responses'" class="empty">No pending responses</p>
-          <article v-for="gate in overview.pendingResponses" :key="gate.id">
+          <article v-for="gate in overview.pendingResponses" :key="gate.navigationTarget">
             <strong>{{ gate.requiredAction }}</strong>
             <dl>
-              <dt>Requirement</dt><dd>{{ gate.requirementTitle }}</dd>
-              <dt>Current phase</dt><dd>{{ gate.currentPhase }}</dd>
-              <dt>Context</dt><dd>{{ gate.context }}</dd>
-              <dt>Started waiting</dt><dd>Started waiting: {{ formatStartedWaiting(gate.startedWaitingAt) }}</dd>
-              <dt>Waiting duration</dt><dd>Waiting for {{ formatWaitingDuration(gate.waitingDurationMinutes) }}</dd>
+              <dt>Recommended choice</dt><dd>{{ gate.recommendedChoice }}</dd>
+              <dt>Why this is recommended</dt><dd>{{ gate.recommendationReason }}</dd>
+              <dt>Other options</dt>
+              <dd><ul><li v-for="option in gate.otherOptions" :key="option">{{ option }}</li></ul></dd>
+              <dt>Where this arose</dt><dd>{{ gate.whereThisArose }}</dd>
+              <dt>Why you need to confirm</dt><dd>{{ gate.confirmationReason }}</dd>
             </dl>
             <a :href="gate.navigationTarget">Open handling location</a>
           </article>

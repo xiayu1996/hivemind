@@ -14,7 +14,6 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
   constructor(
     private readonly client: Client,
     private readonly nodeSnapshot: () => Promise<unknown[]>,
-    private readonly now: () => number = Date.now,
   ) {}
 
   nodes(): Promise<unknown[]> {
@@ -99,38 +98,45 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
   /** Only the central gate registry can create a pending response. */
   async workStatus(): Promise<unknown> {
     const [gates, requirements] = await Promise.all([
-      this.client.execute(`SELECT g.id, g.required_action AS requiredAction, g.phase AS currentPhase,
-                                  g.context, g.created_at AS startedWaitingAt, g.navigation_target AS navigationTarget,
-                                  COALESCE(direct_requirement.title, epic_requirement.title, story_requirement.title) AS requirementTitle,
-                                  COALESCE(direct_requirement.title, epic_requirement.title, story_requirement.title) AS relatedRequirementOrObject
-                             FROM human_gates g
-                             LEFT JOIN requirements direct_requirement
-                               ON g.object_type = 'requirement' AND g.object_id = direct_requirement.id
-                             LEFT JOIN epics gate_epic
-                               ON g.object_type = 'epic' AND g.object_id = gate_epic.id
-                             LEFT JOIN requirements epic_requirement ON gate_epic.requirement_id = epic_requirement.id
-                             LEFT JOIN stories gate_story
-                               ON g.object_type = 'story' AND g.object_id = gate_story.id
-                             LEFT JOIN epics story_epic ON gate_story.epic_id = story_epic.id
-                             LEFT JOIN requirements story_requirement ON story_epic.requirement_id = story_requirement.id
-                            WHERE g.state = 'open'
-                            ORDER BY g.priority, g.created_at, g.id`),
+      this.client.execute(`SELECT id, required_action AS requiredAction, phase AS whereThisArose,
+                                  recommended_choice AS recommendedChoice,
+                                  recommendation_reason AS recommendationReason,
+                                  other_options AS otherOptions,
+                                  confirmation_reason AS confirmationReason,
+                                  navigation_target AS navigationTarget
+                             FROM human_gates
+                            WHERE state = 'open'
+                            ORDER BY priority, created_at, id`),
       this.client.execute(`SELECT id, title, state AS phase, updated_at
                              FROM requirements
                             WHERE state = 'EXECUTING'
                             ORDER BY updated_at DESC, id`),
     ]);
-    const readAt = this.now();
     const pendingResponses = gates.rows.map((gate) => {
       const response = plain(gate);
-      if (typeof response.requirementTitle !== "string" || response.requirementTitle.trim() === ""
-        || typeof response.context !== "string" || response.context.trim() === "") {
+      const requiredText = [
+        response.requiredAction,
+        response.recommendedChoice,
+        response.recommendationReason,
+        response.whereThisArose,
+        response.confirmationReason,
+      ];
+      if (!requiredText.every((value) => typeof value === "string" && value.trim() !== "")) {
         throw new Error("incomplete open human gate");
       }
-      const startedWaitingAt = Number(response.startedWaitingAt);
-      return Object.assign(response, {
-        waitingDurationMinutes: Math.max(0, Math.floor((readAt - startedWaitingAt) / 60_000)),
-      });
+      const recommendedChoice = response.recommendedChoice as string;
+      let otherOptions: unknown;
+      try {
+        otherOptions = JSON.parse(String(response.otherOptions));
+      } catch {
+        throw new Error("incomplete open human gate");
+      }
+      if (!Array.isArray(otherOptions) || otherOptions.length === 0
+        || !otherOptions.every((option) => typeof option === "string" && option.trim() !== "")
+        || otherOptions.some((option) => option.trim() === recommendedChoice.trim())) {
+        throw new Error("incomplete open human gate");
+      }
+      return Object.assign(response, { otherOptions });
     });
     const activeRequirements = requirements.rows.map(plain);
     return {
