@@ -157,7 +157,8 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
     const active = activeRows.map((row) => ({
       id: String(row.id), title: String(row.title), state: String(row.state),
       summary: activeSummary(row.event_type, row.event_phase),
-      updatedAt: Number(row.event_ts ?? row.updated_at), taskPath: "/tasks",
+      timestamp: typeof row.event_ts === "number" ? row.event_ts : undefined,
+      taskPath: "/tasks",
     }));
 
     const eventRows = (await this.client.execute(
@@ -207,7 +208,7 @@ function activeSummary(type: unknown, phase: unknown): string {
   if (eventType === "story.stopped" || eventType === "requirement.stopped") return "Waiting for your answer";
   if (eventType.endsWith(".transition")) return "Work is under way";
   if (eventType !== "") return "Work is under way";
-  return "Just created, not started";
+  return "Just created, not started yet";
 }
 
 function transitionedStoryState(type: string, value: unknown): "DELIVERED" | "FAILED" | null {

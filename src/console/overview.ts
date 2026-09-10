@@ -19,6 +19,12 @@ export interface OverviewGroup {
   items: OverviewItem[];
 }
 
+export function formatOverviewItem(item: OverviewItem, now = Date.now()): string {
+  return Number.isFinite(item.timestamp)
+    ? `${item.summary} · ${formatRelativeTime(item.timestamp!, now)}`
+    : item.summary;
+}
+
 export function formatRelativeTime(timestamp: number, now = Date.now()): string {
   const seconds = Math.max(0, Math.floor((now - timestamp) / 1_000));
   if (seconds < 60) return "just now";

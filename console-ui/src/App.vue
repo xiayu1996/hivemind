@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watchEffect } from "vue";
-import { formatRelativeTime, overviewGroups } from "../../src/console/overview.js";
+import { formatOverviewItem, overviewGroups } from "../../src/console/overview.js";
 
 const views = ["nodes", "tasks", "costs", "config", "stats", "providers"];
 const current = ref(views.includes(location.pathname.slice(1)) ? location.pathname.slice(1) : "overview");
@@ -22,12 +22,6 @@ watchEffect(async () => {
 });
 
 const groups = computed(() => overviewGroups(overview.value));
-
-function itemSummary(item) {
-  const time = item.timestamp ?? item.updatedAt;
-  if (!Number.isFinite(time)) return item.summary;
-  return `${item.summary} · ${formatRelativeTime(time)}`;
-}
 
 function navigate(view) {
   history.pushState({}, "", view === "overview" ? "/" : `/${view}`);
@@ -52,7 +46,7 @@ function navigate(view) {
           <h2>{{ group.title }}</h2>
           <p v-if="group.items.length === 0" class="empty">Nothing needs attention.</p>
           <a v-for="item in group.items" :key="item.id || item.storyId" class="overview-item" :href="item.taskPath">
-            <strong>{{ item.title }}</strong><span>{{ item.state }} · {{ itemSummary(item) }}</span>
+            <strong>{{ item.title }}</strong><span>{{ formatOverviewItem(item) }}</span>
           </a>
         </article>
       </template>
