@@ -53,6 +53,8 @@ export type OverviewSection =
   | { kind: "group"; title: string; items: OverviewItem[] }
   | CostSection;
 
+const COST_CHART_DAYS = 7;
+
 export function formatOverviewItem(item: OverviewItem, now = Date.now()): string {
   return Number.isFinite(item.timestamp)
     ? `${item.summary} · ${formatRelativeTime(item.timestamp!, now)}`
@@ -72,6 +74,11 @@ export function formatRelativeTime(timestamp: number, now = Date.now()): string 
 
 function formatUsd(amount: number): string {
   return `$${amount.toFixed(2)}`;
+}
+
+/** Local MM-DD for a chart bar, zero padded so the labels line up. */
+function formatMonthDay(date: Date): string {
+  return `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
 /** A record is usable only with a finite non-negative cost and a real timestamp. */
@@ -95,9 +102,9 @@ function sumBetween(entries: readonly CostEntry[], start: number, end: number): 
 export function costSection(data: OverviewData, now = Date.now()): CostSection {
   const entries = (data.costs ?? []).filter(isUsableCost);
   const current = new Date(now);
-  const dayStart = (offset: number) => new Date(current.getFullYear(), current.getMonth(), current.getDate() + offset).getTime();
-  const todayStart = dayStart(0);
-  const tomorrowStart = dayStart(1);
+  const dayDate = (offset: number) => new Date(current.getFullYear(), current.getMonth(), current.getDate() + offset);
+  const todayStart = dayDate(0).getTime();
+  const tomorrowStart = dayDate(1).getTime();
   const monthStart = new Date(current.getFullYear(), current.getMonth(), 1).getTime();
   const nextMonthStart = new Date(current.getFullYear(), current.getMonth() + 1, 1).getTime();
 
@@ -105,13 +112,26 @@ export function costSection(data: OverviewData, now = Date.now()): CostSection {
   const monthTotal = sumBetween(entries, monthStart, nextMonthStart);
   const latest = entries.reduce<number | null>((newest, entry) => (newest === null || entry.ts > newest ? entry.ts : newest), null);
 
+  const daily = Array.from({ length: COST_CHART_DAYS }, (_unused, index) => {
+    const offset = index - (COST_CHART_DAYS - 1);
+    return {
+      dateLabel: formatMonthDay(dayDate(offset)),
+      total: sumBetween(entries, dayDate(offset).getTime(), dayDate(offset + 1).getTime()),
+    };
+  });
+  const peak = daily.reduce((highest, day) => Math.max(highest, day.total), 0);
+
   return {
     kind: "cost",
     title: "Approximate costs",
     todayLabel: `Today ${formatUsd(todayTotal)}`,
     monthLabel: `This month ${formatUsd(monthTotal)}`,
     updatedLabel: latest === null ? "" : `Updated ${formatRelativeTime(latest, now)}`,
-    chart: [],
+    chart: daily.map((day) => ({
+      dateLabel: day.dateLabel,
+      amountLabel: formatUsd(day.total),
+      heightPercent: peak > 0 ? (day.total / peak) * 100 : 0,
+    })),
     models: [],
   };
 }

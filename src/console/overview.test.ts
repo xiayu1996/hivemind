@@ -40,7 +40,7 @@ describe("S-E3OVERVIEW-02-chart", () => {
 
     expect(sections.filter((section) => "chart" in section)).toHaveLength(1);
     for (const section of sections) {
-      if (section.kind === "group") expect(Object.keys(section).sort()).toEqual(["items", "kind", "title"]);
+      if (section.kind === "group") expect(Object.keys(section).toSorted()).toEqual(["items", "kind", "title"]);
     }
     const rendered = JSON.stringify(sections);
     expect(rendered).not.toContain("Cache hit");
