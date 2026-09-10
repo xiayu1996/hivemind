@@ -43,7 +43,14 @@ export class EpicBranchFreshness {
     // Merging the local ref would refresh the Epic against whatever this host
     // last happened to pull, which on an idle worker is nothing at all.
     const source = `origin/${this.mainBranch}`;
-    await this.git.run(cwd, ["fetch", "origin", this.mainBranch]);
+    // The network is not this host's fault and not the Epic's: a fetch that
+    // fails is this refresh failing, not the whole orchestrator cycle.
+    try {
+      await this.git.run(cwd, ["fetch", "origin", this.mainBranch]);
+    } catch (cause) {
+      const reason = `fetch of ${source} failed: ${cause instanceof Error ? cause.message : String(cause)}`;
+      return { epicId, outcome: "failed", reason };
+    }
     const sourceRevision = (await this.git.run(cwd, ["rev-parse", source])).trim();
     const time = this.now();
     const lastSuccess = (await this.client.execute({
