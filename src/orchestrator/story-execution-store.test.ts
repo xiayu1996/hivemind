@@ -358,6 +358,31 @@ describe("StoryExecutionStore regression input", () => {
   });
 });
 
+describe("StoryExecutionStore design retry", () => {
+  it("tells the next DESIGN attempt why the last DoD was thrown away", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, (() => { let time = 1_000; return () => time++; })());
+    await store.createStory({
+      id: "S-EPIC1-01",
+      notionPageId: "page-1",
+      title: "Retry design",
+      requirement: "A refused DoD is a task for the next attempt.",
+      branch: "story/epic1-01",
+    });
+    await store.transition("S-EPIC1-01", "QUEUED", "DESIGN", "system", "run-0");
+    await store.beginPhase({ runId: "run-design", cardId: "S-EPIC1-01", phase: "DESIGN", round: 1, prompt: "design" });
+    await store.completePhase({ runId: "run-design", sessionId: "s-design", artifacts: [{ kind: "dod", body: "story_id: S-EPIC1-01" }] });
+    await store.invalidateCompletedPhase("S-EPIC1-01", "DESIGN", 1, "DoD contract is invalid: scenario ids must match the pattern");
+    await store.beginPhase({ runId: "run-design-2", cardId: "S-EPIC1-01", phase: "DESIGN", round: 1, prompt: "design" });
+
+    const input = await store.buildPhaseInput("S-EPIC1-01", "DESIGN", 1);
+    expect(input.previousRejections).toEqual([{ phase: "DESIGN", reason: "DoD contract is invalid: scenario ids must match the pattern" }]);
+    expect(assemblePhasePrompt(input)).toContain("[rejected:DESIGN] DESIGN refused the last attempt: DoD contract is invalid");
+    client.close();
+  });
+});
+
 describe("StoryExecutionStore phase input", () => {
   it("tells the next CODE round what the merge gate refused, since only CODE can change it", async () => {
     const client = createClient({ url: ":memory:" });

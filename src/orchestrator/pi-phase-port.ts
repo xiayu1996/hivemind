@@ -154,11 +154,48 @@ function parseResult(input: ManagedPhaseInput, raw: string): ManagedPhaseResult[
  * contract requires without changing their content. A criterion is kept when
  * it already has the contract's shape, and otherwise reduced to its text so
  * the schema's refusal names the criterion rather than "[object Object]". */
+/** A YAML document the model escaped twice arrives as one line holding the
+ * two characters backslash and n where each line break should be. */
+function unescapeLineBreaks(text: string): string {
+  if (text.includes("\n") || !text.includes("\\n")) return text;
+  return text.replaceAll("\\n", "\n").replaceAll("\\t", "  ");
+}
+
+/**
+ * Quotes the plain scalars a model most often leaves bare: a value holding
+ * ": " (YAML reads it as a nested mapping) or starting with a character YAML
+ * gives a meaning to. Applied only after the document failed to parse, line by
+ * line, and only to `key: value` lines whose value is not already quoted or a
+ * block indicator; anything else is left exactly as written.
+ */
+function quoteBareScalars(text: string): string {
+  return text.split("\n").map((line) => {
+    const match = /^(\s*(?:- )?[A-Za-z_][\w-]*): (.+)$/.exec(line);
+    if (!match) return line;
+    const [, key, value] = match as unknown as [string, string, string];
+    if (/^["'|>[{]/.test(value) || /^-?\d+(\.\d+)?$/.test(value) || /^(true|false|null)$/.test(value)) return line;
+    const risky = value.includes(": ") || value.endsWith(":") || /^[@`*&!%#]/.test(value);
+    if (!risky) return line;
+    return `${key}: ${JSON.stringify(value)}`;
+  }).join("\n");
+}
+
+function parseLeniently(text: string): Record<string, unknown> {
+  const unescaped = unescapeLineBreaks(text);
+  try {
+    return parse(unescaped) as Record<string, unknown>;
+  } catch (cause) {
+    const repaired = quoteBareScalars(unescaped);
+    if (repaired === unescaped) throw cause;
+    return parse(repaired) as Record<string, unknown>;
+  }
+}
+
 function normalizeDodYaml(raw: unknown): string {
   if (raw === null || (typeof raw !== "object" && typeof raw !== "string")) return String(raw);
   try {
     const document = typeof raw === "string"
-      ? (parse(raw) as Record<string, unknown>)
+      ? parseLeniently(raw)
       : { ...(raw as Record<string, unknown>) };
     if (Array.isArray(document.acceptance_criteria)) {
       document.acceptance_criteria = document.acceptance_criteria.map((item) => normalizeCriterion(item));

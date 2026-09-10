@@ -867,7 +867,7 @@ export class StoryExecutionStore {
             WHERE card_id = ? AND phase = ? AND status = 'completed'`,
       args: [cardId, writingPhase],
     })).rows[0]?.at ?? 0);
-    const [specResult, artifactResult, feedbackResult, verifyResult, rejectionResult, bounceResult] = await Promise.all([
+    const [specResult, artifactResult, feedbackResult, verifyResult, rejectionResult, bounceResult, invalidationResult] = await Promise.all([
       this.client.execute({
         sql: "SELECT spec_id, status, text FROM story_specs WHERE story_id = ? ORDER BY spec_id",
         args: [cardId],
@@ -914,6 +914,16 @@ export class StoryExecutionStore {
               WHERE card_id = ? AND type IN ('merge.verification_failed', 'merge.conflict') AND ts > ?
               ORDER BY id DESC LIMIT ?`,
         args: [cardId, lastCodeEnd, phase === writingPhase ? 2 : 0],
+      }),
+      // A completed result the consumer threw away (a DoD the contract
+      // refused) is superseded in phase_runs by the next attempt, so the
+      // reason only survives here. The next attempt has to read it, or it
+      // repeats the same mistake with no idea it made one.
+      this.client.execute({
+        sql: `SELECT data FROM event_log
+              WHERE card_id = ? AND phase = ? AND type = 'phase.invalidated' AND ts > ?
+              ORDER BY id DESC LIMIT 2`,
+        args: [cardId, phase, lastCodeEnd],
       }),
     ]);
 
@@ -977,6 +987,10 @@ export class StoryExecutionStore {
       scenarioFailures,
       ...(regressions ? { regressions } : {}),
       previousRejections: [
+        ...invalidationResult.rows.map((row) => ({
+          phase,
+          reason: String((JSON.parse(stringValue(row.data, "invalidation event")) as { reason?: string }).reason ?? "").slice(0, 800),
+        })).filter((rejection) => rejection.reason !== ""),
         ...rejectionResult.rows
           .map((row) => ({
             phase: stringValue(row.phase, "rejected phase"),

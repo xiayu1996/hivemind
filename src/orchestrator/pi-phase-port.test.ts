@@ -296,4 +296,44 @@ describe("DESIGN acceptance criteria flattening", () => {
     expect(dod).toContain("has a coupon");
     expect(dod).toContain("the discount is deducted once");
   });
+
+  async function designPort(reply: string): Promise<PiStoryPhasePort> {
+    temporary = await mkdtemp(join(tmpdir(), "hivemind-dod-"));
+    const model = await resolveModel({ list: async () => [{ provider: "mock", id: "mock-1" }] }, "mock", "mock-1");
+    return new PiStoryPhasePort({
+      binary: "pi",
+      model,
+      worktreePath: resolve("."),
+      promptRoot: resolve("prompts"),
+      sessionRoot: join(temporary, "sessions"),
+      evidencePath: join(temporary, "evidence"),
+      auditPath: join(temporary, "audit", "tool-audit.jsonl"),
+      guardExtension: resolve("extensions/hive-guard.ts"),
+      canonicalCaptureExtension: resolve("extensions/canonical-capture.ts"),
+      createRunner: () => fakeRunner(reply, "fresh-design-session"),
+      recordTelemetry: async () => undefined,
+      readProviderPayloads: async () => [{ model: "mock-1", messages: [] }],
+    });
+  }
+
+  it("reads a DoD whose line breaks arrived as the two characters backslash and n", async () => {
+    const reply = JSON.stringify({
+      design_summary: "Escaped twice.",
+      dod_yaml: "story_id: S-EPIC1-01\\nscenarios:\\n  - id: S-EPIC1-01-a\\n    then: it works",
+    });
+    const result = await (await designPort(reply)).run(phaseInput("DESIGN"));
+    const dod = result.artifacts.find((item) => item.kind === "dod")?.body ?? "";
+    expect(dod).toContain("story_id: S-EPIC1-01\n");
+    expect(dod).toContain("then: it works");
+  });
+
+  it("quotes a bare scenario sentence that YAML would otherwise read as a nested mapping", async () => {
+    const reply = JSON.stringify({
+      design_summary: "Colon in prose.",
+      dod_yaml: "story_id: S-EPIC1-01\nscenarios:\n  - id: S-EPIC1-01-a\n    then: the page shows Unable to load: HTTP 503 and a Retry button\n",
+    });
+    const result = await (await designPort(reply)).run(phaseInput("DESIGN"));
+    const dod = result.artifacts.find((item) => item.kind === "dod")?.body ?? "";
+    expect(dod).toContain("Unable to load: HTTP 503 and a Retry button");
+  });
 });
