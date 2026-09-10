@@ -338,6 +338,10 @@ describe("SingleStoryWorker", () => {
     }
     await client.execute("UPDATE stories SET inner_loop_rounds = 6 WHERE id = 'S-EPIC1-01'");
     await store.transition("S-EPIC1-01", "NEEDS_INPUT", "CODE", "human", "human-reopen");
+    // The reopen is what puts the card back on CODE, but each test decides
+    // whether a person acted since those rounds failed: that mark, not the
+    // state, is what grants a new budget.
+    await client.execute("UPDATE stories SET last_human_action_at = 0 WHERE id = 'S-EPIC1-01'");
   }
 
   it("stops cleanly when the Epic head bounces a Story whose inner loop is already spent", async () => {

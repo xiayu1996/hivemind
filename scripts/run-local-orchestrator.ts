@@ -148,7 +148,10 @@ async function main(): Promise<void> {
     transport: createNotionHttpTransport({ token }),
   });
   const store = new StoryExecutionStore(handle.client);
-  const config = await ConfigStore.load(handle.client);
+  // Per-repository keys (the gate commands, the hotspot paths) are stored
+  // under the card slug, so the store has to be told which repository this
+  // instance manages or those keys silently read as their defaults.
+  const config = await ConfigStore.load(handle.client, { repository: repositorySlug });
   const providerHealth = new LibsqlProviderHealthStore(handle.client);
   const piBinary = defaultPiBinary();
   const credentialFilePath = join(homedir(), ".pi", "agent", "auth.json");

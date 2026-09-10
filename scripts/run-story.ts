@@ -130,7 +130,10 @@ async function main(): Promise<void> {
     if (!["QUEUED", "DESIGN", "CODE", "MERGE"].includes(story.state)) {
       throw new Error(`Story ${cardId} must be QUEUED, DESIGN, CODE or MERGE, not ${story.state}`);
     }
-    const config = await ConfigStore.load(handle.client);
+    // Per-repository keys (the gate commands the CODE exit and the merge
+    // re-verification run) are stored under the card's slug; without the scope
+    // they would read as their defaults and an unchecked merge would pass.
+    const config = await ConfigStore.load(handle.client, story.repo ? { repository: story.repo } : {});
     // Whether this card's tokens cost money as they are spent decides two
     // things: what the ledger counts as billed, and whether a spend ceiling
     // means anything for this run at all.

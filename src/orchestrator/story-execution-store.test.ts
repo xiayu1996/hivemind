@@ -128,6 +128,37 @@ describe("StoryExecutionStore merge recovery", () => {
   });
 });
 
+describe("StoryExecutionStore resume budget", () => {
+  let client: ReturnType<typeof createClient>;
+  let store: StoryExecutionStore;
+  let time: number;
+
+  beforeEach(async () => {
+    client = createClient({ url: ":memory:" });
+    await migrate(client);
+    time = 1_000;
+    store = new StoryExecutionStore(client, () => time++);
+    await store.createStory({ id: "S-MQ-10-resume", notionPageId: "page-resume", title: "Resume", requirement: "A parked Story runs again." });
+  });
+  afterEach(() => client.close());
+
+  it("counts a person's resume as the moment the round budget starts again", async () => {
+    await store.transition("S-MQ-10-resume", "QUEUED", "DESIGN", "system", "design");
+    const beforeResume = await store.getStory("S-MQ-10-resume");
+    expect(beforeResume.lastHumanActionAt ?? null).toBeNull();
+    await store.transition("S-MQ-10-resume", "DESIGN", "CODE", "human", "resume");
+    const afterResume = await store.getStory("S-MQ-10-resume");
+    expect(afterResume.lastHumanActionAt).toBeGreaterThan(0);
+  });
+
+  it("leaves the mark alone when the system moves the card", async () => {
+    await store.transition("S-MQ-10-resume", "QUEUED", "DESIGN", "human", "human-start");
+    const stamped = (await store.getStory("S-MQ-10-resume")).lastHumanActionAt;
+    await store.transition("S-MQ-10-resume", "DESIGN", "CODE", "system", "code");
+    await expect(store.getStory("S-MQ-10-resume")).resolves.toMatchObject({ lastHumanActionAt: stamped });
+  });
+});
+
 describe("StoryExecutionStore Epic membership", () => {
   it("persists the Epic a Story was intaken under so delivery knows an Epic MR covers it", async () => {
     const client = createClient({ url: ":memory:" });

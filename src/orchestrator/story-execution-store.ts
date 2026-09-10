@@ -204,10 +204,16 @@ export class StoryExecutionStore {
     const time = this.now();
     const [update] = await this.client.batch([
       {
+        // A transition a person made is also the moment the inner-loop budget
+        // starts again: the budget counts the rounds failed since somebody last
+        // acted on the card, so without this stamp a resume grants a reentry
+        // budget and no rounds to use it in.
         sql: `UPDATE stories
-              SET state = ?, phase = ?, stop_reason = NULL, resume_state = NULL, updated_at = ?
+              SET state = ?, phase = ?, stop_reason = NULL, resume_state = NULL,
+                  last_human_action_at = CASE WHEN ? THEN ? ELSE last_human_action_at END,
+                  updated_at = ?
               WHERE id = ? AND state = ?`,
-        args: [to, phaseForState(to), time, cardId, expectedFrom],
+        args: [to, phaseForState(to), actor === "human" ? 1 : 0, time, time, cardId, expectedFrom],
       },
       {
         sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
