@@ -1,5 +1,66 @@
 import { describe, expect, it } from "vitest";
-import { formatOverviewItem, formatRelativeTime, overviewGroups } from "./overview.js";
+import { formatOverviewItem, formatRelativeTime, overviewGroups, overviewSections, type OverviewData } from "./overview.js";
+
+/** The DoD seed: five cost records across today, this month and last month. */
+function costSeed(): OverviewData {
+  const at = (monthIndex: number, day: number, hour: number) => new Date(2026, monthIndex, day, hour).getTime();
+  return {
+    questions: [],
+    active: [],
+    events: [],
+    costs: [
+      { ts: at(2, 15, 10), modelId: "mock-1", costUsd: 1.23 },
+      { ts: at(2, 15, 10) + 300_000, modelId: "deepseek-chat", costUsd: 2 },
+      { ts: at(2, 12, 12), modelId: "deepseek-chat", costUsd: 0.5 },
+      { ts: at(2, 1, 12), modelId: "mock-1", costUsd: 3 },
+      { ts: at(1, 28, 12), modelId: "mock-1", costUsd: 9.99 },
+    ],
+  };
+}
+
+const SEED_NOW = new Date(2026, 2, 15, 12).getTime();
+
+describe("S-E3OVERVIEW-02-summary", () => {
+  it("adds a cost region after the four recent-result groups with today and month totals", () => {
+    const sections = overviewSections(costSeed(), SEED_NOW);
+
+    expect(sections.map((section) => section.title)).toEqual([
+      "Waiting for your answer",
+      "Active work",
+      "Delivered today",
+      "Failed yesterday",
+      "Approximate costs",
+    ]);
+    const cost = sections.at(-1);
+    expect(cost?.kind).toBe("cost");
+    if (cost?.kind !== "cost") throw new Error("the last section is not the cost region");
+    expect(cost.todayLabel).toBe("Today $3.23");
+    expect(cost.monthLabel).toBe("This month $6.73");
+    expect(cost.updatedLabel).toMatch(/^Updated /);
+  });
+
+  it("keeps the region usable and the amounts correct when a record is malformed", () => {
+    const data = costSeed();
+    data.costs = [
+      ...(data.costs ?? []),
+      { ts: Number.NaN, modelId: "mock-1", costUsd: 5 },
+      { ts: SEED_NOW, modelId: "mock-1", costUsd: -1 },
+      { ts: SEED_NOW, modelId: "mock-1", costUsd: Number.POSITIVE_INFINITY },
+    ];
+
+    const cost = overviewSections(data, SEED_NOW).at(-1);
+    if (cost?.kind !== "cost") throw new Error("the last section is not the cost region");
+    expect(cost.todayLabel).toBe("Today $3.23");
+    expect(cost.monthLabel).toBe("This month $6.73");
+  });
+
+  it("never exposes internal cost field names", () => {
+    const cost = overviewSections(costSeed(), SEED_NOW).at(-1);
+    const rendered = JSON.stringify(cost);
+    expect(rendered).not.toContain("cache_read_tokens");
+    expect(rendered).not.toContain("cache_usd");
+  });
+});
 
 describe("S-E3OVERVIEW-01-active", () => {
   it("formats the latest activity time relative to the browser clock", () => {
