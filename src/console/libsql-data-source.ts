@@ -157,11 +157,16 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
         throw new Error("incomplete open human gate");
       }
       const pageId = gatePageIds.get(String(response.id)) ?? null;
+      // An unresolvable object or a missing page id means the link would point
+      // nowhere, so the whole view fails rather than showing an untrusted entry.
+      if (pageId === null || pageId.trim() === "") {
+        throw new Error("open human gate references an object without a notion page");
+      }
       delete response.objectType;
       delete response.objectId;
       return Object.assign(response, {
         otherOptions,
-        notionUrl: pageId === null ? undefined : notionPageUrl(pageId),
+        notionUrl: notionPageUrl(pageId),
       });
     });
     const activeRequirements = requirements.rows.map((row) => {
