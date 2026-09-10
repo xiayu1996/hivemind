@@ -66,6 +66,7 @@ function navigate(view) {
               <dt>Why you need to confirm</dt><dd>{{ gate.confirmationReason }}</dd>
             </dl>
             <a :href="gate.navigationTarget">Open handling location</a>
+            <a :href="gate.notionUrl">Open in Notion</a>
           </article>
         </section>
         <section class="overview-section">
@@ -78,6 +79,7 @@ function navigate(view) {
             <p>Active for: {{ requirement.activeFor }}</p>
             <p>Latest progress: {{ requirement.latestProgress }}</p>
             <a :href="`/tasks/${requirement.storyId}`">View details</a>
+            <a :href="requirement.notionUrl">Open in Notion</a>
           </article>
         </section>
       </template>
