@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watchEffect } from "vue";
-import { overviewGroups } from "../../src/console/overview.js";
+import { formatRelativeTime, overviewGroups } from "../../src/console/overview.js";
 
 const views = ["nodes", "tasks", "costs", "config", "stats", "providers"];
 const current = ref(views.includes(location.pathname.slice(1)) ? location.pathname.slice(1) : "overview");
@@ -26,7 +26,7 @@ const groups = computed(() => overviewGroups(overview.value));
 function itemSummary(item) {
   const time = item.timestamp ?? item.updatedAt;
   if (!Number.isFinite(time)) return item.summary;
-  return `${item.summary} · ${new Date(time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  return `${item.summary} · ${formatRelativeTime(time)}`;
 }
 
 function navigate(view) {
