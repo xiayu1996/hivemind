@@ -48,6 +48,35 @@ describe("S-E3OVERVIEW-02-chart", () => {
   });
 });
 
+describe("S-E3OVERVIEW-02-nocost", () => {
+  it("keeps today at $0.00 and still shows the month total and the newest record time", () => {
+    const data: OverviewData = {
+      questions: [],
+      active: [],
+      events: [],
+      costs: [{ ts: at(2, 1, 0) + 5 * 60_000, modelId: "mock-1", costUsd: 3 }],
+    };
+
+    const cost = overviewSections(data, SEED_NOW).at(-1);
+    if (cost?.kind !== "cost") throw new Error("the last section is not the cost region");
+    expect(cost.todayLabel).toBe("Today $0.00");
+    expect(cost.monthLabel).toBe("This month $3.00");
+    expect(cost.updatedLabel).toBe("Updated 14 days ago");
+  });
+
+  it("shows zero everywhere with an explicit message when the window holds no record", () => {
+    const cost = overviewSections({ questions: [], active: [], events: [], costs: [] }, SEED_NOW).at(-1);
+    if (cost?.kind !== "cost") throw new Error("the last section is not the cost region");
+
+    expect(cost.todayLabel).toBe("Today $0.00");
+    expect(cost.monthLabel).toBe("This month $0.00");
+    expect(cost.updatedLabel).toBe("No cost recorded yet");
+    expect(cost.chart).toHaveLength(7);
+    expect(cost.chart.every((bar) => bar.heightPercent === 0 && bar.amountLabel === "$0.00")).toBe(true);
+    expect(cost.models).toEqual([]);
+  });
+});
+
 describe("S-E3OVERVIEW-02-models", () => {
   it("lists each model with its own today and month totals, biggest month first", () => {
     const cost = overviewSections(costSeed(), SEED_NOW).at(-1);
