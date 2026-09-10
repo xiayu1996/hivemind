@@ -8,6 +8,7 @@ import {
   RunnerHandshakeError,
   RunnerTimeoutError,
   type PiRunner,
+  type PromptImage,
   type PromptResult,
   type QueuedMessages,
   type RpcEvent,
@@ -126,11 +127,27 @@ export class RpcPiRunner implements PiRunner {
     }
   }
 
-  async prompt(message: string, timeoutMs = DEFAULT_PROMPT_TIMEOUT_MS): Promise<PromptResult> {
+  async prompt(
+    message: string,
+    timeoutMs = DEFAULT_PROMPT_TIMEOUT_MS,
+    images: readonly PromptImage[] = [],
+  ): Promise<PromptResult> {
     const from = this.#events.length;
     const settledBefore = this.#count("agent_settled");
 
-    const response = await this.#request({ type: "prompt", message }, COMMAND_TIMEOUT_MS);
+    if (images.length > 0 && this.config.model.images !== true) {
+      // pi forwards the image to the provider regardless, and the provider then
+      // fails with a message about content types that names neither the model
+      // nor the caller's mistake.
+      throw new Error(`model ${this.config.model.id} does not accept image input`);
+    }
+    const response = await this.#request({
+      type: "prompt",
+      message,
+      ...(images.length > 0
+        ? { images: images.map((image) => ({ type: "image", data: image.data, mimeType: image.mimeType })) }
+        : {}),
+    }, COMMAND_TIMEOUT_MS);
     if (!response.success) {
       // Command-level rejection: the run never started, so there is no event to read.
       throw new Error(`prompt rejected: ${response.error ?? "unknown reason"}`);

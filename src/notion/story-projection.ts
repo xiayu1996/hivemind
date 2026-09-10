@@ -80,10 +80,19 @@ export class NotionStoryProjection implements StoryProjectionPort {
       const body = JSON.parse(String(artifact.body)) as {
         reasons?: Array<{ scenarioId: string; reason: string }>;
         validationErrors?: string[];
+        uiReview?: { findings?: Array<{ severity: string; note: string }> };
       };
       const reasons = (body.reasons ?? []).map((item) => `${item.scenarioId}: ${item.reason}`);
       if (reasons.length > 0) parts.push(`reasons: ${reasons.join("; ")}`);
       if ((body.validationErrors ?? []).length > 0) parts.push(`checks: ${body.validationErrors!.join("; ")}`);
+      // The UI review's findings never rejected anything, so they would leave
+      // no trace in the verdict; a person still has to be told they exist and
+      // that the card was not held for them.
+      const findings = body.uiReview?.findings ?? [];
+      if (findings.length > 0) {
+        const major = findings.find((finding) => finding.severity === "major");
+        parts.push(`界面走查 ${findings.length} 条（不影响验收）${major ? `，例如: ${major.note}` : ""}`);
+      }
     }
     const summary = parts.join(" | ");
     return summary.length > SUMMARY_LIMIT ? `${summary.slice(0, SUMMARY_LIMIT - 1)}…` : summary;

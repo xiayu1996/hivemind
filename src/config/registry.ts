@@ -184,8 +184,8 @@ export const CONFIG_KEYS = {
   "model.purposeTiers": def({
     schema: z.record(
       z.enum([
-        "product_manager", "decompose", "design", "code", "verify", "merge",
-        "capacity_probe", "triage", "distiller",
+        "product_manager", "decompose", "design", "code", "verify", "ui_review",
+        "merge", "capacity_probe", "triage", "distiller",
       ]),
       z.enum(["brain", "standard", "cheap"]),
     ),
@@ -195,6 +195,10 @@ export const CONFIG_KEYS = {
       design: "brain",
       code: "standard",
       verify: "standard",
+      // The product manager's acceptance of a screen is a judgment call about
+      // what a person asked for, read off images: the same kind of work the
+      // brain tier serves for the requirement phases.
+      ui_review: "brain",
       merge: "standard",
       capacity_probe: "cheap",
       triage: "cheap",
@@ -207,8 +211,8 @@ export const CONFIG_KEYS = {
   "model.purposeThinking": def({
     schema: z.record(
       z.enum([
-        "product_manager", "decompose", "design", "code", "verify", "merge",
-        "capacity_probe", "triage", "distiller",
+        "product_manager", "decompose", "design", "code", "verify", "ui_review",
+        "merge", "capacity_probe", "triage", "distiller",
       ]),
       z.enum(THINKING_LEVELS),
     ),
@@ -218,6 +222,7 @@ export const CONFIG_KEYS = {
       design: "high",
       code: "medium",
       verify: "medium",
+      ui_review: "medium",
       merge: "low",
       capacity_probe: "off",
       triage: "low",
@@ -395,6 +400,13 @@ export const CONFIG_KEYS = {
     scope: "per-host",
     reload: "next-spawn",
     description: "Additional directories an agent may write to, beyond its worktree.",
+  }),
+  "verify.uiReview": def({
+    schema: z.boolean(),
+    default: true,
+    scope: "global",
+    reload: "hot",
+    description: "Run the product manager's UI acceptance after a round the functional lane accepted: a separate session that reads the screens as images and may drive the browser, judging the Story against what a person asked for. It costs one extra brain-tier turn per accepted round of a Story that declares ui or e2e scenarios, and it needs a model whose catalogue row advertises image input; a host without one skips the lane rather than reviewing screens it cannot see.",
   }),
   "verify.chromiumSandbox": def({
     schema: z.boolean(),

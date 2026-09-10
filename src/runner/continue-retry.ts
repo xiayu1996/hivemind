@@ -1,5 +1,5 @@
 import { classifyError } from "./classify.js";
-import { RunnerTimeoutError, type PiRunner, type PromptResult } from "./types.js";
+import { RunnerTimeoutError, type PiRunner, type PromptImage, type PromptResult } from "./types.js";
 
 export class RetryLimitExceededError extends Error {
   readonly stopReason = "retry_limit_exceeded" as const;
@@ -34,9 +34,14 @@ const NO_USAGE = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 
  * would throw away everything the session had already done, which for a long
  * CODE phase is most of the round.
  */
-async function promptOnce(runner: PiRunner, message: string, timeoutMs?: number): Promise<PromptResult> {
+async function promptOnce(
+  runner: PiRunner,
+  message: string,
+  timeoutMs?: number,
+  images?: readonly PromptImage[],
+): Promise<PromptResult> {
   try {
-    return await runner.prompt(message, timeoutMs);
+    return await runner.prompt(message, timeoutMs, images);
   } catch (cause) {
     if (!(cause instanceof RunnerTimeoutError) || !runner.alive) throw cause;
     // pi keeps the steering and follow-up queue across an abort and continues it
@@ -69,11 +74,13 @@ export async function promptWithContinueRetry(
   message: string,
   options: ContinueRetryOptions,
   timeoutMs?: number,
+  /** Sent with the first prompt only; a resumed session already holds them. */
+  images?: readonly PromptImage[],
 ): Promise<RunOutcome> {
   const sleep = options.sleep ?? defaultSleep;
   const backoff = options.backoffMs ?? defaultBackoff;
 
-  let result = await promptOnce(runner, message, timeoutMs);
+  let result = await promptOnce(runner, message, timeoutMs, images);
   let attempts = 0;
 
   while (result.failure) {

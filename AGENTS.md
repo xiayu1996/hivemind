@@ -87,6 +87,8 @@ pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src
 - **中央 libsql 是执行状态的唯一真相源**，Notion 只是人机界面与呈现。同一字段永不双向合并：系统 owner 字段只由 orchestrator 写，人 owner 字段只被 ingest。
 - **Notion 读写全部收敛在 orchestrator 的 NotionGateway**，worker 永不直连 Notion。单写者是"无需 CAS"这一简化的前提，破坏它就要补一整套冲突解决。
 - **跨 phase 上下文是无状态全量注入**，不做 session fork。`assemblePhasePrompt` 只读它的参数：不读时钟、不读文件系统、不取随机数，每个集合按稳定键排序。相同输入必须产出逐字节相同的 prompt——跨机重建、failover、崩溃恢复三件事都骑在这一条上，且它是 provider 前缀缓存生效的前提。
+- **UI 验收走查是独立的一道,且只有功能能否决**:盲审判"测试是否证明做成了",走查判"用户打开这页看到的对不对"(03 §9)。一次返回两组结论——逐 scenario 的功能验收**能**打回 CODE,界面 findings(间距/一致性/文案/状态/布局)**永不**否决、不进 failed 集合、不消耗轮次,所以 severity 没有 blocking 档。审美不能否决是结构性的:`failed(N) ⊊ failed(N-1)` 在品味上不成立,给了否决权每轮会挑出不同一处细节,正是 §8 消除的失效模式。它只在功能道已 accepted 的轮次、只对 `ui`/`e2e` scenario 跑;原型图是参考不是判据;目录里没宣告图片输入的模型不派去看界面。
+- **余额不预警,假设充足**:没有余额查询 API,靠估算猜只会得到不可信的数;真耗尽时 API 自己返回错误码并被分类为 QUOTA。唯一有业务意义的护栏是单任务上限,不是账户余额(03 §9.4)。
 - **全系统只有四类真停点**：`blocking_question`、`verify_loop_exceeded`、`retry_limit_exceeded`、`cost_ceiling_exceeded`（见 03 §1.5，DB CHECK 强制）。新增停点需要改设计文档。
 - **轮次上限管"打转"，费用上限管"敞口"，互不代替**：同样 6 轮内环在 1M 模型上花费差一个数量级，所以 `cost.perCardUsdCeiling` 独立于 `retry.*`，在 phase 边界检查（turn 掐不断，故上限是超支下界而非精确切口），且**订阅额度不计入**——包月的钱花不花卡都一样。费用停点不出诊断、不进反思管道：它对"这活能不能干成"零信息量。
 - **内环收敛判据是严格真子集**（`failed(N) ⊊ failed(N-1)`）；轮次硬上限（内环 6 / phase 重入 3 / continue 8 / regression 重开 2）只是最终兜底，上限设在离散轮次，不设在时长或 token。

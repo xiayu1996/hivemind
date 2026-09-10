@@ -7,6 +7,7 @@
 //   exit          - exits immediately
 //   garbage       - emits a non-JSON line before answering
 //   reject-prompt - answers prompt with success:false
+//   echo-prompt   - answers with the prompt command it received, images included
 //
 // FAKE_PI_FIXTURE points at a captured event array to replay.
 
@@ -65,6 +66,17 @@ function handle(cmd) {
         return;
       }
       respond("prompt", cmd.id);
+      if (MODE === "echo-prompt") {
+        // Lets a test see the command as pi would have received it, images included.
+        send({ type: "agent_start" });
+        send({
+          type: "message_end",
+          message: { role: "assistant", stopReason: "stop", content: JSON.stringify({ images: cmd.images ?? [] }) },
+        });
+        send({ type: "agent_end", willRetry: false });
+        send({ type: "agent_settled" });
+        return;
+      }
       replay();
       return;
     }
