@@ -15,6 +15,7 @@ describe("S-E1ACTION-01-ignorecomments", () => {
 
   afterEach(() => client.close());
 
+  // @scenario S-E1ACTION-01-ignorecomments
   it("does not turn an unresolved Notion comment into a pending response", async () => {
     await client.execute({
       sql: `INSERT INTO ingested_comments (comment_id, page_id, author, body, created_time, ingested_at)
@@ -26,6 +27,7 @@ describe("S-E1ACTION-01-ignorecomments", () => {
     await expect(source.workStatus()).resolves.toMatchObject({ pendingResponses: [] });
   });
 
+  // @scenario S-E1ACTION-01-mixedempty
   it("reports distinct successful empty states when no gate or active requirement exists", async () => {
     const source = new LibsqlConsoleDataSource(client, async () => []);
     await expect(source.workStatus()).resolves.toEqual({
@@ -37,6 +39,7 @@ describe("S-E1ACTION-01-ignorecomments", () => {
     });
   });
 
+  // @scenario S-E1ACTION-01-nopending
   it("keeps the pending-response section explicit when no centrally recorded human gate exists", async () => {
     const source = new LibsqlConsoleDataSource(client, async () => []);
     await expect(source.workStatus()).resolves.toMatchObject({
@@ -47,6 +50,7 @@ describe("S-E1ACTION-01-ignorecomments", () => {
     await expect(readFile("console-ui/src/App.vue", "utf8")).resolves.toContain("No pending responses");
   });
 
+  // @scenario S-E1ACTION-01-pending
   it("lists a centrally recorded human gate before active requirements with its action, object, phase, and destination", async () => {
     await client.batch([
       { sql: `INSERT INTO requirements (id, notion_page_id, title, state, original_request, created_at, updated_at)
@@ -67,6 +71,7 @@ describe("S-E1ACTION-01-ignorecomments", () => {
     });
   });
 
+  // @scenario S-E1ACTION-01-readfailure
   it("returns an observable loading failure rather than empty sections when projection fails", async () => {
     const failingData: ConsoleDataSource = {
       nodes: async () => [], tasks: async () => [], costs: async () => [], config: async () => [],
@@ -81,6 +86,7 @@ describe("S-E1ACTION-01-ignorecomments", () => {
     await expect(readFile("console-ui/src/App.vue", "utf8")).resolves.toContain("Retry");
   });
 
+  // @scenario S-E1ACTION-01-noactive
   it("keeps the active-requirements section explicit when no requirement is executing", async () => {
     await client.batch([
       {
