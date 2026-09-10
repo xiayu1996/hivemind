@@ -136,20 +136,28 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
     }
 
     const activeRows = (await this.client.execute(
-      `SELECT id, title, state, 'Last updated' AS summary, updated_at FROM requirements
-        WHERE state NOT IN ('DONE', 'FAILED', 'HUMAN_PARKED') AND stop_reason IS NULL
-          AND NOT EXISTS (
-            SELECT 1 FROM requirement_clarify_rounds c
-             WHERE c.requirement_id = requirements.id AND c.answered_at IS NULL
-          )
-       UNION ALL
-       SELECT id, title, state, 'Last updated' AS summary, updated_at FROM stories
-        WHERE state NOT IN ('DELIVERED', 'FAILED', 'HUMAN_PARKED', 'NEEDS_INPUT') AND stop_reason IS NULL
-       ORDER BY updated_at DESC, id`,
+      `WITH active AS (
+         SELECT id, title, state, updated_at FROM requirements
+          WHERE state NOT IN ('DONE', 'FAILED', 'HUMAN_PARKED') AND stop_reason IS NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM requirement_clarify_rounds c
+               WHERE c.requirement_id = requirements.id AND c.answered_at IS NULL
+            )
+         UNION ALL
+         SELECT id, title, state, updated_at FROM stories
+          WHERE state NOT IN ('DELIVERED', 'FAILED', 'HUMAN_PARKED', 'NEEDS_INPUT') AND stop_reason IS NULL
+       )
+       SELECT active.id, active.title, active.state, active.updated_at,
+              e.type AS event_type, e.phase AS event_phase, e.ts AS event_ts, e.data AS event_data
+         FROM active LEFT JOIN event_log e ON e.id = (
+           SELECT id FROM event_log WHERE card_id = active.id ORDER BY ts DESC, id DESC LIMIT 1
+         )
+        ORDER BY COALESCE(e.ts, active.updated_at) DESC, active.id`,
     )).rows;
     const active = activeRows.map((row) => ({
       id: String(row.id), title: String(row.title), state: String(row.state),
-      summary: String(row.summary), updatedAt: Number(row.updated_at), taskPath: "/tasks",
+      summary: activeSummary(row.event_type, row.event_phase),
+      updatedAt: Number(row.event_ts ?? row.updated_at), taskPath: "/tasks",
     }));
 
     const eventRows = (await this.client.execute(
