@@ -25,6 +25,7 @@ const NOW = 1_700_000_000_000;
 const PHASE = { story: "S-E1ACTION-06", title: "Add activity summary", phase: "CODE", startedAt: NOW - 125 * 60_000 };
 
 const PHONE = { width: 390, height: 844 };
+const DESKTOP = { width: 1280, height: 800 };
 
 const DECISION = {
   question: "Which customers should be exported?",
@@ -43,6 +44,13 @@ const DECISION_LABELS = [
   "Other options",
   "Where this arose",
   "Why you need to confirm",
+];
+const DECISION_VALUES = [
+  DECISION.recommendedChoice,
+  DECISION.recommendationReason,
+  DECISION.otherOption,
+  DECISION.whereThisArose,
+  DECISION.confirmationReason,
 ];
 const REQUIREMENT_TITLE = "Export customers";
 const PROGRESS_FIELDS = [
@@ -356,6 +364,27 @@ describeLayout("console layout", () => {
 
     for (const absent of [...EMPTY_OR_ERROR_TEXT, "navigationTarget"]) {
       expect(seen.bodyText, `"${absent}" reached the phone screen`).not.toContain(absent);
+    }
+  });
+
+  // @scenario S-E1ACTION-06-desktop
+  it("S-E1ACTION-06-desktop reads the same group of fields and links as the phone on a 1280x800 screen", { timeout: 60_000 }, async () => {
+    const desktopPage = await openPage(DESKTOP.width, DESKTOP.height);
+    await overview(desktopPage);
+    const desktop = await snapshot(desktopPage, [...OVERVIEW_TEXTS, ...DECISION_VALUES]);
+
+    expect(desktop.scrollWidth, "the overview drags sideways").toBeLessThanOrEqual(DESKTOP.width);
+    expectTextsReadable(desktop, [...OVERVIEW_TEXTS, ...DECISION_VALUES]);
+
+    const phonePage = await openPage(PHONE.width, PHONE.height);
+    await overview(phonePage);
+    const phone = await snapshot(phonePage, OVERVIEW_TEXTS);
+
+    expect(desktop.labels, "the two viewports do not show the same fields").toEqual(phone.labels);
+    expect(desktop.links, "the two viewports do not show the same links").toEqual(phone.links);
+
+    for (const absent of EMPTY_OR_ERROR_TEXT) {
+      expect(desktop.bodyText, `"${absent}" reached the desktop screen`).not.toContain(absent);
     }
   });
 });
