@@ -42,10 +42,24 @@ export interface AcceptanceItem {
   notionBlockId: string | null;
 }
 
-export type ApprovalKind = "prd_confirm" | "prd_revision" | "acceptance";
+export type ApprovalKind = "prd_confirm" | "prd_revision" | "acceptance" | "resume_answer";
 export type ApprovalSource = "comment" | "drag";
 
-export type RequirementNotionSection = "metadata" | "original" | "clarify" | "prd" | "acceptance";
+export type RequirementNotionSection = "metadata" | "original" | "clarify" | "prd" | "acceptance" | "questions";
+
+export interface RequirementStop {
+  /** The state the requirement was in when it stopped; it resumes from there. */
+  state: RequirementState;
+  detail: string;
+  stoppedAt: number;
+}
+
+export interface LinkedEpicProgress {
+  epicId: string;
+  state: string;
+  storiesTotal: number;
+  storiesDelivered: number;
+}
 
 function stringValue(value: unknown, label: string): string {
   if (typeof value !== "string") throw new Error(`${label} is not a string`);
@@ -216,6 +230,21 @@ export class RequirementStore {
     if (update?.rowsAffected !== 1) {
       throw new Error(`requirement stop lost a race: ${id} is not an unstopped ${expectedState}`);
     }
+  }
+
+  /** Why the requirement last stopped for a person, or null if it never did. */
+  async latestStop(id: string): Promise<RequirementStop | null> {
+    const row = (await this.client.execute({
+      sql: `SELECT ts, data FROM event_log
+            WHERE card_id = ? AND type = 'requirement.stopped' ORDER BY ts DESC, id DESC LIMIT 1`,
+      args: [id],
+    })).rows[0];
+    if (!row) return null;
+    const parsed = JSON.parse(stringValue(row.data, "event data")) as { state?: unknown; detail?: unknown };
+    if (typeof parsed.state !== "string" || typeof parsed.detail !== "string") {
+      throw new Error("stop event carries no state or detail");
+    }
+    return { state: parsed.state as RequirementState, detail: parsed.detail, stoppedAt: Number(row.ts) };
   }
 
   /** A human answered, so the loop may run again from the same state. */
@@ -575,16 +604,22 @@ export class RequirementStore {
     return sections;
   }
 
-  /** Epics born from this requirement, with the state each one reached; the
-   * requirement cannot reach acceptance until they are all done. */
-  async linkedEpicStates(id: string): Promise<Array<{ epicId: string; state: string }>> {
+  /** Epics born from this requirement, with the state each one reached and how
+   * many of its Stories are delivered; the requirement cannot reach acceptance
+   * until every Epic is done. */
+  async linkedEpicStates(id: string): Promise<LinkedEpicProgress[]> {
     const rows = (await this.client.execute({
-      sql: "SELECT id, state FROM epics WHERE requirement_id = ? ORDER BY id",
+      sql: `SELECT e.id, e.state,
+                   (SELECT COUNT(*) FROM stories s WHERE s.epic_id = e.id) AS stories_total,
+                   (SELECT COUNT(*) FROM stories s WHERE s.epic_id = e.id AND s.state = 'DELIVERED') AS stories_delivered
+            FROM epics e WHERE e.requirement_id = ? ORDER BY e.id`,
       args: [id],
     })).rows;
     return rows.map((row) => ({
       epicId: stringValue(row.id, "Epic id"),
       state: stringValue(row.state, "Epic state"),
+      storiesTotal: Number(row.stories_total),
+      storiesDelivered: Number(row.stories_delivered),
     }));
   }
 }

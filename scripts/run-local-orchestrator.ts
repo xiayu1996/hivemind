@@ -56,6 +56,8 @@ import { EpicBranchFreshness } from "../src/orchestrator/epic-branch-refresh.js"
 import { surfaceBlockedEpics } from "../src/orchestrator/epic-blocker.js";
 import { EpicCompletion } from "../src/orchestrator/epic-completion.js";
 import { EpicMrDelivery } from "../src/vcs/epic-delivery.js";
+import { escalateParkedStories } from "../src/orchestrator/epic-escalation.js";
+import { epicRegressionClean } from "../src/regression/epic-gate.js";
 import { discoverMRPort } from "../src/vcs/mr/adapters.js";
 import { NotionStoryProjection } from "../src/notion/story-projection.js";
 import { NotionSyncCoordinator, type NotionSyncPoller } from "../src/notion/sync.js";
@@ -263,11 +265,24 @@ async function main(): Promise<void> {
     await registerActiveStories();
   };
   const reconcileProjections = async (): Promise<void> => {
+    // A parked Story is the Epic's problem too: the board shows the Epic as
+    // blocked while any of its Stories waits for a person, and executing again
+    // once none does.
+    for (const change of await escalateParkedStories(handle.client)) {
+      console.warn(`Epic ${change.epicId} ${change.kind}: Stories ${change.storyIds.join(", ")}`);
+    }
     await surfaceBlockedEpics(handle.client);
     const stories = (await handle.client.execute("SELECT id FROM stories ORDER BY id")).rows;
     for (const story of stories) await projection.enqueue(String(story.id));
     // The requirement loop shares this outbox; each side replays only its own rows.
-    await outbox.replay(delivery, { operations: STORY_OUTBOX_OPERATIONS });
+    const replayed = await outbox.replay(delivery, { operations: STORY_OUTBOX_OPERATIONS });
+    if (replayed.failed > 0) console.warn(`Notion outbox: ${replayed.sent} sent, ${replayed.failed} failed this pass`);
+    for (const letter of replayed.dead) {
+      await reportP0(
+        `Notion outbox gave up on ${letter.operation} for ${letter.cardId ?? "no card"}`,
+        new Error(`${letter.attempts} attempts; last error: ${letter.lastError ?? "unknown"}`),
+      );
+    }
     await media.reconcile();
     await registerActiveStories();
   };
@@ -494,8 +509,9 @@ async function main(): Promise<void> {
           return;
         }
         // The worker already recorded the phase failure. Bound automatic
-        // reentries: DESIGN and CODE re-dispatch until the budget is spent,
-        // VERIFY/MERGE failures park immediately for a human resume decision.
+        // reentries: DESIGN, CODE and MERGE re-dispatch until the budget is
+        // spent. MERGE fails on the hosting platform as often as on the code
+        // (a CLI timeout, a push refused once), so one strike is not a stop.
         // A card that never left QUEUED failed before the pipeline started, so
         // nothing recorded the attempt: without counting it here the dispatch
         // query selects the same card on every cycle, forever.
@@ -505,7 +521,7 @@ async function main(): Promise<void> {
           const budget = config.get("retry.maxPhaseReentries");
           await store.recordPhaseReentry(cardId);
           const reentries = card.phaseReentries + 1;
-          const reenterable = ["QUEUED", "DESIGN", "CODE"].includes(card.state) && reentries < budget;
+          const reenterable = ["QUEUED", "DESIGN", "CODE", "MERGE"].includes(card.state) && reentries < budget;
           if (!reenterable) {
             await store.stopForInput(cardId, card.state, "retry_limit_exceeded", `reentry-${cardId}`);
             console.warn(`Story ${cardId} parked after ${reentries} failed attempt(s) in ${card.state}`);
@@ -575,8 +591,24 @@ async function main(): Promise<void> {
     if (!finished) return;
     const epicId = String(finished.id);
     const worktreePath = locateWorktree(repositoryId, `epic-${epicId}`, layout).worktreePath;
-    const delivered = await new EpicMrDelivery(handle.client, await mergeRequests(), { worktreePath })
-      .deliver(epicId);
+    // An Epic whose review request cannot be opened must not take the rest of
+    // the cycle down with it: every other Story would stop being dispatched
+    // for a reason that has nothing to do with them.
+    let delivered;
+    try {
+      delivered = await new EpicMrDelivery(handle.client, await mergeRequests(), {
+        worktreePath,
+        targetBranch: targetBranchDefault,
+        regressionClean: (id) => epicRegressionClean(handle.client, id),
+      }).deliver(epicId);
+    } catch (error) {
+      await reportP0(`Epic ${epicId} review request could not be opened`, error);
+      return;
+    }
+    if (delivered.kind === "waiting") {
+      console.log(`Epic ${epicId} review request waits: ${delivered.reason}`);
+      return;
+    }
     await handle.client.execute({
       sql: "UPDATE epics SET state = 'EPIC_ACCEPT', mr_url = ?, updated_at = ? WHERE id = ? AND state = 'EXECUTING'",
       args: [delivered.mrUrl, Date.now(), epicId],
@@ -620,6 +652,24 @@ async function main(): Promise<void> {
       }, layout);
     }
 
+    // Attribution bisects the Epic's Story sequence by checking out revisions,
+    // which detaches HEAD; the sweep tree keeps its branch, so the probe needs
+    // a tree of its own.
+    let probeWorktree: string | null = null;
+    if (epicId) {
+      let probeTree = locateWorktree(repositoryId, `probe-${epicId}`, layout);
+      if (!(await exists(probeTree.worktreePath))) {
+        probeTree = await createWorktree({
+          repositoryPath,
+          repositoryId,
+          cardId: `probe-${epicId}`,
+          branch: `probe/${epicId}`,
+          startPoint: branch,
+        }, layout);
+      }
+      probeWorktree = probeTree.worktreePath;
+    }
+
     const chain = providerOverride ? [providerOverride] : await modelPolicy.providersFor("verify");
     const provider = usableProviders(chain, await providerHealth.snapshot(), Date.now())[0];
     if (!provider) return;
@@ -636,6 +686,7 @@ async function main(): Promise<void> {
       "--provider", provider,
       "--model", model,
       ...(epicId ? ["--epic", epicId] : []),
+      ...(probeWorktree ? ["--probe-worktree", probeWorktree] : []),
     ], {
       cwd: ROOT,
       windowsHide: true,
@@ -644,6 +695,13 @@ async function main(): Promise<void> {
       env: { ...process.env, HIVEMIND_DB_URL: dbUrl, ...(await providerEnvFor(provider)) },
     });
     if (result.stdout.trim()) console.log(`regression sweep (${plan.reason}): ${result.stdout.trim()}`);
+    try {
+      const summary = JSON.parse(result.stdout.trim()) as { attributionsSkipped?: string; attributions?: unknown[] };
+      if (summary.attributionsSkipped) console.warn(`regression cards raised without attribution: ${summary.attributionsSkipped}`);
+    } catch {
+      // The sweep printed something other than its JSON summary; the raw line
+      // above is the record, and there is nothing further to read from it.
+    }
   };
 
   const cycle = async (): Promise<void> => {

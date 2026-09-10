@@ -78,9 +78,9 @@ describe("requirement property intent", () => {
     expect(interpretRequirementPropertyChange(
       requirementStatus[6]!, requirementStatus[1]!, "HUMAN_PARKED", "CLARIFY", 1_000,
     )).toEqual({ type: "resume", state: "CLARIFY", humanWinsUntil: 121_000 });
-    expect(() => interpretRequirementPropertyChange(
+    expect(interpretRequirementPropertyChange(
       requirementStatus[6]!, requirementStatus[1]!, "HUMAN_PARKED", undefined, 1_000,
-    )).toThrow(/no valid previous state/);
+    )).toEqual({ type: "none" });
   });
 
   it("refuses to invent a meaning for an unexpected column", () => {

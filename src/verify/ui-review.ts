@@ -75,6 +75,8 @@ export interface UiReviewScenario {
   statement: string;
   /** The sentences a refusal may cite: the scenario's then and its examples. */
   refusable: readonly string[];
+  /** The sample data the given asked for, already put into the application when present. */
+  seed?: string;
 }
 
 export interface UiReviewReference {
@@ -104,6 +106,8 @@ export interface UiReviewInput {
   outOfScope?: readonly string[];
   /** Existing pages or services the Story assumes work; their failure is not this card's. */
   reliesOn?: readonly string[];
+  /** Where the repository's application is running for this review, when one was started. */
+  appUrl?: string;
   worktreePath: string;
   evidencePath: string;
   auditPath: string;
@@ -220,6 +224,9 @@ export function promptFor(input: UiReviewInput, attached: LoadedScreenshots): st
     ...(input.references && input.references.length > 0
       ? ["A prototype is attached for reference. It was drawn before this was built and is not expected to match pixel for pixel: a difference from it is a finding at most, and only a requirement that says in words that it must match exactly makes a difference an acceptance failure."]
       : []),
+    ...(input.appUrl
+      ? [`The application is running at ${input.appUrl}. Open it there to check anything a screenshot cannot show; the sample data each scenario declares below has already been put into it, so a scenario that says what data it expects is judged on that data, not on an empty page.`]
+      : []),
     ...(input.allowedHosts.length > 0 ? [browserLaneInstructions(session, input.allowedHosts)] : []),
     "Return only JSON: {\"acceptance\":[{\"id\":string,\"status\":\"passed\"|\"failed\"|\"inconclusive\",\"reason\"?:string,\"cites\"?:string,\"url\"?:string,\"screenshots\"?:string[]}],\"findings\":[{\"area\":\"consistency\"|\"layout\"|\"content\"|\"interaction\",\"severity\":\"major\"|\"minor\",\"note\":string,\"scenarioId\"?:string,\"screenshot\"?:string}]}",
     "Every declared scenario needs exactly one acceptance entry. For anything not passed, `reason` is mandatory: one sentence naming what you saw on which screen, so a person can act on that sentence alone.",
@@ -228,6 +235,7 @@ export function promptFor(input: UiReviewInput, attached: LoadedScreenshots): st
     "Declared scenarios, each followed by the sentences a refusal may cite:",
     input.scenarios.map((scenario) => [
       `${scenario.id}: ${scenario.statement}`,
+      ...(scenario.seed ? [`  sample data in place: ${scenario.seed}`] : []),
       ...scenario.refusable.map((sentence) => `  - ${sentence}`),
     ].join("\n")).join("\n"),
     ...(attached.names.length > 0

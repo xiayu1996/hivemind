@@ -70,6 +70,44 @@ describe("RegressionStore", () => {
     await expect(store.openCards()).resolves.toMatchObject([{ attributedStory: "S-M2-03" }]);
   });
 
+  it("closes a card only for the Story it was attributed to, then lets the same break raise again", async () => {
+    for (let attempt = 0; attempt < 3; attempt++) await fail();
+    const [card] = await store.openCards();
+    await store.attribute(card!.scenarioId, card!.failureSignature, "S-M2-03");
+
+    await expect(store.resolveCard(card!.scenarioId, card!.failureSignature, "S-M2-99")).resolves.toBe(false);
+    await expect(store.openCardsForStory("S-M2-03")).resolves.toHaveLength(1);
+
+    await expect(store.resolveCard(card!.scenarioId, card!.failureSignature, "S-M2-03", 5_000)).resolves.toBe(true);
+    await expect(store.openCards()).resolves.toEqual([]);
+    await expect(store.openCardsForStory("S-M2-03")).resolves.toEqual([]);
+    const row = (await client.execute("SELECT resolved_at FROM regression_cards")).rows[0];
+    expect(row).toMatchObject({ resolved_at: 5_000 });
+
+    for (let attempt = 0; attempt < 3; attempt++) await fail();
+    await expect(store.openCards()).resolves.toHaveLength(1);
+  });
+
+  it("scopes open cards to an Epic through the attributed Story", async () => {
+    await client.execute({
+      sql: "INSERT INTO epics (id, notion_page_id, title, state, created_at, updated_at) VALUES ('E-1', 'p-e1', 'Epic', 'EXECUTING', 1, 1)",
+      args: [],
+    });
+    await client.execute({
+      sql: `INSERT INTO stories (id, epic_id, notion_page_id, title, requirement, state, created_at, updated_at)
+            VALUES ('S-M2-03', 'E-1', 'p-s1', 'Story', 'req', 'DELIVERED', 1, 1)`,
+      args: [],
+    });
+    for (let attempt = 0; attempt < 3; attempt++) await fail("AssertionError: expected 3 to be 4");
+    for (let attempt = 0; attempt < 8; attempt++) await fail("TypeError: cart is not iterable");
+    const [attributed] = await store.openCards();
+    await store.attribute(attributed!.scenarioId, attributed!.failureSignature, "S-M2-03");
+
+    await expect(store.openCards("E-1")).resolves.toMatchObject([{ attributedStory: "S-M2-03" }]);
+    await expect(store.openCards("E-other")).resolves.toEqual([]);
+    await expect(store.openCards()).resolves.toHaveLength(2);
+  });
+
   it("stores no signature for a passing run, which the schema enforces", async () => {
     await store.record({ scenarioId: "S-M2-01-a", pool: "epic", revision: "abc", outcome: "passed" }, policy);
     const row = (await client.execute("SELECT outcome, failure_signature FROM regression_runs")).rows[0];

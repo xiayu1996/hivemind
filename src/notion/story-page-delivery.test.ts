@@ -186,7 +186,7 @@ describe("NotionStoryPageDelivery", () => {
         },
       ], "write");
       await projection.enqueue("S-EPIC1-01");
-      await expect(outbox.replay(delivery)).resolves.toEqual({ sent: 2, failed: 0 });
+      await expect(outbox.replay(delivery)).resolves.toEqual({ sent: 2, failed: 0, dead: [] });
       const mapping = await client.execute("SELECT notion_block_id FROM story_specs WHERE spec_id = 'S-EPIC1-01-a'");
       const current = String(mapping.rows[0]?.notion_block_id);
       specBlockId ??= current;
@@ -231,10 +231,10 @@ describe("NotionStoryPageDelivery", () => {
     );
     const outbox = new NotionOutbox(client, () => 20);
     await new NotionStoryProjection(client, () => 20).enqueue("S-EPIC1-01");
-    await expect(outbox.replay(delivery)).resolves.toEqual({ sent: 2, failed: 0 });
+    await expect(outbox.replay(delivery)).resolves.toEqual({ sent: 2, failed: 0, dead: [] });
     // A second projection of the same state must find the page complete.
     await client.execute("UPDATE notion_outbox SET state = 'pending'");
-    await expect(outbox.replay(delivery)).resolves.toEqual({ sent: 2, failed: 0 });
+    await expect(outbox.replay(delivery)).resolves.toEqual({ sent: 2, failed: 0, dead: [] });
 
     const page = fake.visible("page-1");
     expect(page.filter((item) => item.type === "toggle")).toHaveLength(1);

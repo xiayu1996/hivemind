@@ -1,4 +1,4 @@
-export type RequirementSection = "metadata" | "original" | "clarify" | "prd" | "acceptance";
+export type RequirementSection = "metadata" | "original" | "clarify" | "prd" | "acceptance" | "questions";
 
 export const REQUIREMENT_SECTION_ORDER: readonly RequirementSection[] = [
   "metadata",
@@ -6,6 +6,7 @@ export const REQUIREMENT_SECTION_ORDER: readonly RequirementSection[] = [
   "clarify",
   "prd",
   "acceptance",
+  "questions",
 ];
 
 export interface RequirementSectionSnapshot {
@@ -28,6 +29,9 @@ export interface DesiredRequirementPage {
   /** A confirmed PRD is what the person approved, so nothing may touch it. */
   prdFrozen: boolean;
   acceptance: readonly string[];
+  /** Why the system is waiting on a person and how to answer; absent when it
+   * is not waiting, which empties the section. Same shape as a Story page. */
+  questions?: string | undefined;
 }
 
 export type RequirementPageOperation =
@@ -121,5 +125,26 @@ export function planRequirementPageUpdate(
   }
 
   appendMissing(operations, "acceptance", snapshot.sections.acceptance, desired.acceptance, "to_do");
+
+  const questions = snapshot.sections.questions;
+  if (questions) {
+    const [current, ...extra] = questions.blocks;
+    // One paragraph, rewritten in place: the wait is a live status, not a log,
+    // and an answered question must disappear so the page does not keep asking.
+    for (const entry of extra) operations.push({ type: "archive_block", blockId: entry.id });
+    if (!desired.questions) {
+      if (current) operations.push({ type: "archive_block", blockId: current.id });
+    } else if (!current) {
+      operations.push({
+        type: "insert",
+        section: "questions",
+        afterBlockId: questions.anchorBlockId,
+        content: desired.questions,
+        block: "paragraph",
+      });
+    } else if (current.content !== desired.questions) {
+      operations.push({ type: "update_block", blockId: current.id, content: desired.questions });
+    }
+  }
   return operations;
 }

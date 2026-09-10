@@ -110,9 +110,10 @@ export function interpretRequirementPropertyChange(
     return { type: "park", previousState: internalState, humanWinsUntil };
   }
   if (internalState === "HUMAN_PARKED" && observedRequirementStatus !== parkedColumn) {
-    if (!parkedResumeState || parkedResumeState === "HUMAN_PARKED") {
-      throw new Error("a parked requirement has no valid previous state to restore");
-    }
+    // A parked requirement with nothing to resume to cannot be moved by a drag;
+    // the column is left where the person put it and nothing is applied, so
+    // one odd row does not take the whole poll down with it.
+    if (!parkedResumeState || parkedResumeState === "HUMAN_PARKED") return { type: "none" };
     return { type: "resume", state: parkedResumeState, humanWinsUntil };
   }
   if (internalState === "PRD_CONFIRM" && observedRequirementStatus === decomposingColumn) {

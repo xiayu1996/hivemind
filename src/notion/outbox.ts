@@ -38,9 +38,29 @@ export interface NotionOutboxDelivery {
   send(record: NotionOutboxRecord): Promise<void>;
 }
 
+/**
+ * How many delivery attempts a row gets before it is declared dead. Notion
+ * outages clear within a few cycles; a row still failing after this many is
+ * a payload the API will never accept, and retrying it forever only hides
+ * the failure while it holds its place in the queue.
+ */
+export const OUTBOX_MAX_ATTEMPTS = 8;
+
+export interface DeadLetter {
+  id: number;
+  cardId: string | null;
+  operation: string;
+  target: string;
+  attempts: number;
+  lastError: string | null;
+}
+
 export interface ReplayResult {
   sent: number;
+  /** Rows that failed this pass and remain pending, including those just declared dead. */
   failed: number;
+  /** Rows that crossed OUTBOX_MAX_ATTEMPTS during this pass. */
+  dead: DeadLetter[];
 }
 
 export interface ReplayOptions {
@@ -151,6 +171,7 @@ export class NotionOutbox {
     })).rows;
     let sent = 0;
     let failed = 0;
+    const dead: DeadLetter[] = [];
 
     for (const row of rows) {
       const record: NotionOutboxRecord = {
@@ -176,14 +197,43 @@ export class NotionOutbox {
         });
         sent++;
       } catch (cause) {
+        const lastError = String((cause as Error).message).slice(0, 2_000);
+        const exhausted = record.attempts >= OUTBOX_MAX_ATTEMPTS;
         await this.client.execute({
-          sql: "UPDATE notion_outbox SET last_error = ? WHERE id = ?",
-          args: [String((cause as Error).message).slice(0, 2_000), record.id],
+          sql: "UPDATE notion_outbox SET last_error = ?, state = ? WHERE id = ?",
+          args: [lastError, exhausted ? "dead" : "pending", record.id],
         });
         failed++;
+        if (exhausted) {
+          dead.push({
+            id: record.id,
+            cardId: record.cardId,
+            operation: record.operation,
+            target: record.target,
+            attempts: record.attempts,
+            lastError,
+          });
+        }
       }
     }
 
-    return { sent, failed };
+    return { sent, failed, dead };
   }
+}
+
+/** Rows that gave up, newest first, for the operator log and inspect scripts. */
+export async function deadLetters(client: Client, limit = 50): Promise<DeadLetter[]> {
+  const rows = (await client.execute({
+    sql: `SELECT id, card_id, operation, target, attempts, last_error
+          FROM notion_outbox WHERE state = 'dead' ORDER BY id DESC LIMIT ?`,
+    args: [limit],
+  })).rows;
+  return rows.map((row) => ({
+    id: Number(row.id),
+    cardId: row.card_id === null ? null : String(row.card_id),
+    operation: String(row.operation),
+    target: String(row.target),
+    attempts: Number(row.attempts),
+    lastError: row.last_error === null ? null : String(row.last_error),
+  }));
 }

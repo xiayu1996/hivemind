@@ -127,8 +127,13 @@ async function main(): Promise<void> {
     await migrate(handle.client);
     const store = new StoryExecutionStore(handle.client);
     const story = await store.getStory(cardId);
-    if (!["QUEUED", "DESIGN", "CODE", "MERGE"].includes(story.state)) {
-      throw new Error(`Story ${cardId} must be QUEUED, DESIGN, CODE or MERGE, not ${story.state}`);
+    if (!["QUEUED", "DESIGN", "CODE", "MERGE", "REGRESSION_FIX"].includes(story.state)) {
+      throw new Error(`Story ${cardId} must be QUEUED, DESIGN, CODE, MERGE or REGRESSION_FIX, not ${story.state}`);
+    }
+    // A regression fix lands on the Epic head again; without the integration
+    // worktree the loop could fix and never deliver.
+    if (story.state === "REGRESSION_FIX" && !integrationWorktree) {
+      throw new Error(`Story ${cardId} is in REGRESSION_FIX and needs --integration-worktree`);
     }
     // Per-repository keys (the gate commands the CODE exit and the merge
     // re-verification run) are stored under the card's slug; without the scope
@@ -269,6 +274,16 @@ async function main(): Promise<void> {
         auditPath,
         allowedHosts,
         chromiumSandbox: config.get("verify.chromiumSandbox"),
+        // The application the reviewer looks at, started and seeded by the
+        // system; a reviewer told to "open the page" with nothing running
+        // returns inconclusive for every scenario, which is what happened on
+        // the first run under this contract.
+        app: {
+          startCommand: config.get("verify.appStartCommand"),
+          readyUrl: config.get("verify.appReadyUrl"),
+          readyTimeoutMs: config.get("verify.appReadyTimeoutMs"),
+          seedCommand: config.get("verify.seedCommand"),
+        },
         storyTitle: async () => {
           const snapshot = await store.getStory(cardId);
           return { title: snapshot.title, businessGoal: snapshot.requirement };
@@ -307,6 +322,7 @@ async function main(): Promise<void> {
       {
         ...(integration ? { integration } : {}),
         maxInnerLoopRounds: limits.maxInnerLoopRounds,
+        maxRegressionReopens: limits.maxRegressionReopens,
         friction: { record: (input) => store.recordFriction(input) },
         // A flat-rate subscription has no money to cap, and a port that
         // always answered zero would read as a ceiling being enforced when

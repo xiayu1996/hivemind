@@ -261,6 +261,15 @@
 | IT-11 | ✅ Notion 验证记录可读：accepted 轮写「N 个场景都验证通过（…）」，rejected 轮逐场景写两条道原因与所依据的 DoD 句子，列出 DoD 修订建议 | `src/notion/story-projection.ts` | projection 单测 | IT-03 |
 | IT-12 | ✅ 轮次账本展示：`Budget x/6` 按 `last_human_action_at` 之后被拒轮数计；round 流水号不重置 | `src/notion/story-projection.ts` | projection 单测 | — |
 | IT-13 | **IT 验收**：S-E3OVERVIEW-01 重置到 DESIGN 重跑；对照旧 8 轮：DoD 一次通过 schema、CODE ≤ 2 轮、环境失败不计轮次、Notion 上能看到回答与可读记录 | `docs/poc/mp-acceptance.md` 追记 | inspect-round 逐轮对照 | IT-01..12 |
+| IT-14 | ✅ Epic 分支在拆解批准时推送；派发前重试；合入后推头 | `src/vcs/epic-branch.ts`, `plan-approval.ts`, `merge-flow.ts` | 单测 + 实跑 origin/epic/E3OVERVIEW 存在 | — |
+| IT-15 | ✅ Story draft MR 在 ff-merge 之前开（rebase → 推分支 → 开 MR → 复验 → 合入）；复用已开 MR；目标已包含则不开 | `merge-flow.ts`, `epic-integration.ts`, `story-worker.ts`, `story-delivery.ts`, `mr/adapters.ts` | 单测顺序断言 + S-E3OVERVIEW-01 resume 实跑 | IT-14 |
+| IT-16 | Epic MR：缺红绿提交对不抛错；目标分支来自 `--target-branch`；等回归池干净；关闭未合并退回 EXECUTING | `src/vcs/epic-delivery.ts`, `epic-completion.ts`, `regression/epic-gate.ts` | 单测 | — |
+| IT-17 | 走查环境：`verify.appStartCommand/appReadyUrl/seedCommand`，DoD `seed`；走查 inconclusive 可见 | `src/verify/app-under-review.ts`, `ui-reviewed-verify-port.ts`, `dod.ts` | 单测 + E3 卡实跑 | — |
+| IT-18 | 需求层 `clearStop` 调用者；停点详情上页；HUMAN_PARKED 空 resume 不抛；EXECUTING 期间重投影 | `requirement-input-sync.ts`, `requirement-page-delivery.ts` | 单测 | — |
+| IT-19 | ✅ MERGE 可重入；✅ 人工/契约触发的回 DESIGN 解冻并作废可复用轮 | `run-local-orchestrator.ts`, `story-execution-store.ts`, `story-worker.ts` | 单测 | — |
+| IT-20 | Story 停牌上浮 Epic BLOCKED，恢复自动回 EXECUTING；escalation 型 BLOCKED 不可被评论触发重拆 | `src/orchestrator/epic-escalation.ts` | 单测 | — |
+| IT-21 | outbox attempts + dead 状态 + 计数日志 + 死信列表 | `src/notion/outbox.ts` | 单测 | — |
+| IT-22 | 回归环路：sweep 传 probe worktree；`regression_cards` resolve；REGRESSION_FIX 可运行 | `scripts/run-regression.ts`, `regression/store.ts`, `story-worker.ts` | 单测 + 人为制造回归实跑 | IT-16 |
 
 ---
 

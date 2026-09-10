@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DefinitionOfDone } from "../pipeline/dod.js";
 import type { UiReviewResult } from "../verify/ui-review.js";
-import { reviewableScenarios, UiReviewedVerifyPort } from "./ui-reviewed-verify-port.js";
+import type { AppUnderReview } from "../verify/app-under-review.js";
+import { reviewableScenarios, UiReviewedVerifyPort, type UiReviewAppOptions } from "./ui-reviewed-verify-port.js";
 import type { ManagedVerifyInput, ManagedVerifyResult } from "./story-worker.js";
 
 function dod(layers: Array<DefinitionOfDone["scenarios"][number]["layers"]>): DefinitionOfDone {
@@ -73,6 +74,8 @@ function port(options: {
   onReview?: (input: unknown) => void;
   publish?: (input: { text: string }) => Promise<void>;
   friction?: (input: { cardId: string; runId: string; kind: string; detail: string }) => Promise<void>;
+  app?: UiReviewAppOptions;
+  appUnderReview?: () => Pick<AppUnderReview, "start" | "stop" | "seed">;
 }) {
   const review = vi.fn(async (given: unknown) => {
     options.onReview?.(given);
@@ -88,8 +91,34 @@ function port(options: {
     storyTitle: async () => ({ title: "买家看到运费", businessGoal: "下单前知道总价" }),
     ...(options.publish ? { publishFindings: options.publish as never } : {}),
     ...(options.friction ? { recordFriction: options.friction as never } : {}),
+    ...(options.app ? { app: options.app } : {}),
+    ...(options.appUnderReview ? { appUnderReview: options.appUnderReview } : {}),
   });
   return { instance, review };
+}
+
+function fakeApp(overrides: Partial<Pick<AppUnderReview, "start" | "stop" | "seed">> = {}) {
+  const calls: { start: unknown[]; seed: unknown[]; stopped: number } = { start: [], seed: [], stopped: 0 };
+  const handle: Pick<AppUnderReview, "start" | "stop" | "seed"> = {
+    start: async (given) => {
+      calls.start.push(given);
+      return { started: true, url: given.readyUrl };
+    },
+    seed: async (given) => {
+      calls.seed.push(given);
+      return { ok: true, output: "" };
+    },
+    stop: async () => {
+      calls.stopped += 1;
+    },
+    ...overrides,
+  };
+  return { calls, handle };
+}
+
+function withSeed(definition: DefinitionOfDone): DefinitionOfDone {
+  definition.scenarios[0]!.seed = "一个仓库下有 3 个 Story";
+  return definition;
 }
 
 describe("reviewableScenarios", () => {
@@ -221,7 +250,114 @@ describe("UiReviewedVerifyPort", () => {
       cardId: "story-1",
       runId: "run-1",
       kind: "ui_review_inconclusive",
-      detail: "browser never started",
+      detail: "S-EPIC-01-s0: browser never started",
     }]);
+    expect(JSON.parse(result.artifact).uiReview.inconclusive).toEqual(["S-EPIC-01-s0"]);
+  });
+
+  it("names the scenarios the reviewer could not judge, so an accepted round does not hide them", async () => {
+    // S-E3OVERVIEW-01: three of four scenarios came back inconclusive for lack
+    // of fixture data and the card delivered with nothing on the board saying so.
+    const friction: Array<{ kind: string; detail: string }> = [];
+    const { instance } = port({
+      functional: functionalResult(),
+      review: reviewResult({
+        acceptance: [
+          { id: "S-EPIC-01-s0", status: "passed" },
+          { id: "S-EPIC-01-s1", status: "inconclusive", reason: "列表为空，没有数据可看" },
+        ],
+      }),
+      friction: async (input) => {
+        friction.push(input);
+      },
+    });
+    const result = await instance.run(verifyInput(dod([["ui"], ["ui"]])));
+    expect(result.verdict).toBe("accepted");
+    expect(friction).toEqual([{
+      cardId: "story-1",
+      runId: "run-1",
+      kind: "ui_review_inconclusive",
+      detail: "S-EPIC-01-s1: 列表为空，没有数据可看",
+    }]);
+    expect(JSON.parse(result.artifact).uiReview.inconclusive).toEqual(["S-EPIC-01-s1"]);
+  });
+
+  describe("with an application to look at", () => {
+    const app = { startCommand: ["npm", "run", "dev"], readyUrl: "http://app.local:3000/", readyTimeoutMs: 1000, seedCommand: ["npm", "run", "seed"] };
+
+    it("starts the application in the worktree, seeds each scenario that asks for data, tells the reviewer, and stops it", async () => {
+      const { calls, handle } = fakeApp();
+      let seen: { appUrl?: string; allowedHosts: string[]; scenarios: Array<{ seed?: string }> } | undefined;
+      const { instance } = port({
+        functional: functionalResult(),
+        onReview: (input) => {
+          seen = input as typeof seen;
+        },
+        app,
+        appUnderReview: () => handle,
+      });
+      const result = await instance.run(verifyInput(withSeed(dod([["ui"], ["ui"]]))));
+      expect(result.verdict).toBe("accepted");
+      expect(calls.start).toEqual([{ cwd: "/work", command: app.startCommand, readyUrl: app.readyUrl, timeoutMs: 1000 }]);
+      expect(calls.seed).toEqual([{ cwd: "/work", command: app.seedCommand, scenarioId: "S-EPIC-01-s0", seed: "一个仓库下有 3 个 Story" }]);
+      expect(seen?.appUrl).toBe(app.readyUrl);
+      expect(seen?.allowedHosts).toEqual(["localhost", "app.local"]);
+      expect(seen?.scenarios.map((scenario) => scenario.seed)).toEqual(["一个仓库下有 3 个 Story", undefined]);
+      expect(calls.stopped).toBe(1);
+    });
+
+    it("stops the application even when the reviewer throws", async () => {
+      const { calls, handle } = fakeApp();
+      const { instance } = port({
+        functional: functionalResult(),
+        onReview: () => {
+          throw new Error("reviewer crashed");
+        },
+        app,
+        appUnderReview: () => handle,
+      });
+      await expect(instance.run(verifyInput(dod([["ui"]])))).rejects.toThrow("reviewer crashed");
+      expect(calls.stopped).toBe(1);
+    });
+
+    it("keeps the functional acceptance and marks every screen inconclusive when the application will not start", async () => {
+      const friction: Array<{ kind: string; detail: string }> = [];
+      const { calls, handle } = fakeApp({ start: async () => ({ started: false, reason: "port 3000 never answered" }) });
+      const { instance, review } = port({
+        functional: functionalResult(),
+        friction: async (input) => {
+          friction.push({ kind: input.kind, detail: input.detail });
+        },
+        app,
+        appUnderReview: () => handle,
+      });
+      const result = await instance.run(verifyInput(dod([["ui"], ["unit"], ["e2e"]])));
+      expect(review).not.toHaveBeenCalled();
+      expect(result.verdict).toBe("accepted");
+      expect(friction).toEqual([{ kind: "ui_review_app_unavailable", detail: "port 3000 never answered" }]);
+      const uiReview = JSON.parse(result.artifact).uiReview;
+      expect(uiReview.verdict).toBe("inconclusive");
+      expect(uiReview.inconclusive).toEqual(["S-EPIC-01-s0", "S-EPIC-01-s2"]);
+      expect(uiReview.inconclusiveReasons).toEqual([
+        { id: "S-EPIC-01-s0", reason: "port 3000 never answered" },
+        { id: "S-EPIC-01-s2", reason: "port 3000 never answered" },
+      ]);
+      expect(calls.stopped).toBe(1);
+    });
+
+    it("does not start anything when the repository declares no start command", async () => {
+      let created = 0;
+      const { instance, review } = port({
+        functional: functionalResult(),
+        app: { ...app, startCommand: [] },
+        appUnderReview: () => {
+          created += 1;
+          return fakeApp().handle;
+        },
+      });
+      await instance.run(verifyInput(dod([["ui"]])));
+      expect(created).toBe(0);
+      expect(review).toHaveBeenCalledTimes(1);
+    });
   });
 });

@@ -71,6 +71,42 @@ describe("RequirementPageProjector", () => {
     expect((await client.execute("SELECT COUNT(*) AS count FROM notion_outbox")).rows[0]?.count).toBe(1);
   });
 
+  it("tells the person what it is waiting for and how to answer, and stops once they have", async () => {
+    await store.stopForHumanInput(REQUIREMENT_ID, "CLARIFY", "run-stop", "clarification did not converge in 3 rounds");
+    await projector.publish(REQUIREMENT_ID);
+    let rows = (await client.execute("SELECT payload FROM notion_outbox ORDER BY id")).rows;
+    let desired = (JSON.parse(String(rows.at(-1)!.payload)) as { desired: { questions?: string } }).desired;
+    expect(desired.questions).toContain("clarification did not converge in 3 rounds");
+    expect(desired.questions).toContain("评论");
+
+    await store.clearStop(REQUIREMENT_ID, "run-answer");
+    await projector.publish(REQUIREMENT_ID);
+    rows = (await client.execute("SELECT payload FROM notion_outbox ORDER BY id")).rows;
+    expect(rows).toHaveLength(2);
+    desired = (JSON.parse(String(rows.at(-1)!.payload)) as { desired: { questions?: string } }).desired;
+    expect(desired.questions).toBeUndefined();
+  });
+
+  it("re-projects the page as the Epics underneath it make progress", async () => {
+    await client.execute({
+      sql: `INSERT INTO epics (id, notion_page_id, title, state, requirement_id, created_at, updated_at)
+            VALUES ('E-1', 'epic-page-1', 'Console shell', 'EXECUTING', ?, 1, 1)`,
+      args: [REQUIREMENT_ID],
+    });
+    await client.execute(`INSERT INTO stories (id, epic_id, notion_page_id, title, requirement, state, created_at, updated_at)
+      VALUES ('S-1', 'E-1', 'story-page-1', 'Shell', 'shell', 'CODE', 1, 1)`);
+    await projector.publish(REQUIREMENT_ID);
+    await projector.publish(REQUIREMENT_ID);
+    expect((await client.execute("SELECT COUNT(*) AS count FROM notion_outbox")).rows[0]?.count).toBe(1);
+
+    await client.execute("UPDATE stories SET state = 'DELIVERED' WHERE id = 'S-1'");
+    await projector.publish(REQUIREMENT_ID);
+    const rows = (await client.execute("SELECT payload FROM notion_outbox ORDER BY id")).rows;
+    expect(rows).toHaveLength(2);
+    const metadata = (JSON.parse(String(rows[1]!.payload)) as { desired: { metadata: string } }).desired.metadata;
+    expect(metadata).toContain("E-1（开发中，Story 1/1 已交付）");
+  });
+
   it("marks a confirmed PRD frozen so the page projection stops touching it", async () => {
     await store.transition(REQUIREMENT_ID, "CLARIFY", "PRD_CONFIRM", "system", "run-1");
     await store.saveDraftPrd(REQUIREMENT_ID, JSON.stringify({

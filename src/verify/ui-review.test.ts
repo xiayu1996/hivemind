@@ -166,6 +166,14 @@ describe("UiReviewExecutor", () => {
     expect(prompt).toContain("/tasks 页面");
   });
 
+  it("tells the reviewer where the application runs and which sample data each scenario already has", () => {
+    const given = input({ appUrl: "http://127.0.0.1:3000/" });
+    const scenarios = given.scenarios.map((scenario) => ({ ...scenario, seed: "一个仓库下有 3 个 Story" }));
+    const prompt = promptFor({ ...given, scenarios }, { images: [], names: [], skipped: [] });
+    expect(prompt).toContain("running at http://127.0.0.1:3000/");
+    expect(prompt).toContain("sample data in place: 一个仓库下有 3 个 Story");
+  });
+
   it("sends the screenshots as images with the first prompt", async () => {
     const fake = runner(PASSED);
     const result = await new UiReviewExecutor({ create: () => fake }).run(input());

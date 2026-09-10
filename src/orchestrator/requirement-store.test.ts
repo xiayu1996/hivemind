@@ -168,8 +168,24 @@ describe("RequirementStore", () => {
             VALUES ('E-1', 'epic-page-1', 'Console shell', 'EXECUTING', ?, 1, 1)`,
       args: [REQUIREMENT_ID],
     });
+    await client.batch([
+      `INSERT INTO stories (id, epic_id, notion_page_id, title, requirement, state, created_at, updated_at)
+       VALUES ('S-1', 'E-1', 'story-page-1', 'Shell', 'shell', 'DELIVERED', 1, 1)`,
+      `INSERT INTO stories (id, epic_id, notion_page_id, title, requirement, state, created_at, updated_at)
+       VALUES ('S-2', 'E-1', 'story-page-2', 'Nav', 'nav', 'CODE', 1, 1)`,
+    ], "write");
     await expect(store.linkedEpicStates(REQUIREMENT_ID)).resolves.toEqual([
-      { epicId: "E-1", state: "EXECUTING" },
+      { epicId: "E-1", state: "EXECUTING", storiesTotal: 2, storiesDelivered: 1 },
     ]);
+  });
+
+  it("remembers why it last stopped so the page and the resume can read it back", async () => {
+    await expect(store.latestStop(REQUIREMENT_ID)).resolves.toBeNull();
+    await store.stopForHumanInput(REQUIREMENT_ID, "CLARIFY", "run-stop", "still asking: who reads it?");
+    await expect(store.latestStop(REQUIREMENT_ID)).resolves.toEqual({
+      state: "CLARIFY",
+      detail: "still asking: who reads it?",
+      stoppedAt: expect.any(Number),
+    });
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DoDValidationError, LAYER_OWNER, hasScreen, parseDoD, refusableStatements, scanScenarioCoverage } from "./dod.js";
+import { DoDValidationError, LAYER_OWNER, hasScreen, parseDoD, refusableStatements, scanScenarioCoverage, seedOf } from "./dod.js";
 
 const yaml = `
 story_id: S-EPIC12-03
@@ -68,6 +68,12 @@ baseline:`);
     ]);
     expect(LAYER_OWNER.ui).toBe("verify");
     expect(LAYER_OWNER.unit).toBe("code");
+  });
+
+  it("carries the sample data a screen scenario asks for, and leaves it optional", () => {
+    const dod = parseDoD(yaml.replace("    layers: [unit, integration]\n", "    layers: [unit, integration]\n    seed: one cart with two taxable items\n"));
+    expect(seedOf(dod.scenarios[0]!)).toBe("one cart with two taxable items");
+    expect(seedOf(parseDoD(yaml).scenarios[0]!)).toBeUndefined();
   });
 
   it("requires a reason when a test baseline is exempt", () => {

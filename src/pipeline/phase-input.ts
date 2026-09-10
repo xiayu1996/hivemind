@@ -33,6 +33,14 @@ export interface EvidenceRef {
   note?: string;
 }
 
+export interface RegressionCardRef {
+  scenarioId: string;
+  /** The normalised failure text the card is keyed by. */
+  signature: string;
+  /** The Story the bisection blamed; absent when the card is still unattributed. */
+  attributedStory?: string;
+}
+
 export interface PhaseInput {
   cardId: string;
   phase: Phase;
@@ -49,6 +57,8 @@ export interface PhaseInput {
   failedScenarios: string[];
   /** Why each scenario was refused, verbatim from the lane that refused it. */
   scenarioFailures?: ScenarioFailure[];
+  /** Open regression cards this round must close; only REGRESSION_FIX carries them. */
+  regressions?: RegressionCardRef[];
 }
 
 export interface PhaseRejection {
@@ -156,6 +166,12 @@ export function roundTasks(input: PhaseInput): RoundTask[] {
     tasks.push({
       tag: `[scenario:${scenarioId}]`,
       text: `still failing. ${why || "No reason was recorded; treat the scenario as unverified and prove it."}`,
+    });
+  }
+  for (const card of sortBy(input.regressions ?? [], (c) => `${c.scenarioId} ${c.signature}`)) {
+    tasks.push({
+      tag: `[regression:${card.scenarioId}]`,
+      text: `the scenario fails on the Epic branch since ${card.attributedStory ?? "an unattributed Story"}: ${card.signature.trim()}`,
     });
   }
   return tasks;

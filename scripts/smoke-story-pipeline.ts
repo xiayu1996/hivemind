@@ -144,6 +144,7 @@ async function main(): Promise<void> {
       recordTelemetry: (input) => recorder.record(input),
     });
     const delivery = new GitMrStoryDelivery({
+      findOpen: async () => null,
       create: async () => ({
         url: "https://github.com/example/hivemind-smoke/pull/1",
         provider: "github",

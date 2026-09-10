@@ -152,6 +152,25 @@ describe("what this round must do", () => {
   });
 });
 
+describe("regression cards", () => {
+  it("turns each open card into a tagged task naming the blamed Story and the signature", () => {
+    const input = {
+      ...base,
+      phase: "REGRESSION_FIX" as const,
+      regressions: [
+        { scenarioId: "S-EPIC3-05", signature: "TypeError: cart is not iterable", attributedStory: "S-EPIC3-02" },
+        { scenarioId: "S-EPIC3-04", signature: "expected 8.1, received 9 " },
+      ],
+    };
+    const tags = roundTasks(input).map((task) => task.tag);
+    expect(tags.slice(-2)).toEqual(["[regression:S-EPIC3-04]", "[regression:S-EPIC3-05]"]);
+    const prompt = assemblePhasePrompt(input);
+    expect(prompt).toContain("- [regression:S-EPIC3-05] the scenario fails on the Epic branch since S-EPIC3-02: TypeError: cart is not iterable");
+    expect(prompt).toContain("- [regression:S-EPIC3-04] the scenario fails on the Epic branch since an unattributed Story: expected 8.1, received 9");
+    expect(assemblePhasePrompt({ ...input, regressions: input.regressions.toReversed() })).toBe(prompt);
+  });
+});
+
 describe("formatting", () => {
   it("trims stored bodies so incidental whitespace does not change the bytes", () => {
     const padded = { ...base, requirement: "\n  Do the thing.  \n" };

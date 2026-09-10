@@ -147,6 +147,7 @@ export const regressionCards = sqliteTable("regression_cards", {
   failureSignature: text("failure_signature").notNull(),
   attributedStory: text("attributed_story"),
   createdAt: ms("created_at").notNull(),
+  resolvedAt: ms("resolved_at"),
 }, (t) => [primaryKey({ columns: [t.scenarioId, t.failureSignature] })]);
 
 export const providerHealth = sqliteTable("provider_health", {

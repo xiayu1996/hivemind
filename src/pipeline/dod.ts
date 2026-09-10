@@ -37,6 +37,14 @@ const scenario = z.object({
   /** Where the shown data comes from: table, event type, existing endpoint. */
   source: z.string().trim().min(1).optional(),
   examples: z.array(example).optional(),
+  /**
+   * The sample data the given needs on a screen, in plain language, e.g. "one
+   * repository with 3 stories, 1 delivered, 1 parked". The repository's seed
+   * command receives it verbatim before the interface is reviewed; without it
+   * the reviewer looks at whatever the application starts with, which is how a
+   * review ends inconclusive for lack of anything to look at.
+   */
+  seed: z.string().trim().min(1).optional(),
 }).strict();
 
 const baseline = z.discriminatedUnion("type", [
@@ -133,6 +141,11 @@ export function hasScreen(entry: Pick<DoDScenario, "layers">): boolean {
 /** The scenarios VERIFY has to reach in a browser; the rest are proved by tests alone. */
 export function screenScenarios(dod: DefinitionOfDone): DoDScenario[] {
   return dod.scenarios.filter((entry) => hasScreen(entry));
+}
+
+/** The sample data a screen scenario asks for, or undefined when it declares none. */
+export function seedOf(entry: Pick<DoDScenario, "seed">): string | undefined {
+  return entry.seed;
 }
 
 /** The sentences a reviewer may refuse this scenario for, verbatim. */

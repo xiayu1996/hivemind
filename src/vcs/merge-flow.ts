@@ -28,8 +28,16 @@ export interface EpicMergeFlowOptions {
   actualFootprints?: ActualFootprintRecorder;
 }
 
+/**
+ * Opens the Story's review request once the branch sits on the Epic head. It
+ * runs before the subset re-verification and the fast-forward, so the request
+ * shows the Story's own diff; opened afterwards it would be empty, since the
+ * Epic branch already contains every commit.
+ */
+export type StoryPublisher = (story: MergeStory) => Promise<{ mrUrl: string | null }>;
+
 export type MergeResult =
-  | { kind: "merged"; integrationBranch: string; scenarioIds: readonly string[] }
+  | { kind: "merged"; integrationBranch: string; scenarioIds: readonly string[]; mrUrl: string | null }
   | { kind: "conflict"; integrationBranch: string; reason: string }
   | { kind: "verification_failed"; integrationBranch: string; scenarioIds: readonly string[]; reason?: string };
 
@@ -58,7 +66,12 @@ export class EpicMergeFlow {
     this.mainBranch = options.mainBranch ?? "main";
   }
 
-  async merge(input: { epicId: string; story: MergeStory; integratedStories: readonly MergeStory[] }): Promise<MergeResult> {
+  async merge(input: {
+    epicId: string;
+    story: MergeStory;
+    integratedStories: readonly MergeStory[];
+    publish?: StoryPublisher;
+  }): Promise<MergeResult> {
     const target = integrationBranch(input.epicId);
     await this.ensureIntegrationBranch(target);
     await this.requireCleanIntegrationBranch();
@@ -76,6 +89,10 @@ export class EpicMergeFlow {
       }
       return { kind: "verification_failed", integrationBranch: target, scenarioIds: [], reason };
     }
+    // Published while the branch is rebased and still ahead of the Epic head.
+    // A later refusal leaves the request open as a draft, and the next attempt
+    // finds it again rather than opening a second one.
+    const published = input.publish ? await input.publish(input.story) : { mrUrl: null };
     const affectedStories = [
       input.story,
       ...input.integratedStories.filter((story) => intersects(input.story.predictedFootprint, story.predictedFootprint)),
@@ -132,7 +149,7 @@ export class EpicMergeFlow {
     // hold the head the Story was merged into, not the one it was cut from.
     await this.git.run(this.options.integrationWorktree, ["push", "--set-upstream", "origin", target]);
     if (this.options.actualFootprints) await this.options.actualFootprints.apply(input.story.id);
-    return { kind: "merged", integrationBranch: target, scenarioIds };
+    return { kind: "merged", integrationBranch: target, scenarioIds, mrUrl: published.mrUrl };
   }
 
   private async ensureIntegrationBranch(target: string): Promise<void> {

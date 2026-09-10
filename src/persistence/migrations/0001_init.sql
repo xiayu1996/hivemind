@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS requirement_acceptance_items (
 CREATE TABLE IF NOT EXISTS requirement_approval_events (
   event_id       TEXT PRIMARY KEY,
   requirement_id TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
-  kind           TEXT NOT NULL CHECK (kind IN ('prd_confirm','prd_revision','acceptance')),
+  kind           TEXT NOT NULL CHECK (kind IN ('prd_confirm','prd_revision','acceptance','resume_answer')),
   source         TEXT NOT NULL CHECK (source IN ('comment','drag')),
   created_at     INTEGER NOT NULL
 );
@@ -89,7 +89,7 @@ CREATE INDEX IF NOT EXISTS idx_requirement_approval_events ON requirement_approv
 -- updates in place instead of appending a second copy.
 CREATE TABLE IF NOT EXISTS requirement_notion_sections (
   requirement_id  TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
-  section         TEXT NOT NULL CHECK (section IN ('metadata','original','clarify','prd','acceptance')),
+  section         TEXT NOT NULL CHECK (section IN ('metadata','original','clarify','prd','acceptance','questions')),
   anchor_block_id TEXT NOT NULL UNIQUE,
   PRIMARY KEY (requirement_id, section)
 );
@@ -192,12 +192,14 @@ CREATE TABLE IF NOT EXISTS regression_runs (
 CREATE INDEX IF NOT EXISTS idx_regression_runs_scenario ON regression_runs(scenario_id, ts);
 
 -- One card per distinct failure, so a deterministic break does not raise a new
--- card on every sweep.
+-- card on every sweep. A card stays open until resolved_at is set; an Epic's
+-- review request is held back while any of its scenarios has an open card.
 CREATE TABLE IF NOT EXISTS regression_cards (
   scenario_id       TEXT NOT NULL,
   failure_signature TEXT NOT NULL,
   attributed_story  TEXT,
   created_at        INTEGER NOT NULL,
+  resolved_at       INTEGER,
   PRIMARY KEY (scenario_id, failure_signature)
 );
 
@@ -359,7 +361,9 @@ CREATE TABLE IF NOT EXISTS notion_outbox (
   target        TEXT NOT NULL,
   payload       TEXT NOT NULL,
   payload_hash  TEXT NOT NULL,
-  state         TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','sent','failed')),
+  -- 'dead' is a row that exhausted its attempts; the drain skips it and keeps
+  -- last_error so a person can read why before deciding whether to requeue.
+  state         TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','sent','failed','dead')),
   attempts      INTEGER NOT NULL DEFAULT 0,
   last_error    TEXT,
   created_at    INTEGER NOT NULL,

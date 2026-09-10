@@ -197,10 +197,24 @@ depends_on: []
       sql: `INSERT INTO human_feedback (comment_id, card_id, spec_id, round, channel, body, applied_at, created_at)
             VALUES ('c-1', 'S-EPIC1-04', 'S-EPIC1-04-a', 7, 'answer', 'Use the latest event.', 12, 11)`,
     });
+    await client.execute({
+      sql: `INSERT INTO phase_runs (run_id, card_id, phase, round, prompt_sha256, status, started_at, ended_at)
+            VALUES ('run-v1', 'S-EPIC1-04', 'VERIFY', 1, ?, 'completed', 5, 10)`,
+      args: ["a".repeat(64)],
+    });
+    await client.execute({
+      sql: `INSERT INTO phase_artifacts (run_id, card_id, phase, round, kind, body, created_at)
+            VALUES ('run-v1', 'S-EPIC1-04', 'VERIFY', 1, 'verification', ?, 10)`,
+      args: [JSON.stringify({
+        verdict: "accepted",
+        failedScenarios: [],
+        uiReview: { verdict: "accepted", acceptance: [], findings: [], amendments: [], inconclusive: ["S-EPIC1-04-b"] },
+      })],
+    });
     await new NotionStoryProjection(client, () => 20).enqueue("S-EPIC1-04");
     const page = (await client.execute("SELECT payload FROM notion_outbox WHERE operation = 'sync_story_page'")).rows[0];
     const desired = JSON.parse(String(page?.payload)).desired;
-    expect(desired.verificationRound.summary).toBe("通过：2 个场景都验证通过（S-EPIC1-04-a、S-EPIC1-04-b）");
+    expect(desired.verificationRound.summary).toBe("通过：2 个场景都验证通过（S-EPIC1-04-a、S-EPIC1-04-b）；走查无结论：S-EPIC1-04-b");
     expect(desired.questions).toBe(
       "已应用的回答：\n- Claude Code session on behalf of Ryan（2025-09-09 06:40 UTC，针对 S-EPIC1-04-a，已用于第 8 轮）：Use the latest event.",
     );

@@ -93,12 +93,18 @@ export class NotionStoryProjection implements StoryProjectionPort {
         acceptance?: Array<{ id: string; status: string; reason?: string; cites?: string }>;
         findings?: Array<{ severity: string; note: string }>;
         amendments?: Array<{ scenarioId: string; observation: string }>;
+        inconclusive?: string[];
       };
     } : {};
     const passed = declared.filter((id) => !failed.includes(id));
     const lines: string[] = [];
     if (verdict === "accepted") {
-      lines.push(`通过：${passed.length} 个场景都验证通过${passed.length > 0 ? `（${passed.join("、")}）` : ""}`);
+      // The UI lane's inconclusive scenarios never reject and never consume a
+      // round, so the verdict hides them; the person still has to see which
+      // screens nobody managed to look at.
+      const unreviewed = body.uiReview?.inconclusive ?? [];
+      const walkthrough = unreviewed.length > 0 ? `；走查无结论：${unreviewed.join("、")}` : "";
+      lines.push(`通过：${passed.length} 个场景都验证通过${passed.length > 0 ? `（${passed.join("、")}）` : ""}${walkthrough}`);
     } else if (verdict === "inconclusive") {
       lines.push(`无结论：验证环境出了问题，不算这张卡的失败，也不消耗轮次${failed.length > 0 ? `（涉及 ${failed.join("、")}）` : ""}`);
     } else {

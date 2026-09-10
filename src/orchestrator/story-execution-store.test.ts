@@ -282,6 +282,82 @@ describe("StoryExecutionStore invalidation audit", () => {
   });
 });
 
+describe("StoryExecutionStore redesign", () => {
+  it("unfreezes the DoD and discards reusable results when a person sends the Story back to DESIGN", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    let time = 1_000;
+    const store = new StoryExecutionStore(client, () => time++);
+    await store.createStory({
+      id: "S-EPIC1-01",
+      notionPageId: "page-1",
+      title: "Redesign",
+      requirement: "A Story sent back to DESIGN is designed again.",
+      branch: "story/epic1-01",
+    });
+    await store.transition("S-EPIC1-01", "QUEUED", "DESIGN", "system", "run-0");
+    await store.beginPhase({ runId: "run-design", cardId: "S-EPIC1-01", phase: "DESIGN", round: 1, prompt: "design" });
+    await store.completePhase({ runId: "run-design", sessionId: "s-design", artifacts: [{ kind: "dod", body: "story_id: S-EPIC1-01" }] });
+    await client.execute("INSERT INTO story_specs (spec_id, story_id, seq, text, status) VALUES ('S-EPIC1-01-a','S-EPIC1-01',1,'a','pending')");
+    await store.transition("S-EPIC1-01", "DESIGN", "CODE", "system", "run-0");
+    // Round 1 reached a verdict; round 2 is a CODE result nobody verified.
+    await store.beginPhase({ runId: "run-code-1", cardId: "S-EPIC1-01", phase: "CODE", round: 1, prompt: "code" });
+    await store.completePhase({ runId: "run-code-1", sessionId: "s-code-1", artifacts: [{ kind: "implementation", body: "x" }] });
+    await store.transition("S-EPIC1-01", "CODE", "VERIFY", "system", "run-verify-1");
+    await store.beginPhase({ runId: "run-verify-1", cardId: "S-EPIC1-01", phase: "VERIFY", round: 1, prompt: "verify" });
+    await store.completePhase({ runId: "run-verify-1", sessionId: "s-verify-1", artifacts: [{ kind: "verification", body: "{}" }] });
+    await store.recordVerification("run-verify-1", {
+      cardId: "S-EPIC1-01", round: 1, codeSessionId: "s-code-1", verifySessionId: "s-verify-1",
+      verdict: "rejected", failedScenarios: ["S-EPIC1-01-a"],
+    });
+    await store.transition("S-EPIC1-01", "VERIFY", "CODE", "system", "run-verify-1");
+    await store.beginPhase({ runId: "run-code-2", cardId: "S-EPIC1-01", phase: "CODE", round: 2, prompt: "code" });
+    await store.completePhase({ runId: "run-code-2", sessionId: "s-code-2", artifacts: [{ kind: "implementation", body: "y" }] });
+    await store.stopForInput("S-EPIC1-01", "CODE", "retry_limit_exceeded", "run-stop");
+
+    await store.transition("S-EPIC1-01", "NEEDS_INPUT", "DESIGN", "human", "run-human");
+
+    expect(await store.getCompletedPhase("S-EPIC1-01", "DESIGN", 1)).toBeNull();
+    expect(await store.getCompletedPhase("S-EPIC1-01", "CODE", 2)).toBeNull();
+    expect(await store.getCompletedPhase("S-EPIC1-01", "CODE", 1)).not.toBeNull();
+    expect(await store.findFrozenDefinitionOfDone("S-EPIC1-01")).toBeNull();
+    const events = (await client.execute("SELECT type FROM event_log WHERE type IN ('story.redesign','phase.invalidated') ORDER BY type")).rows;
+    expect(events.map((row) => row.type)).toEqual(["phase.invalidated", "phase.invalidated", "story.redesign"]);
+    client.close();
+  });
+});
+
+describe("StoryExecutionStore regression input", () => {
+  it("tells a REGRESSION_FIX round which cards it exists for, and leaves every other phase's prompt untouched", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, () => 1_000);
+    await store.createStory({
+      id: "S-EPIC1-01",
+      notionPageId: "page-1",
+      title: "Regression input",
+      requirement: "Open cards are the round's tasks.",
+      branch: "story/epic1-01",
+    });
+    await store.transition("S-EPIC1-01", "QUEUED", "DESIGN", "system", "run-0");
+    await store.transition("S-EPIC1-01", "DESIGN", "CODE", "system", "run-0");
+    const before = assemblePhasePrompt(await store.buildPhaseInput("S-EPIC1-01", "CODE", 1));
+    await client.execute(
+      "INSERT INTO regression_cards (scenario_id, failure_signature, attributed_story, created_at) VALUES ('S-EPIC1-01-a', 'sig', 'S-EPIC1-01', 5)",
+    );
+    await client.execute(
+      "INSERT INTO regression_cards (scenario_id, failure_signature, attributed_story, created_at, resolved_at) VALUES ('S-EPIC1-01-b', 'sig', 'S-EPIC1-01', 5, 6)",
+    );
+
+    const fix = await store.buildPhaseInput("S-EPIC1-01", "REGRESSION_FIX", 2);
+    expect(fix.regressions).toEqual([{ scenarioId: "S-EPIC1-01-a", signature: "sig", attributedStory: "S-EPIC1-01" }]);
+    expect(fix.failedScenarios).toEqual(["S-EPIC1-01-a"]);
+    expect(assemblePhasePrompt(fix)).toContain("[regression:S-EPIC1-01-a]");
+    expect(assemblePhasePrompt(await store.buildPhaseInput("S-EPIC1-01", "CODE", 1))).toBe(before);
+    client.close();
+  });
+});
+
 describe("StoryExecutionStore phase input", () => {
   it("tells the next CODE round what the merge gate refused, since only CODE can change it", async () => {
     const client = createClient({ url: ":memory:" });

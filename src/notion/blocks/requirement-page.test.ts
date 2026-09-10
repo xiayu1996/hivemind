@@ -14,6 +14,7 @@ function settledPage(overrides: Partial<Record<string, unknown>> = {}): Requirem
     clarify: { anchorBlockId: "anchor-clarify", blocks: [{ id: "c", content: "第 1 轮 问: 谁会用它？" }] },
     prd: { anchorBlockId: "anchor-prd", blocks: [{ id: "p", content: "业务目标: 值班的人随时看到进度" }] },
     acceptance: { anchorBlockId: "anchor-acceptance", blocks: [] },
+    questions: { anchorBlockId: "anchor-questions", blocks: [] },
   };
   return { sections: { ...sections, ...overrides } } as RequirementPageSnapshot;
 }
@@ -105,6 +106,23 @@ describe("planRequirementPageUpdate", () => {
       content: "场景二",
       block: "to_do",
     }]);
+  });
+
+  it("shows the wait for a person as one paragraph and clears it once they answered", () => {
+    expect(planRequirementPageUpdate(settledPage(), desired({ questions: "系统已停下等你回答：还差谁会用它" }))).toEqual([{
+      type: "insert",
+      section: "questions",
+      afterBlockId: "anchor-questions",
+      content: "系统已停下等你回答：还差谁会用它",
+      block: "paragraph",
+    }]);
+    const waiting = settledPage({
+      questions: { anchorBlockId: "anchor-questions", blocks: [{ id: "q", content: "系统已停下等你回答：还差谁会用它" }] },
+    });
+    expect(planRequirementPageUpdate(waiting, desired({ questions: "系统已停下等你回答：预算用完" }))).toEqual([
+      { type: "update_block", blockId: "q", content: "系统已停下等你回答：预算用完" },
+    ]);
+    expect(planRequirementPageUpdate(waiting, desired())).toEqual([{ type: "archive_block", blockId: "q" }]);
   });
 
   it("settles: a page already matching the record needs no edits", () => {

@@ -1,5 +1,5 @@
 import type { Client } from "@libsql/client";
-import type { MergeRequestStatePort } from "../vcs/mr/types.js";
+import type { MergeRequestState, MergeRequestStatePort } from "../vcs/mr/types.js";
 import { EPIC_BOARD_STATUS, epicStatusStatement } from "./epic-status-projection.js";
 import { assertEpicTransition } from "./state-machine.js";
 
@@ -7,6 +7,7 @@ export type EpicCompletionOutcome =
   | { epicId: string; kind: "done" }
   | { epicId: string; kind: "awaiting_merge" }
   | { epicId: string; kind: "awaiting_acceptance" }
+  | { epicId: string; kind: "review_closed"; reason: string }
   | { epicId: string; kind: "unreadable"; reason: string };
 
 /**
@@ -15,7 +16,9 @@ export type EpicCompletionOutcome =
  * and the human side comes from where the design puts it — an Epic that
  * belongs to a requirement is accepted scenario by scenario on the requirement
  * page, while a standalone Epic is accepted by dragging it to the finished
- * column of the board.
+ * column of the board. A review request closed without landing sends the Epic
+ * back to EXECUTING with no mr_url, so the next maintenance cycle opens a
+ * fresh one instead of waiting on a review nobody will merge.
  */
 export class EpicCompletion {
   constructor(
@@ -32,15 +35,21 @@ export class EpicCompletion {
     const outcomes: EpicCompletionOutcome[] = [];
     for (const row of rows) {
       const epicId = String(row.id);
-      let merged: boolean;
+      const mrUrl = String(row.mr_url);
+      let state: MergeRequestState;
       try {
-        merged = await this.mergeRequests.isMerged(String(row.mr_url));
+        state = await this.mergeRequests.state(mrUrl);
       } catch (error) {
         outcomes.push({ epicId, kind: "unreadable", reason: (error as Error).message });
         continue;
       }
-      if (!merged) {
+      if (state === "open") {
         outcomes.push({ epicId, kind: "awaiting_merge" });
+        continue;
+      }
+      if (state === "closed") {
+        const reason = `review request ${mrUrl} was closed without merging`;
+        if (await this.reopenExecution(epicId, mrUrl, reason)) outcomes.push({ epicId, kind: "review_closed", reason });
         continue;
       }
       const standalone = row.requirement_id === null;
@@ -60,5 +69,26 @@ export class EpicCompletion {
       if (result[0]?.rowsAffected === 1) outcomes.push({ epicId, kind: "done" });
     }
     return outcomes;
+  }
+
+  private async reopenExecution(epicId: string, mrUrl: string, reason: string): Promise<boolean> {
+    assertEpicTransition("EPIC_ACCEPT", "EXECUTING");
+    const time = this.now();
+    const runId = `epic-review-closed:${epicId}:${time}`;
+    const result = await this.client.batch([
+      {
+        sql: `UPDATE epics SET state = 'EXECUTING', mr_url = NULL, updated_at = ?
+               WHERE id = ? AND state = 'EPIC_ACCEPT' AND mr_url = ?`,
+        args: [time, epicId, mrUrl],
+      },
+      {
+        sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
+              SELECT ?, (SELECT COALESCE(MAX(seq), -1) + 1 FROM event_log WHERE run_id = ?),
+                     NULL, 'MERGE', 'epic.review_closed', ?, ?
+              WHERE EXISTS (SELECT 1 FROM epics WHERE id = ? AND state = 'EXECUTING' AND mr_url IS NULL)`,
+        args: [runId, runId, time, JSON.stringify({ epicId, mrUrl, reason }), epicId],
+      },
+    ], "write");
+    return result[0]?.rowsAffected === 1;
   }
 }

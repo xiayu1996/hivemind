@@ -101,7 +101,7 @@ describe("M2 acceptance: one Epic from decomposition to review request", () => {
             VALUES (?, 'epic/M2', ?, ?, '[]', 'applied', ?, ?)`,
       args: [storyId, base, revision, time, time],
     });
-    const flow = { merge: vi.fn(async () => ({ kind: "merged" as const, integrationBranch: "epic/M2", scenarioIds: [] })) };
+    const flow = { merge: vi.fn(async () => ({ kind: "merged" as const, integrationBranch: "epic/M2", scenarioIds: [], mrUrl: null })) };
     await new EpicIntegrator(client, store, flow).integrate(storyId, `${storyId}-merge`);
     await store.transition(storyId, "MERGE", "DELIVERED", "system", `${storyId}-delivered`);
     await registry.promoteToMain(storyId);

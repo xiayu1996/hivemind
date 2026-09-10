@@ -19,6 +19,8 @@ export interface RequirementCommentPollResult {
   prdConfirmed: boolean;
   revisionRequested: boolean;
   gapsRecorded: number;
+  /** A person answered a stopped requirement; the loop may pick it up again. */
+  resumed: boolean;
 }
 
 export interface RequirementContentPollResult {
@@ -37,7 +39,10 @@ function runId(requirementId: string): string {
  * Reads what a person did on their requirement page and turns it into the
  * three inputs the product manager layer accepts from them: a verdict on the
  * PRD, a verdict on each acceptance scenario, and parking. Clarification
- * answers are not read here; the clarification channel owns those.
+ * answers are not read here; the clarification channel owns those. The one
+ * exception is a stopped requirement: whatever a person writes after the stop
+ * is the answer the system stopped for, and reading it here is what lets the
+ * requirement move again.
  *
  * Every decision is claimed under an event id before it acts, so the same
  * comment or tick seen by a webhook and by the fallback poll counts once.
@@ -132,8 +137,13 @@ export class NotionRequirementInputSync {
     await this.comments.registerPage(pageId, [...anchors, ...boxes]);
     const polled = await this.comments.pollPage(pageId);
     const result: RequirementCommentPollResult = {
-      ingested: polled.inserted, prdConfirmed: false, revisionRequested: false, gapsRecorded: 0,
+      ingested: polled.inserted, prdConfirmed: false, revisionRequested: false, gapsRecorded: 0, resumed: false,
     };
+
+    if (requirement.stopReason) {
+      result.resumed = await this.resumeFromComments(requirementId, pageId);
+      return result;
+    }
 
     if (requirement.state === "PRD_CONFIRM") {
       const draft = (await this.client.execute({
@@ -202,9 +212,41 @@ export class NotionRequirementInputSync {
     return result;
   }
 
-  private async unclaimedComments(pageId: string, after: number): Promise<Array<{ id: string; blockId: string | null; body: string }>> {
+  /**
+   * A stopped requirement resumes on the first human comment written after the
+   * stop. The comments are archived as one more clarification round whose
+   * question is the stop itself, because the clarification history is what
+   * every product manager step reads back in; an answer kept anywhere else
+   * would clear the stop and then be ignored.
+   */
+  private async resumeFromComments(requirementId: string, pageId: string): Promise<boolean> {
+    const stop = await this.store.latestStop(requirementId);
+    if (!stop) return false;
+    const answers = await this.unclaimedComments(pageId, stop.stoppedAt);
+    if (answers.length === 0) return false;
+    const bodies = answers.map((comment) => `${comment.author}: ${comment.body}`);
+    const open = await this.store.latestClarifyRound(requirementId);
+    if (open && open.answers === null) {
+      await this.store.recordClarifyAnswers(requirementId, open.round, bodies, runId(requirementId));
+    } else {
+      const round = await this.store.openClarifyRound(
+        requirementId, [`系统停下等你回答：${stop.detail}`], runId(requirementId),
+      );
+      await this.store.recordClarifyAnswers(requirementId, round, bodies, runId(requirementId));
+    }
+    // Spent: the same words must not be read a second time as PRD feedback.
+    for (const comment of answers) {
+      await this.store.claimApprovalEvent(requirementId, comment.id, "resume_answer", "comment");
+    }
+    return this.store.clearStop(requirementId, runId(requirementId));
+  }
+
+  private async unclaimedComments(
+    pageId: string,
+    after: number,
+  ): Promise<Array<{ id: string; blockId: string | null; author: string; body: string }>> {
     const rows = (await this.client.execute({
-      sql: `SELECT ic.comment_id, ic.block_id, ic.body FROM ingested_comments ic
+      sql: `SELECT ic.comment_id, ic.block_id, ic.author, ic.body FROM ingested_comments ic
             LEFT JOIN requirement_approval_events a ON a.event_id = ic.comment_id
             WHERE ic.page_id = ? AND ic.created_time > ? AND a.event_id IS NULL
             ORDER BY ic.created_time, ic.comment_id`,
@@ -213,6 +255,7 @@ export class NotionRequirementInputSync {
     return rows.map((row) => ({
       id: String(row.comment_id),
       blockId: row.block_id === null ? null : String(row.block_id),
+      author: String(row.author),
       body: String(row.body),
     }));
   }

@@ -101,6 +101,10 @@ async function main(): Promise<void> {
 
     // A raised card is only actionable once it names the Story that broke it.
     const attributions = [];
+    let attributionsSkipped: string | undefined;
+    if (result.raised.length > 0 && !(epicId && probeWorktree)) {
+      attributionsSkipped = probeWorktree ? "no epic" : "no probe worktree";
+    }
     if (epicId && probeWorktree && result.raised.length > 0) {
       const sequence = await attributionSequence(handle.client, epicId);
       const probeSweep = new BlindSweepPort({
@@ -112,17 +116,23 @@ async function main(): Promise<void> {
         allowedHosts,
       chromiumSandbox: config.get("verify.chromiumSandbox"),
       });
-      for (const raised of result.raised) {
-        const card = { scenarioId: raised.scenarioId, failureSignature: raised.signature };
-        const attribution = await attributeCard(handle.client, store, card, sequence, async (revision, scenarioId) => {
-          await execFileAsync("git", ["checkout", "--detach", revision], { cwd: probeWorktree, windowsHide: true });
-          const probed = await probeSweep.run({ pool, branch: revision, scenarioIds: [scenarioId] });
-          return probed.outcomes.some((outcome) => outcome.outcome === "failed");
-        });
-        attributions.push({ ...card, attribution });
+      try {
+        for (const raised of result.raised) {
+          const card = { scenarioId: raised.scenarioId, failureSignature: raised.signature };
+          const attribution = await attributeCard(handle.client, store, card, sequence, async (revision, scenarioId) => {
+            await execFileAsync("git", ["checkout", "--detach", revision], { cwd: probeWorktree, windowsHide: true });
+            const probed = await probeSweep.run({ pool, branch: revision, scenarioIds: [scenarioId] });
+            return probed.outcomes.some((outcome) => outcome.outcome === "failed");
+          });
+          attributions.push({ ...card, attribution });
+        }
+      } finally {
+        // Bisection leaves the probe worktree detached; the next sweep expects
+        // the branch checked out, and a failed probe must not change that.
+        await execFileAsync("git", ["checkout", branch], { cwd: probeWorktree, windowsHide: true });
       }
     }
-    console.log(JSON.stringify({ ...result, attributions }));
+    console.log(JSON.stringify({ ...result, attributions, ...(attributionsSkipped ? { attributionsSkipped } : {}) }));
   } finally {
     handle.close();
   }

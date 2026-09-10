@@ -68,13 +68,24 @@ export class GitMrStoryDelivery implements StoryDeliveryPort {
     if (status.trim() !== "") throw new Error("worktree has uncommitted changes at delivery");
     await this.git.run(this.options.worktreePath, ["push", "--set-upstream", "origin", story.branch]);
     await this.recordActualFootprint(story.id, story.branch);
+    // A Story in an Epic stacks onto the Epic branch it is about to land on.
+    const targetBranch = story.epicId
+      ? epicBranch(story.epicId)
+      : this.options.targetBranch ?? story.targetBranch ?? "main";
+    const request = { repository: story.repo, sourceBranch: story.branch, targetBranch };
+    // A second delivery of the same branch (the Epic head refused the first
+    // one after its request was opened) reuses the open request.
+    const open = await this.mr.findOpen?.(request);
+    if (open) return { mrUrl: open };
+    // A branch the target already contains has nothing to review; the hosting
+    // platform refuses such a request, and refusing here says why.
+    const ahead = (await this.git.run(this.options.worktreePath, ["rev-list", "--count", `origin/${targetBranch}..${story.branch}`])).trim();
+    if (ahead === "0") {
+      console.warn(`Story ${story.id}: ${targetBranch} already contains ${story.branch}; no review request to open`);
+      return { mrUrl: null };
+    }
     const result = await this.mr.create({
-      repository: story.repo,
-      sourceBranch: story.branch,
-      // A Story in an Epic stacks onto the Epic branch it was just merged into.
-      targetBranch: story.epicId
-        ? epicBranch(story.epicId)
-        : this.options.targetBranch ?? story.targetBranch ?? "main",
+      ...request,
       title: `[${story.id}] ${story.title}`,
       body: input.mergeArtifact,
       ...(story.epicId ? { draft: true } : {}),

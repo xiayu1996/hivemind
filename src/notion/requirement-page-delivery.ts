@@ -18,6 +18,7 @@ const SECTION_TITLES: Record<RequirementSection, string> = {
   clarify: "澄清记录",
   prd: "PRD",
   acceptance: "场景化验收清单",
+  questions: "待人回答",
 };
 const TITLE_SECTIONS = new Map(
   Object.entries(SECTION_TITLES).map(([section, title]) => [title, section as RequirementSection]),
@@ -30,6 +31,7 @@ const desiredSchema = z.object({
   prd: z.array(z.string()),
   prdFrozen: z.boolean(),
   acceptance: z.array(z.string()),
+  questions: z.string().optional(),
 });
 const pageSchema = z.object({
   requirementId: z.string().min(1),

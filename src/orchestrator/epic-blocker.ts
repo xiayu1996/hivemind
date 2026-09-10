@@ -9,6 +9,7 @@ import {
   type HumanQuestion,
 } from "./human-question.js";
 import { assertEpicTransition } from "./state-machine.js";
+import escalationText from "./epic-escalation-text.json" with { type: "json" };
 
 export const COMMENT_EPIC_PAGE = "comment_epic_page";
 
@@ -19,28 +20,45 @@ export interface BlockerAnswer {
   answer: string;
 }
 
-/** What the person reads on the Epic page when decomposition had to stop. */
-export function blockingQuestionBody(question: HumanQuestion): string {
+/**
+ * Why an Epic is blocked. A decomposition block asks a question that the
+ * person answers on the Epic page; an escalation block only reports that a
+ * Story is waiting, and is answered on that Story's page.
+ */
+export interface EpicBlock {
+  question: HumanQuestion;
+  escalation: boolean;
+}
+
+/** What the person reads on the Epic page when the Epic had to stop. */
+export function blockingQuestionBody(question: HumanQuestion, escalation = false): string {
+  if (escalation) return `${escalationText.bodyPrefix}${questionText(question)}\n\n${escalationText.bodySuffix}`;
   return `[拆解阻塞问题] ${questionText(question)}\n\n${replyHint([question])}拆解会带着你的回答重新进行。`;
 }
 
-/** The question the last block raised, read back from the transition that
+/** The last block recorded for the Epic, read back from the transition that
  * recorded it. Transitions written before questions were structured carry
  * only the reason line, which is the question itself. */
-export async function latestBlockingQuestion(client: Client, epicId: string): Promise<HumanQuestion | null> {
+export async function latestBlock(client: Client, epicId: string): Promise<EpicBlock | null> {
   const rows = (await client.execute({
     sql: "SELECT data FROM event_log WHERE run_id = ? AND type = 'epic.transition' ORDER BY seq DESC",
     args: [`epic:${epicId}`],
   })).rows;
   for (const row of rows) {
-    const data = JSON.parse(String(row.data)) as { to?: string; reason?: string; question?: unknown };
+    const data = JSON.parse(String(row.data)) as { to?: string; reason?: string; question?: unknown; escalation?: unknown };
     if (data.to !== "BLOCKED") continue;
+    const escalation = data.escalation === true;
     const structured = humanQuestionInputSchema.safeParse(data.question);
-    if (structured.success) return normalizeQuestion(structured.data);
+    if (structured.success) return { question: normalizeQuestion(structured.data), escalation };
     if (data.reason === undefined) return null;
-    return normalizeQuestion(data.reason.startsWith(QUESTION_PREFIX) ? data.reason.slice(QUESTION_PREFIX.length) : data.reason);
+    const reason = data.reason.startsWith(QUESTION_PREFIX) ? data.reason.slice(QUESTION_PREFIX.length) : data.reason;
+    return { question: normalizeQuestion(reason), escalation };
   }
   return null;
+}
+
+export async function latestBlockingQuestion(client: Client, epicId: string): Promise<HumanQuestion | null> {
+  return (await latestBlock(client, epicId))?.question ?? null;
 }
 
 /**
@@ -48,8 +66,13 @@ export async function latestBlockingQuestion(client: Client, epicId: string): Pr
  * board never shows is a stop nobody answers; the payload is constant per
  * question so re-running this after a restart adds nothing.
  */
-export function blockingQuestionStatement(epicId: string, question: HumanQuestion, time: number): InStatement {
-  const encoded = payloadHash({ epicId, body: blockingQuestionBody(question) });
+export function blockingQuestionStatement(
+  epicId: string,
+  question: HumanQuestion,
+  time: number,
+  escalation = false,
+): InStatement {
+  const encoded = payloadHash({ epicId, body: blockingQuestionBody(question, escalation) });
   return {
     sql: `INSERT INTO notion_outbox (card_id, priority, operation, target, payload, payload_hash, created_at)
           VALUES (?, 1, ?, ?, ?, ?, ?)
@@ -64,9 +87,9 @@ export async function surfaceBlockedEpics(client: Client, now: () => number = Da
   const surfaced: string[] = [];
   for (const row of blocked) {
     const epicId = String(row.id);
-    const question = await latestBlockingQuestion(client, epicId);
-    if (!question) continue;
-    await client.execute(blockingQuestionStatement(epicId, question, now()));
+    const block = await latestBlock(client, epicId);
+    if (!block) continue;
+    await client.execute(blockingQuestionStatement(epicId, block.question, now(), block.escalation));
     surfaced.push(epicId);
   }
   return surfaced;
@@ -95,7 +118,10 @@ export function withBlockerAnswers(requirement: string, answers: readonly Blocke
 /**
  * A person's comment on a blocked Epic is the answer. It is claimed under the
  * comment id so a second delivery changes nothing, and the Epic goes back to
- * decomposition carrying the answer.
+ * decomposition carrying the answer. An escalation block is not a question
+ * about the requirement: its Stories already exist and some are delivered, so
+ * a comment must not send the Epic back to decomposition. The Story page is
+ * where that answer belongs, and the Epic resumes on its own.
  */
 export async function answerBlocker(
   client: Client,
@@ -105,8 +131,9 @@ export async function answerBlocker(
   now: () => number = Date.now,
 ): Promise<boolean> {
   if (answer.trim() === "") return false;
-  const asked = await latestBlockingQuestion(client, epicId);
-  if (asked === null) return false;
+  const block = await latestBlock(client, epicId);
+  if (block === null || block.escalation) return false;
+  const asked = block.question;
   // The letters a person typed are expanded next to their words so the
   // decomposer reads what was chosen, not which key was pressed.
   const question = questionText(asked);

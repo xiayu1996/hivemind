@@ -31,24 +31,54 @@ describe("@scenario S-M2-06-epicmr", () => {
   it("creates one stable Epic MR with ordered Story chapters and red-to-green evidence", async () => {
     const git = { run: vi.fn(async (_cwd: string, args: string[]) => args[0] === "log" ? `${commits.join("\n")}\n` : "") };
     const create = vi.fn(async () => ({ url: "https://github.com/owner/repo/pull/42", provider: "github" as const }));
-    const delivery = new EpicMrDelivery(client, { create }, { worktreePath: "integration", git, now: () => 3 });
+    const delivery = new EpicMrDelivery(client, { create, findOpen: async () => null }, { worktreePath: "integration", git, now: () => 3 });
 
-    await expect(delivery.deliver("M2")).resolves.toEqual({ mrUrl: "https://github.com/owner/repo/pull/42" });
+    await expect(delivery.deliver("M2")).resolves.toEqual({ kind: "delivered", mrUrl: "https://github.com/owner/repo/pull/42" });
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
       repository: "owner/repo", sourceBranch: "epic/M2", targetBranch: "main",
       body: "# Epic M2: Delivery\n\n## S-M2-06-alpha: Alpha\n\nOutcome: First outcome\n\nVerification: Alpha verification passed.\n\nEvidence: `test(S-M2-06-alpha): red` -> `feat(S-M2-06-alpha): green`\n\n## S-M2-06-beta: Beta\n\nOutcome: Second outcome\n\nVerification: Beta verification passed.\n\nEvidence: `test(S-M2-06-beta): red` -> `feat(S-M2-06-beta): green`\n",
     }));
-    await expect(delivery.deliver("M2")).resolves.toEqual({ mrUrl: "https://github.com/owner/repo/pull/42" });
+    await expect(delivery.deliver("M2")).resolves.toEqual({ kind: "delivered", mrUrl: "https://github.com/owner/repo/pull/42" });
     expect(create).toHaveBeenCalledTimes(1);
   });
 
-  it("refuses a missing or out-of-order red-to-green pair instead of representing the Story as delivered", async () => {
-    const git = { run: vi.fn(async () => "feat(S-M2-06-alpha): green\ntest(S-M2-06-alpha): red\n") };
-    const create = vi.fn();
-    const delivery = new EpicMrDelivery(client, { create }, { worktreePath: "integration", git });
+  it("points at the verification report when a Story has no red-to-green pair, and keeps the pairs that exist", async () => {
+    const git = { run: vi.fn(async () => "feat(S-M2-06-alpha): green\ntest(S-M2-06-alpha): red\ntest(S-M2-06-beta): red\nfeat(S-M2-06-beta): green\n") };
+    const create = vi.fn(async () => ({ url: "https://github.com/owner/repo/pull/44", provider: "github" as const }));
+    const delivery = new EpicMrDelivery(client, { create, findOpen: async () => null }, { worktreePath: "integration", git });
 
-    await expect(delivery.deliver("M2")).rejects.toThrow("invalid red-to-green evidence for Story S-M2-06-alpha");
+    await expect(delivery.deliver("M2")).resolves.toEqual({ kind: "delivered", mrUrl: "https://github.com/owner/repo/pull/44" });
+    const body = (create.mock.calls[0] as unknown as [{ body: string }])[0].body;
+    expect(body).toContain("## S-M2-06-alpha: Alpha\n\nOutcome: First outcome\n\nVerification: Alpha verification passed.\n\nEvidence: no red/green commit pair on the branch; see the verification report");
+    expect(body).toContain("Evidence: `test(S-M2-06-beta): red` -> `feat(S-M2-06-beta): green`");
+  });
+
+  it("logs against and targets the configured branch instead of main", async () => {
+    const git = { run: vi.fn(async (_cwd: string, args: string[]) => args[0] === "log" ? `${commits.join("\n")}\n` : "") };
+    const create = vi.fn(async () => ({ url: "https://github.com/owner/repo/pull/45", provider: "github" as const }));
+    const delivery = new EpicMrDelivery(client, { create, findOpen: async () => null }, { worktreePath: "integration", git, targetBranch: "develop" });
+
+    await delivery.deliver("M2");
+    expect(git.run).toHaveBeenCalledWith("integration", ["log", "--format=%s", "--reverse", "develop..epic/M2"]);
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ targetBranch: "develop" }));
+  });
+
+  it("waits instead of opening the review request while the regression gate is not clean", async () => {
+    const git = { run: vi.fn(async () => `${commits.join("\n")}\n`) };
+    const create = vi.fn();
+    let clean = false;
+    const delivery = new EpicMrDelivery(client, { create, findOpen: async () => null }, {
+      worktreePath: "integration", git,
+      regressionClean: async (epicId) => (clean ? { clean: true } : { clean: false, reason: `Epic ${epicId} has open cards` }),
+    });
+
+    await expect(delivery.deliver("M2")).resolves.toEqual({ kind: "waiting", reason: "Epic M2 has open cards" });
     expect(create).not.toHaveBeenCalled();
+    expect((await client.execute("SELECT mr_url FROM epics WHERE id = 'M2'")).rows[0]?.mr_url).toBeNull();
+
+    clean = true;
+    create.mockResolvedValue({ url: "https://github.com/owner/repo/pull/46", provider: "github" });
+    await expect(delivery.deliver("M2")).resolves.toEqual({ kind: "delivered", mrUrl: "https://github.com/owner/repo/pull/46" });
   });
 });
 
@@ -82,9 +112,9 @@ describe("@scenario S-M2-06-epicmr Story ids that follow the decomposition gramm
       requests.push(request);
       return { url: "https://github.com/owner/repo/pull/43", provider: "github" as const };
     });
-    const delivery = new EpicMrDelivery(client, { create }, { worktreePath: "integration", git, now: () => 3 });
+    const delivery = new EpicMrDelivery(client, { create, findOpen: async () => null }, { worktreePath: "integration", git, now: () => 3 });
 
-    await expect(delivery.deliver("M2")).resolves.toEqual({ mrUrl: "https://github.com/owner/repo/pull/43" });
+    await expect(delivery.deliver("M2")).resolves.toEqual({ kind: "delivered", mrUrl: "https://github.com/owner/repo/pull/43" });
     const body = requests[0]?.body ?? "";
     expect(body).toContain("`test(S-M2-06-epicmr): red` -> `feat(S-M2-06-epicmr): green`");
     expect(body).toContain("`test(S-M2-06-freshness): red` -> `feat(S-M2-06-freshness): green`");
