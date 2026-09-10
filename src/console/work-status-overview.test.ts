@@ -81,12 +81,19 @@ describe("S-E1ACTION-01-ignorecomments", () => {
     await expect(readFile("console-ui/src/App.vue", "utf8")).resolves.toContain("Retry");
   });
 
-  it("keeps the active-requirements section explicit when there is no active requirement", async () => {
-    await client.execute({
-      sql: `INSERT INTO human_gates (id, object_type, object_id, required_action, phase, navigation_target, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      args: ["gate-1", "story", "story-1", "Answer the question", "CODE", "/tasks/story-1", 1, 1],
-    });
+  it("keeps the active-requirements section explicit when no requirement is executing", async () => {
+    await client.batch([
+      {
+        sql: `INSERT INTO requirements (id, notion_page_id, title, state, original_request, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        args: ["requirement-1", "requirement-page-1", "Awaiting clarification", "CLARIFY", "Clarify the request", 1, 1],
+      },
+      {
+        sql: `INSERT INTO human_gates (id, object_type, object_id, required_action, phase, navigation_target, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        args: ["gate-1", "story", "story-1", "Answer the question", "CODE", "/tasks/story-1", 1, 1],
+      },
+    ], "write");
 
     const source = new LibsqlConsoleDataSource(client, async () => []);
     await expect(source.workStatus()).resolves.toMatchObject({
