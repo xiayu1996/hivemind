@@ -77,7 +77,7 @@ function navigate(view) {
             <p>Working on: {{ requirement.workingOn }}</p>
             <p>Active for: {{ requirement.activeFor }}</p>
             <p>Latest progress: {{ requirement.latestProgress }}</p>
-            <a>View details</a>
+            <a :href="`/tasks/${requirement.storyId}`">View details</a>
           </article>
         </section>
       </template>
