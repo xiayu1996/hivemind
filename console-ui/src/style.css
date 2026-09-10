@@ -5,7 +5,7 @@
 }
 
 body { margin: 0; }
-main { max-width: 1100px; margin: 0 auto; padding: 32px; }
+main { box-sizing: border-box; max-width: 1100px; margin: 0 auto; padding: 32px; }
 /* A narrow view cannot spare a third of its width on side padding. */
 @media (max-width: 600px) { main { padding: 16px; } }
 header { display: flex; align-items: baseline; gap: 16px; }
