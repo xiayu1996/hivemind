@@ -53,7 +53,7 @@ describe("replay", () => {
       send: async (record) => { seen.push(record.operation); },
     };
 
-    expect(await outbox.replay(delivery, { operations: ["sync_requirement_page"] })).toEqual({ sent: 1, failed: 0, dead: [] });
+    expect(await outbox.replay(delivery, { operations: ["sync_requirement_page"] })).toEqual({ sent: 1, failed: 0, failures: [], dead: [] });
     expect(seen).toEqual(["sync_requirement_page"]);
     const untouched = (await client.execute(
       "SELECT state, attempts FROM notion_outbox WHERE operation = 'present_epic_plan'",
@@ -82,8 +82,13 @@ describe("replay", () => {
       },
     };
 
-    expect(await outbox.replay(delivery)).toEqual({ sent: 0, failed: 1, dead: [] });
-    expect(await outbox.replay(delivery)).toEqual({ sent: 1, failed: 0, dead: [] });
+    expect(await outbox.replay(delivery)).toMatchObject({
+      sent: 0,
+      failed: 1,
+      failures: [expect.objectContaining({ id: 1, attempts: 1, error: "process died after remote apply" })],
+      dead: [],
+    });
+    expect(await outbox.replay(delivery)).toEqual({ sent: 1, failed: 0, failures: [], dead: [] });
     expect(sends).toBe(1);
     const row = (await client.execute("SELECT state, attempts, sent_at FROM notion_outbox")).rows[0];
     expect(row?.state).toBe("sent");
@@ -101,7 +106,7 @@ describe("replay", () => {
       isApplied: async () => false,
       send: async (record) => { order.push(record.target); },
     };
-    expect(await outbox.replay(delivery)).toEqual({ sent: 3, failed: 0, dead: [] });
+    expect(await outbox.replay(delivery)).toEqual({ sent: 3, failed: 0, failures: [], dead: [] });
     expect(order).toEqual(["high-1", "high-2", "low"]);
   });
 
@@ -121,11 +126,13 @@ describe("replay", () => {
     for (let attempt = 1; attempt < OUTBOX_MAX_ATTEMPTS; attempt++) {
       const result = await outbox.replay(delivery);
       expect(result).toMatchObject({ failed: 1, dead: [] });
+      expect(result.failures).toHaveLength(1);
     }
     const last = await outbox.replay(delivery);
     expect(last).toEqual({
       sent: 0,
       failed: 1,
+      failures: [expect.objectContaining({ id: 1, attempts: OUTBOX_MAX_ATTEMPTS })],
       dead: [expect.objectContaining({
         cardId: null,
         operation: "append_blocks",
@@ -136,7 +143,7 @@ describe("replay", () => {
     });
     // The healthy row went out on the first pass; the dead one is no longer offered.
     expect(sends).toBe(OUTBOX_MAX_ATTEMPTS + 1);
-    expect(await outbox.replay(delivery)).toEqual({ sent: 0, failed: 0, dead: [] });
+    expect(await outbox.replay(delivery)).toEqual({ sent: 0, failed: 0, failures: [], dead: [] });
     expect(sends).toBe(OUTBOX_MAX_ATTEMPTS + 1);
 
     const row = (await client.execute("SELECT state, attempts, last_error FROM notion_outbox WHERE target = 'page-1'")).rows[0];

@@ -185,6 +185,9 @@ async function main(): Promise<void> {
 
     // The orchestrator shares this outbox; each side replays only its own rows.
     const replayed = await outbox.replay(delivery, { operations: REQUIREMENT_OUTBOX_OPERATIONS });
+    for (const failure of replayed.failures) {
+      console.warn(`Notion outbox: ${failure.operation} for ${failure.cardId ?? "no card"} failed (attempt ${failure.attempts}): ${failure.error}`);
+    }
     if (replayed.sent > 0 || replayed.failed > 0) {
       console.log(`Notion outbox: ${replayed.sent} sent, ${replayed.failed} failed`);
     }

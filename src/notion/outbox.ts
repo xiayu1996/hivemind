@@ -55,10 +55,21 @@ export interface DeadLetter {
   lastError: string | null;
 }
 
+export interface OutboxFailure {
+  id: number;
+  cardId: string | null;
+  operation: string;
+  attempts: number;
+  error: string;
+}
+
 export interface ReplayResult {
   sent: number;
   /** Rows that failed this pass and remain pending, including those just declared dead. */
   failed: number;
+  /** Why each row failed this pass. The row's own last_error is cleared on the
+   * next attempt, so a transient failure is only ever visible here. */
+  failures: OutboxFailure[];
   /** Rows that crossed OUTBOX_MAX_ATTEMPTS during this pass. */
   dead: DeadLetter[];
 }
@@ -172,6 +183,7 @@ export class NotionOutbox {
     let sent = 0;
     let failed = 0;
     const dead: DeadLetter[] = [];
+    const failures: OutboxFailure[] = [];
 
     for (const row of rows) {
       const record: NotionOutboxRecord = {
@@ -204,6 +216,7 @@ export class NotionOutbox {
           args: [lastError, exhausted ? "dead" : "pending", record.id],
         });
         failed++;
+        failures.push({ id: record.id, cardId: record.cardId, operation: record.operation, attempts: record.attempts, error: lastError });
         if (exhausted) {
           dead.push({
             id: record.id,
@@ -217,7 +230,7 @@ export class NotionOutbox {
       }
     }
 
-    return { sent, failed, dead };
+    return { sent, failed, failures, dead };
   }
 }
 

@@ -41,7 +41,7 @@ describe("NotionStoryPropertyDelivery", () => {
     const gateway = new NotionGateway({ transport, ratePerSecond: 1_000_000 });
     const delivery = new NotionStoryPropertyDelivery(gateway, client, () => 100);
 
-    await expect(outbox.replay(delivery)).resolves.toEqual({ sent: 1, failed: 0, dead: [] });
+    await expect(outbox.replay(delivery)).resolves.toEqual({ sent: 1, failed: 0, failures: [], dead: [] });
     expect(transport).not.toHaveBeenCalled();
     const row = (await client.execute(
       "SELECT notion_ai_status_shadow FROM stories WHERE id = 'S-EPIC1-01'",

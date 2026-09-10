@@ -276,7 +276,9 @@ async function main(): Promise<void> {
     for (const story of stories) await projection.enqueue(String(story.id));
     // The requirement loop shares this outbox; each side replays only its own rows.
     const replayed = await outbox.replay(delivery, { operations: STORY_OUTBOX_OPERATIONS });
-    if (replayed.failed > 0) console.warn(`Notion outbox: ${replayed.sent} sent, ${replayed.failed} failed this pass`);
+    for (const failure of replayed.failures) {
+      console.warn(`Notion outbox: ${failure.operation} for ${failure.cardId ?? "no card"} failed (attempt ${failure.attempts}): ${failure.error}`);
+    }
     for (const letter of replayed.dead) {
       await reportP0(
         `Notion outbox gave up on ${letter.operation} for ${letter.cardId ?? "no card"}`,
