@@ -1,5 +1,7 @@
 import { createClient } from "@libsql/client";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { migrate } from "../persistence/migrate.js";
 import { LibsqlConsoleDataSource } from "./libsql-data-source.js";
@@ -189,6 +191,52 @@ describe("work status", () => {
     for (const excluded of ["Waiting for human answer", "Failed export", "Delivered export", "Verify activity card", "S-WAIT-01", "S-FAIL-01", "S-DONE-01", "S-OLDER-01"]) {
       expect(projected).not.toContain(excluded);
     }
+  });
+
+  // @scenario S-E1ACTION-04-details
+  it("S-E1ACTION-04-details links to the read-only Story detail that carries its own context", async () => {
+    const started = 1_700_000_000_000;
+    await client.batch([
+      { sql: `INSERT INTO requirements (id, notion_page_id, title, state, original_request, created_at, updated_at)
+              VALUES ('requirement-details', 'requirement-page-details', 'Show activity summary', 'EXECUTING', 'Show activity summary', ?, ?)`, args: [started, started] },
+      { sql: `INSERT INTO epics (id, notion_page_id, title, state, requirement_id, created_at, updated_at)
+              VALUES ('EPIC-details', 'epic-page-details', 'Activity', 'EXECUTING', 'requirement-details', ?, ?)`, args: [started, started] },
+      { sql: `INSERT INTO stories (id, epic_id, notion_page_id, title, requirement, state, phase, phase_started_at, created_at, updated_at)
+              VALUES ('S-E1ACTION-04', 'EPIC-details', 'story-page-details', 'Add activity summary', 'Show activity summary', 'CODE', 'CODE', ?, ?, ?)`, args: [started, started, started] },
+      { sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
+              VALUES ('details-run', 0, 'S-E1ACTION-04', 'CODE', 'story.transition', ?, '{"from":"VERIFY","to":"CODE"}')`, args: [started] },
+    ], "write");
+
+    const source = new LibsqlConsoleDataSource(client, async () => [], () => started);
+    const status = await source.workStatus() as { activeRequirements: Array<{ storyId: string }> };
+    expect(status.activeRequirements[0]?.storyId).toBe("S-E1ACTION-04");
+
+    const uiRoot = await mkdtemp(join(tmpdir(), "hivemind-console-"));
+    await writeFile(join(uiRoot, "index.html"), "<main>console application</main>");
+    const app = await createConsoleServer(source, { uiRoot });
+
+    const page = await app.inject({ method: "GET", url: "/tasks/S-E1ACTION-04" });
+    expect(page.statusCode).toBe(200);
+    expect(page.body).toContain("console application");
+
+    const detail = (await app.inject({ method: "GET", url: "/api/tasks" })).json() as Array<Record<string, unknown>>;
+    expect(detail).toMatchObject([{
+      id: "S-E1ACTION-04",
+      title: "Add activity summary",
+      state: "CODE",
+      phase: "CODE",
+      events: [{ type: "story.transition", data: { from: "VERIFY", to: "CODE" } }],
+    }]);
+
+    // Following the link must stay a read; the console rejects every write method.
+    const write = await app.inject({ method: "POST", url: "/tasks/S-E1ACTION-04" });
+    expect(write.statusCode).toBe(405);
+    await app.close();
+
+    const ui = await readFile("console-ui/src/App.vue", "utf8");
+    expect(ui).toContain("View details");
+    expect(ui).toContain("/tasks/${requirement.storyId}");
+    expect(ui).not.toContain("Save changes");
   });
 
   // @scenario S-E1ACTION-01-ignorecomments
