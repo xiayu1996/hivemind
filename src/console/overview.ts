@@ -94,6 +94,32 @@ function sumBetween(entries: readonly CostEntry[], start: number, end: number): 
   return total;
 }
 
+/** A record without a model id still counts toward the totals, but has no row of its own. */
+function modelRows(
+  entries: readonly CostEntry[],
+  todayStart: number,
+  tomorrowStart: number,
+  monthStart: number,
+  nextMonthStart: number,
+): CostModelRow[] {
+  const byModel = new Map<string, { today: number; month: number }>();
+  for (const entry of entries) {
+    const modelId = typeof entry.modelId === "string" ? entry.modelId.trim() : "";
+    if (modelId === "") continue;
+    const bucket = byModel.get(modelId) ?? { today: 0, month: 0 };
+    if (entry.ts >= todayStart && entry.ts < tomorrowStart) bucket.today += entry.costUsd;
+    if (entry.ts >= monthStart && entry.ts < nextMonthStart) bucket.month += entry.costUsd;
+    byModel.set(modelId, bucket);
+  }
+  return [...byModel.entries()]
+    .filter(([, bucket]) => bucket.month > 0)
+    .toSorted((a, b) => b[1].month - a[1].month || a[0].localeCompare(b[0]))
+    .map(([modelId, bucket]) => ({
+      modelId,
+      text: `${modelId} \u00b7 Today ${formatUsd(bucket.today)} \u00b7 This month ${formatUsd(bucket.month)}`,
+    }));
+}
+
 /**
  * The cost region is the last section, after the four recent-result groups.
  * Calendar boundaries stay in the browser, so the same payload rolls over
@@ -132,7 +158,7 @@ export function costSection(data: OverviewData, now = Date.now()): CostSection {
       amountLabel: formatUsd(day.total),
       heightPercent: peak > 0 ? (day.total / peak) * 100 : 0,
     })),
-    models: [],
+    models: modelRows(entries, todayStart, tomorrowStart, monthStart, nextMonthStart),
   };
 }
 
