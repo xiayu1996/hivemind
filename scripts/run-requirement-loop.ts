@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadSecretsFile } from "../src/config/secrets-file.js";
+import { defaultSecretsPath, loadSecretsFile } from "../src/config/secrets-file.js";
 import { ConfigStore } from "../src/config/store.js";
 import { CommentIngestor } from "../src/notion/comment-ingest.js";
 import { NotionGateway } from "../src/notion/gateway.js";
@@ -25,6 +25,7 @@ import { RequirementStore } from "../src/orchestrator/requirement-store.js";
 import { openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
 import { ModelPolicy } from "../src/runner/model-policy.js";
+import { needsApiKeyEnv, providerKeyEnv } from "../src/runner/provider-env.js";
 import { defaultModelCatalog } from "../src/runner/catalog.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
 
@@ -84,9 +85,21 @@ async function main(): Promise<void> {
   const provider = optional("--provider") ?? (await policy.providersFor("product_manager"))[0];
   if (!provider) throw new Error("no provider in the failover chain serves the product manager tier");
   const model = await policy.resolve("product_manager", provider);
+  // systemd hands the daemon the secrets file; a run by hand inherits nothing,
+  // and pi then reports an API-key provider as unconfigured.
+  const profile = await policy.profileOf(provider);
+  const providerEnv = needsApiKeyEnv(profile)
+    ? providerKeyEnv({
+      provider,
+      ...(profile.envKey ? { envKey: profile.envKey } : {}),
+      secrets: stored,
+      secretsPath: defaultSecretsPath(),
+    })
+    : undefined;
   const pm = new PiPmPort({
     binary: piBinary,
     model,
+    ...(providerEnv ? { env: providerEnv } : {}),
     promptRoot: resolve(ROOT, "prompts"),
     cwd: resolve(optional("--repository-path") ?? ROOT),
   });

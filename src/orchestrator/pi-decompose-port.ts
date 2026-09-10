@@ -54,6 +54,8 @@ export interface PiDecomposePortOptions {
    */
   guard?: { extension: string; auditPath: string };
   extensions?: string[];
+  /** Extra variables for the pi spawn; an API-key provider needs its key here. */
+  env?: Record<string, string>;
   createRunner?: (config: RpcRunnerConfig) => PiRunner;
 }
 
@@ -89,7 +91,10 @@ export class PiDecomposePort implements DecomposePort {
       tools: ["read", "grep", "find", "ls"],
       contextFiles: "explicit",
       ...(extensions.length > 0 ? { extensions } : {}),
-      ...(policy ? { env: { [POLICY_ENV_VAR]: serializeGuardPolicy(policy) } } : {}),
+      env: {
+        ...this.options.env,
+        ...(policy ? { [POLICY_ENV_VAR]: serializeGuardPolicy(policy) } : {}),
+      },
       systemPrompt: { mode: "replace", text: `${layers.combined}${context.text}` },
     });
 
