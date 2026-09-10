@@ -125,6 +125,24 @@ describe("S-E1ACTION-01-ignorecomments", () => {
     await expect(readFile("console-ui/src/App.vue", "utf8")).resolves.toContain("Waiting for");
   });
 
+  // @scenario S-E1ACTION-02-incomplete
+  it("makes work status unavailable when an open gate has no saved context", async () => {
+    await client.batch([
+      { sql: `INSERT INTO requirements (id, notion_page_id, title, state, original_request, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?)`, args: ["requirement-1", "requirement-page-1", "Export invoices", "EXECUTING", "Export invoices", 1, 1] },
+      { sql: `INSERT INTO human_gates (id, object_type, object_id, required_action, phase, navigation_target, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, args: ["gate-incomplete", "requirement", "requirement-1", "Answer", "DESIGN", "/requirements/requirement-1", 1, 1] },
+    ], "write");
+
+    const source = new LibsqlConsoleDataSource(client, async () => []);
+    await expect(source.workStatus()).rejects.toThrow("incomplete open human gate");
+    const app = await createConsoleServer(source, { serveUi: false });
+    const response = await app.inject({ method: "GET", url: "/api/work-status" });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: "work_status_unavailable", retry: true });
+    await app.close();
+  });
+
   // @scenario S-E1ACTION-01-readfailure
   it("returns an observable loading failure rather than empty sections when projection fails", async () => {
     const failingData: ConsoleDataSource = {
