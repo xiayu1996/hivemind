@@ -50,6 +50,8 @@ const PROVIDER_FAULT = [
   /oauth|refresh token|token refresh|sign(?:ing)? in again|invalid_grant|unauthori[sz]ed/i,
   /usage limit|rate limit|too many requests|quota|insufficient balance|\b(?:401|402|429)\b/i,
   /ECONNRESET|ETIMEDOUT|socket hang up|stream (?:ended|closed) unexpectedly|provider request was not captured/i,
+  // An operator stopping or resetting the card is not the phase being refused either.
+  /stopped by the operator|relaunched|reset to DESIGN/i,
 ];
 
 export function isProviderFault(reason: string): boolean {

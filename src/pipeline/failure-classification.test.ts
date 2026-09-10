@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isEnvironmentFailure, splitScenarioFailures } from "./failure-classification.js";
+import { isEnvironmentFailure, isProviderFault, splitScenarioFailures } from "./failure-classification.js";
 
 describe("isEnvironmentFailure", () => {
   it("reads the failures the box caused as environmental", () => {
@@ -57,5 +57,13 @@ describe("reasons that describe the reviewer's own harness", () => {
     expect(isEnvironmentFailure("its /api/overview request returned Route GET:/api/overview not found, so the worktree UI could not be reproduced.")).toBe(true);
     expect(isEnvironmentFailure("Browser showed the pre-existing nodes view instead of the Story's page")).toBe(true);
     expect(isEnvironmentFailure("the total is missing from the checkout page")).toBe(false);
+  });
+});
+
+describe("isProviderFault", () => {
+  it("names a phase the provider or the operator ended, which nobody refused for its approach", () => {
+    expect(isProviderFault("OAuth refresh failed for openai-codex: token refresh failed (401)")).toBe(true);
+    expect(isProviderFault("stopped by the operator: the card is being reset to DESIGN")).toBe(true);
+    expect(isProviderFault("git diff --check reported trailing whitespace in src/a.ts:12")).toBe(false);
   });
 });
