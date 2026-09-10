@@ -10,17 +10,34 @@ import type { RpcEvent } from "./types.js";
  * directory per provider, captured from real error streams rather than written
  * by hand.
  *
- * They exist because the classifier reads text: every provider phrases a spent
- * balance and a throttle differently, and reading one as the other makes a
- * worker wait for a window that will never open. A provider hivemind is
- * willing to spawn without these has an unproven failure path.
+ * They exist because the classifier reads text, and because a provider's error
+ * surface is only known once one of its failures has travelled the whole path:
+ * pi's transport, the assistant message, our extraction, our classifier. A
+ * provider hivemind is willing to spawn without any capture has never had that
+ * path exercised.
  */
 export function fixtureRoot(): string {
   return fileURLToPath(new URL("../../fixtures/rpc-errors/", import.meta.url));
 }
 
-/** The classes a provider must have captured before it can carry cards. */
-export const REQUIRED_ERROR_CLASSES: readonly ErrorClass[] = ["AUTH", "QUOTA", "RATE_LIMIT"];
+/**
+ * The classes a provider must have captured before it can carry cards.
+ *
+ * Only AUTH, because only AUTH can be provoked for free: a wrong key is
+ * refused before a token is billed. A spent balance and a throttle cannot be
+ * ordered on demand — DeepSeek documents no request-rate limit at all and
+ * queues instead of answering 429, and no API reports the account balance — so
+ * requiring them here would have parked every metered provider behind a
+ * fixture nobody can produce, which is a human decision about nothing.
+ *
+ * What still guarantees recognition for the classes not captured here:
+ * `classify.test.ts` asserts pi's own cross-provider wording tables
+ * (`isTerminalRateLimitError`, `RETRYABLE_PROVIDER_ERROR_PATTERN`) rule by
+ * rule, so a wording pi knows can never fall through, and UNKNOWN fails
+ * closed. The spend exposure a real quota would have bounded is bounded
+ * directly instead, by `cost.perCardUsdCeiling`.
+ */
+export const REQUIRED_ERROR_CLASSES: readonly ErrorClass[] = ["AUTH"];
 
 export function capturedProviders(): string[] {
   try {
@@ -64,10 +81,10 @@ export function capturedFailures(provider: string): CapturedFailure[] {
 }
 
 /**
- * Startup gate: a provider may not carry cards until its own failure wordings
- * have been captured and are recognised. Without it, adding a provider to the
- * chain is enough to get a card assigned to one whose quota message the
- * classifier will read as UNKNOWN.
+ * Startup gate: a provider may not carry cards until a real failure of its own
+ * has been captured and is recognised. It proves the whole extraction path
+ * works for that provider — its error surface, its wording, our classifier —
+ * on the one class that can be provoked without spending anything.
  */
 export function assertErrorFixtureCoverage(chain: readonly string[]): void {
   const gaps: string[] = [];

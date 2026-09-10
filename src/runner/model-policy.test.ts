@@ -12,6 +12,7 @@ const catalog = {
       { provider: "openai-codex", id: "gpt-5.6-luna", thinking: false },
     ],
     "zai-coding-cn": [{ provider: "zai-coding-cn", id: "glm-5" }],
+    deepseek: [{ provider: "deepseek", id: "deepseek-flash", thinking: true, images: true }],
   }[provider] ?? []),
 };
 

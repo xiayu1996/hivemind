@@ -86,6 +86,7 @@ pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src
 - **轮次上限管"打转"，费用上限管"敞口"，互不代替**：同样 6 轮内环在 1M 模型上花费差一个数量级，所以 `cost.perCardUsdCeiling` 独立于 `retry.*`，在 phase 边界检查（turn 掐不断，故上限是超支下界而非精确切口），且**订阅额度不计入**——包月的钱花不花卡都一样。费用停点不出诊断、不进反思管道：它对"这活能不能干成"零信息量。
 - **内环收敛判据是严格真子集**（`failed(N) ⊊ failed(N-1)`）；轮次硬上限（内环 6 / phase 重入 3 / continue 8 / regression 重开 2）只是最终兜底，上限设在离散轮次，不设在时长或 token。
 - **加一个 provider 是数据改动，不是代码改动**：`model.providers`（registry 键，console 可编辑，标了 dangerous）声明每家怎么认证、每档用哪个模型；代码里不出现任何字面 model id。加进 `model.failoverChain` 是另一个决策，分开配、分开审计。
+- **chain 顺序是成本决策：订阅在前、计费 API 在后**。包月的钱花不花都一样，所以订阅能扛的每一轮都是 deepseek 不用出的钱；deepseek 在链上是为了在订阅撞到 usage-limit 窗口时让服务不停，不是分担负载。
 - **provider 目录有两个源**：pinned pi 的实时目录是权威，`fixtures/model-catalogs/` 的采集快照是无 pi / 无该家凭据时的兜底（漂移测试守住一致）。快照进仓库还有第二个作用：它让"这个 model id 是否存在"变成**同步**判据，配置写入当场就能拒绝坏 id，而不是等到 spawn 时卡住一张卡。
 - **验证命令永不硬编码**，由 agent 看现场决定。防造假靠三层：prompt 约束、工具面物理掐断、verdict 代码校验；三层缺一不可，prompt 是最弱的一层。
 - **`VERIFY.session_id != CODE.session_id`** 由 DB CHECK 强制，不靠应用层自觉。
@@ -136,7 +137,7 @@ pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src
 
 - 纯函数决策逻辑（收敛判据、footprint 相交、拓扑调度、triage 路由、去重键）全部单测覆盖。
 - **契约 fixture 来自真实采集**（`fixtures/rpc-errors/<provider>/` 是从真实错误流采的，openai-codex 那批来自 M0-05），不手写臆造；新增 fixture 时要有测试保证它不会被漏掉。
-- **进 failover chain 的每个 provider 都必须有自己的 AUTH / QUOTA / RATE_LIMIT 采集**，由 `assertErrorFixtureCoverage` 在 preflight 与 orchestrator 启动时强制。分类器读的是文案，每家措辞不同；把配额耗尽读成限流，worker 会等一个永远不开的窗口。
+- **进 failover chain 的每个 provider 都必须有自己的 AUTH 采集**，由 `assertErrorFixtureCoverage` 在 preflight 与 orchestrator 启动时强制。它证明这家的整条错误路径（pi 传输 → assistant 消息 → 提取 → 分类）真的走通过，而 AUTH 是唯一能零成本触发的一类（错 key 在计费前被拒）。**不要求 QUOTA / RATE_LIMIT 采集**：DeepSeek 官方文档明说不设请求速率上限、排队而不回 429，余额也无 API 可查，要求它们等于把每个计费 provider 卡在一个没人造得出的 fixture 后面，而那不是一个人该做的决策。这两类的识别保证改由 `classify.test.ts` 对 pi 自己的文案表逐条断言 + UNKNOWN fail closed 承担，敞口由 `cost.perCardUsdCeiling` 直接兜住。
 - 测试描述行为而非正确性。行为过时了就连同测试一起改，并在 PR 里说明为什么。
 
 ## 编辑本文件

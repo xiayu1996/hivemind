@@ -166,6 +166,15 @@ export const CONFIG_KEYS = {
         // capacity probe on every subscription host.
         tiers: { brain: "gpt-5.6-sol", standard: "gpt-5.6-terra", cheap: "gpt-5.6-luna" },
       },
+      deepseek: {
+        authType: "api_key",
+        envKey: "DEEPSEEK_API_KEY",
+        // One id for all three tiers: deepseek-flash is the only model this
+        // account is meant to spend on, and it reasons, reads images and
+        // carries a 1M window, so a separate brain id would only cost more for
+        // nothing. Tiers still differ here, through model.purposeThinking.
+        tiers: { brain: "deepseek-flash", standard: "deepseek-flash", cheap: "deepseek-flash" },
+      },
     },
     scope: "global",
     reload: "hot",
@@ -220,10 +229,14 @@ export const CONFIG_KEYS = {
   }),
   "model.failoverChain": def({
     schema: z.array(z.string()).min(1),
-    default: ["openai-codex"],
+    // Subscription first, metered API behind it: the ChatGPT plan costs the
+    // same whether a card uses it or not, so every turn it can serve is a turn
+    // deepseek is not billed for. deepseek exists to keep the service running
+    // through a usage-limit window rather than to share the load.
+    default: ["openai-codex", "deepseek"],
     scope: "global",
     reload: "hot",
-    description: "Provider order tried when one is circuit-broken.",
+    description: "Provider order tried when one is circuit-broken. Order is a cost decision: flat-rate subscriptions come before metered APIs.",
   }),
   "alert.requireOutOfBandChannel": def({
     schema: z.boolean(),

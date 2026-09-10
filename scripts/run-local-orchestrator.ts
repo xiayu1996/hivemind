@@ -13,7 +13,7 @@ import { assertOutOfBandChannel } from "../src/alert/required-channel.js";
 import { diagnoseRetryLimit, renderRetryReport } from "../src/pipeline/retry-limits.js";
 import { ScenarioRegistry } from "../src/regression/scenario-registry.js";
 import { planRegressionSweep } from "../src/regression/scheduler.js";
-import { loadSecretsFile, upsertSecretFile } from "../src/config/secrets-file.js";
+import { defaultSecretsPath, loadSecretsFile, upsertSecretFile } from "../src/config/secrets-file.js";
 import { ConfigStore } from "../src/config/store.js";
 import { breakerPolicy, intakeHalted, usableProviders } from "../src/runner/circuit-breaker.js";
 import { classifyError } from "../src/runner/classify.js";
@@ -23,6 +23,7 @@ import { refreshCredentialsOnce } from "../src/runner/auth-refresh.js";
 import { probeOpenProviders } from "../src/runner/provider-probe.js";
 import { assertErrorFixtureCoverage } from "../src/runner/error-fixtures.js";
 import { assertModelPolicy, ModelPolicy } from "../src/runner/model-policy.js";
+import { needsApiKeyEnv, providerKeyEnv } from "../src/runner/provider-env.js";
 import { defaultModelCatalog } from "../src/runner/catalog.js";
 import { LibsqlProviderHealthStore } from "../src/runner/provider-health-store.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
@@ -113,6 +114,7 @@ async function main(): Promise<void> {
   if (!dataSourceId) throw new Error("HIVEMIND_NOTION_STORIES_DATA_SOURCE_ID is missing");
   const alertChannels = alertChannelsFromConfig(stored);
   const alerts = new AlertRouter(alertChannels);
+  const secretsPath = defaultSecretsPath();
 
   const repositoryPath = resolve(required("--repository-path"));
   const repositoryId = required("--repository-id");
@@ -153,6 +155,23 @@ async function main(): Promise<void> {
   const credentialLockPath = join(homedir(), ".hivemind", "auth-refresh.lock");
   const modelCatalog = defaultModelCatalog(piBinary);
   const modelPolicy = new ModelPolicy(config, modelCatalog);
+  /**
+   * The one variable an API-key provider's pi spawn needs. systemd hands the
+   * daemon its `EnvironmentFile`, but a run by hand inherits nothing, and pi
+   * then reports the provider as unconfigured — indistinguishable from a key
+   * nobody ever added. An OAuth provider keeps its credential in pi's auth
+   * file and gets nothing here.
+   */
+  const providerEnvFor = async (provider: string): Promise<Record<string, string>> => {
+    const profile = await modelPolicy.profileOf(provider);
+    if (!needsApiKeyEnv(profile)) return {};
+    return providerKeyEnv({
+      provider,
+      ...(profile.envKey ? { envKey: profile.envKey } : {}),
+      secrets: stored,
+      secretsPath,
+    });
+  };
   await assertOutOfBandChannel(alerts, config);
   await assertProviderRetriesDisabled(config);
   await assertModelPolicy(config, modelCatalog);
@@ -313,6 +332,7 @@ async function main(): Promise<void> {
       new PiDecomposePort({
         binary: piBinary,
         model: await modelPolicy.resolve("decompose", provider),
+        env: await providerEnvFor(provider),
         promptRoot: join(ROOT, "prompts"),
         cwd: repositoryPath,
         contextFiles: await repositoryContextFiles(repositoryPath),
@@ -433,7 +453,7 @@ async function main(): Promise<void> {
           // Windows refuses to spawn .cmd shims without a shell (EINVAL).
           shell: process.platform === "win32",
           maxBuffer: 10 * 1024 * 1024,
-          env: { ...process.env, HIVEMIND_DB_URL: dbUrl },
+          env: { ...process.env, HIVEMIND_DB_URL: dbUrl, ...(await providerEnvFor(provider)) },
         });
       } catch (error) {
         // The provider's own health is separate from the card's: this records
@@ -603,7 +623,7 @@ async function main(): Promise<void> {
       windowsHide: true,
       shell: process.platform === "win32",
       maxBuffer: 10 * 1024 * 1024,
-      env: { ...process.env, HIVEMIND_DB_URL: dbUrl },
+      env: { ...process.env, HIVEMIND_DB_URL: dbUrl, ...(await providerEnvFor(provider)) },
     });
     if (result.stdout.trim()) console.log(`regression sweep (${plan.reason}): ${result.stdout.trim()}`);
   };
@@ -647,6 +667,9 @@ async function main(): Promise<void> {
       // shared credential file read-only; this is the one place that rotates
       // the token, so two refreshes can never invalidate each other.
       for (const name of chain) {
+        // Only an OAuth credential can be refreshed; an API key does not
+        // expire, and pi has no token to rotate for it.
+        if (needsApiKeyEnv(await modelPolicy.profileOf(name))) continue;
         const outcome = await refreshCredentialsOnce({
           lockPath: credentialLockPath,
           minIntervalMs: config.get("provider.credentialRefreshIntervalMs"),
@@ -670,7 +693,7 @@ async function main(): Promise<void> {
       await probeOpenProviders(
         chain,
         providerHealth,
-        (name) => probeProviderReadiness(piBinary, name),
+        async (name) => probeProviderReadiness(piBinary, name, await providerEnvFor(name)),
         await breakerPolicy(config),
       );
       const healths = await providerHealth.snapshot();
