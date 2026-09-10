@@ -26,6 +26,7 @@ const PHASE = { story: "S-E1ACTION-06", title: "Add activity summary", phase: "C
 
 const PHONE = { width: 390, height: 844 };
 const DESKTOP = { width: 1280, height: 800 };
+const NOTION_URL = /^https:\/\/www\.notion\.so\//;
 
 const DECISION = {
   question: "Which customers should be exported?",
@@ -408,5 +409,27 @@ describeLayout("console layout", () => {
     expect(detail.bodyText, "the Story title is missing").toContain(`"title": "${PHASE.title}"`);
     expect(detail.bodyText, "the Story phase is missing").toContain(`"phase": "${PHASE.phase}"`);
     expectNoWriteControls(detail);
+  });
+
+  // @scenario S-E1ACTION-06-notion
+  it("S-E1ACTION-06-notion keeps both Notion entries tappable on a 390x844 phone", { timeout: 60_000 }, async () => {
+    const page = await openPage(PHONE.width, PHONE.height);
+    await overview(page);
+    const seen = await snapshot(page, OVERVIEW_TEXTS);
+
+    expect(seen.notion, "both Notion entries are missing").toHaveLength(2);
+    for (const entry of seen.notion) {
+      expect(entry.href, "the Notion entry points somewhere else").toMatch(NOTION_URL);
+      expect(entry.width, "the Notion entry is too narrow to tap").toBeGreaterThanOrEqual(24);
+      expect(entry.height, "the Notion entry is too short to tap").toBeGreaterThanOrEqual(24);
+      expect(entry.left, "the Notion entry starts off the left edge").toBeGreaterThanOrEqual(0);
+      expect(entry.right, "the Notion entry ends past the right edge").toBeLessThanOrEqual(PHONE.width);
+    }
+    for (const entry of seen.notion) {
+      expect(entry.hitHref, "another element covers the Notion entry").toBe(entry.href);
+      expect(entry.overlaps, "the Notion entry overlaps another control").toEqual([]);
+    }
+
+    expectNoWriteControls(seen);
   });
 });
