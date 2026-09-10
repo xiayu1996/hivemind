@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CheckpointStore, repairJsonl } from "./checkpoint.js";
+import { CheckpointStore, repairJsonl, type RepairNotice } from "./checkpoint.js";
 
 let dir: string;
 let sessions: string;
@@ -35,7 +35,16 @@ async function session(lines: string[], name = "s.jsonl"): Promise<string> {
 describe("repairJsonl", () => {
   it("leaves an intact file untouched", () => {
     const raw = `${record(1)}\n${record(2)}\n`;
-    expect(repairJsonl(raw)).toEqual({ repaired: raw, truncatedLines: 0 });
+    expect(repairJsonl(raw)).toEqual({ repaired: raw, truncatedLines: 0, terminatedLastLine: false });
+  });
+
+  it("terminates a last line that has no newline, which pi used to merge the next entry into", () => {
+    const raw = `${record(1)}\n${record(2)}`;
+    expect(repairJsonl(raw)).toEqual({
+      repaired: `${record(1)}\n${record(2)}\n`,
+      truncatedLines: 0,
+      terminatedLastLine: true,
+    });
   });
 
   it("truncates a torn trailing record", () => {
@@ -52,11 +61,11 @@ describe("repairJsonl", () => {
 
   it("refuses to repair corruption in the middle, since that is a different fault", () => {
     const raw = `${record(1)}\nNOT JSON\n${record(3)}\n`;
-    expect(repairJsonl(raw)).toEqual({ repaired: raw, truncatedLines: 0 });
+    expect(repairJsonl(raw)).toEqual({ repaired: raw, truncatedLines: 0, terminatedLastLine: false });
   });
 
   it("handles an empty file", () => {
-    expect(repairJsonl("")).toEqual({ repaired: "", truncatedLines: 0 });
+    expect(repairJsonl("")).toEqual({ repaired: "", truncatedLines: 0, terminatedLastLine: false });
   });
 });
 
@@ -81,6 +90,27 @@ describe("capture", () => {
     for (const line of content.split("\n").filter(Boolean)) {
       expect(() => JSON.parse(line)).not.toThrow();
     }
+  });
+
+  it("reports a repair, because the pinned pi fixed both causes and should need none", async () => {
+    const notices: RepairNotice[] = [];
+    const torn = join(sessions, "torn.jsonl");
+    await writeFile(torn, `${record(1)}\n{"torn`, "utf8");
+    await new CheckpointStore({ dir, now: () => clock++, onRepair: (n) => notices.push(n) })
+      .capture("run-1", 3, torn);
+
+    expect(notices).toEqual([
+      { runId: "run-1", seq: 3, sessionFile: torn, truncatedLines: 1, terminatedLastLine: false },
+    ]);
+  });
+
+  it("stays silent when the session needed no repair", async () => {
+    const notices: RepairNotice[] = [];
+    const file = await session([record(1)]);
+    await new CheckpointStore({ dir, now: () => clock++, onRepair: (n) => notices.push(n) })
+      .capture("run-1", 1, file);
+
+    expect(notices).toEqual([]);
   });
 
   it("leaves no temporary file behind", async () => {

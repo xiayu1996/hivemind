@@ -151,6 +151,10 @@ step "pi"
 "$REPO/scripts/install-pi.sh"
 PI_VERSION="$(node -p "require('$REPO/package.json').hivemind.piVersion")"
 PI_BIN="${PI_BIN:-$HIVEMIND_HOME/pi/${HIVEMIND_PI_VERSION:-$PI_VERSION}/pi/pi}"
+# Models hivemind declares on top of pi's built-in catalogue. Every host needs
+# them: the recorded catalogue is what configuration validates against, and a
+# host without them advertises a smaller catalogue than the fixtures record.
+"$REPO/scripts/install-pi-models.sh"
 
 step "Headless Chromium"
 if (cd "$REPO" && npx playwright-cli install-browser --list 2>/dev/null | grep -q chromium_headless_shell); then
@@ -187,6 +191,10 @@ HIVEMIND_NOTION_PARENT_PAGE_ID=
 # One out-of-band alert channel; without it nobody learns about a blocking question.
 FEISHU_WEBHOOK_URL=
 # or SMTP_HOST= SMTP_PORT= SMTP_SECURE= SMTP_USER= SMTP_PASSWORD= SMTP_FROM= SMTP_TO=
+# API keys for providers in model.failoverChain, one per provider (the env var name
+# each provider expects is in pi's docs/providers.md). Subscription providers such as
+# openai-codex authenticate through scripts/pi-login.sh instead and need nothing here.
+# DEEPSEEK_API_KEY=
 EOT
   echo "wrote a template to $SECRETS"
 fi

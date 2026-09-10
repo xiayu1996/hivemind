@@ -16,6 +16,8 @@ const plan = {
     id: "S-M2-02",
     title: "Approve a plan",
     requirement: "A person can approve a plan.",
+    userEntryPoint: "the S-M2-02 view a person opens",
+    verificationPath: "open the S-M2-02 view and check the outcome",
     scenarios: [{ id: "S-M2-02-comment", given: "a plan awaits approval", when: "a human approves it", then: "execution begins" }],
     dependsOn: [],
     predictedFootprint: ["orchestrator"],

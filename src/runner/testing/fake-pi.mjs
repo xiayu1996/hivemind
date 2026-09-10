@@ -7,6 +7,7 @@
 //   exit          - exits immediately
 //   garbage       - emits a non-JSON line before answering
 //   reject-prompt - answers prompt with success:false
+//   echo-prompt   - answers with the prompt command it received, images included
 //
 // FAKE_PI_FIXTURE points at a captured event array to replay.
 
@@ -22,6 +23,7 @@ const respond = (cmd, id, extra = {}) => send({ type: "response", command: cmd, 
 
 if (MODE === "garbage") process.stdout.write("this is not json\n");
 
+const steering = [];
 let buffer = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
@@ -52,7 +54,11 @@ function handle(cmd) {
       respond("abort", cmd.id);
       return;
     case "steer":
+      steering.push(cmd.message);
       respond("steer", cmd.id);
+      return;
+    case "clear_queue":
+      respond("clear_queue", cmd.id, { data: { steering: steering.splice(0), followUp: [] } });
       return;
     case "prompt": {
       if (MODE === "reject-prompt") {
@@ -60,6 +66,17 @@ function handle(cmd) {
         return;
       }
       respond("prompt", cmd.id);
+      if (MODE === "echo-prompt") {
+        // Lets a test see the command as pi would have received it, images included.
+        send({ type: "agent_start" });
+        send({
+          type: "message_end",
+          message: { role: "assistant", stopReason: "stop", content: JSON.stringify({ images: cmd.images ?? [] }) },
+        });
+        send({ type: "agent_end", willRetry: false });
+        send({ type: "agent_settled" });
+        return;
+      }
       replay();
       return;
     }

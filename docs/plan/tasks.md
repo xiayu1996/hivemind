@@ -117,7 +117,7 @@
 | M1-24 | ✅ DoD 契约：YAML schema + 全局 scenario_id 规则（S-EPIC12-03）+ 五层测试矩阵声明 + L3 映射完整性扫描（测试标记 vs DoD diff） | `src/pipeline/dod.ts` | schema 单测；扫描单测：缺 scenario_id 标记 → VERIFY 直接 fail | M1-01 |
 | M1-25 | ✅ 收敛判据纯函数：`failed_scenarios(N) ⊊ failed_scenarios(N-1)` 严格真子集 + 持平/扩大/震荡分类 | `src/pipeline/convergence.ts` | 表驱动单测（空集/首轮/震荡序列/持平） | M1-01 |
 | M1-26 | ✅ verdict L3 代码校验：URL host 白名单、截图真实存在且 mtime 在本轮窗口、结果从轨迹提取非自报、红绿证据双通道挖掘（git 历史 + 轨迹；挖不到 → 盲审升级） | `src/pipeline/verdict.ts` | 伪造 verdict fixture（自报通过但轨迹无证据/截图 mtime 过期）全部被拒 | M1-24 |
-| M1-27 | ✅ completion verifier：每 phase 出口独立小脑单次调用判 done 真伪，fail-closed，否决理由注回同轮 | `src/pipeline/completion-verifier.ts` | fail-closed 单测 + `smoke-completion-verifier.ts` 真实 pi fresh session 通过 | M1-05 |
+| M1-27 | ⛔️ 已撤销（MQ-04，见 03 §8.1）completion verifier：每 phase 出口独立小脑单次调用判 done 真伪，fail-closed，否决理由注回同轮 | `src/pipeline/completion-verifier.ts` | fail-closed 单测 + `smoke-completion-verifier.ts` 真实 pi fresh session 通过 | M1-05 |
 | M1-28 | ✅ VERIFY 盲审执行器：独立 session（DB CHECK 强制）+ 只读+测试+浏览器工具面 | `src/verify/` | DB CHECK 触发用例 + `smoke-blind-verify.ts` 真实 pi fresh session/轨迹证据通过 | M1-11, M1-26 |
 
 ### M1-G VCS
@@ -210,6 +210,7 @@
 > 活体接线暴露并已修的闭环缺口（`npx vitest run` 122 文件 724 测试全绿）：① EPIC_ACCEPT→DONE 无人触发、Epic 状态列从未投影（需求永远进不了 ACCEPTANCE）→ `EpicCompletion` + `sync_epic_status`（03 §7.2 / 01 §2.2 带日期补记）；② 需求页人类输入（PRD 批准/修改意见、验收勾选与缺口留言、停靠/恢复）的解释器只在测试里被调用 → `NotionRequirementInputSync` 接进需求循环；③ 两常驻进程共用 outbox 互相吞行 → 回放按操作过滤；④ worker 浏览器白名单硬编码 → 读 `guard.e2eHostAllowlist`；⑤ VERIFY 会话既不知道也拿不到 `playwright-cli`（prompt 无浏览器车道、PATH 无 CLI、`prompts/phases/verify.md` 从未装载）→ 白名单非空时 prompt 注入浏览器车道说明（只含 host 列表与卡 id，跨机逐字节相同）、hivemind 自己的 `node_modules/.bin` 进 VERIFY/回归会话 PATH、VERIFY 系统提示装载基线+verify.md；⑥ Epic 拆解的阻塞问题不上看板、BLOCKED 无出口 → 问题以评论投到 Epic 页，人的评论即回答并回到 DECOMPOSE；⑦ 两常驻进程共用库文件读到 `SQLITE_BUSY` → 连接级 `busy_timeout` + WAL。活体进度：PRD 已人批冻结，拆出 3 个 Epic，其中 2 个已呈现 Story 拆解方案等人批准，1 个在等阻塞问题的回答。
 > Linux 单节点部署件就位（MP-11），`npm run preflight` 在本机 24 项通过、1 项 WARN（未配带外告警通道）。
 > **Linux 实跑（2026-09-02，本机 colima 虚拟机内干净 Ubuntu 24.04 arm64 容器，不放任何凭据）**：`deploy/linux/install.sh` 全程跑通（npm ci、pinned pi 直连下载并校验、headless shell + 系统库、目录权限、service.env、单元渲染）；`npx vitest run` 121 文件 726 测试全绿；`smoke-browser-e2e` **9/9 通过**（MP-09 的 Linux 判据关闭）；preflight 12 PASS，其余 FAIL 全为容器内无凭据的预期项。实跑暴露并修掉三处部署缺陷：`install-pi.sh` 依赖已登录的 `gh`（首装时尚未登录）→ 直连公开 release；arm64 Node 缺 `libatomic1` → runbook 前置；Ubuntu 23.10+ AppArmor 限制用户命名空间使 Chromium 沙箱起不来 → preflight 检查 + runbook 首选 sysctl 修法 + `verify.chromiumSandbox` 显式开关（默认开、标 dangerous）。
+> **执行状态追记（2026-09-05，macOS 本机接真实 Notion，Ryan 授权代理人以本人身份做人工 gate）**：三个 Epic 的拆解方案获批、E2RESULTS 阻塞问题得到回答，12 个 Story 入库建页；S-E2RESULTS-01 与 S-E1ACTION-01 各有一轮盲审 accepted，后者的证据目录含真实 headless 浏览器截图（判据③的证据形态已出现，交付未完成）。接线 Epic→Story 这条边暴露 20 项缺口（投影早于建页、分支切自尚不存在的 epic 分支、DESIGN 前读 DoD、NEEDS_INPUT 无法回 QUEUED、调度饿死、VERIFY 写模式启发式误拦箭头函数与所有重定向、verdict 无理由、judge 只看尾部工具结果、供应商故障混入卡预算、用量撞墙熔断被凭据探针关回、Story 页重复插入、关停不 drain 等），已全部修复并有单测；逐条见 `docs/poc/mp-acceptance.md` 当日表。当日 17:02 Codex 用量窗口撞墙，流水线等待窗口恢复。
 
 | ID | 任务 | 输出物 | 验证方式 | 前置 |
 |---|---|---|---|---|
@@ -224,6 +225,29 @@
 | MP-09 | ⚠️ 单机全能力 worker：headless 浏览器自动化落地本机（原 M3-09 前移）。**选型改为双车道（2026-09-01，见 02 §4.3 更正）**：验证/回归 = `@playwright/test`，探索与自愈 = `@playwright/cli`（Playwright 核心团队维护，经 bash，token 约为 MCP 的 1/4），不引入 MCP 与任何社区 pi adapter；浏览器红线三层同源（bash 命令行导航过闸 / 浏览器 allowedOrigins / 判据校验） | `src/verify/browser-config.ts` + `src/guard/tool-decision.ts` 导航拦截 + `scripts/smoke-browser-e2e.ts` | 真实 headless Chromium 冒烟 9/9：allowlist 内可开、`file://` 与非白名单 host 被 guard 拒、名单外请求被浏览器以 `net::ERR_BLOCKED_BY_CLIENT` 拒、截图落进证据目录；guard 拦截单测 12 条。Linux 判据已关（2026-09-02 干净 Ubuntu 24.04 arm64 容器 9/9）。仍开放：一个真实 Story 的浏览器 e2e 证据（并入 MP-10） | M1-10 |
 | MP-11 | ✅ Linux 单节点部署件：幂等安装脚本（Node 26 检查、`npm ci`、pinned pi、Playwright headless shell + 系统库、`~/.hivemind` 与 secrets 模板 600、systemd 服务环境）、两个 systemd 用户单元（orchestrator / requirements 分 unit，共用一库一 outbox）、就绪探针 `scripts/preflight.ts`（pi/凭据/Notion 三库共享/配置断言/provider 凭据/四档位 provider/gh 或 glab/git 身份/headless Chromium，不打印凭据）、runbook | `deploy/linux/` + `scripts/preflight.ts` + `docs/runbooks/linux-single-node.md` | 本机 `npm run preflight` 24 PASS / 1 WARN；干净 Ubuntu 24.04 arm64 容器内 `install.sh` 全程跑通、单测 726 全绿、浏览器冒烟 9/9、preflight 正确报出内核沙箱限制。仍开放：带凭据的真实 Linux 主机上起两个 systemd 单元（并入 MP-10） | MP-09 |
 | MP-10 | **MP 验收**：一条真实模糊需求（首个候选：本项目 web 客户端）在 Linux 单机走完 澄清→PRD 确认→拆解（≥1 Epic ≥2 Story）→开发交付→场景化验收 全程 | `docs/poc/mp-acceptance.md` | ① 全程 Notion 单一信息源可追溯；② 除四类设计内人工 gate（澄清回答/PRD 批准/PLAN_APPROVAL/验收勾选）外无人干预——含不打临时修复、不写人工恢复脚本（M1-37 教训）；③ 至少一个 Story 的验证含真实浏览器 e2e 证据；④ 验收清单逐条对应 PRD 场景 | MP-01..09, M2-14 |
+
+## MQ 主流程收敛（2026-09-09 增补，排期在 MP 之后、M3 之前）
+
+目标：让一张垂直切片 Story 在无人干预下稳定走完 DESIGN→CODE→VERIFY→合流→draft MR。设计见 03 §8；断点分析见 `docs/design/diagrams/story-main-flow-as-built.html`。切入点：S-E3OVERVIEW-01（分支代码已完成、单测 22/22 通过，卡在流程）。
+
+> 前置动作：2026-09-05 会话的 41 个文件修复（P1–P31）已提交（`fix: close the gaps that stalled Story cards mid-flow`）。
+>
+> 开跑前置：CODE 出口与合流复验都跑「仓库自己声明的门禁命令」，本仓库要先写进 config——
+> `codeExit.projectChecks = [{"name":"npm run lint","command":["npm","run","lint"]},{"name":"npm run typecheck","command":["npm","run","typecheck"]},{"name":"npm test","command":["npm","test"]}]`
+> （per-repo 作用域，空清单时合流复验会拒绝把未检查的合流算通过）。
+
+| ID | 任务 | 输出物 | 验证方式 | 前置 |
+|---|---|---|---|---|
+| MQ-01 | ✅ 供应商故障不进预算：QUOTA/RATE_LIMIT/TRANSPORT/TIMEOUT/AUTH 只进熔断，卡原地等待，不计内环与重入、不产生停点；熔断开合写 event_log；探测改用凭据探针；usage limit 无窗口时指数退避 | `src/runner/circuit-breaker.ts`、`scripts/run-local-orchestrator.ts` | 单测：每类故障后 `phase_reentries` 与 `inner_loop_rounds` 不变、`stop_reason` 为空；真实 fixture（"The usage limit has been reached"）进 `fixtures/rpc-errors/` 并有测试保证不被漏掉 | — |
+| MQ-02 | ✅（smoke-crash-recovery 待真实 pi 跑） CODE 超时改为 checkpoint 续跑：prompt 超时不判失败，走 continue-retry；`maxContinueRetries` 耗尽才算一次失败；超时阈值 config 化 | `src/orchestrator/pi-phase-port.ts`、`src/config/registry.ts` | 单测：超时后 checkpoint 被载入续跑；`smoke-crash-recovery` 通过 | MQ-01 |
+| MQ-03 | ✅ OAuth 刷新单点化：orchestrator 持文件锁刷新，worker 只读；修好前 `schedule.maxConcurrentStories` 默认 1 | `src/runner/auth-*.ts` | 并发测试：两个 runner 同时启动只发生一次刷新 | — |
+| MQ-04 | ✅（S-E3OVERVIEW-01 实跑待配额恢复） CODE 出口确定性检查替代 completion judge：树干净且有提交、每场景红绿轨迹、`@scenario` 标记覆盖 DoD、format/lint/typecheck/全量测试；不过不计预算，清单喂回 CODE；撤销 MERGE judge | `src/pipeline/code-exit-gate.ts`（替换 completion-verifier 的调用位） | 单测覆盖四项各自失败的清单文案；S-E3OVERVIEW-01 分支上实跑一次全过 | — |
+| MQ-05 | ✅ MERGE 只写报告：删去门禁语义；报告业务区 regex lint | `prompts/phases/merge.md`、`src/notion/...` | MERGE 无 `git diff --check` 失败路径；lint 单测 | MQ-04 |
+| MQ-06 | ✅ 合流复验确定性化：rebase 后只跑本 Story 与 footprint 相交 Story 的测试（含 e2e 脚本），通过即 ff-merge；盲审归回归 loop，失败开 regression 卡；修 `scripts/run-story.ts` 盲审 cwd 与 HEAD 断言 | `src/vcs/subset-verifier.ts`、`src/vcs/merge-flow.ts` | 单测：复验只调用测试执行器不调用 BlindVerifyExecutor；集成测试：两张相交 Story 顺序合入 | MQ-04 |
+| MQ-07 | ✅ 收敛判据只吃代码层失败：环境类 fail 记 `inconclusive`，不进 failed 集合、不消耗轮次；连续两次 inconclusive 物化 friction | `src/pipeline/convergence.ts`、`src/verify/executor.ts` | 单测：服务 404 类理由不触发 expanded | MQ-06 |
+| MQ-08 | ✅（真实 gh 实跑待配额恢复） Story draft MR：DELIVERED 时开 story→epic 的 draft MR，链接回写 Notion MR 属性；Epic MR 仍为最终入口 | `src/vcs/story-delivery.ts` | 单测 + 真实 gh 实跑一次 | MQ-06 |
+| MQ-09 | ✅ DECOMPOSE 垂直切片约束：每张 Story 声明用户可见入口与独立验证路径；Epic 内 Story 数上限 config 化（默认 4）；水平切分打回重拆 | `prompts/phases/decompose.md`、`src/orchestrator/epic-decompose*.ts` | 单测：六张同页面验收条目的拆解被拒；现有 E1ACTION 拆解按新约束重拆 | — |
+| MQ-10 | **MQ 验收**：S-E3OVERVIEW-01 在无人干预下从当前 NEEDS_INPUT 恢复后走完 CODE 出口检查→VERIFY→合流→draft MR；随后重拆的第二张 Story 从 QUEUED 走完全程 | `docs/poc/mp-acceptance.md` 追记 | 两张卡各自 event_log 中无 retry_limit_exceeded；供应商故障期间 `stop_reason` 始终为空 | MQ-01..09 |
 
 ---
 

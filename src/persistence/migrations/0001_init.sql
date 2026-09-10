@@ -150,7 +150,8 @@ CREATE TABLE IF NOT EXISTS stories (
   phase_reentries   INTEGER NOT NULL DEFAULT 0,
   regression_reopens INTEGER NOT NULL DEFAULT 0,
   stop_reason       TEXT CHECK (stop_reason IS NULL OR stop_reason IN (
-                      'blocking_question','verify_loop_exceeded','retry_limit_exceeded')),
+                      'blocking_question','verify_loop_exceeded','retry_limit_exceeded',
+                      'cost_ceiling_exceeded')),
   resume_state      TEXT CHECK (resume_state IS NULL OR resume_state IN (
                       'QUEUED','DESIGN','CODE','VERIFY','MERGE','REGRESSION_FIX','NEEDS_INPUT')),
   notion_ai_status_shadow TEXT,

@@ -127,6 +127,17 @@ describe("S-M2-03-dispatchable narrowing a repository to what can run now", () =
     expect(plan).toEqual({ kind: "planned", batches: [["S-EPIC1-01"], ["S-EPIC1-02"]] });
   });
 
+  it("holds back the dependents of a Story that stopped for a person, so they do not starve their neighbours", () => {
+    const plan = planStoryExecution(dispatchableStories([
+      { id: "S-EPIC1-01", state: "NEEDS_INPUT", dependsOn: [], predictedFootprint: ["console-ui"] },
+      { id: "S-EPIC1-02", state: "QUEUED", dependsOn: ["S-EPIC1-01"], predictedFootprint: ["console-ui"] },
+      { id: "S-EPIC1-03", state: "QUEUED", dependsOn: ["S-EPIC1-02"], predictedFootprint: ["console-ui"] },
+      { id: "S-EPIC2-01", state: "QUEUED", dependsOn: [], predictedFootprint: ["console-ui"] },
+    ]), []);
+
+    expect(plan).toEqual({ kind: "planned", batches: [["S-EPIC2-01"]] });
+  });
+
   it("leaves a Story parked for a human out of the plan entirely", () => {
     expect(dispatchableStories([
       { id: "S-EPIC1-01", state: "NEEDS_INPUT", dependsOn: [], predictedFootprint: ["src/a"] },

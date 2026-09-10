@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_FENCED_PATTERNS } from "./danger-rules.js";
-import { compileBannedBashPatterns, compileFencedPatterns, type GuardPolicy } from "./policy.js";
+import { compileBannedBashPatterns, compileFencedPatterns, type GuardPolicy, READ_ONLY_BASH_PATTERNS } from "./policy.js";
 import { decideToolCall, type ToolCallEvent } from "./tool-decision.js";
 
 const policy: GuardPolicy = {
@@ -59,17 +59,13 @@ describe("read-only bash", () => {
   const readOnlyPolicy = {
     ...policy,
     phase: "VERIFY",
-    bannedBash: [
-      "(?:^|[^>])(?:>>|>)(?![>&])\\s*\\S+",
-      "\\bsed\\s+[^\\n]*?-i(?:[^\\s]*)?(?:\\s|$)",
-      "(?:^|[|;]\\s*)tee(?:\\s|$)",
-      "\\bgit\\s+commit\\b",
-    ],
+    bannedBash: [...READ_ONLY_BASH_PATTERNS],
   };
   const patterns = compileBannedBashPatterns(readOnlyPolicy.bannedBash);
 
   for (const command of [
     "printf x > src/a.ts",
+    "printf x 2>src/a.log",
     "sed -i 's/a/b/' src/a.ts",
     "printf x | tee src/a.ts",
     "git commit -am green",
@@ -80,8 +76,46 @@ describe("read-only bash", () => {
     });
   }
 
+  it("lets a verifier log a service it starts into the evidence directory, and nowhere else", () => {
+    for (const command of [
+      "nohup node server.js > /ev/card-12/service.log 2>&1 &",
+      "node server.js >/ev/card-12/service.log 2>/dev/null &",
+      "nohup node server.js > \"$HIVEMIND_EVIDENCE_DIR/service.log\" 2>&1 &",
+      "nohup node server.js > ${HIVEMIND_EVIDENCE_DIR}/service.log 2>&1 &",
+    ]) {
+      expect(decideToolCall(call("bash", { command }), readOnlyPolicy, fenced, patterns).block).toBe(false);
+    }
+    for (const command of [
+      "nohup node server.js > /tmp/service.log 2>&1 &",
+      "node server.js > service.log",
+    ]) {
+      expect(decideToolCall(call("bash", { command }), readOnlyPolicy, fenced, patterns))
+        .toMatchObject({ block: true, reason: "shell write is forbidden in VERIFY" });
+    }
+  });
+
+  it("refuses to let a verifier answer the page's requests itself", () => {
+    const browsing = { ...readOnlyPolicy, e2eHostAllowlist: ["localhost"] };
+    for (const command of [
+      "playwright-cli -s=S-1 route '**/api/status' --status 200 --body '{}'",
+      "playwright-cli -s=S-1 unroute '**/api/status' && playwright-cli -s=S-1 reload",
+    ]) {
+      expect(decideToolCall(call("bash", { command }), browsing, fenced, patterns))
+        .toMatchObject({ block: true, reason: expect.stringContaining("request interception") });
+    }
+    expect(decideToolCall(call("bash", { command: "playwright-cli -s=S-1 open http://localhost:3000/ && playwright-cli -s=S-1 screenshot" }), browsing, fenced, patterns).block).toBe(false);
+  });
+
   it("still permits verification commands", () => {
-    for (const command of ["npm test", "git diff --check", "printf x 2>&1"]) {
+    for (const command of [
+      "npm test",
+      "git diff --check",
+      "printf x 2>&1",
+      // Inline scripts are how a verifier starts the service it looks at.
+      "npx tsx -e 'const app = await create(async () => []); setInterval(() => {}, 1000);'",
+      "grep -- '->' src/a.ts",
+      "printf 'EVIDENCE=%s\\n' \"${HIVEMIND_EVIDENCE_DIR:-<unset>}\"; npm test -- --reporter=verbose",
+    ]) {
       expect(decideToolCall(call("bash", { command }), readOnlyPolicy, fenced, patterns).block).toBe(false);
     }
   });

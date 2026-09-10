@@ -105,9 +105,29 @@ export interface RepositoryStory extends SchedulableStory {
  * unresolved would otherwise strand its dependents forever.
  */
 export function dispatchableStories(stories: readonly RepositoryStory[]): SchedulableStory[] {
+  const byId = new Map(stories.map((story) => [story.id, story]));
   const open = new Set(stories.filter((story) => DISPATCHABLE.has(story.state)).map((story) => story.id));
+  // A dependency that is neither delivered nor still dispatchable (stopped for
+  // a person, parked, failed) holds its dependents back: planning them would
+  // only let them claim a batch slot they cannot use, starving the Stories
+  // whose footprint overlaps theirs.
+  const held = new Set<string>();
+  const isHeld = (id: string, trail: Set<string>): boolean => {
+    if (held.has(id)) return true;
+    if (trail.has(id)) return false;
+    trail.add(id);
+    const story = byId.get(id);
+    const blocked = story !== undefined && story.dependsOn.some((dependency) => {
+      const upstream = byId.get(dependency);
+      if (!upstream) return false;
+      if (upstream.state === "DELIVERED") return false;
+      return !open.has(dependency) || isHeld(dependency, trail);
+    });
+    if (blocked) held.add(id);
+    return blocked;
+  };
   return stories
-    .filter((story) => open.has(story.id))
+    .filter((story) => open.has(story.id) && !isHeld(story.id, new Set()))
     .map((story) => ({
       id: story.id,
       dependsOn: story.dependsOn.filter((dependency) => open.has(dependency)),

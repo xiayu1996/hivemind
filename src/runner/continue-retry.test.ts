@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { promptWithContinueRetry, RetryLimitExceededError } from "./continue-retry.js";
-import type { PiRunner, PromptResult } from "./types.js";
+import { RunnerTimeoutError, type PiRunner, type PromptResult } from "./types.js";
 
 const EMPTY_USAGE = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, costUsd: 0 };
 
@@ -12,27 +12,75 @@ const failing = (errorMessage: string): PromptResult => ({
   events: [],
 });
 
-function stubRunner(results: PromptResult[], alive = true): PiRunner & { prompts: string[] } {
+const TIMEOUT = "timeout" as const;
+
+function stubRunner(
+  results: Array<PromptResult | typeof TIMEOUT>,
+  alive = true,
+): PiRunner & { prompts: string[]; aborts: number; queueClears: number; calls: string[] } {
   const prompts: string[] = [];
+  const calls: string[] = [];
   return {
     prompts,
+    calls,
+    aborts: 0,
+    queueClears: 0,
     alive,
     async start() {},
     async prompt(message: string) {
       prompts.push(message);
-      return results.shift() ?? ok();
+      const next = results.shift() ?? ok();
+      if (next === TIMEOUT) throw new RunnerTimeoutError("timed out waiting for agent_settled");
+      return next;
     },
     async steer() {},
-    async abort() {},
+    async abort() { this.aborts++; calls.push("abort"); },
+    async clearQueue() { this.queueClears++; calls.push("clearQueue"); return { steering: [], followUp: [] }; },
+    waitingOnUser: [],
     async getMessages() { return []; },
     async getState() { return {}; },
     async setAutoRetry() {},
     async stop() {},
     async kill() {},
-  } as PiRunner & { prompts: string[] };
+  } as PiRunner & { prompts: string[]; aborts: number; queueClears: number; calls: string[] };
 }
 
 const noWait = { sleep: async () => {}, backoffMs: () => 0 };
+
+describe("a prompt that never settles", () => {
+  it("abandons the turn and resumes the same session instead of failing the phase", async () => {
+    // The process and its session are still alive: replaying the phase would
+    // throw away everything a long CODE turn had already committed.
+    const runner = stubRunner([TIMEOUT, ok()]);
+    const outcome = await promptWithContinueRetry(runner, "implement the story", { maxContinueRetries: 8, ...noWait });
+
+    expect(outcome.failure).toBeNull();
+    expect(outcome.continueRetries).toBe(1);
+    expect(runner.prompts).toEqual(["implement the story", "continue"]);
+    expect(runner.aborts).toBe(1);
+  });
+
+  it("clears the queue before aborting, so the resumed turn is not steered by the broken one", async () => {
+    // pi keeps queued steering and follow-up messages across an abort and
+    // continues them afterwards.
+    const runner = stubRunner([TIMEOUT, ok()]);
+    await promptWithContinueRetry(runner, "implement the story", { maxContinueRetries: 8, ...noWait });
+
+    expect(runner.calls).toEqual(["clearQueue", "abort"]);
+  });
+
+  it("spends the continue budget on repeated timeouts and then gives up", async () => {
+    const runner = stubRunner([TIMEOUT, TIMEOUT, TIMEOUT]);
+    await expect(promptWithContinueRetry(runner, "work", { maxContinueRetries: 2, ...noWait }))
+      .rejects.toBeInstanceOf(RetryLimitExceededError);
+  });
+
+  it("rethrows the timeout when the process itself is gone", async () => {
+    const runner = stubRunner([TIMEOUT], false);
+    await expect(promptWithContinueRetry(runner, "work", { maxContinueRetries: 8, ...noWait }))
+      .rejects.toBeInstanceOf(RunnerTimeoutError);
+  });
+});
 
 describe("stream interruption", () => {
   it("resumes the same session with continue and reports the retry count", async () => {

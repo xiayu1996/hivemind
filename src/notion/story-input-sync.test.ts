@@ -177,4 +177,88 @@ depends_on: []
     }));
     client.close();
   });
+
+  it("treats a page without an AI status as not yet projected instead of failing the poll", async () => {
+    const { client, store } = await story();
+    const gateway = new NotionGateway({
+      ratePerSecond: 1_000_000,
+      transport: async () => ({ status: 200, data: { properties: {} } }),
+    });
+    const sync = new NotionStoryInputSync(
+      client,
+      gateway,
+      emptyApi,
+      new CommentIngestor(client, emptyComments, { now: () => 1_000 }),
+      store,
+      () => 1_000,
+    );
+    await expect(sync.pollProperties("page-1")).resolves.toEqual({ cardId: "S-EPIC1-01", intent: "initialized" });
+    await expect(store.getStory("S-EPIC1-01")).resolves.toMatchObject({ state: "CODE" });
+    client.close();
+  });
+
+  it("requeues a Story that stopped before starting when a person drags it back to active", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, () => 1_000);
+    await store.createStory({
+      id: "S-EPIC1-03",
+      notionPageId: "page-3",
+      title: "Never started",
+      requirement: "Requirement",
+    });
+    await store.recordPhaseReentry("S-EPIC1-03");
+    await store.recordPhaseReentry("S-EPIC1-03");
+    await store.stopForInput("S-EPIC1-03", "QUEUED", "retry_limit_exceeded", "reentry-S-EPIC1-03");
+    await client.execute({
+      sql: "UPDATE stories SET notion_ai_status_shadow = ? WHERE id = 'S-EPIC1-03'",
+      args: [schema.options.aiStatus[2]!],
+    });
+    const gateway = new NotionGateway({
+      ratePerSecond: 1_000_000,
+      transport: async () => ({ status: 200, data: page(schema.options.aiStatus[1]!) }),
+    });
+    const sync = new NotionStoryInputSync(
+      client,
+      gateway,
+      emptyApi,
+      new CommentIngestor(client, emptyComments, { now: () => 1_000 }),
+      store,
+      () => 1_000,
+    );
+    await expect(sync.pollProperties("page-3")).resolves.toEqual({ cardId: "S-EPIC1-03", intent: "continue_development" });
+    await expect(store.getStory("S-EPIC1-03")).resolves.toMatchObject({
+      state: "QUEUED",
+      stopReason: null,
+      phaseReentries: 0,
+    });
+    client.close();
+  });
+
+  it("sends a Story that stopped in MERGE back to CODE when a person drags it to active", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, () => 1_000);
+    await store.createStory({ id: "S-EPIC1-05", notionPageId: "page-5", title: "Merge stop", requirement: "Requirement" });
+    for (const [from, to] of [["QUEUED", "DESIGN"], ["DESIGN", "CODE"], ["CODE", "VERIFY"], ["VERIFY", "MERGE"]] as const) {
+      await store.transition("S-EPIC1-05", from, to, "system", `${from}-${to}`);
+    }
+    await store.stopForInput("S-EPIC1-05", "MERGE", "retry_limit_exceeded", "reentry-S-EPIC1-05");
+    await client.execute({ sql: "UPDATE stories SET notion_ai_status_shadow = ? WHERE id = 'S-EPIC1-05'", args: [schema.options.aiStatus[2]!] });
+    const gateway = new NotionGateway({
+      ratePerSecond: 1_000_000,
+      transport: async () => ({ status: 200, data: page(schema.options.aiStatus[1]!) }),
+    });
+    const sync = new NotionStoryInputSync(
+      client,
+      gateway,
+      emptyApi,
+      new CommentIngestor(client, emptyComments, { now: () => 1_000 }),
+      store,
+      () => 1_000,
+    );
+    await expect(sync.pollProperties("page-5")).resolves.toEqual({ cardId: "S-EPIC1-05", intent: "continue_development" });
+    await expect(store.getStory("S-EPIC1-05")).resolves.toMatchObject({ state: "CODE", stopReason: null });
+    client.close();
+  });
 });

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { classifyConvergence } from "../pipeline/convergence.js";
+import { costCeilingVerdict, renderCostCeilingReport, type CardSpend } from "../pipeline/cost-ceiling.js";
 import { parseDoD, type DefinitionOfDone } from "../pipeline/dod.js";
 import { assemblePhasePrompt, type PhaseInput } from "../pipeline/phase-input.js";
 import {
@@ -7,6 +8,7 @@ import {
   type StoryPhase,
   type StorySnapshot,
 } from "./story-execution-store.js";
+import type { StoryState } from "./state-machine.js";
 
 export interface ManagedPhaseInput {
   runId: string;
@@ -38,6 +40,10 @@ export interface ManagedVerifyResult {
   sessionId: string;
   verdict: "accepted" | "rejected" | "inconclusive";
   failedScenarios: string[];
+  /** The subset of `failedScenarios` that failed for a reason in the code.
+   * Absent means every failure counts, which is what a port that cannot tell
+   * the difference has to assume. */
+  codeFailedScenarios?: string[];
   evidenceDir?: string;
   screenshots?: Array<{ scenarioId: string; path: string }>;
   artifact: string;
@@ -58,6 +64,12 @@ export interface StoryProjectionPort {
   enqueue(cardId: string): Promise<void>;
 }
 
+export interface StoryFrictionPort {
+  /** Records that the pipeline, not the Story, is what failed. Feeds the
+   * reflection pipeline; see 03 section 4. */
+  record(input: { cardId: string; runId: string; kind: string; detail: string }): Promise<void>;
+}
+
 export interface StoryIntegrationPort {
   /** Puts the Story on its Epic head. A result other than "merged" has already
    * returned the Story to CODE; the run stops without delivering. */
@@ -66,15 +78,37 @@ export interface StoryIntegrationPort {
 
 export interface StoryWorkerOptions {
   maxInnerLoopRounds?: number;
+  /** How many consecutive rounds may be lost to the environment before the
+   * card stops for a person. The rounds themselves cost no budget; this is
+   * what keeps a broken host from looping forever. */
+  maxInconclusiveRounds?: number;
   integration?: StoryIntegrationPort;
+  friction?: StoryFrictionPort;
+  spend?: StorySpendPort;
   runId?: (cardId: string, phase: StoryPhase, round: number) => string;
+}
+
+/**
+ * What one card has spent, and what it is allowed to spend.
+ *
+ * Optional because it only means anything where a provider is billed per token:
+ * a host running a flat-rate subscription has no money to cap, and giving it a
+ * port that always answers zero would read as a ceiling being enforced when
+ * nothing is.
+ */
+export interface StorySpendPort {
+  cardSpend(cardId: string): Promise<CardSpend>;
+  ceilingUsd(): Promise<number>;
+  spendByPhase?(cardId: string): Promise<ReadonlyMap<string, number>>;
 }
 
 export interface StoryWorkerResult {
   state: "DELIVERED" | "NEEDS_INPUT" | "CODE";
   rounds: number;
   mrUrl: string | null;
-  stopReason: "verify_loop_exceeded" | null;
+  stopReason: "verify_loop_exceeded" | "cost_ceiling_exceeded" | null;
+  /** Attached to the card when the run stopped; business language, no thresholds alone. */
+  stopReport?: string;
 }
 
 function artifact(result: ManagedPhaseResult, kind: string): string {
@@ -86,8 +120,11 @@ function artifact(result: ManagedPhaseResult, kind: string): string {
 /** Executes one Story on one host through DESIGN, CODE/VERIFY and MERGE. */
 export class SingleStoryWorker {
   private readonly maxInnerLoopRounds: number;
+  private readonly maxInconclusiveRounds: number;
+  private readonly friction: StoryFrictionPort | undefined;
   private readonly createRunId: (cardId: string, phase: StoryPhase, round: number) => string;
   private readonly integration: StoryIntegrationPort | undefined;
+  private readonly spend: StorySpendPort | undefined;
 
   constructor(
     private readonly store: StoryExecutionStore,
@@ -98,6 +135,9 @@ export class SingleStoryWorker {
     options: StoryWorkerOptions = {},
   ) {
     this.integration = options.integration;
+    this.friction = options.friction;
+    this.spend = options.spend;
+    this.maxInconclusiveRounds = options.maxInconclusiveRounds ?? 2;
     this.maxInnerLoopRounds = options.maxInnerLoopRounds ?? 6;
     if (!Number.isInteger(this.maxInnerLoopRounds) || this.maxInnerLoopRounds < 1) {
       throw new Error("maxInnerLoopRounds must be a positive integer");
@@ -106,6 +146,42 @@ export class SingleStoryWorker {
       const safeCardId = cardId.replaceAll(/[^A-Za-z0-9._-]/g, "-");
       return `${safeCardId}-${phase.toLowerCase()}-${round}-${randomUUID()}`;
     });
+  }
+
+  /**
+   * Stops the card if it has already reached the money one card may spend.
+   *
+   * Checked at a phase boundary, which is the finest granularity available: a
+   * turn cannot be interrupted partway, and the spend of the turn about to start
+   * is unknown until it ends. So the ceiling is a floor on the overrun, not an
+   * exact cut — a card stops once it has crossed the line, not before it can.
+   *
+   * Deliberately separate from the round budget. Rounds answer whether the
+   * system is going in circles; this answers how much one card may cost. A
+   * spend stop says nothing about whether the work is achievable, and the report
+   * says so, because the two get confused by whoever reads the card.
+   */
+  async #costCeilingStop(
+    cardId: string,
+    fromState: StoryState,
+    round: number,
+  ): Promise<StoryWorkerResult | null> {
+    if (!this.spend) return null;
+    const spent = await this.spend.cardSpend(cardId);
+    const verdict = costCeilingVerdict(spent, await this.spend.ceilingUsd());
+    if (!verdict.exceeded) return null;
+
+    const byPhase = (await this.spend.spendByPhase?.(cardId)) ?? new Map<string, number>();
+    const runId = this.createRunId(cardId, "VERIFY", round);
+    await this.store.stopForInput(cardId, fromState, "cost_ceiling_exceeded", runId);
+    await this.projection.enqueue(cardId);
+    return {
+      state: "NEEDS_INPUT",
+      rounds: round,
+      mrUrl: null,
+      stopReason: "cost_ceiling_exceeded",
+      stopReport: renderCostCeilingReport(cardId, verdict, spent, byPhase),
+    };
   }
 
   async run(cardId: string): Promise<StoryWorkerResult> {
@@ -137,8 +213,32 @@ export class SingleStoryWorker {
     let mergeRunId = "";
     let totalRounds = mergeOnly ? story.innerLoopRounds : 0;
     if (!mergeOnly) {
-      const failureHistory = await this.store.getVerificationFailureHistory(cardId);
-      for (let round = failureHistory.length + 1; round <= this.maxInnerLoopRounds; round++) {
+      // The budget counts the rounds since a person last acted on the card: a
+      // resume is a decision to spend more, not a replay of the spent rounds.
+      const failureHistory = await this.store.getVerificationFailureHistory(cardId, story.lastHumanActionAt ?? 0);
+      // Round numbers keep counting across resumes; the budget does not.
+      let round = story.innerLoopRounds;
+      if (failureHistory.length >= this.maxInnerLoopRounds) {
+        // The Epic head refused the branch after the loop was already spent:
+        // there is no round left to fix it in, so this is the verification stop.
+        const stopRunId = this.createRunId(cardId, "VERIFY", round);
+        await this.store.stopForInput(cardId, story.state, "verify_loop_exceeded", stopRunId);
+        await this.projection.enqueue(cardId);
+        return { state: "NEEDS_INPUT", rounds: round, mrUrl: null, stopReason: "verify_loop_exceeded" };
+      }
+      // `spent` is the budget: only a round that failed in the code costs one.
+      let spent = failureHistory.length;
+      let inconclusiveStreak = 0;
+      while (spent < this.maxInnerLoopRounds) {
+        // Before buying another CODE turn, not after: the ceiling exists to stop
+        // the next purchase, and a card resumed by a person who raised it starts
+        // the round it was stopped before.
+        // Every path into this loop has already transitioned the card to CODE,
+        // so the snapshot's own state is stale here and the guarded UPDATE
+        // would find no row.
+        const overspent = await this.#costCeilingStop(cardId, "CODE", round);
+        if (overspent) return overspent;
+        round += 1;
         const codeRunId = this.createRunId(cardId, "CODE", round);
         const code = await this.runPhase(cardId, "CODE", round, codeRunId);
         artifact(code, "implementation");
@@ -160,9 +260,32 @@ export class SingleStoryWorker {
           break;
         }
 
-        failureHistory.push([...new Set(verification.failedScenarios)].toSorted());
+        if (verification.verdict === "inconclusive") {
+          // The round was lost to the environment, not to the code: it says
+          // nothing about convergence, so it costs no budget. Two in a row is
+          // the pipeline's own failure and belongs to a person.
+          inconclusiveStreak += 1;
+          if (inconclusiveStreak >= this.maxInconclusiveRounds) {
+            await this.friction?.record({
+              cardId,
+              runId: verifyRunId,
+              kind: "verification_inconclusive",
+              detail: `${inconclusiveStreak} consecutive rounds failed for environmental reasons: ${verification.failedScenarios.join(", ")}`,
+            });
+            await this.store.stopForInput(cardId, "VERIFY", "verify_loop_exceeded", verifyRunId);
+            await this.projection.enqueue(cardId);
+            return { state: "NEEDS_INPUT", rounds: round, mrUrl: null, stopReason: "verify_loop_exceeded" };
+          }
+          await this.store.transition(cardId, "VERIFY", "CODE", "system", verifyRunId);
+          continue;
+        }
+        inconclusiveStreak = 0;
+        spent += 1;
+        failureHistory.push([
+          ...new Set(verification.codeFailedScenarios ?? verification.failedScenarios),
+        ].toSorted());
         const convergence = classifyConvergence(failureHistory);
-        if (round === this.maxInnerLoopRounds || !convergence.mayContinue) {
+        if (spent >= this.maxInnerLoopRounds || !convergence.mayContinue) {
           await this.store.stopForInput(cardId, "VERIFY", "verify_loop_exceeded", verifyRunId);
           await this.projection.enqueue(cardId);
           return {

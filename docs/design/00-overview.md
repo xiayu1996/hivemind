@@ -29,11 +29,11 @@ hivemind 以 pi（earendil-works/pi，provider 无关）为执行底座、Notion
 
 ## 3. 调研结论摘要
 
-### pi（v0.84.x，pin exact）
+### pi（v0.85.x，pin exact）
 
 - **给**：40+ provider 抽象（anthropic/openai-codex/zai/xai 原生）、Context 纯 JSON 跨供应商 handoff、extension 钩子（tool_call 可 block / before_provider_request / session_before_compact）、原生 CLAUDE.md/AGENTS.md 层叠 + skills（agentskills.io 规范，可直接挂 ~/.claude/skills）、RPC/JSON headless 入口、per-message 成本。
 - **不给（自建 harness）**：MCP（社区有 pi-mcp-adapter）、subagent 编排、权限/沙箱、任务队列、跨供应商 failover、预算护栏、observability exporter、崩溃恢复编排。
-- **风险**：pre-1.0 SDK 不稳、session JSONL 尾部损坏 open bug（#8345/8346）——对策：RPC 模式 + 自建 Context checkpoint，session 文件当可丢弃缓存。
+- **风险**：pre-1.0 SDK 不稳（0.85.0 误发布内部实验代码致 SDK 导入失败，pi#9132，只能 pin 0.85.1）、session JSONL 尾部损坏（#8345/8346，0.84.4 已修根因，checkpoint 侧修复保留以兼容旧 session）——对策：RPC 模式 + 自建 Context checkpoint，session 文件当可丢弃缓存。上游没有 2.0 版本线；`harness v2` 是库内部的 Session/SessionRepo 抽象，不是产品版本。
 
 ### cumora（拿模式不拿拓扑）
 

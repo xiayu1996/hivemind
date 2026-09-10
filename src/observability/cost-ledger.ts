@@ -1,4 +1,5 @@
 import type { Client } from "@libsql/client";
+import type { CardSpend } from "../pipeline/cost-ceiling.js";
 import type { TokenUsage } from "../runner/types.js";
 
 export interface CostContext {
@@ -51,6 +52,38 @@ export class CostLedger {
     private readonly events?: CostEventSink,
     private readonly now: () => number = Date.now,
   ) {}
+
+  /**
+   * What one card has spent, split by whether the money was actually metered.
+   * The split is the point: subscription rows carry pi's notional price for a
+   * flat-rate plan, so folding them in would charge a card for money nobody
+   * spent and park it short of its real allowance.
+   */
+  async cardSpend(cardId: string): Promise<CardSpend> {
+    const result = await this.client.execute({
+      sql: `SELECT
+              COALESCE(SUM(CASE WHEN is_subscription = 0 THEN cost_usd ELSE 0 END), 0) AS billed,
+              COALESCE(SUM(CASE WHEN is_subscription = 1 THEN cost_usd ELSE 0 END), 0) AS subscription
+            FROM cost_entries WHERE card_id = ?`,
+      args: [cardId],
+    });
+    const row = result.rows[0];
+    return {
+      billedUsd: Number(row?.billed ?? 0),
+      subscriptionUsd: Number(row?.subscription ?? 0),
+    };
+  }
+
+  /** Metered spend per phase, for the report on a card that hit the ceiling. */
+  async cardSpendByPhase(cardId: string): Promise<Map<string, number>> {
+    const result = await this.client.execute({
+      sql: `SELECT COALESCE(phase, 'unattributed') AS phase, SUM(cost_usd) AS usd
+            FROM cost_entries WHERE card_id = ? AND is_subscription = 0
+            GROUP BY COALESCE(phase, 'unattributed')`,
+      args: [cardId],
+    });
+    return new Map(result.rows.map((row) => [String(row.phase), Number(row.usd ?? 0)]));
+  }
 
   async record(context: CostContext, usage: TokenUsage): Promise<CostRecordedEvent> {
     requireUsage(usage);

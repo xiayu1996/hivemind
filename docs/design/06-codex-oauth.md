@@ -13,7 +13,7 @@
 
 hivemind 走 pi 路线（provider 抽象、成本、reasoning 档位都齐），cumora 的教训作为加固清单吸收（§7）。
 
-## 2. pi 的 OAuth 机制（v0.84.3 源码核实）
+## 2. pi 的 OAuth 机制（v0.85.1 源码核实）
 
 - **client_id 复用官方 Codex CLI**（`app_EMoamEEZ73f0CkXaXp7hrann`），且**不伪装**：authorize URL 带 `originator=pi`，请求头 `originator: pi` + pi 的 User-Agent——OpenAI 完全识别 pi 流量并照常服务。
 - **两种登录**（`/login` 是 TUI 交互命令，**RPC 协议没有 auth 命令**→ 登录必须是带外人工步骤）：
@@ -21,13 +21,15 @@ hivemind 走 pi 路线（provider 抽象、成本、reasoning 档位都齐），
   2. **Device code 流（headless，已内置）**：终端显示 user code → 任意设备访问 `auth.openai.com/codex/device` 输入，15 分钟超时。
 - **token 落盘** `~/.pi/agent/auth.json`（0600；`PI_CODING_AGENT_DIR` 可改目录）：`{type:"oauth", access:<JWT>, refresh, expires:<epoch 毫秒>, accountId}`。**与官方 `~/.codex/auth.json` 格式不兼容**（复用官方登录结果需手工字段映射）。
 - **自动刷新**：剩余 <5min 触发，双检锁（proper-lockfile 文件锁，锁内二次检查 + 写回）——**跨进程有效但仅限同机同文件系统**；v0.84.3 已修并发启动锁竞争误报（pi#1871）。
+- **⚠️ 被 SIGKILL 的持有者会留下 `auth.json.lock` 目录**：pi 的异步取锁路径 `stale = 30_000`，即下一个 pi 要等满 30s 才能夺锁。看守狗击杀、隔离、宿主机真死之后的**第一次 spawn 因此必然卡在握手上**，且 stdout/stderr 全静默、无从归因。两条对策同时生效（`src/runner/auth-lock.ts`）：spawn 前清理 mtime 超过 30s 的陈旧锁（用 pi 自己的判据，夺不走活持有者的锁——活持有者会持续刷新 mtime），以及**握手超时必须高于这 30s 窗口**，否则一个正确等锁的健康 pi 会被我们当成坏进程杀掉。
 - **⚠️ refresh token rotation（一次性）**：每次刷新换发新 refresh token，旧的立即作废（codex#10332 实证）。**这是多机方案的决定性约束。**
 
 ## 3. 请求形态与模型
 
 - endpoint `chatgpt.com/backend-api`，头带 `Authorization: Bearer <JWT>` + `chatgpt-account-id`（请求时从 JWT 现场解出）；`store:false`；请求体 zstd 压缩；`session-id` 头做 prompt cache 亲和。
 - transport `auto`（SSE / WebSocket / websocket-cached，含 60min 连接上限前主动轮换）；`websocket_connection_limit_reached` → 降级 `sse` 重试。
-- 现役 model（v0.84.3 catalog）：`gpt-5.6-sol`（旗舰）/ `gpt-5.6-terra`（中档）/ `gpt-5.6-luna`（低价）272K ctx，仅 5.6 系支持 `:max`；`gpt-5.5` / `gpt-5.4` / `gpt-5.4-mini`。**模型分层表（02 文档 §5.1）的 codex 列据此落位：大脑=gpt-5.6-sol:xhigh，中脑=gpt-5.6-terra:medium**；小脑仍走 GLM/Grok（不占订阅窗口）。cumora 实测教训：ChatGPT 账号下小模型名不能想当然（`gpt-5-mini` 被拒、`gpt-5.4-mini` 可用），model id 全部走动态配置。
+- 现役 model（v0.84.3 catalog）：`gpt-5.6-sol`（旗舰）/ `gpt-5.6-terra`（中档）/ `gpt-5.6-luna`（低价）272K ctx，仅 5.6 系支持 `:max`；`gpt-5.5` / `gpt-5.4` / `gpt-5.4-mini`。**模型分层表（02 文档 §5.1）的 codex 列据此落位：大脑=gpt-5.6-sol:xhigh，中脑=gpt-5.6-terra:medium，廉价档=gpt-5.6-luna**；小脑仍走 GLM/Grok（不占订阅窗口）。
+- **⚠️ 目录列出的 id 不等于本账号可用的 id**。2026-09-09 在 ChatGPT 订阅账号上逐个真实往返实测 v0.85.1 的 8 个 id：可用 `gpt-5.5` / `gpt-5.6-luna` / `gpt-5.6-terra` / `gpt-5.6-sol` / `gpt-6-astra`；**被拒** `gpt-5.4` / `gpt-5.4-mini` / `gpt-5.3-codex-spark`，文案一律 `The '<id>' model is not supported when using Codex with a ChatGPT account.`（此前记录的"`gpt-5.4-mini` 可用"已不成立）。所以廉价档必须也是 5.6+，否则 preflight 的 capacity_probe 在每台订阅主机上都失败。唯一可信判据是真实往返（preflight 已有该检查），采集快照只能回答"这个 id 是否存在"。
 
 ## 4. 配额与错误分诊
 

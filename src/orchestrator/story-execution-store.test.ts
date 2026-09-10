@@ -226,3 +226,38 @@ describe("StoryExecutionStore invalidation audit", () => {
     client.close();
   });
 });
+
+describe("StoryExecutionStore phase input", () => {
+  it("tells the next CODE round what the merge gate refused, since only CODE can change it", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, () => 1_000);
+    await store.createStory({
+      id: "S-EPIC1-01",
+      notionPageId: "page-1",
+      title: "Merge gate feedback",
+      requirement: "Requirement",
+      branch: "story/epic1-01",
+    });
+    await store.transition("S-EPIC1-01", "QUEUED", "DESIGN", "system", "run-0");
+    await store.transition("S-EPIC1-01", "DESIGN", "CODE", "system", "run-1");
+    await store.transition("S-EPIC1-01", "CODE", "VERIFY", "system", "run-2");
+    await store.transition("S-EPIC1-01", "VERIFY", "MERGE", "system", "run-3");
+    await store.beginPhase({ runId: "run-merge", cardId: "S-EPIC1-01", phase: "MERGE", round: 1, prompt: "merge" });
+    await store.failPhase("run-merge", "git diff --check reported trailing whitespace in src/a.ts:12");
+
+    const input = await store.buildPhaseInput("S-EPIC1-01", "CODE", 2);
+    expect(input.previousRejections).toEqual([
+      { phase: "MERGE", reason: "git diff --check reported trailing whitespace in src/a.ts:12" },
+    ]);
+    await store.recordIntegrationRejection("S-EPIC1-01", "run-merge", "subset re-verification on epic/EPIC1 failed for S-EPIC1-01-a: page returned 404");
+    const bounced = await store.buildPhaseInput("S-EPIC1-01", "CODE", 2);
+    expect(bounced.previousRejections).toContainEqual({
+      phase: "MERGE",
+      reason: "re-verification on the Epic head failed: subset re-verification on epic/EPIC1 failed for S-EPIC1-01-a: page returned 404",
+    });
+    const design = await store.buildPhaseInput("S-EPIC1-01", "DESIGN", 2);
+    expect(design.previousRejections).toEqual([]);
+    client.close();
+  });
+});

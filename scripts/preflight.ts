@@ -14,9 +14,13 @@ import { createNotionHttpTransport } from "../src/notion/sdk-adapters.js";
 import { openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
 import { probeProviderReadiness } from "../src/runner/auth-probe.js";
+import { needsApiKeyEnv, providerKeyEnv } from "../src/runner/provider-env.js";
+import { reapStalePiAuthLock } from "../src/runner/auth-lock.js";
+import { probeCredentialRoundTrip } from "../src/runner/credential-roundtrip.js";
+import { assertErrorFixtureCoverage } from "../src/runner/error-fixtures.js";
 import { assertProviderRetriesDisabled } from "../src/runner/failover.js";
 import { assertModelPolicy, ModelPolicy } from "../src/runner/model-policy.js";
-import { PiModelCatalog } from "../src/runner/model-resolver.js";
+import { defaultModelCatalog } from "../src/runner/catalog.js";
 import { defaultPiBinary, pinnedPiVersion } from "../src/runner/pi-binary.js";
 
 const execFileAsync = promisify(execFile);
@@ -78,6 +82,17 @@ async function main(): Promise<void> {
     if (version !== PI_VERSION) throw new Error(`found ${version} at ${piBinary}`);
     return piBinary;
   });
+
+  // An abandoned credential lock means the last pi on this host was killed
+  // mid-refresh. It is cleared rather than reported as broken, because the next
+  // spawn would otherwise stall for pi's whole staleness window with no output
+  // at all; a lock a peer worker still holds is left alone and reported.
+  await attempt("pi credential lock is free", async () => {
+    const lock = await reapStalePiAuthLock();
+    if (lock.reaped) return `cleared a lock abandoned ${Math.round(lock.ageMs! / 1000)}s ago`;
+    if (lock.ageMs !== null) return `held by another process for ${Math.round(lock.ageMs / 1000)}s`;
+    return "no lock";
+  }, "WARN");
 
   const stored = await loadSecretsFile().catch(() => new Map<string, string>());
   await attempt("secrets file present and private", async () => {
@@ -141,7 +156,7 @@ async function main(): Promise<void> {
   });
 
   if (config) {
-    const catalog = new PiModelCatalog({ binary: piBinary });
+    const catalog = defaultModelCatalog(piBinary);
     await attempt("every configured model id exists in its provider's catalogue", () => assertModelPolicy(config!, catalog));
     await attempt("provider retries are disabled (failover owns retries)", () => assertProviderRetriesDisabled(config!));
     await attempt("an out-of-band alert channel is configured", () =>
@@ -151,11 +166,50 @@ async function main(): Promise<void> {
 
     const policy = new ModelPolicy(config, catalog);
     const chain = config.get("model.failoverChain");
+    const severity = chain.length > 1 ? "WARN" : "FAIL";
+    await attempt("every provider in the chain has captured failure wordings", () => {
+      assertErrorFixtureCoverage(chain);
+      return Promise.resolve(chain.join(", "));
+    });
     for (const provider of chain) {
+      // An api_key provider's key reaches pi only if something puts it there.
+      // systemd gives the daemons the secrets file; a preflight run by hand
+      // gets nothing, and pi then reports the provider as unconfigured — which
+      // reads exactly like a credential nobody ever added.
+      let providerEnv: Record<string, string> | undefined;
+      await attempt(`provider ${provider} key reaches pi`, async () => {
+        const profile = await policy.profileOf(provider);
+        if (!needsApiKeyEnv(profile)) {
+          providerEnv = {};
+          return "oauth; credential lives in pi's auth file";
+        }
+        providerEnv = providerKeyEnv({
+          provider,
+          ...(profile.envKey ? { envKey: profile.envKey } : {}),
+          secrets: stored,
+          secretsPath,
+        });
+        return Object.keys(providerEnv)[0]!;
+      }, severity);
+      // Without the key, the probes below would fail for a reason that has
+      // nothing to do with the credential being valid.
+      if (providerEnv === undefined) continue;
+      const spawnEnv = providerEnv;
+
+      let configured = false;
       await attempt(`provider ${provider} credentials ready`, async () => {
-        const readiness = await probeProviderReadiness(piBinary, provider);
+        const readiness = await probeProviderReadiness(piBinary, provider, spawnEnv);
         if (!readiness.ready) throw new Error(readiness.reason ?? "not ready; run scripts/pi-login.sh");
-      }, chain.length > 1 ? "WARN" : "FAIL");
+        configured = true;
+      }, severity);
+      if (!configured) continue;
+      // `auth check` only proves a credential is present. One tiny turn on the
+      // cheap tier is what separates a working key from a revoked one.
+      await attempt(`provider ${provider} answers a real turn`, async () => {
+        const model = await policy.resolve("capacity_probe", provider);
+        await probeCredentialRoundTrip({ binary: piBinary, provider, model, env: spawnEnv });
+        return model.id;
+      }, severity);
     }
     for (const purpose of ["product_manager", "decompose", "code", "verify"] as const) {
       await attempt(`a provider serves the ${purpose} tier`, async () => {

@@ -1,6 +1,7 @@
 // @scenario S-M2-05-integration
 // @scenario S-M2-05-conflict
 // @scenario S-M2-05-subset
+// @scenario S-M2-05-revision
 import { describe, expect, it, vi } from "vitest";
 import { EpicMergeFlow } from "./merge-flow.js";
 
@@ -34,6 +35,22 @@ describe("EpicMergeFlow", () => {
       { cwd: "integration", args: ["merge", "--ff-only", story.branch] },
     ]));
     expect(calls.some(({ args }) => args.includes("push") || args.includes("main") && args[0] === "merge")).toBe(false);
+  });
+
+  it("S-M2-05-revision refuses to merge a revision the re-verification never saw", async () => {
+    const revisions = ["aaa111", "bbb222"];
+    const git = { run: vi.fn(async (cwd: string, args: string[]) => {
+      if (args.join(" ") === "branch --show-current") return cwd === "story" ? story.branch : "epic/E-1";
+      if (args.join(" ") === "rev-parse HEAD" && cwd === "story") return `${revisions.shift() ?? "bbb222"}\n`;
+      return "";
+    }) };
+    const verify = vi.fn(async (scenarioIds: readonly string[]) => ({ passed: true as const, scenarioIds }));
+    const flow = new EpicMergeFlow(git, verify, { storyWorktree: "story", integrationWorktree: "integration" });
+
+    const result = await flow.merge({ epicId: "E-1", story, integratedStories: [] });
+    expect(result.kind).toBe("verification_failed");
+    expect((result as { reason?: string }).reason).toContain("moved during re-verification");
+    expect(git.run.mock.calls.some(([, args]) => args[0] === "merge")).toBe(false);
   });
 
   it("S-M2-05-conflict retains only an actual unresolved rebase conflict and never merges it", async () => {

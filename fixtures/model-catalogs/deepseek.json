@@ -1,0 +1,39 @@
+{
+  "provider": "deepseek",
+  "piVersion": "0.85.1",
+  "capturedAt": "2026-09-10T02:20:23.283Z",
+  "models": [
+    {
+      "provider": "deepseek",
+      "id": "deepseek-flash",
+      "contextWindow": 1000000,
+      "maxOutput": 384000,
+      "thinking": true,
+      "images": true
+    },
+    {
+      "provider": "deepseek",
+      "id": "deepseek-v4-flash",
+      "contextWindow": 1000000,
+      "maxOutput": 384000,
+      "thinking": true,
+      "images": false
+    },
+    {
+      "provider": "deepseek",
+      "id": "deepseek-v4-flash-vision-exp",
+      "contextWindow": 1000000,
+      "maxOutput": 384000,
+      "thinking": true,
+      "images": true
+    },
+    {
+      "provider": "deepseek",
+      "id": "deepseek-v4-pro",
+      "contextWindow": 1000000,
+      "maxOutput": 384000,
+      "thinking": true,
+      "images": false
+    }
+  ]
+}

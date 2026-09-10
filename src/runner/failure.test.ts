@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { extractFailure, sumUsage } from "./failure.js";
 import type { RpcEvent } from "./types.js";
 
-const FIXTURES = join(process.cwd(), "fixtures/rpc-errors");
+const FIXTURES = join(process.cwd(), "fixtures/rpc-errors/openai-codex");
 
 // Captured from real pi runs against the mock provider (docs/poc/poc-5-error-catalog.md).
 const captured = (name: string): RpcEvent[] =>
@@ -19,6 +19,7 @@ describe("extractFailure against captured pi output", () => {
     ["invalid_request", /400/],
     ["transport", /connection error/i],
     ["mid_stream_drop", /connection error/i],
+    ["usage_limit_codex", /usage limit has been reached/i],
   ];
 
   for (const [name, pattern] of cases) {

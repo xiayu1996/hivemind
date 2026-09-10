@@ -11,6 +11,11 @@ export interface DecompositionStory {
   id: string;
   title: string;
   requirement: string;
+  /** Where a person sees this Story's outcome: the screen, report or message
+   * they open. A slice with no entry point of its own is a layer, not a Story. */
+  userEntryPoint: string;
+  /** How this Story is verified on its own, without waiting for a sibling. */
+  verificationPath: string;
   scenarios: readonly DecompositionScenario[];
   dependsOn: readonly string[];
   predictedFootprint: readonly string[];
@@ -34,6 +39,12 @@ export interface AcceptedDecomposition {
   epicId: string;
   businessGoal: string;
   stories: readonly DecompositionStory[];
+}
+
+export interface DecompositionLimits {
+  /** Stories per Epic. A longer list is almost always a horizontal cut of one
+   * feature; re-splitting is cheaper than carrying it through the pipeline. */
+  maxStories?: number;
 }
 
 export interface RejectedDecomposition {
@@ -102,6 +113,23 @@ function validateStory(story: DecompositionStory, index: number, allStoryIds: Re
       }
     }
   }
+  // A vertical slice cuts through every layer and lands somewhere a person can
+  // look. Both fields are the check that it does: without them the plausible
+  // failure is six Stories that each build one layer of the same screen, which
+  // is what the 2026-09-05 Epic did and why none of its cards could be verified
+  // or delivered on its own.
+  if (story.userEntryPoint.trim() === "") {
+    reasons.push(`${prefix} must name the user-visible entry point where its outcome can be seen`);
+  }
+  for (const issue of inspectBusinessLanguage(`${prefix} user entry point`, story.userEntryPoint)) {
+    reasons.push(`${issue.field} line ${issue.line} ${issue.reason}`);
+  }
+  if (story.verificationPath.trim() === "") {
+    reasons.push(`${prefix} must state how it is verified on its own, without a sibling Story`);
+  }
+  for (const issue of inspectBusinessLanguage(`${prefix} verification path`, story.verificationPath)) {
+    reasons.push(`${issue.field} line ${issue.line} ${issue.reason}`);
+  }
   if (story.predictedFootprint.length === 0) reasons.push(`${prefix} must declare a directory or module footprint`);
   for (const entry of story.predictedFootprint) {
     if (!footprint.test(entry)) reasons.push(`${prefix} footprint must name a directory or module, not a file: ${entry}`);
@@ -117,7 +145,34 @@ function validateStory(story: DecompositionStory, index: number, allStoryIds: Re
  * Validates an all-or-nothing DECOMPOSE artifact. Input order is retained because
  * it is the approved dependency order; only set-like fields are canonicalized.
  */
-export function evaluateDecomposition(candidate: DecompositionCandidate): DecompositionResult {
+const DEFAULT_MAX_STORIES = 4;
+
+/** Two Stories that show their outcome in the same place are one Story cut
+ * horizontally, whatever their titles say. */
+function horizontalCuts(stories: readonly DecompositionStory[]): string[] {
+  const reasons: string[] = [];
+  const byEntryPoint = new Map<string, string[]>();
+  for (const story of stories) {
+    const key = story.userEntryPoint.trim().toLowerCase();
+    if (key === "") continue;
+    byEntryPoint.set(key, [...(byEntryPoint.get(key) ?? []), story.id]);
+  }
+  for (const [entryPoint, ids] of byEntryPoint) {
+    if (ids.length > 1) {
+      reasons.push(`Stories ${ids.join(", ")} share the user-visible entry point "${entryPoint}": that is one Story cut into layers, re-split it so each slice is independently usable`);
+    }
+  }
+  const footprints = new Set(stories.map((story) => [...story.predictedFootprint].toSorted().join("|")));
+  if (stories.length > 1 && footprints.size === 1) {
+    reasons.push("every Story declares the same footprint, so the Epic was cut by layer rather than by outcome; re-split it");
+  }
+  return reasons;
+}
+
+export function evaluateDecomposition(
+  candidate: DecompositionCandidate,
+  limits: DecompositionLimits = {},
+): DecompositionResult {
   const question = candidate.blockingQuestion === undefined ? null : normalizeQuestion(candidate.blockingQuestion);
   if (question && question.question !== "") {
     if (candidate.stories.length > 0) {
@@ -134,6 +189,11 @@ export function evaluateDecomposition(candidate: DecompositionCandidate): Decomp
     reasons.push(`${issue.field} line ${issue.line} ${issue.reason}`);
   }
   if (candidate.stories.length === 0) reasons.push("Epic must contain at least one Story");
+  const maxStories = limits.maxStories ?? DEFAULT_MAX_STORIES;
+  if (candidate.stories.length > maxStories) {
+    reasons.push(`Epic contains ${candidate.stories.length} Stories, more than the ${maxStories} allowed: split the Epic or merge the slices that are not independently usable`);
+  }
+  reasons.push(...horizontalCuts(candidate.stories));
 
   const ids = candidate.stories.map((story) => story.id);
   const allStoryIds = new Set(ids);
