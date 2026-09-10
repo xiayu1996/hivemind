@@ -371,6 +371,38 @@ describe("work status", () => {
     });
   });
 
+  // @scenario S-E1ACTION-05-missingpage
+  it("S-E1ACTION-05-missingpage fails the whole overview when the gate object cannot be resolved", async () => {
+    await client.execute(gateRow("gate-orphan", "requirement", "requirement-gone", "Where did it go?", "/requirements/requirement-gone"));
+
+    const source = new LibsqlConsoleDataSource(client, async () => []);
+    await expect(source.workStatus()).rejects.toThrow("open human gate");
+
+    const app = await createConsoleServer(source, { serveUi: false });
+    const response = await app.inject({ method: "GET", url: "/api/work-status" });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: "work_status_unavailable", retry: true });
+    // No half-built or fabricated Notion address reaches the client.
+    expect(response.body).not.toContain("notion.so");
+    await app.close();
+
+    const ui = await readFile("console-ui/src/App.vue", "utf8");
+    expect(ui).toContain("Unable to load work status: {{ error }}");
+    expect(ui).toContain("Retry");
+  });
+
+  // @scenario S-E1ACTION-05-missingpage
+  it("S-E1ACTION-05-missingpage fails closed when the gate object has no notion page id", async () => {
+    await client.batch([
+      { sql: `INSERT INTO requirements (id, notion_page_id, title, state, original_request, created_at, updated_at)
+              VALUES ('requirement-nopage', '', 'Export customers', 'EXECUTING', 'Export customers', 1, 1)` },
+      gateRow("gate-nopage", "requirement", "requirement-nopage", "Which customers?", "/requirements/requirement-nopage"),
+    ], "write");
+
+    const source = new LibsqlConsoleDataSource(client, async () => []);
+    await expect(source.workStatus()).rejects.toThrow("open human gate");
+  });
+
   // @scenario S-E1ACTION-01-ignorecomments
   it("does not turn an unresolved Notion comment into a pending response", async () => {
     await client.execute({
