@@ -55,8 +55,8 @@ describe("S-E1ACTION-01-ignorecomments", () => {
     await client.batch([
       { sql: `INSERT INTO requirements (id, notion_page_id, title, state, original_request, created_at, updated_at)
               VALUES (?, ?, ?, ?, ?, ?, ?)`, args: ["requirement-1", "requirement-page-1", "Status overview", "EXECUTING", "Show work status", 1, 5] },
-      { sql: `INSERT INTO human_gates (id, object_type, object_id, required_action, phase, navigation_target, priority, created_at, updated_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, args: ["gate-1", "requirement", "requirement-1", "Approve the plan", "PRD_CONFIRM", "/requirements/requirement-1", 0, 2, 2] },
+      { sql: `INSERT INTO human_gates (id, object_type, object_id, required_action, phase, context, navigation_target, priority, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, args: ["gate-1", "requirement", "requirement-1", "Approve the plan", "PRD_CONFIRM", "Plan approval is required", "/requirements/requirement-1", 0, 2, 2] },
     ], "write");
 
     const source = new LibsqlConsoleDataSource(client, async () => []);
@@ -165,11 +165,6 @@ describe("S-E1ACTION-01-ignorecomments", () => {
         sql: `INSERT INTO requirements (id, notion_page_id, title, state, original_request, created_at, updated_at)
               VALUES (?, ?, ?, ?, ?, ?, ?)`,
         args: ["requirement-1", "requirement-page-1", "Awaiting clarification", "CLARIFY", "Clarify the request", 1, 1],
-      },
-      {
-        sql: `INSERT INTO human_gates (id, object_type, object_id, required_action, phase, navigation_target, created_at, updated_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        args: ["gate-1", "story", "story-1", "Answer the question", "CODE", "/tasks/story-1", 1, 1],
       },
     ], "write");
 

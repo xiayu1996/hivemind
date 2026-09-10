@@ -123,6 +123,10 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
     const readAt = this.now();
     const pendingResponses = gates.rows.map((gate) => {
       const response = plain(gate);
+      if (typeof response.requirementTitle !== "string" || response.requirementTitle.trim() === ""
+        || typeof response.context !== "string" || response.context.trim() === "") {
+        throw new Error("incomplete open human gate");
+      }
       const startedWaitingAt = Number(response.startedWaitingAt);
       return Object.assign(response, {
         waitingDurationMinutes: Math.max(0, Math.floor((readAt - startedWaitingAt) / 60_000)),
