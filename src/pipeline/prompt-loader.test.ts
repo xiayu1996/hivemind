@@ -9,7 +9,7 @@ import type { Phase } from "./phase-input.js";
 const tempDirs: string[] = [];
 const PROMPTS = join(process.cwd(), "prompts");
 const PHASES: Phase[] = ["DECOMPOSE", "DESIGN", "CODE", "VERIFY", "MERGE", "REGRESSION_FIX"];
-const PM_PHASES: PmPhase[] = ["CLARIFY", "PRD", "REQUIREMENT_DECOMPOSE"];
+const PM_PHASES: PmPhase[] = ["CLARIFY", "PRD", "REQUIREMENT_DECOMPOSE", "UI_REVIEW"];
 
 afterEach(() => {
   for (const path of tempDirs.splice(0)) rmSync(path, { recursive: true, force: true });

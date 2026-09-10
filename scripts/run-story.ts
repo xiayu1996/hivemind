@@ -6,6 +6,9 @@ import { fileURLToPath } from "node:url";
 import { CANONICAL_CAPTURE_ENV } from "../src/observability/capture-contract.js";
 import { LibsqlPhaseRecorder } from "../src/observability/phase-recorder.js";
 import { BlindVerifyStoryPort } from "../src/orchestrator/blind-verify-port.js";
+import { UiReviewedVerifyPort } from "../src/orchestrator/ui-reviewed-verify-port.js";
+import { UiReviewExecutor } from "../src/verify/ui-review.js";
+import { loadPmPromptLayers } from "../src/pipeline/prompt-loader.js";
 import { PiStoryPhasePort } from "../src/orchestrator/pi-phase-port.js";
 import { EpicIntegrator } from "../src/orchestrator/epic-integration.js";
 import { StoryExecutionStore } from "../src/orchestrator/story-execution-store.js";
@@ -23,9 +26,9 @@ import { probeProviderReadiness } from "../src/runner/auth-probe.js";
 import { type ExplicitContextFile } from "../src/runner/context-files.js";
 import { resolveModel } from "../src/runner/model-resolver.js";
 import { defaultModelCatalog } from "../src/runner/catalog.js";
+import { ModelPolicy } from "../src/runner/model-policy.js";
 import { ConfigStore } from "../src/config/store.js";
 import { CostLedger } from "../src/observability/cost-ledger.js";
-import { ModelPolicy } from "../src/runner/model-policy.js";
 import { isMeteredProvider } from "../src/runner/provider-env.js";
 import { costCeilingUsd } from "../src/pipeline/cost-ceiling.js";
 import { retryLimits } from "../src/pipeline/retry-limits.js";
@@ -131,7 +134,8 @@ async function main(): Promise<void> {
     // Whether this card's tokens cost money as they are spent decides two
     // things: what the ledger counts as billed, and whether a spend ceiling
     // means anything for this run at all.
-    const metered = isMeteredProvider(await new ModelPolicy(config, defaultModelCatalog(piBinary, worktreePath)).profileOf(provider));
+    const modelPolicy = new ModelPolicy(config, defaultModelCatalog(piBinary, worktreePath));
+    const metered = isMeteredProvider(await modelPolicy.profileOf(provider));
     const recorder = new LibsqlPhaseRecorder(handle.client, {
       evidenceRoot,
       provider: model.provider,
@@ -218,6 +222,57 @@ async function main(): Promise<void> {
       commitMessages: () => gitMessages(worktreePath, targetBranch),
       recordTelemetry: (input) => recorder.record(input),
     });
+    // The product manager's acceptance of the interface, in its own session
+    // with its own eyes. It only reviews what the functional lane already
+    // accepted, and only a model that can actually see the screens: a
+    // text-only reviewer judging a layout is theatre, so the lane is skipped
+    // and said out loud instead.
+    const uiReviewModel = config.get("verify.uiReview")
+      ? await modelPolicy.resolve("ui_review", provider).catch((cause: unknown) => {
+        console.warn(`UI review lane disabled: ${(cause as Error).message}`);
+        return undefined;
+      })
+      : undefined;
+    if (uiReviewModel && uiReviewModel.images !== true) {
+      console.warn(`UI review lane disabled: ${uiReviewModel.id} does not accept image input`);
+    }
+    const uiReviewLayers = uiReviewModel?.images === true
+      ? await loadPmPromptLayers(join(ROOT, "prompts"), "UI_REVIEW")
+      : undefined;
+    const reviewedVerifier = uiReviewModel && uiReviewLayers
+      ? new UiReviewedVerifyPort({
+        functional: verifier,
+        review: new UiReviewExecutor({
+          create: (policy) => new RpcPiRunner({
+            binary: piBinary,
+            provider: uiReviewModel.provider,
+            model: uiReviewModel,
+            cwd: worktreePath,
+            sessionDir: join(sessionRoot, "ui-review"),
+            tools: ["read", "bash", "grep", "find", "ls"],
+            extensions: [guardExtension, canonicalExtension],
+            contextFiles: "explicit",
+            systemPrompt: { mode: "replace", text: uiReviewLayers.combined },
+            env: {
+              PATH: browserLanePath(ROOT),
+              [POLICY_ENV_VAR]: serializeGuardPolicy(policy),
+              [CANONICAL_CAPTURE_ENV]: join(policy.extraWriteRoots[0]!, "ui-review-requests.jsonl"),
+              [EVIDENCE_DIR_ENV]: policy.extraWriteRoots[0]!,
+            },
+          }),
+        }),
+        worktreePath,
+        evidenceRoot,
+        auditPath,
+        allowedHosts,
+        chromiumSandbox: config.get("verify.chromiumSandbox"),
+        storyTitle: async () => {
+          const snapshot = await store.getStory(cardId);
+          return { title: snapshot.title, businessGoal: snapshot.requirement };
+        },
+        recordFriction: (friction) => store.recordFriction(friction),
+      })
+      : verifier;
     const delivery = new GitMrStoryDelivery(await discoverMRPort(), {
       worktreePath,
       targetBranch,
@@ -243,7 +298,7 @@ async function main(): Promise<void> {
     const result = await new SingleStoryWorker(
       store,
       phases,
-      verifier,
+      reviewedVerifier,
       delivery,
       new NotionStoryProjection(handle.client),
       {

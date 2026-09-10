@@ -220,3 +220,41 @@ describe("spawn arguments", () => {
     expect(args[args.indexOf("--thinking") + 1]).toBe("off");
   });
 });
+
+const SEEING_MODEL = await resolveModel(
+  staticCatalog([{ provider: "fake", id: "fake-eyes", images: true }]),
+  "fake",
+  "fake-eyes",
+);
+
+describe("prompt images", () => {
+
+  it("refuses to attach an image to a model whose catalogue row does not advertise image input", async () => {
+    // pi forwards it to the provider anyway, which then fails with a message
+    // about content types naming neither the model nor the caller's mistake.
+    const runner = makeNodeRunner();
+    await runner.start();
+    await expect(runner.prompt("look at this", 2_000, [{ data: "AAAA", mimeType: "image/png" }]))
+      .rejects.toThrow(/fake-1 does not accept image input/);
+  });
+
+  it("sends them in the shape pi's prompt command takes", async () => {
+    const runner = new RpcPiRunner({
+      binary: process.execPath,
+      binaryArgs: [FAKE_PI],
+      provider: "fake",
+      model: SEEING_MODEL,
+      cwd: process.cwd(),
+      tools: [],
+      authLockPath: AUTH_LOCK,
+      env: { FAKE_PI_MODE: "echo-prompt" },
+    });
+    runners.push(runner);
+    await runner.start();
+    const result = await runner.prompt("look at this", 5_000, [{ data: "AAAA", mimeType: "image/png" }]);
+    const echoed = result.events.find((event) => event.type === "message_end")?.message as { content: string };
+    expect(JSON.parse(echoed.content)).toEqual({
+      images: [{ type: "image", data: "AAAA", mimeType: "image/png" }],
+    });
+  });
+});

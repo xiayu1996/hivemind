@@ -79,7 +79,7 @@ describe("ModelPolicy", () => {
     // a partial map would silently leave a call site with no tier at all.
     await config.set("model.purposeTiers", {
       product_manager: "brain", decompose: "brain", design: "cheap", code: "standard",
-      verify: "standard", merge: "standard", capacity_probe: "cheap",
+      verify: "standard", ui_review: "brain", merge: "standard", capacity_probe: "cheap",
       triage: "cheap", distiller: "cheap",
     }, "test");
     const policy = new ModelPolicy(config, catalog);
@@ -106,7 +106,8 @@ describe("ModelPolicy", () => {
   it("passes a changed effort through without touching the tier", async () => {
     await config.set("model.purposeThinking", {
       product_manager: "high", decompose: "high", design: "minimal", code: "medium",
-      verify: "medium", merge: "low", capacity_probe: "off", triage: "low", distiller: "off",
+      verify: "medium", ui_review: "medium", merge: "low", capacity_probe: "off",
+      triage: "low", distiller: "off",
     }, "test");
     const policy = new ModelPolicy(config, catalog);
     await expect(policy.resolve("design", "openai-codex")).resolves.toMatchObject({

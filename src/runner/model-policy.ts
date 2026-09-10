@@ -9,6 +9,7 @@ export const MODEL_PURPOSES = [
   "design",
   "code",
   "verify",
+  "ui_review",
   "merge",
   "capacity_probe",
   "triage",

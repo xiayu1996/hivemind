@@ -13,12 +13,17 @@ const PHASE_FILES: Record<Phase, string> = {
 
 /** The product manager's phases run above the Epic pipeline and share none of
  * its phase prompts, so they carry their own layer pair. */
-export type PmPhase = "CLARIFY" | "PRD" | "REQUIREMENT_DECOMPOSE";
+export type PmPhase = "CLARIFY" | "PRD" | "REQUIREMENT_DECOMPOSE" | "UI_REVIEW";
 
 const PM_FILES: Record<PmPhase, string> = {
   CLARIFY: "clarify.md",
   PRD: "prd.md",
   REQUIREMENT_DECOMPOSE: "decompose.md",
+  // The UI acceptance lane is a product manager reading a delivered screen, so
+  // it inherits the PM baseline (business language, no implementation talk)
+  // rather than the engineering phases' one. It is not a state-machine phase:
+  // it runs inside VERIFY and has no state of its own.
+  UI_REVIEW: "ui-review.md",
 };
 
 export interface PromptLayers {

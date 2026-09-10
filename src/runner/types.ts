@@ -71,6 +71,17 @@ export interface QueuedMessages {
   followUp: string[];
 }
 
+/**
+ * An image sent with a prompt, in pi's `ImageContent` shape. Only a model whose
+ * catalogue row advertises image input may be sent one: pi relays the content
+ * to the provider either way, and a text-only model answers with a provider
+ * error that says nothing about what was actually wrong.
+ */
+export interface PromptImage {
+  data: string;
+  mimeType: string;
+}
+
 export interface PromptResult {
   settled: boolean;
   failure: RunFailure | null;
@@ -85,7 +96,7 @@ export interface PromptResult {
  */
 export interface PiRunner {
   start(): Promise<void>;
-  prompt(message: string, timeoutMs?: number): Promise<PromptResult>;
+  prompt(message: string, timeoutMs?: number, images?: readonly PromptImage[]): Promise<PromptResult>;
   steer(message: string): Promise<void>;
   abort(): Promise<void>;
   /** Removes queued steering and follow-up messages and returns their text. */
