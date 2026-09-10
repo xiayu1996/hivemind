@@ -119,15 +119,16 @@ export class StoryExecutionStore {
     const [insert] = await this.client.batch([
       {
         sql: `INSERT OR IGNORE INTO stories
-                (id, epic_id, notion_page_id, title, requirement, state, phase, priority, repo, branch,
+                (id, epic_id, notion_page_id, title, requirement, state, phase, phase_started_at, priority, repo, branch,
                  target_branch, capabilities, created_at, updated_at)
-              VALUES (?, ?, ?, ?, ?, 'QUEUED', NULL, ?, ?, ?, ?, ?, ?, ?)`,
+              VALUES (?, ?, ?, ?, ?, 'QUEUED', NULL, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           input.id,
           input.epicId ?? null,
           input.notionPageId,
           input.title,
           input.requirement,
+          time,
           input.priority ?? 2,
           input.repo ?? null,
           input.branch ?? null,
@@ -205,9 +206,10 @@ export class StoryExecutionStore {
     const [update] = await this.client.batch([
       {
         sql: `UPDATE stories
-              SET state = ?, phase = ?, stop_reason = NULL, resume_state = NULL, updated_at = ?
+              SET state = ?, phase = ?, phase_started_at = CASE WHEN ? THEN ? ELSE phase_started_at END,
+                  stop_reason = NULL, resume_state = NULL, updated_at = ?
               WHERE id = ? AND state = ?`,
-        args: [to, phaseForState(to), time, cardId, expectedFrom],
+        args: [to, phaseForState(to), isActiveStoryState(to) ? 1 : 0, time, time, cardId, expectedFrom],
       },
       {
         sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
@@ -254,7 +256,8 @@ export class StoryExecutionStore {
     const [update] = await this.client.batch([
       {
         sql: `UPDATE stories
-              SET state = ?, phase = ?, stop_reason = NULL, resume_state = ?,
+              SET state = ?, phase = ?, phase_started_at = CASE WHEN ? THEN ? ELSE phase_started_at END,
+                  stop_reason = NULL, resume_state = ?,
                   notion_ai_status_shadow = ?, human_wins_until = ?,
                   phase_reentries = CASE WHEN ? THEN 0 ELSE phase_reentries END,
                   last_human_action_at = ?, updated_at = ?
@@ -262,6 +265,8 @@ export class StoryExecutionStore {
         args: [
           input.to,
           phaseForState(input.to),
+          isActiveStoryState(input.to) ? 1 : 0,
+          time,
           resumeState,
           input.observedAiStatus,
           input.humanWinsUntil,
@@ -641,9 +646,9 @@ export class StoryExecutionStore {
     const time = this.now();
     const [update] = await this.client.batch([
       {
-        sql: `UPDATE stories SET state = 'CODE', phase = 'CODE', updated_at = ?
+        sql: `UPDATE stories SET state = 'CODE', phase = 'CODE', phase_started_at = ?, updated_at = ?
               WHERE id = ? AND state = 'MERGE'`,
-        args: [time, cardId],
+        args: [time, time, cardId],
       },
       eventStatement(runId, cardId, "MERGE", type, { reason }, time),
     ], "write");
@@ -870,6 +875,10 @@ export class StoryExecutionStore {
       ],
     };
   }
+}
+
+function isActiveStoryState(state: StoryState): boolean {
+  return ["QUEUED", "DESIGN", "CODE", "VERIFY", "MERGE", "REGRESSION_FIX"].includes(state);
 }
 
 function phaseForState(state: StoryState): StoryPhase | null {

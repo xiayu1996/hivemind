@@ -142,6 +142,7 @@ CREATE TABLE IF NOT EXISTS stories (
                       'QUEUED','DESIGN','CODE','VERIFY','MERGE','DELIVERED',
                       'REGRESSION_FIX','NEEDS_INPUT','HUMAN_PARKED','FAILED')),
   phase             TEXT,
+  phase_started_at  INTEGER,
   priority          INTEGER NOT NULL DEFAULT 2,
   repo              TEXT,
   branch            TEXT,

@@ -120,10 +120,33 @@ describe("work status", () => {
         latestProgress: "CODE started",
       }],
     });
+    // Raw RPC events and epoch timestamps never reach the summary text.
+    const projection = JSON.stringify(await source.workStatus());
+    for (const excluded of ["rpc.tool_call", "1760000000000"]) {
+      expect(projection).not.toContain(excluded);
+    }
 
     const ui = await readFile("console-ui/src/App.vue", "utf8");
     for (const label of ["Working on", "Active for", "Latest progress", "View details"]) expect(ui).toContain(label);
     for (const excluded of ["Last updated:", "rpc.tool_call", "updated_at"]) expect(ui).not.toContain(excluded);
+  });
+
+  // @scenario S-E1ACTION-04-progress
+  it("S-E1ACTION-04-progress skips an active requirement whose only Story has no phase start", async () => {
+    await client.batch([
+      { sql: `INSERT INTO requirements (id, notion_page_id, title, state, original_request, created_at, updated_at)
+              VALUES ('requirement-no-start', 'requirement-page-no-start', 'Unowned summary', 'EXECUTING', 'Unowned summary', ?, ?)`, args: [1, 1] },
+      { sql: `INSERT INTO epics (id, notion_page_id, title, state, requirement_id, created_at, updated_at)
+              VALUES ('EPIC-no-start', 'epic-page-no-start', 'Activity', 'EXECUTING', 'requirement-no-start', ?, ?)`, args: [1, 1] },
+      { sql: `INSERT INTO stories (id, epic_id, notion_page_id, title, requirement, state, phase, phase_started_at, created_at, updated_at)
+              VALUES ('S-NOSTART-01', 'EPIC-no-start', 'story-page-no-start', 'Legacy activity card', 'Unowned summary', 'CODE', 'CODE', NULL, ?, ?)`, args: [1, 1] },
+    ], "write");
+
+    const source = new LibsqlConsoleDataSource(client, async () => [], () => 1_700_000_000_000);
+    await expect(source.workStatus()).resolves.toMatchObject({
+      activeRequirementState: "no_active_requirements",
+      activeRequirements: [],
+    });
   });
 
   // @scenario S-E1ACTION-01-ignorecomments

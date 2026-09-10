@@ -5,6 +5,7 @@ import { renderTraceHtml } from "../observability/projections/trace-html.js";
 import { traceProjection } from "../observability/projections/units.js";
 import { summarizeFootprintDeviation } from "../orchestrator/footprint-deviation.js";
 import type { ConsoleDataSource } from "./server.js";
+import { formatWaitingDuration } from "./work-status-time.js";
 
 function plain(row: Row): Record<string, unknown> {
   return Object.fromEntries(Object.entries(row));
@@ -14,6 +15,7 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
   constructor(
     private readonly client: Client,
     private readonly nodeSnapshot: () => Promise<unknown[]>,
+    private readonly now: () => number = Date.now,
   ) {}
 
   nodes(): Promise<unknown[]> {
@@ -107,10 +109,16 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
                              FROM human_gates
                             WHERE state = 'open'
                             ORDER BY priority, created_at, id`),
-      this.client.execute(`SELECT id, title, state AS phase, updated_at
-                             FROM requirements
-                            WHERE state = 'EXECUTING'
-                            ORDER BY updated_at DESC, id`),
+      this.client.execute(`SELECT r.id AS id, r.title AS title, s.id AS story_id,
+                                  COALESCE(s.phase, s.state) AS phase, s.title AS working_on,
+                                  s.phase_started_at
+                             FROM requirements r
+                             JOIN epics e ON e.requirement_id = r.id
+                             JOIN stories s ON s.epic_id = e.id
+                            WHERE r.state = 'EXECUTING'
+                              AND s.state IN ('QUEUED', 'DESIGN', 'CODE', 'VERIFY', 'MERGE', 'REGRESSION_FIX')
+                              AND s.phase_started_at IS NOT NULL
+                            ORDER BY r.updated_at DESC, r.id`),
     ]);
     const pendingResponses = gates.rows.map((gate) => {
       const response = plain(gate);
@@ -138,7 +146,18 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
       }
       return Object.assign(response, { otherOptions });
     });
-    const activeRequirements = requirements.rows.map(plain);
+    const activeRequirements = requirements.rows.map((row) => {
+      const phase = String(row.phase);
+      return {
+        id: String(row.id),
+        title: String(row.title),
+        storyId: String(row.story_id),
+        phase,
+        workingOn: String(row.working_on),
+        activeFor: formatWaitingDuration((this.now() - Number(row.phase_started_at)) / 60_000),
+        latestProgress: `${phase} started`,
+      };
+    });
     return {
       status: "success",
       pendingResponseState: pendingResponses.length === 0 ? "no_pending_responses" : "available",

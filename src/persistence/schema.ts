@@ -108,6 +108,7 @@ export const stories = sqliteTable("stories", {
   requirement: text("requirement").notNull(),
   state: text("state").notNull(),
   phase: text("phase"),
+  phaseStartedAt: ms("phase_started_at"),
   priority: integer("priority").notNull().default(2),
   repo: text("repo"),
   branch: text("branch"),

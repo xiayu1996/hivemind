@@ -80,6 +80,29 @@ describe("StoryExecutionStore", () => {
     expect(run.rows[0]).toMatchObject({ status: "completed", session_id: "session-design", hash_length: 64 });
   });
 
+  // @scenario S-E1ACTION-04-progress
+  it("records when the Story last entered an active phase", async () => {
+    const readStartedAt = async () => Number((await client.execute(
+      "SELECT phase_started_at FROM stories WHERE id = 'S-EPIC1-01'",
+    )).rows[0]?.phase_started_at);
+
+    const queuedAt = await readStartedAt();
+    expect(queuedAt).not.toBeNaN();
+
+    time = 5_000;
+    await store.transition("S-EPIC1-01", "QUEUED", "DESIGN", "system", "run-design");
+    await expect(readStartedAt()).resolves.toBe(5_000);
+
+    time = 9_000;
+    await store.transition("S-EPIC1-01", "DESIGN", "CODE", "system", "run-code");
+    await expect(readStartedAt()).resolves.toBe(9_000);
+
+    // Parking for a human is not progress; the phase clock must not restart.
+    time = 12_000;
+    await store.stopForInput("S-EPIC1-01", "CODE", "retry_limit_exceeded", "run-stop");
+    await expect(readStartedAt()).resolves.toBe(9_000);
+  });
+
   it("rolls back artifacts when completing the same run twice", async () => {
     await store.transition("S-EPIC1-01", "QUEUED", "DESIGN", "system", "run-design");
     await store.beginPhase({

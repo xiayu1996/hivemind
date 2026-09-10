@@ -74,7 +74,10 @@ function navigate(view) {
           <article v-for="requirement in overview.activeRequirements" :key="requirement.id">
             <strong>{{ requirement.title }}</strong>
             <p>Current phase: {{ requirement.phase }}</p>
-            <p>Last updated: {{ requirement.updated_at }}</p>
+            <p>Working on: {{ requirement.workingOn }}</p>
+            <p>Active for: {{ requirement.activeFor }}</p>
+            <p>Latest progress: {{ requirement.latestProgress }}</p>
+            <a>View details</a>
           </article>
         </section>
       </template>
