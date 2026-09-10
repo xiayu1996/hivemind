@@ -64,8 +64,8 @@ describe("S-E3OVERVIEW-01-active", () => {
     const source = new LibsqlConsoleDataSource(client, async () => []);
 
     await expect(source.overview()).resolves.toMatchObject({ active: [
-      { id: "s-active", title: "Active story", state: "CODE", summary: "CODE" },
-      { id: "r-active", title: "Active requirement", state: "EXECUTING", summary: "EXECUTING" },
+      { id: "s-active", title: "Active story", state: "CODE", summary: "Last updated" },
+      { id: "r-active", title: "Active requirement", state: "EXECUTING", summary: "Last updated" },
     ] });
     client.close();
   });
