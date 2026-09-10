@@ -90,7 +90,7 @@ pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src
 - **UI 验收走查是独立的一道,且只有功能能否决**:盲审判"测试是否证明做成了",走查判"用户打开这页看到的对不对"(03 §9)。一次返回两组结论——逐 scenario 的功能验收**能**打回 CODE,界面 findings(间距/一致性/文案/状态/布局)**永不**否决、不进 failed 集合、不消耗轮次,所以 severity 没有 blocking 档。审美不能否决是结构性的:`failed(N) ⊊ failed(N-1)` 在品味上不成立,给了否决权每轮会挑出不同一处细节,正是 §8 消除的失效模式。它只在功能道已 accepted 的轮次、只对 `ui`/`e2e` scenario 跑;原型图是参考不是判据;目录里没宣告图片输入的模型不派去看界面。
 - **余额不预警,假设充足**:没有余额查询 API,靠估算猜只会得到不可信的数;真耗尽时 API 自己返回错误码并被分类为 QUOTA。唯一有业务意义的护栏是单任务上限,不是账户余额(03 §9.4)。
 - **全系统只有四类真停点**：`blocking_question`、`verify_loop_exceeded`、`retry_limit_exceeded`、`cost_ceiling_exceeded`（见 03 §1.5，DB CHECK 强制）。新增停点需要改设计文档。
-- **轮次上限管"打转"，费用上限管"敞口"，互不代替**：同样 6 轮内环在 1M 模型上花费差一个数量级，所以 `cost.perCardUsdCeiling` 独立于 `retry.*`，在 phase 边界检查（turn 掐不断，故上限是超支下界而非精确切口），且**订阅额度不计入**——包月的钱花不花卡都一样。费用停点不出诊断、不进反思管道：它对"这活能不能干成"零信息量。
+- **轮次上限管"打转"，费用上限管"敞口"，互不代替**：同样 6 轮内环在 1M 模型上花费差一个数量级，所以 `cost.perCardUsdCeiling` 独立于 `retry.*`，在 phase 边界检查（turn 掐不断，故上限是超支下界而非精确切口），且**订阅额度不计入**——包月的钱花不花卡都一样。哪家算计费由 profile 的 `billing` 决定,不写则按 `authType` 推(api_key=计费 / oauth=订阅),付费型 OAuth 账号必须显式写明;卡跑在订阅 provider 上时 `spend` 端口**不挂**——一个永远回零的端口读起来像上限在生效,而其实什么都没管。费用停点不出诊断、不进反思管道：它对"这活能不能干成"零信息量。
 - **内环收敛判据是严格真子集**（`failed(N) ⊊ failed(N-1)`）；轮次硬上限（内环 6 / phase 重入 3 / continue 8 / regression 重开 2）只是最终兜底，上限设在离散轮次，不设在时长或 token。
 - **加一个 provider 是数据改动，不是代码改动**：`model.providers`（registry 键，console 可编辑，标了 dangerous）声明每家怎么认证、每档用哪个模型；代码里不出现任何字面 model id。加进 `model.failoverChain` 是另一个决策，分开配、分开审计。
 - **chain 顺序是成本决策：订阅在前、计费 API 在后**。包月的钱花不花都一样，所以订阅能扛的每一轮都是 deepseek 不用出的钱；deepseek 在链上是为了在订阅撞到 usage-limit 窗口时让服务不停，不是分担负载。

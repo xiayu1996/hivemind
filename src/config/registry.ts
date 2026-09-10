@@ -47,6 +47,16 @@ const providerProfiles = z.record(
     authType: z.enum(["api_key", "oauth"]),
     /** The environment variable pi reads the key from; see pi's docs/providers.md. */
     envKey: z.string().regex(/^[A-Z][A-Z0-9_]*$/).optional(),
+    /**
+     * Whether this provider's tokens cost money as they are spent. It decides
+     * what the per-card ceiling counts: a flat-rate plan costs the same
+     * whether a card uses it or not, so charging a card pi's notional price
+     * for it would park it short of the money it was actually allowed to
+     * spend. Omitted means it follows `authType`, which is right for both
+     * providers configured today and wrong for a pay-as-you-go OAuth account,
+     * which has to say so here.
+     */
+    billing: z.enum(["subscription", "metered"]).optional(),
     tiers: z.partialRecord(modelTier, z.string().min(1)),
   }).refine(
     (profile) => profile.authType !== "api_key" || profile.envKey !== undefined,

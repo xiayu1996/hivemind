@@ -22,6 +22,8 @@ export type ModelTier = "brain" | "standard" | "cheap";
 export interface ProviderProfile {
   authType: "api_key" | "oauth";
   envKey?: string;
+  /** Whether tokens cost money as they are spent; see `isMeteredProvider`. */
+  billing?: "subscription" | "metered";
   tiers: Partial<Record<ModelTier, string>>;
 }
 

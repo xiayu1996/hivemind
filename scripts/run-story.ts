@@ -28,6 +28,9 @@ import { resolveModel } from "../src/runner/model-resolver.js";
 import { defaultModelCatalog } from "../src/runner/catalog.js";
 import { ModelPolicy } from "../src/runner/model-policy.js";
 import { ConfigStore } from "../src/config/store.js";
+import { CostLedger } from "../src/observability/cost-ledger.js";
+import { isMeteredProvider } from "../src/runner/provider-env.js";
+import { costCeilingUsd } from "../src/pipeline/cost-ceiling.js";
 import { retryLimits } from "../src/pipeline/retry-limits.js";
 import { ScenarioRegistry } from "../src/regression/scenario-registry.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
@@ -127,15 +130,28 @@ async function main(): Promise<void> {
     if (!["QUEUED", "DESIGN", "CODE", "MERGE"].includes(story.state)) {
       throw new Error(`Story ${cardId} must be QUEUED, DESIGN, CODE or MERGE, not ${story.state}`);
     }
+    const config = await ConfigStore.load(handle.client);
+    // Whether this card's tokens cost money as they are spent decides two
+    // things: what the ledger counts as billed, and whether a spend ceiling
+    // means anything for this run at all.
+    const modelPolicy = new ModelPolicy(config, defaultModelCatalog(piBinary, worktreePath));
+    const metered = isMeteredProvider(await modelPolicy.profileOf(provider));
     const recorder = new LibsqlPhaseRecorder(handle.client, {
       evidenceRoot,
       provider: model.provider,
       modelId: model.id,
       hostId: hostname(),
+      isSubscription: !metered,
     });
-    const config = await ConfigStore.load(handle.client);
-    const modelPolicy = new ModelPolicy(config, defaultModelCatalog(piBinary, worktreePath));
     const limits = await retryLimits(config);
+    const ledger = new CostLedger(handle.client);
+    const spendPort = {
+      cardSpend: (id: string) => ledger.cardSpend(id),
+      // Read per check rather than once per run: raising the ceiling is how a
+      // person resumes a card that already stopped on it.
+      ceilingUsd: () => costCeilingUsd(config),
+      spendByPhase: (id: string) => ledger.cardSpendByPhase(id),
+    };
     // The same list feeds the guard, the browser and the verdict check; it is
     // read here once so no layer can drift from the others.
     const allowedHosts = config.get("guard.e2eHostAllowlist");
@@ -289,6 +305,10 @@ async function main(): Promise<void> {
         ...(integration ? { integration } : {}),
         maxInnerLoopRounds: limits.maxInnerLoopRounds,
         friction: { record: (input) => store.recordFriction(input) },
+        // A flat-rate subscription has no money to cap, and a port that
+        // always answered zero would read as a ceiling being enforced when
+        // nothing is.
+        ...(metered ? { spend: spendPort } : {}),
       },
     ).run(cardId);
     // The scenarios a Story declares become the regression pools' problem the
