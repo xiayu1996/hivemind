@@ -270,6 +270,10 @@ function expectTextsReadable(seen: Snapshot, texts: string[]): void {
   }
 }
 
+function expectNoWriteControls(seen: Snapshot): void {
+  expect(seen.writeControls, "the console is read-only").toEqual([]);
+}
+
 function browserAvailable(): boolean {
   try {
     return existsSync(chromium.executablePath());
@@ -386,5 +390,23 @@ describeLayout("console layout", () => {
     for (const absent of EMPTY_OR_ERROR_TEXT) {
       expect(desktop.bodyText, `"${absent}" reached the desktop screen`).not.toContain(absent);
     }
+  });
+
+  // @scenario S-E1ACTION-06-detail
+  it("S-E1ACTION-06-detail opens the Story detail from a phone without dragging sideways", { timeout: 60_000 }, async () => {
+    const page = await openPage(PHONE.width, PHONE.height);
+    await overview(page);
+    await Promise.all([
+      page.waitForURL(`**/tasks/${PHASE.story}`),
+      page.getByRole("link", { name: "View details" }).click(),
+    ]);
+    await page.waitForSelector("pre");
+
+    expect(new URL(page.url()).pathname).toBe(`/tasks/${PHASE.story}`);
+    const detail = await snapshot(page, []);
+    expect(detail.scrollWidth, "the detail page drags sideways").toBeLessThanOrEqual(detail.innerWidth);
+    expect(detail.bodyText, "the Story title is missing").toContain(`"title": "${PHASE.title}"`);
+    expect(detail.bodyText, "the Story phase is missing").toContain(`"phase": "${PHASE.phase}"`);
+    expectNoWriteControls(detail);
   });
 });
