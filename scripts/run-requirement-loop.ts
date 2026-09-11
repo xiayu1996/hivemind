@@ -24,6 +24,7 @@ import { RequirementDecomposer } from "../src/orchestrator/requirement-decompose
 import { RequirementStore } from "../src/orchestrator/requirement-store.js";
 import { openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
+import { assertSchemaCurrent } from "../src/persistence/schema-fingerprint.js";
 import { ModelPolicy } from "../src/runner/model-policy.js";
 import { needsApiKeyEnv, providerKeyEnv } from "../src/runner/provider-env.js";
 import { defaultModelCatalog } from "../src/runner/catalog.js";
@@ -60,6 +61,10 @@ async function main(): Promise<void> {
 
   const handle = openDb(process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db");
   await migrate(handle.client);
+  // Before the first card is picked up. A database an older 0001 created
+  // records itself as migrated while enforcing the older constraints, and the
+  // first thing that notices is a write failing inside somebody's Story.
+  await assertSchemaCurrent(handle.client);
   const config = await ConfigStore.load(handle.client);
   const gateway = new NotionGateway({ transport: createNotionHttpTransport({ token }) });
   const store = new RequirementStore(handle.client);

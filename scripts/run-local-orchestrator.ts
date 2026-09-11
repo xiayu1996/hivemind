@@ -69,6 +69,7 @@ import { dispatchableStories, planRepositoryStoryExecution } from "../src/orches
 import { StoryExecutionStore } from "../src/orchestrator/story-execution-store.js";
 import { openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
+import { assertSchemaCurrent } from "../src/persistence/schema-fingerprint.js";
 import { createWorktree, locateWorktree, worktreeLayout } from "../src/vcs/worktree.js";
 import { publishEpicBranch } from "../src/vcs/epic-branch.js";
 import { processGitCommand } from "../src/vcs/story-delivery.js";
@@ -176,6 +177,10 @@ async function main(): Promise<void> {
   const dbUrl = process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db";
   const handle = openDb(dbUrl);
   await migrate(handle.client);
+  // Before the first card is picked up. A database an older 0001 created
+  // records itself as migrated while enforcing the older constraints, and the
+  // first thing that notices is a write failing inside somebody's Story.
+  await assertSchemaCurrent(handle.client);
   const gateway = new NotionGateway({
     transport: createNotionHttpTransport({ token }),
   });
