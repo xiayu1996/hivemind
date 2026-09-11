@@ -100,9 +100,20 @@ describe("SingleStoryWorker", () => {
     await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED", stopReason: null });
     // Two rounds ran; the failing one was not charged, so the budget is intact.
     await expect(store.getVerificationFailureHistory("S-EPIC1-01")).resolves.toEqual([]);
+    // And the second verification judged the same code as the first: a round
+    // the box lost buys no CODE turn, so the HEAD the retry is judged on is
+    // the HEAD that was already there.
+    const codeRuns = designAndCode.mock.calls.filter(([input]) => input.phase === "CODE");
+    expect(codeRuns).toHaveLength(1);
+    expect(verifier.run).toHaveBeenCalledTimes(2);
+    const codeSessions = new Set(
+      (verifier.run as unknown as { mock: { calls: [{ codeSessionId: string }][] } })
+        .mock.calls.map(([input]) => input.codeSessionId),
+    );
+    expect([...codeSessions]).toEqual(["session-code-1"]);
   });
 
-  it("stops for a person after two consecutive rounds lost to the environment, and records the friction", async () => {
+  it("stops for a person after two consecutive attempts lost to the environment, and records the friction", async () => {
     const verifier: StoryVerifyPort = {
       run: vi.fn(async (input) => ({
         sessionId: `session-verify-${input.round}`,
@@ -124,7 +135,7 @@ describe("SingleStoryWorker", () => {
 
     await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({
       state: "NEEDS_INPUT",
-      stopReason: "verify_loop_exceeded",
+      stopReason: "retry_limit_exceeded",
     });
     expect(friction.record).toHaveBeenCalledWith(expect.objectContaining({
       cardId: "S-EPIC1-01",

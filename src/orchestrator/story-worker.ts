@@ -86,9 +86,10 @@ export interface StoryWorkerOptions {
   maxInnerLoopRounds?: number;
   /** How many times the regression loop may reopen a delivered Story. */
   maxRegressionReopens?: number;
-  /** How many consecutive rounds may be lost to the environment before the
-   * card stops for a person. The rounds themselves cost no budget; this is
-   * what keeps a broken host from looping forever. */
+  /** How many consecutive verification attempts may be lost to the environment
+   * before the card stops for a person as `retry_limit_exceeded`. The attempts
+   * cost no inner-loop budget and leave the CODE HEAD alone; this is what keeps
+   * a broken host from re-verifying forever. */
   maxInconclusiveRounds?: number;
   integration?: StoryIntegrationPort;
   friction?: StoryFrictionPort;
@@ -114,7 +115,7 @@ export interface StoryWorkerResult {
   state: "DELIVERED" | "NEEDS_INPUT" | "CODE";
   rounds: number;
   mrUrl: string | null;
-  stopReason: "verify_loop_exceeded" | "cost_ceiling_exceeded" | null;
+  stopReason: "verify_loop_exceeded" | "retry_limit_exceeded" | "cost_ceiling_exceeded" | null;
   /** Attached to the card when the run stopped; business language, no thresholds alone. */
   stopReport?: string;
 }
@@ -285,9 +286,9 @@ export class SingleStoryWorker {
         const codeRunId = this.createRunId(cardId, "CODE", round);
         const code = await this.runPhase(cardId, "CODE", round, codeRunId);
         artifact(code, "implementation");
-        const verifyRunId = this.createRunId(cardId, "VERIFY", round);
+        let verifyRunId = this.createRunId(cardId, "VERIFY", round);
         await this.store.transition(cardId, "CODE", "VERIFY", "system", verifyRunId);
-        const verification = await this.runVerification(
+        let verification = await this.runVerification(
           cardId,
           round,
           verifyRunId,
@@ -296,6 +297,45 @@ export class SingleStoryWorker {
         );
         await this.projection.enqueue(cardId);
 
+        // A round the box lost is retried against the same CODE output. Going
+        // back to CODE would buy a model turn to fix something the code never
+        // did - S-E2RESULTS-01 spent rounds 11 and 12 rewriting a page whose
+        // only fault was a dev server that was not listening - and it would
+        // move the HEAD the next attempt is judged on, so a retry could no
+        // longer be compared with the attempt it repeats. Re-verifying stands
+        // the environment up again, which is the repair for the cases this
+        // reaches: a port somebody else held, a server that died, a browser
+        // that failed to launch.
+        while (verification.verdict === "inconclusive") {
+          inconclusiveStreak += 1;
+          if (inconclusiveStreak >= this.maxInconclusiveRounds) {
+            await this.friction?.record({
+              cardId,
+              runId: verifyRunId,
+              kind: "verification_inconclusive",
+              detail: `${inconclusiveStreak} consecutive attempts failed for environmental reasons: ${verification.failedScenarios.join(", ")}`,
+            });
+            await this.store.stopForInput(cardId, "VERIFY", "retry_limit_exceeded", verifyRunId);
+            await this.projection.enqueue(cardId);
+            return { state: "NEEDS_INPUT", rounds: round, mrUrl: null, stopReason: "retry_limit_exceeded" };
+          }
+          // A new round number, because one phase run per (card, phase, round)
+          // is what makes a resumed card idempotent. `spent` stays put: the
+          // number counts what the code was judged on, and this attempt was
+          // not.
+          round += 1;
+          verifyRunId = this.createRunId(cardId, "VERIFY", round);
+          verification = await this.runVerification(
+            cardId,
+            round,
+            verifyRunId,
+            code.sessionId,
+            definitionOfDone,
+          );
+          await this.projection.enqueue(cardId);
+        }
+        inconclusiveStreak = 0;
+
         if (verification.verdict === "accepted" && verification.failedScenarios.length === 0) {
           mergeRunId = this.createRunId(cardId, "MERGE", 1);
           totalRounds = round;
@@ -303,26 +343,6 @@ export class SingleStoryWorker {
           break;
         }
 
-        if (verification.verdict === "inconclusive") {
-          // The round was lost to the environment, not to the code: it says
-          // nothing about convergence, so it costs no budget. Two in a row is
-          // the pipeline's own failure and belongs to a person.
-          inconclusiveStreak += 1;
-          if (inconclusiveStreak >= this.maxInconclusiveRounds) {
-            await this.friction?.record({
-              cardId,
-              runId: verifyRunId,
-              kind: "verification_inconclusive",
-              detail: `${inconclusiveStreak} consecutive rounds failed for environmental reasons: ${verification.failedScenarios.join(", ")}`,
-            });
-            await this.store.stopForInput(cardId, "VERIFY", "verify_loop_exceeded", verifyRunId);
-            await this.projection.enqueue(cardId);
-            return { state: "NEEDS_INPUT", rounds: round, mrUrl: null, stopReason: "verify_loop_exceeded" };
-          }
-          await this.store.transition(cardId, "VERIFY", "CODE", "system", verifyRunId);
-          continue;
-        }
-        inconclusiveStreak = 0;
         spent += 1;
         failureHistory.push([
           ...new Set(verification.codeFailedScenarios ?? verification.failedScenarios),

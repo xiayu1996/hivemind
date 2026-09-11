@@ -1,0 +1,33 @@
+{
+  "capturedFrom": {
+    "cardId": "S-E2RESULTS-01",
+    "phase": "VERIFY",
+    "round": 12,
+    "database": "data/hivemind-mp.db",
+    "capturedAt": "2026-09-11"
+  },
+  "origin": "environment",
+  "note": "The dev server the reviewer navigated to was not listening. Chromium names this net::ERR_CONNECTION_REFUSED, which no rule matched, so all five scenarios entered the code-failure set and the card stopped for verify_loop_exceeded.",
+  "reasons": [
+    {
+      "scenarioId": "S-E2RESULTS-01-delivery",
+      "reason": "Browser navigation to http://127.0.0.1:3213/results failed with net::ERR_CONNECTION_REFUSED, so no scenario-specific screenshot could be taken."
+    },
+    {
+      "scenarioId": "S-E2RESULTS-01-exclusion",
+      "reason": "Browser navigation to http://127.0.0.1:3213/results failed with net::ERR_CONNECTION_REFUSED, so no scenario-specific screenshot could be taken."
+    },
+    {
+      "scenarioId": "S-E2RESULTS-01-failure",
+      "reason": "Browser navigation to http://127.0.0.1:3213/results failed with net::ERR_CONNECTION_REFUSED, so no scenario-specific screenshot could be taken."
+    },
+    {
+      "scenarioId": "S-E2RESULTS-01-integrity",
+      "reason": "Browser navigation to http://127.0.0.1:3213/results failed with net::ERR_CONNECTION_REFUSED, so no scenario-specific screenshot could be taken."
+    },
+    {
+      "scenarioId": "S-E2RESULTS-01-recovery",
+      "reason": "Browser navigation to http://127.0.0.1:3213/results failed with net::ERR_CONNECTION_REFUSED, so no scenario-specific screenshot could be taken."
+    }
+  ]
+}

@@ -15,6 +15,16 @@ export const SCREEN_EVIDENCE_MISSING = "no screen evidence of its own was left f
 const ENVIRONMENT_REASON = [
   /ECONNREFUSED|ECONNRESET|EADDRINUSE|EHOSTUNREACH|ENOTFOUND/i,
   /connection refused|connection reset|could not connect|unable to connect/i,
+  // Chromium's own names for a transport that never carried a response. The
+  // browser reports these with underscores (net::ERR_CONNECTION_REFUSED), so
+  // neither the errno family above nor the prose one matched them, and the
+  // five scenarios of S-E2RESULTS-01 round 12 - every one of them a dev server
+  // that was not listening - were counted as code failures until the card
+  // stopped for verify_loop_exceeded. Listed one by one rather than as
+  // net::ERR_.* on purpose: ERR_FILE_NOT_FOUND and ERR_BLOCKED_BY_CLIENT
+  // describe a page the Story is responsible for, and blanket-excusing the
+  // prefix would hide real defects behind a browser error name.
+  /net::ERR_(?:CONNECTION_(?:REFUSED|RESET|CLOSED|TIMED_OUT|FAILED|ABORTED)|EMPTY_RESPONSE|ADDRESS_UNREACHABLE|ADDRESS_INVALID|NAME_NOT_RESOLVED|NAME_RESOLUTION_FAILED|INTERNET_DISCONNECTED|NETWORK_CHANGED|SOCKET_NOT_CONNECTED|TIMED_OUT|TUNNEL_CONNECTION_FAILED|PROXY_CONNECTION_FAILED|SSL_PROTOCOL_ERROR|CERT_[A-Z_]+)\b/,
   /address already in use|port \d+ is (?:already )?in use/i,
   /(?:service|server|dev server|app|site|page)\b[^.]{0,40}?\bnot (?:running|reachable|up|started|available|serving)/i,
   /\bnot (?:running|started|up)\b[^.]{0,20}\b(?:service|server|app)\b/i,

@@ -1,5 +1,24 @@
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { isEnvironmentFailure, isProviderFault, splitScenarioFailures } from "./failure-classification.js";
+
+const REASON_FIXTURE_DIR = new URL("../../fixtures/verify-reasons/", import.meta.url);
+
+interface ReasonFixture {
+  capturedFrom: { cardId: string; round: number };
+  origin: "environment" | "code";
+  reasons: { scenarioId: string; reason: string }[];
+}
+
+function reasonFixtures(): { name: string; fixture: ReasonFixture }[] {
+  return readdirSync(REASON_FIXTURE_DIR)
+    .filter((name) => name.endsWith(".json"))
+    .toSorted()
+    .map((name) => ({
+      name,
+      fixture: JSON.parse(readFileSync(new URL(name, REASON_FIXTURE_DIR), "utf8")) as ReasonFixture,
+    }));
+}
 
 describe("isEnvironmentFailure", () => {
   it("reads the failures the box caused as environmental", () => {
@@ -65,5 +84,42 @@ describe("isProviderFault", () => {
     expect(isProviderFault("OAuth refresh failed for openai-codex: token refresh failed (401)")).toBe(true);
     expect(isProviderFault("stopped by the operator: the card is being reset to DESIGN")).toBe(true);
     expect(isProviderFault("git diff --check reported trailing whitespace in src/a.ts:12")).toBe(false);
+  });
+});
+
+/**
+ * Every captured round is replayed by reading the directory, so a fixture
+ * added later is asserted without anyone remembering to list it here.
+ */
+describe("captured verification rounds", () => {
+  const fixtures = reasonFixtures();
+
+  it("has rounds to replay", () => {
+    expect(fixtures.length).toBeGreaterThan(0);
+  });
+
+  for (const { name, fixture } of fixtures) {
+    it(`classifies every reason of ${name} as ${fixture.origin}`, () => {
+      expect(fixture.reasons.length).toBeGreaterThan(0);
+      for (const { reason } of fixture.reasons) {
+        expect(isEnvironmentFailure(reason), reason).toBe(fixture.origin === "environment");
+      }
+    });
+
+    it(`keeps ${name} out of the code-failure set`, () => {
+      const scenarioIds = fixture.reasons.map((entry) => entry.scenarioId);
+      const split = splitScenarioFailures(scenarioIds, fixture.reasons);
+      const judged = fixture.origin === "environment" ? split.code : split.environment;
+      expect(judged).toEqual([]);
+    });
+  }
+});
+
+describe("browser errors that do describe the page the Story owns", () => {
+  it("does not excuse a Story defect because the browser named it", () => {
+    // Chromium reports both of these, and both are the page's own doing: an
+    // asset the build never emitted, and a request the page's own code blocked.
+    expect(isEnvironmentFailure("the logo request failed with net::ERR_FILE_NOT_FOUND")).toBe(false);
+    expect(isEnvironmentFailure("the analytics call failed with net::ERR_BLOCKED_BY_CLIENT")).toBe(false);
   });
 });
