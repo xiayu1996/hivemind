@@ -747,7 +747,17 @@ async function main(): Promise<void> {
       // the host is idle enough to sweep. Between the two the sweep was
       // unreachable in both directions, which is why regression_runs was empty
       // after six delivered Stories.
-      await step("regression sweep", regressionSweep);
+      // Reported, not raised. A sweep is a safety net running behind the
+      // foreground; letting its failure end the cycle stopped intake,
+      // projection and dispatch for every Story on the host because one Epic's
+      // worktree was in a state git would not allow.
+      await step("regression sweep", async () => {
+        try {
+          await regressionSweep();
+        } catch (error) {
+          await reportP0("regression sweep failed", error);
+        }
+      });
 
       const rows = (await handle.client.execute({
         sql: `SELECT id, state, epic_id, repo, branch, target_branch, depends_on, predicted_footprint
