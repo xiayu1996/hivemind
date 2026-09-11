@@ -29,7 +29,7 @@ function scheduleExpiry(snapshotAt) {
 
 async function loadOverview() {
   try {
-    const response = await fetch("/api/overview", { cache: "no-store" });
+    const response = await fetch("/api/overview", { method: "GET", cache: "no-store" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const payload = await response.json();
     if (!hasFreshSnapshot(payload) || !hasCompleteOverview(payload)) throw new Error("stale or incomplete snapshot");
