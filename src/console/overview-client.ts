@@ -8,6 +8,15 @@ export function formatSnapshotAt(snapshotAt: number): string {
   return `Overall status updated at ${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+/** A complete response has enough data to render every fixed home-page region. */
+export function hasCompleteOverview(value: unknown): value is { questions: unknown[]; active: unknown[]; events: unknown[]; costs: unknown[] } {
+  return typeof value === "object" && value !== null
+    && Array.isArray((value as { questions?: unknown }).questions)
+    && Array.isArray((value as { active?: unknown }).active)
+    && Array.isArray((value as { events?: unknown }).events)
+    && Array.isArray((value as { costs?: unknown }).costs);
+}
+
 /** A client may render only a complete snapshot produced within the last five minutes. */
 export function hasFreshSnapshot(value: { snapshotAt?: unknown }, now = Date.now()): value is { snapshotAt: number } {
   return typeof value.snapshotAt === "number"

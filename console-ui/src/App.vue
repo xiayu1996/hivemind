@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { formatOverviewItem, overviewSections } from "../../src/console/overview.js";
-import { formatSnapshotAt, hasFreshSnapshot, SNAPSHOT_MAX_AGE_MS } from "../../src/console/overview-client.js";
+import { formatSnapshotAt, hasCompleteOverview, hasFreshSnapshot, SNAPSHOT_MAX_AGE_MS } from "../../src/console/overview-client.js";
 
 const views = ["nodes", "tasks", "costs", "config", "stats", "providers"];
 const current = ref(views.includes(location.pathname.slice(1)) ? location.pathname.slice(1) : "overview");
@@ -29,7 +29,7 @@ async function loadOverview() {
     const response = await fetch("/api/overview", { cache: "no-store" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const payload = await response.json();
-    if (!hasFreshSnapshot(payload)) throw new Error("stale snapshot");
+    if (!hasFreshSnapshot(payload) || !hasCompleteOverview(payload)) throw new Error("stale or incomplete snapshot");
     overview.value = payload;
     error.value = "";
     scheduleExpiry(payload.snapshotAt);
