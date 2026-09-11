@@ -11,6 +11,16 @@ const data: ConsoleDataSource = {
   overview: async () => ({ questions: [], active: [], events: [], costs: [{ ts: 1, modelId: "mock-1", costUsd: 0.1 }] }),
 };
 
+describe("S-E3OVERVIEW-03-freshness", () => {
+  it("returns a no-store overview snapshot", async () => {
+    const app = await createConsoleServer(data, { serveUi: false });
+    const response = await app.inject({ method: "GET", url: "/api/overview" });
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.json().snapshotAt).toEqual(expect.any(Number));
+    await app.close();
+  });
+});
+
 describe("S-E3OVERVIEW-02-summary", () => {
   it("serves the cost records read-only", async () => {
     const app = await createConsoleServer(data, { serveUi: false });
