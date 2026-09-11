@@ -196,3 +196,39 @@ P1-H 特别说明：`phase_runs.prompt_sha256` 已存在，它是组装输入的
 - `src/orchestrator/acceptance-checklist.ts`、`src/orchestrator/epic-completion.ts`：验收补单与 PR 关闭后的状态路径。
 - `src/orchestrator/story-execution-store.ts:860`、`scripts/replay-phase.ts`：历史回放当前实际读取语义。
 - [GitHub PR #26](https://github.com/xiayu1996/hivemind/pull/26)：实时状态读取。
+
+---
+
+## 10. 实施记录（2026-09-11 当日，随 PR #29、#30 落地）
+
+本节只记录已经实际改掉并验证过的部分，以及核验时未定位、实施中才查清的运行时原因。未做的仍按第 5–7 节的计划待办。
+
+### 已修（PR #29，已合入 main）
+
+| 缺口 | 实际根因 | 处理 |
+|---|---|---|
+| P0-A 分类漏判 | 规则写的是 `connection refused`（空格），Chromium 发的是 `net::ERR_CONNECTION_REFUSED`（下划线），两条既有规则都匹配不上 | 按传输层逐条列出 `net::ERR_*`（不做前缀通配，`ERR_FILE_NOT_FOUND` 一类仍判代码）；第 12 轮原文存为 `fixtures/verify-reasons/`，测试遍历目录断言 |
+| P0-A 环境重试 | 环境失败退回 CODE，既买了一次无意义的模型调用，又挪动了下一轮被评判的 HEAD，使重试无法与它重复的那轮比较 | 原地重跑 VERIFY，不动 CODE HEAD、不计内环预算；耗尽恢复次数停为 `retry_limit_exceeded` |
+| P0-C schema 漂移 | 已确认：MP 库 `stories.stop_reason` CHECK 缺 `cost_ceiling_exceeded` | 新增 `src/persistence/schema-fingerprint.ts`，期望值由"在内存库跑一遍迁移"现算（不留需同步维护的常量），preflight 单列探针 + 两个常驻启动即拒；MP 库经备份校验后事务内重建 `stories` 表 |
+| P0-B gate 语义 | `epicRegressionClean` 零记录返回 clean | 增加"该 revision 上有通过记录"的要求；零注册场景也判等待 |
+| P0-B main 池晋升 | Story DELIVERED 即 `promoteToMain`，而交付目的地是 Epic 分支 | 晋升移到 `EpicCompletion` 读到合并时；`promoteToMain` 对属于 Epic 的 Story 直接报错而非静默忽略；MP 库 26 个错误晋升的场景已归位 |
+| 恢复入口 | `resume-parked-story.ts` 不盖 `last_human_action_at`，恢复后把已花轮次全部读回，第一次验证就再停 | 恢复时盖印重置预算，`verify_records` 原样保留 |
+
+**回归从未落账的运行时原因（核验时未定位）**：`regressionSweep()` 排在派单之后，看到的是本轮刚塞进 `inFlight` 的卡而判定前台忙；而无单可派时 `if (batch.length === 0) return` 又在它之前返回。忙时够不着、闲时走不到，两头落空。移到派单之前后，本项目历史上第一次 sweep 当场跑起来。
+
+**sweep 契约不全的实际后果**：`BlindSweepPort` 只把 scenario id 拼成一句话交给验证器，没有冻结正文——验证器只能猜场景含义再给自己的猜测打分。第一次 sweep 把一张已交付验收的卡判失败 4/5；改为读 `story_specs.text` 后，同一 revision 上 `mixedempty`/`noactive`/`nopending`/`readfailure` 全部由 failed 翻为 passed。同时 inconclusive 不再整批记成 failed（那会拿"服务器没起来"去立回归卡并触发归因二分），改为单列上报、不落账。
+
+### 已修（PR #30）
+
+- **sweep 失败拖垮整轮**：归因结束后在 probe worktree 里 `git checkout <epic 分支>`，而该分支被 sweep worktree 占着，git 拒绝 → sweep 非零退出 → 整个 cycle 结束，intake/投影/派单全停。改为 `--detach` 回到 tip（sweep 只读 HEAD，本就不需要分支名），且 sweep 失败改为上报而非抛出。
+- **跨 Epic 混批**：一批场景在单个 worktree 单个 revision 上跑，混批会把第二个 Epic 的场景放进第一个 Epic 的代码里判，既因"东西不存在"而失败，又把结果记在自己 Epic 从未有过的 revision 上——正是 gate 永远等不到的那种记录。批次限定单 Epic。
+- **交付被回归证据饿死**：gate 要证据，而空闲 sweep 让位前台、且按 scenario_id 顺序先跑别的 Epic。把"挡住 MR 的场景"接进调度器早已存在、生产从未提供的 `triggered` 旁路：优先、且不等前台空闲。
+- **验收补单不幂等**：缺口轮次由"数已存在的缺口 Epic"得出，而建 Epic 正是这次操作的第一步——崩在建 Epic 与重开条目之间，重试会为同一条反馈开出第二个缺口 Epic。改为数 `acceptance_gaps_reopened` 事件（与重开是同一个原子写）。
+- **推进探针**：`npm run health`。每一次停滞都留着进程活着，pid 检查全报健康。探针读库回答"活是不是在往前走"：working phase 里不再变化的卡、从未 sweep 或从未通过的注册表、旧到看板已不反映真相的 outbox 积压、卡在自己 gate 上的 Epic。等人是designed stop，如实上报但不判失败。
+
+### 仍然待办
+
+- **带外告警通道仍关闭**，常驻每次启动都在警告：一张卡真停下来时没有任何人会被通知到。需要选定通道并放凭据，不是代码问题。
+- **P0-A 余下的大头**：应用生命周期管理器与服务身份核验（确认验证器打开的是当前 worktree 的服务，而不是残留旧进程）。分类与环境重试落地后，它的验收判据才写得清楚。
+- **P0-D 业务口径冻结**：S-E2RESULTS-01 的 DoD 与 D3 回答冲突一事，`data/decisions` 的 P9 已有既定处置（不中断当前 Story，验收时按 D3 逐条核对，用缺口机制回灌），它不构成阻塞，故本次未改动。
+- 第 5 节其余 P1 与第 6 节 P2 未动。
