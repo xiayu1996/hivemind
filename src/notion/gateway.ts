@@ -48,6 +48,28 @@ export class NotionGatewayError extends Error {
   }
 }
 
+/**
+ * Archiving a block Notion has already archived answers 400 "Can't edit block
+ * that is archived". The state the caller asked for is the state the block is
+ * in, so the refusal is success; left thrown it fails the projection entry on
+ * every retry until the outbox declares it dead and the page stops updating.
+ */
+export async function archiveBlock(
+  request: (input: NotionRequest) => Promise<NotionTransportResponse>,
+  blockId: string,
+): Promise<void> {
+  try {
+    await request({
+      method: "PATCH",
+      path: `/v1/blocks/${encodeURIComponent(blockId)}`,
+      priority: "projection",
+      body: { archived: true },
+    });
+  } catch (error) {
+    if (!/block that is archived/i.test((error as Error).message)) throw error;
+  }
+}
+
 interface PendingRequest {
   seq: number;
   request: NotionRequest;

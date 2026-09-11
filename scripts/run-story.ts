@@ -127,8 +127,13 @@ async function main(): Promise<void> {
     await migrate(handle.client);
     const store = new StoryExecutionStore(handle.client);
     const story = await store.getStory(cardId);
-    if (!["QUEUED", "DESIGN", "CODE", "MERGE", "REGRESSION_FIX"].includes(story.state)) {
-      throw new Error(`Story ${cardId} must be QUEUED, DESIGN, CODE, MERGE or REGRESSION_FIX, not ${story.state}`);
+    // VERIFY is here because a run can die inside it; the worker sends such a
+    // card back to CODE rather than refusing it, which is what kept a single
+    // transport fault from being recoverable at all.
+    if (!["QUEUED", "DESIGN", "CODE", "VERIFY", "MERGE", "REGRESSION_FIX"].includes(story.state)) {
+      throw new Error(
+        `Story ${cardId} must be QUEUED, DESIGN, CODE, VERIFY, MERGE or REGRESSION_FIX, not ${story.state}`,
+      );
     }
     // A regression fix lands on the Epic head again; without the integration
     // worktree the loop could fix and never deliver.

@@ -7,7 +7,7 @@ import {
   type RequirementPageSnapshot,
   type RequirementSection,
 } from "./blocks/requirement-page.js";
-import type { NotionGateway } from "./gateway.js";
+import { archiveBlock, type NotionGateway } from "./gateway.js";
 import { shouldSuppressSystemProjection } from "./intent-interpreter.js";
 import type { NotionOutboxDelivery, NotionOutboxRecord } from "./outbox.js";
 import schema from "./notion-schema.json" with { type: "json" };
@@ -168,12 +168,7 @@ export class NotionRequirementPageDelivery implements NotionOutboxDelivery {
 
     for (const operation of operations) {
       if (operation.type === "archive_block") {
-        await this.gateway.request({
-          method: "PATCH",
-          path: `/v1/blocks/${encoded(operation.blockId)}`,
-          priority: "projection",
-          body: { archived: true },
-        });
+        await archiveBlock((input) => this.gateway.request(input), operation.blockId);
       }
       if (operation.type === "update_block") {
         const type = snapshot.sections.metadata?.blocks[0]?.id === operation.blockId ? "callout" : "paragraph";

@@ -1,6 +1,6 @@
 import type { Client, InStatement } from "@libsql/client";
 import { z } from "zod";
-import type { NotionGateway } from "./gateway.js";
+import { archiveBlock, type NotionGateway } from "./gateway.js";
 import type { NotionOutboxDelivery, NotionOutboxRecord } from "./outbox.js";
 import {
   planStoryPageUpdate,
@@ -325,12 +325,7 @@ export class NotionStoryPageDelivery implements NotionOutboxDelivery {
       } else if (operation.type === "archive_verification_rounds") {
         await this.archiveRounds(cardId, pageId, remote, operation.rounds);
       } else {
-        await this.gateway.request({
-          method: "PATCH",
-          path: `/v1/blocks/${encoded(operation.blockId)}`,
-          priority: "projection",
-          body: { archived: true },
-        });
+        await archiveBlock((input) => this.gateway.request(input), operation.blockId);
       }
     }
   }
@@ -386,12 +381,7 @@ export class NotionStoryPageDelivery implements NotionOutboxDelivery {
       const summary = remote.snapshot.verificationRounds.find((round) => round.round === item.round)?.summary ?? "";
       const content = `Round ${item.round}: ${summary}`;
       if (!existing.has(content)) await this.append(historyPageId, [notionBlock("paragraph", content)]);
-      await this.gateway.request({
-        method: "PATCH",
-        path: `/v1/blocks/${encoded(item.toggleBlockId)}`,
-        priority: "projection",
-        body: { archived: true },
-      });
+      await archiveBlock((input) => this.gateway.request(input), item.toggleBlockId);
       await this.client.execute({
         sql: `UPDATE notion_verification_rounds SET archived_page_id = ?
               WHERE story_id = ? AND round = ?`,

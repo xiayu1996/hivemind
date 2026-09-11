@@ -387,6 +387,39 @@ describe("SingleStoryWorker", () => {
     expect(seenRounds[0]).toBe(7);
   });
 
+  it("re-verifies the finished round after a run died inside VERIFY, buying no new CODE turn", async () => {
+    const crashing = new SingleStoryWorker(
+      store,
+      { run: designAndCode },
+      { run: async () => { throw new Error("provider transport failed"); } },
+      { deliver: async () => { throw new Error("delivery must not run"); } },
+      { enqueue: async () => undefined },
+      { runId: (_cardId, phase, round) => `crash-${phase}-${round}` },
+    );
+    await expect(crashing.run("S-EPIC1-01")).rejects.toThrow("provider transport failed");
+    expect((await store.getStory("S-EPIC1-01")).state).toBe("VERIFY");
+
+    const seen: string[] = [];
+    const resumed = new SingleStoryWorker(
+      store,
+      {
+        run: async (input: ManagedPhaseInput) => {
+          seen.push(`${input.phase}:${input.round}`);
+          return designAndCode(input);
+        },
+      },
+      { run: async () => ({ sessionId: "session-verify-2", verdict: "accepted", failedScenarios: [], artifact: "Fine" }) },
+      { deliver: async () => ({ mrUrl: "https://example.test/mr/9" }) },
+      { enqueue: async () => undefined },
+      { runId: (_cardId, phase, round) => `resumed-${phase}-${round}` },
+    );
+    await expect(resumed.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED", rounds: 1 });
+    expect(seen).toEqual(["MERGE:1"]);
+    // The lost round recorded no verdict, so the budget still has every round
+    // and the CODE work it already paid for is reused rather than rewritten.
+    expect(await store.getVerificationFailureHistory("S-EPIC1-01")).toEqual([]);
+  });
+
   it("resumes a reopened CODE state from central DoD and verification history", async () => {
     const initialPhases = {
       run: async (input: ManagedPhaseInput) => input.phase === "DESIGN"

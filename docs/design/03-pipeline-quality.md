@@ -384,3 +384,9 @@ Story 页「待人回答」区列出已应用的回答：谁、何时、针对�
 - **回归环路接通**：sweep 传 probe worktree，归因能跑；`regression_cards` 有 resolve 语义；REGRESSION_FIX 是可运行的 phase（见 tasks IT-2x）。
 - **outbox 死信**：每行计 attempts，超过上限转 dead 并保留错误；周期日志报 failed/dead 计数，`inspect` 可列死信。
 
+线上跑通一整条链路之后又暴露三处，同批修完：
+
+- **VERIFY 可恢复**：进程死在 VERIFY 里（provider TRANSPORT 故障、被杀）会把卡留在 VERIFY，而这个状态没有任何 phase 能从它起跑——调度器照样派发，`run-story` 的状态守卫拒绝，卡被 park、Epic 被升级为 BLOCKED。改为 worker 进门就把 VERIFY 退回 CODE 并记 `verification_interrupted` friction；丢掉的那一轮没记 verdict，所以不计预算，已完成的 CODE 轮直接复用、只重跑验证，不再买一轮新的 CODE。
+- **网络抖动不吞周期**：周期开头的 Notion/远端步骤（intake、投影对账、拆解、Epic 维护）失败会中止整个周期，后面派卡、落分支、回归 sweep 全部不跑。改为这四步各自隔离：`classifyError` 判为 TRANSPORT 的按告警跳过本周期，其他错误照旧中止。
+- **重复归档不进死信**：对已归档的块再发 `archived: true`，Notion 回 400「Can't edit block that is archived」。目标状态已经达到，所以这条拒绝等于成功；不吞掉它，outbox 会把同一条投影重试到 dead，之后这张页面就再也不更新了。
+

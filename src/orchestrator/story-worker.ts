@@ -197,6 +197,22 @@ export class SingleStoryWorker {
   async run(cardId: string): Promise<StoryWorkerResult> {
     let story = await this.store.getStory(cardId);
     if (story.state === "REGRESSION_FIX") return this.regressionFixLoop(cardId, story);
+    // A run that died inside VERIFY (a killed process, a provider transport
+    // fault) leaves the Story in a state no phase starts from. The round it
+    // lost recorded no verification, so it cost no budget: the card goes back
+    // to CODE and the inner loop buys the round again. Without this a single
+    // transport fault parks the card and blocks its Epic for good.
+    if (story.state === "VERIFY") {
+      const resumeRunId = this.createRunId(cardId, "VERIFY", story.innerLoopRounds);
+      await this.store.transition(cardId, "VERIFY", "CODE", "system", resumeRunId);
+      await this.friction?.record({
+        cardId,
+        runId: resumeRunId,
+        kind: "verification_interrupted",
+        detail: `round ${story.innerLoopRounds} left VERIFY without a verdict`,
+      });
+      story = await this.store.getStory(cardId);
+    }
     let definitionOfDone: DefinitionOfDone;
     // VERIFY already accepted: re-entering at MERGE skips the inner loop and
     // redoes only the delivery report plus branch publication.

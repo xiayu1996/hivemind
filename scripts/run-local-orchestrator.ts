@@ -106,6 +106,23 @@ async function currentBranch(path: string): Promise<string> {
   return result.stdout.trim();
 }
 
+/**
+ * One step of the cycle, isolated from a transient network fault. The steps
+ * that talk to Notion or to the remote fail whenever the link blinks, and
+ * they run before the steps that dispatch cards and land branches: letting
+ * one of them abort the cycle stalls the whole pipeline until the link comes
+ * back. Anything that is not a transport fault still stops the cycle.
+ */
+const step = async (name: string, run: () => Promise<void>): Promise<void> => {
+  try {
+    await run();
+  } catch (error) {
+    const message = (error as Error).message;
+    if (classifyError(message).class !== "TRANSPORT") throw error;
+    console.warn(`${name} was skipped this cycle after a transient network fault: ${message}`);
+  }
+};
+
 async function main(): Promise<void> {
   const stored = await loadSecretsFile();
   const token = process.env.NOTION_TOKEN ?? stored.get("NOTION_TOKEN");
@@ -715,10 +732,10 @@ async function main(): Promise<void> {
     if (running) return;
     running = true;
     try {
-      await syncIntake();
-      await reconcileProjections();
-      await decomposeWaitingEpic();
-      await maintainEpics();
+      await step("intake sync", syncIntake);
+      await step("projection reconciliation", reconcileProjections);
+      await step("epic decomposition", decomposeWaitingEpic);
+      await step("epic maintenance", maintainEpics);
 
       const rows = (await handle.client.execute({
         sql: `SELECT id, state, epic_id, repo, branch, target_branch, depends_on, predicted_footprint
