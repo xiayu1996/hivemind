@@ -35,6 +35,7 @@ function port(result: BlindVerifyResult) {
   const git = { run: vi.fn(async () => "rev-abc\n") };
   const sweep = new BlindSweepPort({
     worktreeFor: async () => "D:/pool",
+    specificationFor: async (ids) => new Map(ids.map((id) => [id, `frozen text of ${id}`])),
     executor,
     git,
     evidenceRoot: "D:/evidence",
@@ -62,13 +63,43 @@ describe("BlindSweepPort", () => {
     });
   });
 
-  it("counts an inconclusive sweep as a failure for everything in it", async () => {
+  it("judges nothing when the sweep itself never reached a verdict", async () => {
+    // Calling this a failure raised regression cards against the code for a
+    // box that lost the run, and attribution then went bisecting for the
+    // commit that broke it.
     const { sweep } = port(verifyResult("inconclusive", [], { runnerFailure: "VERIFY returned no assistant verdict" }));
 
     const result = await sweep.run({ pool: "main", branch: "main", scenarioIds: ["S-VAL-01-a"] });
 
-    expect(result.outcomes).toMatchObject([{ scenarioId: "S-VAL-01-a", outcome: "failed" }]);
-    expect(result.outcomes[0]?.output).toContain("no assistant verdict");
+    expect(result.outcomes).toEqual([]);
+    expect(result.inconclusive).toEqual(["S-VAL-01-a"]);
+  });
+
+  it("hands the verifier the frozen text of each scenario, not only its id", async () => {
+    const { sweep, executor } = port(verifyResult("accepted", []));
+
+    await sweep.run({ pool: "epic", branch: "epic/M2", scenarioIds: ["S-M2-01-a"] });
+
+    const [input] = executor.run.mock.calls.at(0) as unknown as [{ specification: string }];
+    const specification = input.specification;
+    expect(specification).toContain("frozen text of S-M2-01-a");
+  });
+
+  it("refuses to sweep a scenario whose frozen text it cannot find", async () => {
+    const executor = { run: vi.fn(async () => verifyResult("accepted", [])) };
+    const sweep = new BlindSweepPort({
+      worktreeFor: async () => "D:/pool",
+      specificationFor: async () => new Map(),
+      executor,
+      git: { run: vi.fn(async () => "rev-abc\n") },
+      evidenceRoot: "D:/evidence",
+      auditPath: "D:/evidence/audit.jsonl",
+      allowedHosts: ["localhost"],
+    });
+
+    await expect(sweep.run({ pool: "main", branch: "main", scenarioIds: ["S-VAL-01-a"] }))
+      .rejects.toThrow("no frozen text");
+    expect(executor.run).not.toHaveBeenCalled();
   });
 
   it("never reuses a coding session id, which the database forbids", async () => {

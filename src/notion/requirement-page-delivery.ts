@@ -7,7 +7,7 @@ import {
   type RequirementPageSnapshot,
   type RequirementSection,
 } from "./blocks/requirement-page.js";
-import type { NotionGateway } from "./gateway.js";
+import { archiveBlock, type NotionGateway } from "./gateway.js";
 import { shouldSuppressSystemProjection } from "./intent-interpreter.js";
 import type { NotionOutboxDelivery, NotionOutboxRecord } from "./outbox.js";
 import schema from "./notion-schema.json" with { type: "json" };
@@ -18,6 +18,7 @@ const SECTION_TITLES: Record<RequirementSection, string> = {
   clarify: "澄清记录",
   prd: "PRD",
   acceptance: "场景化验收清单",
+  questions: "待人回答",
 };
 const TITLE_SECTIONS = new Map(
   Object.entries(SECTION_TITLES).map(([section, title]) => [title, section as RequirementSection]),
@@ -30,6 +31,7 @@ const desiredSchema = z.object({
   prd: z.array(z.string()),
   prdFrozen: z.boolean(),
   acceptance: z.array(z.string()),
+  questions: z.string().optional(),
 });
 const pageSchema = z.object({
   requirementId: z.string().min(1),
@@ -166,12 +168,7 @@ export class NotionRequirementPageDelivery implements NotionOutboxDelivery {
 
     for (const operation of operations) {
       if (operation.type === "archive_block") {
-        await this.gateway.request({
-          method: "PATCH",
-          path: `/v1/blocks/${encoded(operation.blockId)}`,
-          priority: "projection",
-          body: { archived: true },
-        });
+        await archiveBlock((input) => this.gateway.request(input), operation.blockId);
       }
       if (operation.type === "update_block") {
         const type = snapshot.sections.metadata?.blocks[0]?.id === operation.blockId ? "callout" : "paragraph";

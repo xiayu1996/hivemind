@@ -82,7 +82,8 @@ DECOMPOSE 为每个 Story 产出：
 ### 1.3 分支与合流：epic 集成分支 + Story 分支逐个合入 + Epic 单 MR
 
 - `epic/<id>` 从 main cut，是 Epic 的集成基准；每 Story 独立 worktree + `story/<epic>-<id>` 分支；**依赖 Story 在被依赖者合入后才 cut 分支**（天然拿到依赖代码，无需 cherry-pick）。
-- 合流：rebase onto epic HEAD → 有冲突 CODE agent 现场解 → **子集重验**（本 Story 场景 + footprint 相交 Story 的场景）→ 合入。
+- 合流：rebase onto epic HEAD → 有冲突 CODE agent 现场解 → **推 Story 分支并开 draft MR（story→epic）** → **子集重验**（本 Story 场景 + footprint 相交 Story 的场景）→ ff 合入 → 推 epic 分支。MR 必须在合入之前开：合入之后 epic 分支已含全部 commit，平台会以「无差异」拒绝；复验失败退回 CODE 后再来，复用已开的 MR，不开第二个；目标分支已包含该分支时不开 MR 并写明原因（2026-09-10）。
+- epic 分支由系统在拆解批准时推到 origin，派发前重试，每次合入后推头；Story 分支 stack 在它上面，所以它不能只活在本机（2026-09-10）。
 - MR：Epic 级单 MR（epic→main），commit 按 Story 分段（保留 red/green），文案按 Story 分章；单 Story 小 Epic 退化为 story→main 直出。
 - 理由：常驻 E2E loop 需要"当前 Epic 全量交付态"的分支作回归基准；人审拿到完整业务上下文；redo 语义清晰（每轮全新分支+新 MR 防 stale ref，busybee D6）。
 - 缓解：epic 分支每日 merge main 防偏离（回归 loop 验证吸收成本）；>8 Story 的 Epic 提示"建议拆 Epic"由人裁决；人审主阵地是 Notion（每 Story 有设计总结+逐场景报告），MR 只是代码载体。
@@ -147,6 +148,8 @@ DoD 每条业务场景带全局唯一 `scenario_id`（如 S-EPIC12-03）；测�
 
 DESIGN 阶段产出**测试矩阵声明**冻结进 Story DoD；VERIFY 按声明核对；豁免走 exempt + 理由留痕。
 
+**层有归属，且由系统固定而非 DoD 声明（2026-09-10）**：unit / integration / snapshot 归 CODE，用测试证明；e2e / ui 归 VERIFY，在真实浏览器里证明。CODE 是 TDD 驱动、要快，不买慢的浏览器轮；VERIFY 不采信 CODE 对屏幕的自述。CODE 出口只查 CODE 归属层的红绿证据；VERIFY 对每个 e2e / ui 场景要求**属于该场景独有的截图 + 到达的页面**，由 verdict 代码校验——S-E3OVERVIEW-01 曾用同一张截图通过四个场景。缺失记 `inconclusive`（§9.3），不进 failed 集合。
+
 | 层 | 触发条件（按改动性质） | 证据形态 |
 |---|---|---|
 | 单测 | 永远（任何逻辑变更的底线层） | 轨迹中 test 工具事件：红输出 hash → 绿输出 |
@@ -204,13 +207,28 @@ story_id: S-EPIC12-03
 design_summary: <一页纸核心设计，业务语言>
 scenarios:
   - id: S-EPIC12-03-a
-    given/when/then: <业务语言>
-    layers: [unit, e2e]          # 测试矩阵声明（§2.2 裁剪结果）
+    given/when/then: <业务语言；then 点名可观察物与边界>
+    layers: [unit, e2e]          # 测试矩阵声明（§2.2 裁剪结果；层归属由系统固定）
+    source: <含 e2e/ui 层时必填：数据从哪张表、哪类事件、哪个既有接口来>
+    seed: <可选：given 在屏幕上需要的样例数据，人话一句；走查前经仓库的 verify.seedCommand 造出>
+    examples:                    # 含 e2e/ui 层时必填：至少一条 shows 与一条 excludes
+      - kind: shows
+        text: <用户看到的字面文本>
+      - kind: excludes
+        text: <不得出现的内容>
 baseline: acceptance_test | bug_repro | exempt(reason)
-acceptance_criteria: [<人可勾选的验收条目>]
+acceptance_criteria:             # 每条必须有归宿
+  - text: <人可勾选的验收条目>
+    scenarios: [S-EPIC12-03-a]   # 由这些场景的测试证明
+  - text: <约束型条目>
+    constraint: <由什么代码检查兜底>
+out_of_scope: [<走查不得据以否决的事项；可为空但必须写>]
+relies_on: [<依赖其正常工作的既有页面/路由/服务；它们坏了不算本卡失败>]
 predicted_footprint: [module/dir]
 depends_on: [story_id]
 ```
+
+**DoD 写到什么程度（2026-09-10）**：只读代码的 CODE 与只看屏幕的走查，对着同一条 `then` 必须得出同一个结论。「简洁」「清晰」「摘要」这类词必须由 `examples` 的字面样例定义；schema（`src/pipeline/dod.ts`）在 DESIGN 出口强制上述字段，含糊的 DoD 出不了 DESIGN。依据：S-E3OVERVIEW-01 八轮中两轮（第 6、7 轮）源于 `then` 只写「简洁活动摘要」，CODE 按最小解释做、走查按用户语义打回，两边都没错，错在 DoD 允许两种解释；另有三条验收标准无任何场景归宿，只能靠评审人眼发现。
 
 **Epic 完成判定**（可代码判定，非 agent 自报）：全部 Story delivered ∧ epic 回归池连续 K 轮全绿（或 24h 无新增 regression 卡）∧ MR 合并 ∧ Notion 人工验收勾选。
 
@@ -317,6 +335,10 @@ usage limit、限流、超时、传输中断、OAuth 刷新失败只进熔断器
 - **只看 `ui` / `e2e` 层的 scenario**。没有界面的 scenario 没有可看的东西。
 - **原型图是参考不是判据**。原型画在实现之前,不要求像素级一致,与它的差异最多是一条 finding;只有需求用文字写明"必须与原型一致",差异才算功能验收不通过。
 
+### 9.2a 否决必须回指 DoD（2026-09-10）
+
+走查每条 `failed` 必须带 `cites`：所违反的 scenario `then` 或 `examples` 原句，代码校验引用真存在于 DoD（`splitRefusals`）。引不到的观察**不否决**：记为 finding，同时作为「DoD 修订建议」写到 Notion 卡上，由人批准后成为下一轮 `[answer:]` 任务。理由与 9.1 同源：一个可以凭任何用户语义否决的评审，就是一个每轮加需求、无上限的产品经理，`failed(N) ⊊ failed(N-1)` 对它不成立。DoD 的 `out_of_scope` 与 `relies_on` 随 prompt 下发：前者不得据以否决，后者坏了记 `inconclusive` 并点名依赖而非本卡。
+
 ### 9.3 跑不起来不占预算
 
 走查自身失败(浏览器起不来、回复不是要求的 JSON)记 `inconclusive`:卡照常交付,按 §8.6 不进 failed 集合、不消耗轮次,但作为系统侧 friction 物化——它是我们的缺陷,不是这张卡的。同理,目录里没有宣告图片输入的模型不会被派去看界面:那是演戏,该道直接跳过并明说。
@@ -325,4 +347,49 @@ usage limit、限流、超时、传输中断、OAuth 刷新失败只进熔断器
 
 - **余额不做预警,假设充足**。DeepSeek 没有余额查询 API,靠累计估算去猜只会得到一个不可信的数;真的耗尽时 API 自己会返回错误码,分类器已认得(QUOTA → 停牌叫人,充值只有人能做)。唯一有业务意义的护栏是**单任务消耗上限**(`cost.perCardUsdCeiling`,§1.5),它管的是"一张卡不能花过头",而不是"账户还剩多少"。
 - **等人不做二次提醒**。停点首次告警之后不再重复推送,卡可以无限期停在等人。这是明确接受的:重复提醒的价值低于它带来的噪音,人什么时候回是人的节奏。
+
+## 10. 增补（2026-09-10）：轮次为什么会烧掉——一张卡八轮的归因与可迭代性
+
+依据 S-E3OVERVIEW-01 全部 8 轮（17 个 phase run，$4.73）的逐轮展开（`scripts/inspect-round.ts`）。归因：2 轮真 bug；1 轮门禁放错位置（尾随空白到 MERGE 才查）；3 轮含环境失败（评审打到旧服务、OAuth 401、评审自建服务 500）；2 轮 DoD 含糊（§5 修订）。此外第 7 轮 CODE 的 prompt 15.9KB，人的回答缺失、三段可执行内容全在最后 1KB；第 8 轮 21.1KB 中 18.6KB 是 6 份重复旧产物。结论：轮次不是被模型「偷懒」烧掉的，是被契约漏洞烧掉的，而工具不足让漏洞看不见。
+
+### 10.1 prompt 结构：该做的事在前，历史在后，只注入最新产物
+
+`assemblePhasePrompt` 在 `## Specification` 之后紧接 `## What this round must do`：每项带 tag——`[answer:<feedbackId>]`（人的回答）、`[rejected:<phase>]`（上一次被拒的原因）、`[scenario:<id>]`（仍失败的场景，附两条道各自的原因）。`## Evidence from earlier rounds` 与 `## Output of earlier phases` 排最后，且每个 (phase, kind) 只注入最新一份产物。纯函数与稳定排序不变，跨机重建仍逐字节相同。
+
+### 10.2 CODE 出口增加「逐条回应」检查
+
+CODE 的 artifact 必须为每个注入的 tag 写一行 `addressed <tag>: <what you changed>`；缺的 tag 作为 gate finding 喂回同一 session（不计轮次、不计重入，与 §8.1 其他检查同性质）。检查的是「有没有对它作出回应」，不是「回应对不对」——后者是 VERIFY 的事。
+
+### 10.3 可观察与可重放
+
+- `scripts/inspect-round.ts`：一轮一屏——prompt 分段体积与 tag 到达位置、工具调用统计、模型自述、该 run 窗口内的 commit、verdict 与两条道的逐场景原因；VERIFY 与走查的 session 按时间窗口从各自 lane 目录找到。
+- `scripts/replay-phase.ts`：用某轮存下的输入单跑一个 phase，不写库、不动状态机、不发 Notion；改 prompt 后直接对比产物。
+- 轮次账本：`round` 是永不重置的流水号；预算按 `last_human_action_at` 之后被拒的轮数计，Notion 显示 `Budget x/6`。
+
+### 10.4 人的回答可见
+
+Story 页「待人回答」区列出已应用的回答：谁、何时、针对哪条、原文，以及用于第几轮。运维代答按实际来源署名，不冒充看板上的人。
+
+## 11. 增补（2026-09-10）：从需求到合入主分支的闭环审计
+
+对着「requirement → 拆 Epic → 拆 Story → 开发/自测/审查 → draft MR 到 epic 分支 → 验收 → epic 分支合入 main」逐函数追踪，找到 10 处让链路无法闭环的缺口，一批修完。原则：每一处都是「流程在某个环节把责任丢给了人却没告诉人」，修法是让系统自己把事做完，做不完就把停点写到人能看到的地方。
+
+- **MR 顺序**（§1.3）：MR 在 ff-merge 之后开，永远是空 diff。改为 rebase → 推分支 → 开 MR → 复验 → 合入。
+- **Epic MR 不中止周期**：缺 red/green 提交名时不再抛错中止整个 orchestrator 周期，改为在 MR 描述里写「无红绿提交对，见验证报告」；目标分支来自 `--target-branch`；Epic MR 等 Epic 回归池没有未解决的回归卡才开；EPIC_ACCEPT 下 MR 被关闭未合并则退回 EXECUTING 重开。
+- **走查环境**（§9）：仓库级 `verify.appStartCommand` / `verify.appReadyUrl` / `verify.seedCommand`，DoD 场景以 `seed` 声明样本数据；系统起服务、造数据、把 URL 交给评审。起不来记 friction、场景 inconclusive，不否决；走查 inconclusive 在 Notion 上可见，不再被功能道结论吞掉。
+- **需求层停点**：`clearStop` 有了调用者——人的回答清掉 stop 并进入下一轮澄清；需求页渲染停点详情与回答方式，而不是一个枚举词。HUMAN_PARKED 且无 resume_state 不再抛错。EXECUTING 期间 Epic 进度变化重新投影需求页。
+- **MERGE 可重入**：MERGE 阶段失败与 DESIGN/CODE 同样在预算内自动重入；平台瞬时错误不是停牌理由。
+- **重置解冻**：人把 Story 拖回 DESIGN，或冻结 DoD 不再满足当前契约，系统解冻 specs、作废 DESIGN/MERGE 第 1 轮与未验证的 CODE 轮，自动回 DESIGN；不再靠幂等复用把旧结果递回来。
+- **停牌上浮**：任一 Story NEEDS_INPUT，Epic 转 BLOCKED 并在 Epic 页写明哪张卡停在什么原因；全部恢复后自动回 EXECUTING。这种 BLOCKED 不能被评论「回答」成重新拆解。
+- **回归环路接通**：sweep 传 probe worktree，归因能跑；`regression_cards` 有 resolve 语义；REGRESSION_FIX 是可运行的 phase（见 tasks IT-2x）。
+- **outbox 死信**：每行计 attempts，超过上限转 dead 并保留错误；周期日志报 failed/dead 计数，`inspect` 可列死信。
+
+线上跑通一整条链路之后又暴露三处，同批修完：
+
+- **VERIFY 可恢复**：进程死在 VERIFY 里（provider TRANSPORT 故障、被杀）会把卡留在 VERIFY，而这个状态没有任何 phase 能从它起跑——调度器照样派发，`run-story` 的状态守卫拒绝，卡被 park、Epic 被升级为 BLOCKED。改为 worker 进门就把 VERIFY 退回 CODE 并记 `verification_interrupted` friction；丢掉的那一轮没记 verdict，所以不计预算，已完成的 CODE 轮直接复用、只重跑验证，不再买一轮新的 CODE。
+- **网络抖动不吞周期**：周期开头的 Notion/远端步骤（intake、投影对账、拆解、Epic 维护）失败会中止整个周期，后面派卡、落分支、回归 sweep 全部不跑。改为这四步各自隔离：`classifyError` 判为 TRANSPORT 的按告警跳过本周期，其他错误照旧中止。
+- **重复归档不进死信**：对已归档的块再发 `archived: true`，Notion 回 400「Can't edit block that is archived」。目标状态已经达到，所以这条拒绝等于成功；不吞掉它，outbox 会把同一条投影重试到 dead，之后这张页面就再也不更新了。
+- **页面上不留系统标记**：Epic 页曾把重放键（`hivemind-plan:` / `hivemind-progress:`）当作一行正文打印，读页的人得跳过它。键改存 `epic_notion_sections`，下一次写页面时顺手删掉旧标记行；仍带标记行的页面照旧算已投影，不会重复追加。
+- **投影键跟着「页面长什么样」**：outbox 只按 payload 去重，于是改了措辞而事实没变时，线上每一页都还显示旧文案。键改为覆盖渲染后的行。
+- **受阻行说人话**：Epic 页原样打印事件日志里给运维看的理由（含 `verify_loop_exceeded` 这类枚举），而下面的 Story 行已经用中文说过一遍。有卡在等回答时，页面只说等谁；运维那句留在 payload 与日志里。
 

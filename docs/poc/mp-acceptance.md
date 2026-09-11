@@ -96,6 +96,38 @@ Codex 订阅额度接近耗尽，本轮不跑 pi agent，卡片回归等配额�
 树干净、相对 main 有 14 个提交、四条场景各有红绿提交与测试文件点名、`git diff --check` 干净、仓库三条门禁命令全绿（该分支自身 126 文件 768 测试通过）。
 即这张卡的代码在 09-06 就已经满足出口条件，把它停在 `retry_limit_exceeded` 的是流程本身，新出口会放它过去。
 
+## IT 快速迭代整改：S-E3OVERVIEW-01 重置到 DESIGN 重跑（2026-09-10）
+
+依据 D23–D31（`data/decisions/2026-09-10-dod-and-iteration-decisions.md`）。同一张卡、同一棵工作树、同一 provider（openai-codex / gpt-5.6-terra），旧 8 轮 $4.73 停在 `verify_loop_exceeded`；新契约下：
+
+| 阶段 | 耗时 | 费用 | 结果 |
+|---|---|---|---|
+| DESIGN r1 | 51s | $0.10 | 新 DoD 一次通过 schema：4 场景各有 shows/excludes 样例与 source，5 条标准全部有归宿，out_of_scope 写明 375px 布局与空状态文案，relies_on 写明 /tasks |
+| VERIFY r8（复用旧 CODE r8 产物） | 170s | $0.25 | 4 场景全部被打回，理由逐条对上 DoD 样例（露出 CLARIFY / CODE / QUEUED / DELIVERED / FAILED，回退文案不符），每场景独有截图 |
+| CODE r9 | 263s | $0.45 | prompt 10.3KB，任务段在 1.1KB 处；产物 5 行 addressed 对应 5 个 tag；一轮处理完 4 个场景 |
+| VERIFY r9 | 506s | $0.24 | 盲审 4 场景 passed 且各有截图；走查 active passed，其余 3 个 inconclusive（走查自建页面无样本数据），3 条 findings 不否决 |
+| MERGE r1 | — | — | 报告写出，Story 合入本地 Epic 分支；开 draft MR 时失败：`origin/epic/E3OVERVIEW` 不存在（Epic 分支从未推送，MQ-08 真实 gh 路径尚未走通） |
+
+对照：旧流程 CODE 第 7 轮 prompt 15.9KB、任务段在最后 1KB、只做 1 个场景；新流程一轮 CODE 即通过验证。已发现并修掉的两处副作用：worker 幂等复用已完成的 CODE 轮（重置后应把轮次推到下一位）；操作员的停止/重置文案曾被当作「上一次被拒的原因」注入 DESIGN prompt（已归入非拒绝类）。
+
+走查 3 个 inconclusive 指向下一个系统侧缺口：走查道需要按 DoD 的 given 造样本数据，否则只能看空页面。
+
+## 闭环整改后的首次完整链路（2026-09-10 晚）
+
+依据 D32–D36。orchestrator 用 `634aa6a` 及后续三个修复重启，三张停牌卡由 `resume-parked-story.ts` 恢复，其余 Story 由系统自行派发，人未再介入。
+
+| 卡 | 结果 | 轮次 | 备注 |
+|---|---|---|---|
+| S-E1ACTION-01 | DELIVERED，draft PR #20 → `epic/E1ACTION`，ff 合入后 GitHub 标 MERGED | 8（重设计后 1 轮 CODE+VERIFY） | 旧 DoD 不合规 → 系统自动回 DESIGN（D35）；走查 6/6 各有独立截图，3 条 finding 不否决 |
+| S-E1ACTION-02..06 | DELIVERED，PR #21–#25 | 各 1–2 轮 | 03 前两次 DESIGN 的 DoD YAML 无效（字面 `\n`、句中「: 」），第三次过；由此补了 DESIGN 重试回喂被拒原因 + YAML 宽容解析（`20f670a`） |
+| S-E1ACTION-04..06 | 在 deepseek 上完成 | — | codex 订阅撞用量窗口，断路器打开，链路自动切到计费 provider；04 计费 $0.058、05 $0.072、06 $0.131 |
+| Epic E1ACTION | EPIC_ACCEPT，Epic MR #26 `epic/E1ACTION → main` 已开，描述按 Story 分章、逐场景红绿证据 | — | 首次由系统自己走到「等人合并」这一步 |
+| S-E3OVERVIEW-01 | DELIVERED（mrUrl 空：分支已在 Epic 头，按 D33 不开空 MR） | 9 | 从 MERGE 恢复，MERGE r1 复用 |
+
+其间暴露并当场修掉的缺口：Epic 分支刷新时 `git fetch` 网络失败会打断整个周期（`b92f356`）；outbox 失败原因在重试成功后被清掉、日志只剩计数（`8a2a1e4`）。
+
+仍开放：调度不区分「已开工」与新卡，E3OVERVIEW-01 在 MERGE 状态排队约 100 分钟等 E1ACTION 新卡跑完；Epic 页面没有 MR 链接、没有 EPIC_ACCEPT / BLOCKED 的看板状态选项（Epic 状态列只有 4 个选项）。
+
 ## 尚未发生
 
 - Linux 主机上执行 `deploy/linux/install.sh` → `npm run preflight` → 两个 systemd 单元起来；同机重跑 `smoke-browser-e2e`。

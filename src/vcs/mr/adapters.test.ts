@@ -44,16 +44,39 @@ describe("MR CLI adapters", () => {
     ]);
   });
 
-  it("reads whether a review request has landed, from either CLI", async () => {
+  it("reads whether a review request is open, landed, or closed without landing, from either CLI", async () => {
     const gh = fake('{"state":"MERGED"}\n');
-    await expect(new GhMRAdapter(gh).isMerged("https://github.com/owner/repo/pull/7")).resolves.toBe(true);
+    await expect(new GhMRAdapter(gh).state("https://github.com/owner/repo/pull/7")).resolves.toBe("merged");
     expect(gh.run).toHaveBeenCalledWith("gh", ["pr", "view", "https://github.com/owner/repo/pull/7", "--json", "state"]);
-    await expect(new GhMRAdapter(fake('{"state":"OPEN"}')).isMerged("u")).resolves.toBe(false);
+    await expect(new GhMRAdapter(fake('{"state":"OPEN"}')).state("u")).resolves.toBe("open");
+    await expect(new GhMRAdapter(fake('{"state":"CLOSED"}')).state("u")).resolves.toBe("closed");
 
     const glab = fake('{"state":"merged"}');
-    await expect(new GlabMRAdapter(glab).isMerged("https://gitlab.com/o/r/-/merge_requests/3")).resolves.toBe(true);
+    await expect(new GlabMRAdapter(glab).state("https://gitlab.com/o/r/-/merge_requests/3")).resolves.toBe("merged");
     expect(glab.run).toHaveBeenCalledWith("glab", ["mr", "view", "https://gitlab.com/o/r/-/merge_requests/3", "--output", "json"]);
-    await expect(new GlabMRAdapter(fake("not json")).isMerged("u")).rejects.toThrow(/did not return JSON/);
+    await expect(new GlabMRAdapter(fake('{"state":"opened"}')).state("u")).resolves.toBe("open");
+    await expect(new GlabMRAdapter(fake('{"state":"closed"}')).state("u")).resolves.toBe("closed");
+    await expect(new GlabMRAdapter(fake('{"state":"weird"}')).state("u")).rejects.toThrow(/unknown merge request state/);
+    await expect(new GlabMRAdapter(fake("not json")).state("u")).rejects.toThrow(/did not return JSON/);
+  });
+
+  it("finds the open review request between two branches, or reports none, from either CLI", async () => {
+    const query = { repository: "owner/repo", sourceBranch: "story/one", targetBranch: "main" };
+    const gh = fake('[{"url":"https://github.com/owner/repo/pull/9"}]\n');
+    await expect(new GhMRAdapter(gh).findOpen(query)).resolves.toBe("https://github.com/owner/repo/pull/9");
+    expect(gh.run).toHaveBeenCalledWith("gh", [
+      "pr", "list", "--repo", "owner/repo", "--head", "story/one", "--base", "main", "--state", "open", "--json", "url",
+    ]);
+    await expect(new GhMRAdapter(fake("[]")).findOpen(query)).resolves.toBeNull();
+
+    const glab = fake('[{"web_url":"https://gitlab.com/o/r/-/merge_requests/5","state":"opened"}]');
+    await expect(new GlabMRAdapter(glab).findOpen(query)).resolves.toBe("https://gitlab.com/o/r/-/merge_requests/5");
+    expect(glab.run).toHaveBeenCalledWith("glab", [
+      "mr", "list", "--repo", "owner/repo", "--source-branch", "story/one", "--target-branch", "main", "--output", "json",
+    ]);
+    await expect(new GlabMRAdapter(fake("[]")).findOpen(query)).resolves.toBeNull();
+    await expect(new GlabMRAdapter(fake('{"web_url":"x"}')).findOpen(query)).rejects.toThrow(/no merge request list/);
+    await expect(new GhMRAdapter(fake("not json")).findOpen(query)).rejects.toThrow(/did not return JSON/);
   });
 
   it("prefers gh and falls back to glab", async () => {

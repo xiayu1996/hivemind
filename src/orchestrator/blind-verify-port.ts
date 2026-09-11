@@ -1,5 +1,6 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { screenScenarios } from "../pipeline/dod.js";
 import { splitScenarioFailures } from "../pipeline/failure-classification.js";
 import type { BlindVerifyExecutor, BlindVerifyResult } from "../verify/executor.js";
 import type { PhaseTelemetryInput } from "./pi-phase-port.js";
@@ -49,6 +50,7 @@ export class BlindVerifyStoryPort implements StoryVerifyPort {
       auditPath: this.options.auditPath,
       specification: JSON.stringify(input.definitionOfDone),
       declaredScenarioIds: input.definitionOfDone.scenarios.map((scenario) => scenario.id),
+      screenScenarioIds: screenScenarios(input.definitionOfDone).map((scenario) => scenario.id),
       allowedHosts: this.options.allowedHosts,
       ...(this.options.chromiumSandbox === undefined ? {} : { chromiumSandbox: this.options.chromiumSandbox }),
       commitMessages: await this.options.commitMessages(),

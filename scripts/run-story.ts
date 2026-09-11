@@ -127,10 +127,23 @@ async function main(): Promise<void> {
     await migrate(handle.client);
     const store = new StoryExecutionStore(handle.client);
     const story = await store.getStory(cardId);
-    if (!["QUEUED", "DESIGN", "CODE", "MERGE"].includes(story.state)) {
-      throw new Error(`Story ${cardId} must be QUEUED, DESIGN, CODE or MERGE, not ${story.state}`);
+    // VERIFY is here because a run can die inside it; the worker sends such a
+    // card back to CODE rather than refusing it, which is what kept a single
+    // transport fault from being recoverable at all.
+    if (!["QUEUED", "DESIGN", "CODE", "VERIFY", "MERGE", "REGRESSION_FIX"].includes(story.state)) {
+      throw new Error(
+        `Story ${cardId} must be QUEUED, DESIGN, CODE, VERIFY, MERGE or REGRESSION_FIX, not ${story.state}`,
+      );
     }
-    const config = await ConfigStore.load(handle.client);
+    // A regression fix lands on the Epic head again; without the integration
+    // worktree the loop could fix and never deliver.
+    if (story.state === "REGRESSION_FIX" && !integrationWorktree) {
+      throw new Error(`Story ${cardId} is in REGRESSION_FIX and needs --integration-worktree`);
+    }
+    // Per-repository keys (the gate commands the CODE exit and the merge
+    // re-verification run) are stored under the card's slug; without the scope
+    // they would read as their defaults and an unchecked merge would pass.
+    const config = await ConfigStore.load(handle.client, story.repo ? { repository: story.repo } : {});
     // Whether this card's tokens cost money as they are spent decides two
     // things: what the ledger counts as billed, and whether a spend ceiling
     // means anything for this run at all.
@@ -266,6 +279,16 @@ async function main(): Promise<void> {
         auditPath,
         allowedHosts,
         chromiumSandbox: config.get("verify.chromiumSandbox"),
+        // The application the reviewer looks at, started and seeded by the
+        // system; a reviewer told to "open the page" with nothing running
+        // returns inconclusive for every scenario, which is what happened on
+        // the first run under this contract.
+        app: {
+          startCommand: config.get("verify.appStartCommand"),
+          readyUrl: config.get("verify.appReadyUrl"),
+          readyTimeoutMs: config.get("verify.appReadyTimeoutMs"),
+          seedCommand: config.get("verify.seedCommand"),
+        },
         storyTitle: async () => {
           const snapshot = await store.getStory(cardId);
           return { title: snapshot.title, businessGoal: snapshot.requirement };
@@ -304,6 +327,7 @@ async function main(): Promise<void> {
       {
         ...(integration ? { integration } : {}),
         maxInnerLoopRounds: limits.maxInnerLoopRounds,
+        maxRegressionReopens: limits.maxRegressionReopens,
         friction: { record: (input) => store.recordFriction(input) },
         // A flat-rate subscription has no money to cap, and a port that
         // always answered zero would read as a ceiling being enforced when
@@ -311,13 +335,15 @@ async function main(): Promise<void> {
         ...(metered ? { spend: spendPort } : {}),
       },
     ).run(cardId);
-    // The scenarios a Story declares become the regression pools' problem the
-    // moment they exist, and everyone's problem once the Story is delivered.
+    // The scenarios a Story declares become its Epic's pool the moment they
+    // exist. They stay there: a delivered Story is on its Epic's integration
+    // branch, and only the Epic landing on the target branch makes them
+    // everyone's problem. EpicCompletion promotes them when it reads the
+    // merge.
     const registry = new ScenarioRegistry(handle.client);
     await registry.registerStory(cardId).catch((cause: unknown) => {
       console.warn(`scenario registration skipped: ${(cause as Error).message}`);
     });
-    if (result.state === "DELIVERED") await registry.promoteToMain(cardId);
     console.log(JSON.stringify(result));
   } finally {
     handle.close();

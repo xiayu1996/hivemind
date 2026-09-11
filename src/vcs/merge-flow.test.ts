@@ -28,13 +28,16 @@ describe("EpicMergeFlow", () => {
       kind: "merged",
       integrationBranch: "epic/E-1",
       scenarioIds: ["S-M2-05-integration"],
+      mrUrl: null,
     });
     expect(calls).toEqual(expect.arrayContaining([
       { cwd: "integration", args: ["switch", "-c", "epic/E-1", "main"] },
       { cwd: "story", args: ["rebase", "epic/E-1"] },
       { cwd: "integration", args: ["merge", "--ff-only", story.branch] },
     ]));
-    expect(calls.some(({ args }) => args.includes("push") || args.includes("main") && args[0] === "merge")).toBe(false);
+    expect(calls).toContainEqual({ cwd: "integration", args: ["push", "--set-upstream", "origin", "epic/E-1"] });
+    expect(calls.some(({ args }) => args[0] === "push" && args.includes("main"))).toBe(false);
+    expect(calls.some(({ args }) => args[0] === "merge" && args.includes("main"))).toBe(false);
   });
 
   it("S-M2-05-revision refuses to merge a revision the re-verification never saw", async () => {
@@ -114,5 +117,33 @@ describe("EpicMergeFlow", () => {
     });
     expect(verify).not.toHaveBeenCalled();
     expect(calls.some(({ args }) => args[0] === "merge")).toBe(false);
+  });
+
+  it("opens the Story's review request after the rebase and before anything is merged", async () => {
+    const order: string[] = [];
+    const git = { run: vi.fn(async (cwd: string, args: string[]) => {
+      order.push(args.join(" "));
+      if (args.join(" ") === "branch --show-current") return cwd === "story" ? story.branch : "epic/E-1";
+      return "";
+    }) };
+    const verify = vi.fn(async (scenarioIds: readonly string[]) => {
+      order.push("verify");
+      return { passed: true as const, scenarioIds };
+    });
+    const publish = vi.fn(async () => {
+      order.push("publish");
+      return { mrUrl: "https://example.test/pull/9" };
+    });
+    const flow = new EpicMergeFlow(git, verify, { storyWorktree: "story", integrationWorktree: "integration" });
+
+    await expect(flow.merge({ epicId: "E-1", story, integratedStories: [], publish })).resolves.toMatchObject({
+      kind: "merged",
+      mrUrl: "https://example.test/pull/9",
+    });
+    expect(publish).toHaveBeenCalledWith(story);
+    const at = (step: string) => order.findIndex((entry) => entry.startsWith(step));
+    expect(at("rebase")).toBeLessThan(at("publish"));
+    expect(at("publish")).toBeLessThan(at("verify"));
+    expect(at("verify")).toBeLessThan(at("merge --ff-only"));
   });
 });

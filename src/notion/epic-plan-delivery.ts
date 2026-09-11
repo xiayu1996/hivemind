@@ -4,6 +4,8 @@ import type { NotionGateway } from "./gateway.js";
 import type { NotionOutboxDelivery, NotionOutboxRecord } from "./outbox.js";
 import { COMMENT_EPIC_PAGE } from "../orchestrator/epic-blocker.js";
 import { SYNC_EPIC_STATUS } from "../orchestrator/epic-status-projection.js";
+import { SYNC_EPIC_PAGE, renderEpicProgress, type EpicPagePayload } from "../orchestrator/epic-page-projection.js";
+import pageText from "../orchestrator/epic-page-text.json" with { type: "json" };
 import schema from "./notion-schema.json" with { type: "json" };
 
 const planSchema = z.object({
@@ -24,6 +26,22 @@ const statusSchema = z.object({
   at: z.number().int(),
 });
 
+const pageSchema = z.object({
+  epicId: z.string().min(1),
+  status: z.enum(schema.options.epicStatus),
+  mrUrl: z.string().nullable(),
+  targetBranch: z.string().min(1),
+  integrationBranch: z.string().nullable(),
+  blockedReason: z.string().nullable(),
+  stories: z.array(z.object({
+    id: z.string().min(1),
+    title: z.string(),
+    state: z.string().min(1),
+    stopReason: z.string().nullable(),
+    mrUrl: z.string().nullable(),
+  })),
+});
+
 const commentSchema = z.object({
   epicId: z.string().min(1),
   body: z.string().min(1),
@@ -31,10 +49,13 @@ const commentSchema = z.object({
 
 /** Every outbox operation this delivery owns, for the replay filter. */
 export const EPIC_OUTBOX_OPERATIONS = [
-  "present_epic_plan", "create_story_page", SYNC_EPIC_STATUS, COMMENT_EPIC_PAGE,
+  "present_epic_plan", "create_story_page", SYNC_EPIC_STATUS, COMMENT_EPIC_PAGE, SYNC_EPIC_PAGE,
 ] as const;
 
-const MARKER_PREFIX = "hivemind-plan:";
+// Older projections printed the replay key as a line on the page. The key
+// lives in `epic_notion_sections` now; these prefixes are only how such a
+// line is recognised so it can be removed when the page is next written.
+const LEGACY_MARKER_PREFIXES = ["hivemind-plan:", "hivemind-progress:"] as const;
 
 function encoded(id: string): string {
   return encodeURIComponent(id);
@@ -77,9 +98,15 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
 
   async isApplied(record: NotionOutboxRecord): Promise<boolean> {
     if (record.operation === "present_epic_plan") {
-      return this.planMarkerPresent(record.target, record.payloadHash);
+      const payload = planSchema.parse(record.payload);
+      return this.sectionApplied(payload.epicId, "plan", record.target, record.payloadHash);
     }
     if (record.operation === SYNC_EPIC_STATUS) return this.statusApplied(statusSchema.parse(record.payload));
+    if (record.operation === SYNC_EPIC_PAGE) {
+      const payload = pageSchema.parse(record.payload);
+      const pageId = String((await this.epicRow(payload.epicId)).notion_page_id);
+      return this.sectionApplied(payload.epicId, "progress", pageId, record.payloadHash);
+    }
     if (record.operation === COMMENT_EPIC_PAGE) return this.commentPresent(commentSchema.parse(record.payload));
     if (record.operation === "create_story_page") {
       const payload = storyPageSchema.parse(record.payload);
@@ -95,8 +122,133 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
     if (record.operation === "present_epic_plan") return this.presentPlan(record);
     if (record.operation === "create_story_page") return this.createStoryPage(record);
     if (record.operation === SYNC_EPIC_STATUS) return this.syncStatus(statusSchema.parse(record.payload));
+    if (record.operation === SYNC_EPIC_PAGE) return this.syncPage(pageSchema.parse(record.payload), record.payloadHash);
     if (record.operation === COMMENT_EPIC_PAGE) return this.comment(commentSchema.parse(record.payload));
     throw new Error(`unsupported Epic plan operation: ${record.operation}`);
+  }
+
+  /**
+   * The page a person opens to see where the Epic stands: the board column,
+   * the review request link, and one line per Story. The progress section is
+   * rewritten in place under its heading; the plan above it is left alone.
+   */
+  private async syncPage(payload: EpicPagePayload, payloadHash: string): Promise<void> {
+    const epic = await this.epicRow(payload.epicId);
+    const pageId = String(epic.notion_page_id);
+    const properties: Record<string, unknown> = {
+      [schema.propertyNames.mergeRequest]: { url: payload.mrUrl },
+    };
+    // A column a person just dragged keeps their word until the human-wins
+    // window closes, exactly as the status-only projection does.
+    const humanWins = Number(epic.human_wins_until ?? 0) > this.now();
+    if (!humanWins) properties[schema.propertyNames.epicStatus] = { select: { name: payload.status } };
+    await this.gateway.request({
+      method: "PATCH",
+      path: `/v1/pages/${encoded(pageId)}`,
+      priority: "projection",
+      body: { properties },
+    });
+    if (!humanWins) await this.rememberStatus(payload.epicId, payload.status);
+
+    const stale = await this.progressSectionBlocks(pageId);
+    // A page written by an older projection still shows its replay key as a
+    // line of text, and the plan's key sits outside the progress section. This
+    // is the write that takes both away.
+    for (const blockId of await this.legacyMarkerBlocks(pageId)) {
+      if (!stale.includes(blockId)) stale.push(blockId);
+    }
+    for (const blockId of stale) {
+      await this.gateway.request({ method: "DELETE", path: `/v1/blocks/${encoded(blockId)}`, priority: "projection" });
+    }
+    const progress = renderEpicProgress(payload);
+    await this.gateway.request({
+      method: "PATCH",
+      path: `/v1/blocks/${encoded(pageId)}/children`,
+      priority: "projection",
+      body: {
+        children: [
+          heading(pageText.heading),
+          ...progress.lead.map((line) => paragraph(line)),
+          ...progress.stories.map((line) => bullet(line)),
+        ],
+      },
+    });
+    await this.rememberSection(payload.epicId, "progress", payloadHash);
+  }
+
+  private async legacyMarkerBlocks(pageId: string): Promise<string[]> {
+    return (await this.children(pageId))
+      .filter((block) => LEGACY_MARKER_PREFIXES.some((prefix) => plainText(block.paragraph).startsWith(prefix)))
+      .map((block) => String(block.id));
+  }
+
+  /** The progress heading and every block after it up to the next heading. */
+  private async progressSectionBlocks(pageId: string): Promise<string[]> {
+    const ids: string[] = [];
+    let inside = false;
+    for (const block of await this.children(pageId)) {
+      const type = String(block.type ?? "");
+      if (type === "heading_2") {
+        inside = plainText(block.heading_2) === pageText.heading;
+        if (!inside) continue;
+      }
+      if (inside) ids.push(String(block.id));
+    }
+    return ids;
+  }
+
+  private async children(pageId: string): Promise<Array<Record<string, unknown>>> {
+    const blocks: Array<Record<string, unknown>> = [];
+    let cursor: string | undefined;
+    do {
+      const suffix = cursor ? `?page_size=100&start_cursor=${encoded(cursor)}` : "?page_size=100";
+      const response = await this.gateway.request({
+        method: "GET",
+        path: `/v1/blocks/${encoded(pageId)}/children${suffix}`,
+        priority: "projection",
+      });
+      const page = z.object({
+        results: z.array(z.record(z.string(), z.unknown())),
+        has_more: z.boolean().optional(),
+        next_cursor: z.string().nullable().optional(),
+      }).parse(response.data);
+      blocks.push(...page.results);
+      cursor = page.has_more ? page.next_cursor ?? undefined : undefined;
+    } while (cursor);
+    return blocks;
+  }
+
+  /**
+   * Whether the page already shows this payload. A page written before the key
+   * moved into the database still carries its marker line, so that counts too
+   * and the section is not appended a second time.
+   */
+  private async sectionApplied(
+    epicId: string,
+    section: "plan" | "progress",
+    pageId: string,
+    payloadHash: string,
+  ): Promise<boolean> {
+    const row = (await this.client.execute({
+      sql: "SELECT payload_hash FROM epic_notion_sections WHERE epic_id = ? AND section = ?",
+      args: [epicId, section],
+    })).rows[0];
+    if (row && String(row.payload_hash) === payloadHash) return true;
+    const legacy = new Set(LEGACY_MARKER_PREFIXES.map((prefix) => `${prefix}${payloadHash}`));
+    const present = (await this.children(pageId))
+      .some((block) => legacy.has(plainText(block.paragraph)));
+    if (present) await this.rememberSection(epicId, section, payloadHash);
+    return present;
+  }
+
+  private async rememberSection(epicId: string, section: "plan" | "progress", payloadHash: string): Promise<void> {
+    await this.client.execute({
+      sql: `INSERT INTO epic_notion_sections (epic_id, section, payload_hash, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(epic_id, section) DO UPDATE SET
+              payload_hash = excluded.payload_hash, updated_at = excluded.updated_at`,
+      args: [epicId, section, payloadHash, this.now()],
+    });
   }
 
   /** The comment's own text is the replay marker: the page either carries it or it does not. */
@@ -197,9 +349,6 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
       paragraph(plan.businessGoal),
       ...plan.stories.map((story) => bullet(`${story.id} ${story.title}`)),
       ...(plan.recommendation ? [paragraph(plan.recommendation)] : []),
-      // Replay marker: the outbox may hand the same plan back after a crash, and
-      // an appended plan cannot be diffed the way a property can.
-      paragraph(`${MARKER_PREFIX}${record.payloadHash}`),
     ];
     await this.gateway.request({
       method: "PATCH",
@@ -207,6 +356,9 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
       priority: "interaction",
       body: { children },
     });
+    // The outbox may hand the same plan back after a crash, and an appended
+    // plan cannot be diffed the way a property can.
+    await this.rememberSection(plan.epicId, "plan", record.payloadHash);
   }
 
   private async createStoryPage(record: NotionOutboxRecord): Promise<void> {
@@ -242,28 +394,6 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
     });
     const pageId = z.object({ id: z.string().min(1) }).parse(created.data).id;
     await this.rememberPageId(payload.storyId, pageId);
-  }
-
-  private async planMarkerPresent(pageId: string, payloadHash: string): Promise<boolean> {
-    let cursor: string | undefined;
-    do {
-      const suffix = cursor ? `?page_size=100&start_cursor=${encoded(cursor)}` : "?page_size=100";
-      const response = await this.gateway.request({
-        method: "GET",
-        path: `/v1/blocks/${encoded(pageId)}/children${suffix}`,
-        priority: "projection",
-      });
-      const page = z.object({
-        results: z.array(z.record(z.string(), z.unknown())),
-        has_more: z.boolean().optional(),
-        next_cursor: z.string().nullable().optional(),
-      }).parse(response.data);
-      for (const block of page.results) {
-        if (plainText(block.paragraph) === `${MARKER_PREFIX}${payloadHash}`) return true;
-      }
-      cursor = page.has_more ? page.next_cursor ?? undefined : undefined;
-    } while (cursor);
-    return false;
   }
 
   private async findStoryPage(storyId: string): Promise<string | null> {

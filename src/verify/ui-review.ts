@@ -35,6 +35,8 @@ const acceptanceSchema = z.object({
   id: z.string().min(1),
   status: z.enum(["passed", "failed", "inconclusive"]),
   reason: z.string().optional(),
+  /** The DoD sentence (then or an example) the refusal rests on, verbatim. */
+  cites: z.string().optional(),
   url: z.string().optional(),
   screenshots: z.array(z.string()).optional(),
 }).strict();
@@ -55,10 +57,26 @@ const replySchema = z.object({
 export type UiAcceptance = z.infer<typeof acceptanceSchema>;
 export type UiFinding = z.infer<typeof findingSchema>;
 
+/**
+ * A refusal the DoD does not support. The reviewer saw something wrong that
+ * nobody wrote down, so no round was ever asked to build it: it goes to the
+ * person who owns the DoD as a proposed amendment, and only their approval
+ * turns it into work for the next round.
+ */
+export interface UiAmendment {
+  scenarioId: string;
+  observation: string;
+  cites?: string;
+}
+
 export interface UiReviewScenario {
   id: string;
   /** What a person asked for, in their words; the reviewer judges against this. */
   statement: string;
+  /** The sentences a refusal may cite: the scenario's then and its examples. */
+  refusable: readonly string[];
+  /** The sample data the given asked for, already put into the application when present. */
+  seed?: string;
 }
 
 export interface UiReviewReference {
@@ -84,6 +102,12 @@ export interface UiReviewInput {
    * that it must match exactly makes a difference a failure.
    */
   references?: readonly UiReviewReference[];
+  /** What the DoD says the reviewer may not refuse the card for. */
+  outOfScope?: readonly string[];
+  /** Existing pages or services the Story assumes work; their failure is not this card's. */
+  reliesOn?: readonly string[];
+  /** Where the repository's application is running for this review, when one was started. */
+  appUrl?: string;
   worktreePath: string;
   evidencePath: string;
   auditPath: string;
@@ -99,6 +123,8 @@ export interface UiReviewResult {
   failedScenarios: string[];
   acceptance: UiAcceptance[];
   findings: UiFinding[];
+  /** Refusals the DoD did not support, handed to a person instead of to CODE. */
+  amendments: UiAmendment[];
   validationErrors: string[];
   /** The reviewer's own failure, if it never reached a verdict. */
   runnerFailure: string | null;
@@ -186,18 +212,32 @@ export function promptFor(input: UiReviewInput, attached: LoadedScreenshots): st
     "Accept or reject this Story as the product manager who asked for it. You are looking at the delivered interface, not at the code: judge what a user sees and can do.",
     "Two answers are wanted and they are not the same question.",
     "1. Acceptance, per declared scenario: is the thing that was asked for actually there, reachable, and does it do what the statement says? Drive the browser to check anything a screenshot cannot show. `failed` means the function is missing, unreachable or wrong; `inconclusive` means you could not get to a screen that would tell you.",
+    "A `failed` must rest on the DoD: put in `cites` the exact sentence, from the scenario's `then` or its examples below, that the screen contradicts. A refusal that cites nothing the DoD says is not a rejection of this Story — it is recorded as a finding and proposed to the person who owns the DoD as an amendment, and only they can make it a requirement. Write it as a failure anyway, without `cites`, so that proposal reaches them.",
+    ...(input.outOfScope && input.outOfScope.length > 0
+      ? [`Out of scope by the DoD, never a reason to fail a scenario: ${input.outOfScope.join("; ")}.`]
+      : []),
+    ...(input.reliesOn && input.reliesOn.length > 0
+      ? [`This Story relies on these existing parts working: ${input.reliesOn.join("; ")}. If one of them is broken, the scenario that needs it is inconclusive and the reason names the part, not the Story.`]
+      : []),
     "2. Findings, on how it looks and reads: spacing and alignment, visual consistency with the rest of the product, wording, empty and error states, whether the layout holds at the size you viewed it. Findings never reject the Story — they are read by a person who decides whether any of them is worth its own card. Say what is wrong and where, not that something 'could be improved'.",
     "Do not modify source, tests, configuration or repository state.",
     ...(input.references && input.references.length > 0
       ? ["A prototype is attached for reference. It was drawn before this was built and is not expected to match pixel for pixel: a difference from it is a finding at most, and only a requirement that says in words that it must match exactly makes a difference an acceptance failure."]
       : []),
+    ...(input.appUrl
+      ? [`The application is running at ${input.appUrl}. Open it there to check anything a screenshot cannot show; the sample data each scenario declares below has already been put into it, so a scenario that says what data it expects is judged on that data, not on an empty page.`]
+      : []),
     ...(input.allowedHosts.length > 0 ? [browserLaneInstructions(session, input.allowedHosts)] : []),
-    "Return only JSON: {\"acceptance\":[{\"id\":string,\"status\":\"passed\"|\"failed\"|\"inconclusive\",\"reason\"?:string,\"url\"?:string,\"screenshots\"?:string[]}],\"findings\":[{\"area\":\"consistency\"|\"layout\"|\"content\"|\"interaction\",\"severity\":\"major\"|\"minor\",\"note\":string,\"scenarioId\"?:string,\"screenshot\"?:string}]}",
+    "Return only JSON: {\"acceptance\":[{\"id\":string,\"status\":\"passed\"|\"failed\"|\"inconclusive\",\"reason\"?:string,\"cites\"?:string,\"url\"?:string,\"screenshots\"?:string[]}],\"findings\":[{\"area\":\"consistency\"|\"layout\"|\"content\"|\"interaction\",\"severity\":\"major\"|\"minor\",\"note\":string,\"scenarioId\"?:string,\"screenshot\"?:string}]}",
     "Every declared scenario needs exactly one acceptance entry. For anything not passed, `reason` is mandatory: one sentence naming what you saw on which screen, so a person can act on that sentence alone.",
     `Story: ${input.storyTitle}`,
     `Business goal: ${input.businessGoal}`,
-    "Declared scenarios:",
-    input.scenarios.map((scenario) => `${scenario.id}: ${scenario.statement}`).join("\n"),
+    "Declared scenarios, each followed by the sentences a refusal may cite:",
+    input.scenarios.map((scenario) => [
+      `${scenario.id}: ${scenario.statement}`,
+      ...(scenario.seed ? [`  sample data in place: ${scenario.seed}`] : []),
+      ...scenario.refusable.map((sentence) => `  - ${sentence}`),
+    ].join("\n")).join("\n"),
     ...(attached.names.length > 0
       ? [`Attached screenshots, in order: ${attached.names.join(", ")}`]
       : ["No screenshot was attached: judge from the browser, and answer inconclusive for anything you cannot reach."]),
@@ -233,6 +273,38 @@ export function validateUiReview(
     if (!seen.has(id)) errors.push(`scenario ${id} has no acceptance entry`);
   }
   return errors;
+}
+
+function normalizeSentence(text: string): string {
+  return text.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function sameSentence(left: string, right: string): boolean {
+  const a = normalizeSentence(left);
+  const b = normalizeSentence(right);
+  return a.length > 0 && (a === b || a.includes(b) || b.includes(a));
+}
+
+/**
+ * Splits the reviewer's refusals into those the DoD supports and those it
+ * does not. Only the first kind rejects the round; the second kind is what a
+ * reviewer with unlimited veto used to spend a round on every time.
+ */
+export function splitRefusals(
+  acceptance: readonly UiAcceptance[],
+  scenarios: readonly UiReviewScenario[],
+): { supported: UiAcceptance[]; amendments: UiAmendment[] } {
+  const refusable = new Map(scenarios.map((scenario) => [scenario.id, scenario.refusable]));
+  const supported: UiAcceptance[] = [];
+  const amendments: UiAmendment[] = [];
+  for (const entry of acceptance) {
+    if (entry.status !== "failed") continue;
+    const sentences = refusable.get(entry.id) ?? [];
+    const cited = entry.cites && sentences.some((sentence) => sameSentence(sentence, entry.cites!));
+    if (cited) supported.push(entry);
+    else amendments.push({ scenarioId: entry.id, observation: entry.reason ?? "", ...(entry.cites ? { cites: entry.cites } : {}) });
+  }
+  return { supported, amendments };
 }
 
 export interface UiReviewRunnerFactory {
@@ -328,6 +400,7 @@ export class UiReviewExecutor {
         failedScenarios: [],
         acceptance: [],
         findings: [],
+        amendments: [],
         validationErrors: [],
         runnerFailure,
         reviewSessionId,
@@ -344,6 +417,7 @@ export class UiReviewExecutor {
         failedScenarios: [],
         acceptance: [],
         findings: [],
+        amendments: [],
         validationErrors: [error!],
         runnerFailure: null,
         reviewSessionId,
@@ -353,10 +427,19 @@ export class UiReviewExecutor {
       };
     }
     const validationErrors = validateUiReview(reply, declaredIds);
-    const failedScenarios = reply.acceptance
-      .filter((entry) => entry.status === "failed")
-      .map((entry) => entry.id)
-      .toSorted();
+    const { supported, amendments } = splitRefusals(reply.acceptance, input.scenarios);
+    const failedScenarios = supported.map((entry) => entry.id).toSorted();
+    // An uncited refusal still reaches a person, as a finding on the card and
+    // as a proposed amendment; it just does not send the card back to CODE.
+    const findings: UiFinding[] = [
+      ...reply.findings,
+      ...amendments.map((item): UiFinding => ({
+        area: "content",
+        severity: "major",
+        note: `${item.observation} (not required by the DoD; proposed as an amendment)`,
+        scenarioId: item.scenarioId,
+      })),
+    ];
     // A reply that does not answer what was asked is not evidence either way,
     // so it is inconclusive rather than a rejection: 03 section 8.6 keeps a
     // review that never happened out of the convergence criterion.
@@ -367,7 +450,8 @@ export class UiReviewExecutor {
       verdict,
       failedScenarios,
       acceptance: reply.acceptance,
-      findings: reply.findings,
+      findings,
+      amendments,
       validationErrors,
       runnerFailure: null,
       reviewSessionId,
@@ -376,6 +460,15 @@ export class UiReviewExecutor {
       usage,
     };
   }
+}
+
+/** What the DoD owner reads: refusals the DoD did not support, as proposals. */
+export function renderDodAmendments(amendments: readonly UiAmendment[]): string {
+  if (amendments.length === 0) return "";
+  return [
+    "走查提出了 DoD 没有写到的要求。它们不会把卡打回开发；你同意的每一条，请在卡上回复「同意 <场景 id>: <要求>」，它会成为下一轮必须完成的任务：",
+    ...amendments.map((item) => `- ${item.scenarioId}: ${item.observation}${item.cites ? `（引用了「${item.cites}」，但 DoD 里没有这句）` : ""}`),
+  ].join("\n");
 }
 
 /** What a person reads on the card: the findings, in business language. */

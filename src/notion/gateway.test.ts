@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  archiveBlock,
   NotionGateway,
   type NotionRequest,
   type NotionTransport,
@@ -132,5 +133,26 @@ describe("property writes", () => {
     });
     expect(result.skipped).toBe(true);
     expect(transport).not.toHaveBeenCalled();
+  });
+});
+
+describe("archiving a block", () => {
+  it("treats Notion's refusal to edit an already archived block as done", async () => {
+    const request = vi.fn(async () => {
+      throw new Error(
+        "PATCH /v1/blocks/abc failed with status 400: {\"code\":\"validation_error\",\"message\":\"Can't edit block that is archived. You must unarchive the block before editing.\"}",
+      );
+    });
+    await expect(archiveBlock(request as unknown as (input: NotionRequest) => Promise<NotionTransportResponse>, "abc")).resolves.toBeUndefined();
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets every other failure through", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("PATCH /v1/blocks/abc failed with status 502");
+    });
+    await expect(
+      archiveBlock(request as unknown as (input: NotionRequest) => Promise<NotionTransportResponse>, "abc"),
+    ).rejects.toThrow("status 502");
   });
 });

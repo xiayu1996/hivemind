@@ -1,0 +1,28 @@
+{
+  "heading": "进展",
+  "reviewRequest": "Epic MR：{url}（等你审阅合并到 {target}）",
+  "integrationBranch": "集成分支：{branch}，Story 逐个合入，全部交付后自动开 Epic MR",
+  "blocked": "受阻：{reason}",
+  "blockedWaiting": "受阻：在等你回答 {stories}",
+  "storyLine": "{id} {title} — {state}",
+  "storyMr": "，MR {url}",
+  "storyStop": "（{reason}）",
+  "storyStates": {
+    "QUEUED": "排队中",
+    "DESIGN": "需求分析",
+    "CODE": "开发中",
+    "VERIFY": "验证中",
+    "MERGE": "合入中",
+    "DELIVERED": "已交付",
+    "REGRESSION_FIX": "修回归",
+    "NEEDS_INPUT": "等你回答",
+    "HUMAN_PARKED": "人工停靠",
+    "FAILED": "失败"
+  },
+  "stopReasons": {
+    "blocking_question": "有问题等你回答",
+    "verify_loop_exceeded": "验证轮次用完",
+    "retry_limit_exceeded": "重试次数用完",
+    "cost_ceiling_exceeded": "费用超上限"
+  }
+}

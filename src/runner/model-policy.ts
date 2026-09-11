@@ -72,20 +72,40 @@ export class ModelPolicy {
   }
 
   /** The failover chain narrowed to the providers that declare a model for the
-   * purpose's tier, in chain order. Health is a separate concern. */
+   * purpose's tier, in the order that tier is tried. A tier may carry its own
+   * order — the brain tier does, because there the best model leads rather than
+   * the cheapest — and inherits the global one otherwise. Health is a separate
+   * concern. */
   async providersFor(purpose: ModelPurpose): Promise<string[]> {
     const tier = await this.tierOf(purpose);
     const profiles = this.config.get("model.providers") as ProviderProfiles;
-    const chain = this.config.get("model.failoverChain");
+    const perTier = this.config.get("model.tierFailoverChains") as Partial<Record<ModelTier, string[]>>;
+    const chain = perTier[tier] ?? this.config.get("model.failoverChain");
     return chain.filter((provider) => profiles[provider]?.tiers[tier] !== undefined);
   }
 }
 
 /** Startup gate: every configured id must exist in its provider's catalogue.
- * A typo here is otherwise discovered as an invented price on a real run. */
+ * A typo here is otherwise discovered as an invented price on a real run.
+ *
+ * It also holds the per-tier orders to the chain. A tier order naming a
+ * provider the chain does not carry would route cards to one that is never
+ * given a credential, never has its failure wordings captured and has no health
+ * record, and the only symptom would be a tier that quietly skips it. */
 export async function assertModelPolicy(config: ConfigStore, catalog: ModelCatalog): Promise<void> {
   await config.reload();
   const profiles = config.get("model.providers") as ProviderProfiles;
+  const chain = config.get("model.failoverChain");
+  const perTier = config.get("model.tierFailoverChains") as Partial<Record<ModelTier, string[]>>;
+  const strays: string[] = [];
+  for (const [tier, order] of Object.entries(perTier)) {
+    for (const provider of order ?? []) {
+      if (!chain.includes(provider)) strays.push(`${tier}: ${provider}`);
+    }
+  }
+  if (strays.length > 0) {
+    throw new Error(`model.tierFailoverChains names providers outside model.failoverChain: ${strays.toSorted().join(", ")}`);
+  }
   const failures: string[] = [];
   for (const [provider, profile] of Object.entries(profiles)) {
     for (const [tier, id] of Object.entries(profile.tiers)) {

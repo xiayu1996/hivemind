@@ -56,6 +56,9 @@ import { EpicBranchFreshness } from "../src/orchestrator/epic-branch-refresh.js"
 import { surfaceBlockedEpics } from "../src/orchestrator/epic-blocker.js";
 import { EpicCompletion } from "../src/orchestrator/epic-completion.js";
 import { EpicMrDelivery } from "../src/vcs/epic-delivery.js";
+import { escalateParkedStories } from "../src/orchestrator/epic-escalation.js";
+import { enqueueEpicPages } from "../src/orchestrator/epic-page-projection.js";
+import { epicRegressionClean } from "../src/regression/epic-gate.js";
 import { discoverMRPort } from "../src/vcs/mr/adapters.js";
 import { NotionStoryProjection } from "../src/notion/story-projection.js";
 import { NotionSyncCoordinator, type NotionSyncPoller } from "../src/notion/sync.js";
@@ -66,7 +69,10 @@ import { dispatchableStories, planRepositoryStoryExecution } from "../src/orches
 import { StoryExecutionStore } from "../src/orchestrator/story-execution-store.js";
 import { openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
+import { assertSchemaCurrent } from "../src/persistence/schema-fingerprint.js";
 import { createWorktree, locateWorktree, worktreeLayout } from "../src/vcs/worktree.js";
+import { publishEpicBranch } from "../src/vcs/epic-branch.js";
+import { processGitCommand } from "../src/vcs/story-delivery.js";
 
 const execFileAsync = promisify(execFile);
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -101,6 +107,23 @@ async function currentBranch(path: string): Promise<string> {
   return result.stdout.trim();
 }
 
+/**
+ * One step of the cycle, isolated from a transient network fault. The steps
+ * that talk to Notion or to the remote fail whenever the link blinks, and
+ * they run before the steps that dispatch cards and land branches: letting
+ * one of them abort the cycle stalls the whole pipeline until the link comes
+ * back. Anything that is not a transport fault still stops the cycle.
+ */
+const step = async (name: string, run: () => Promise<void>): Promise<void> => {
+  try {
+    await run();
+  } catch (error) {
+    const message = (error as Error).message;
+    if (classifyError(message).class !== "TRANSPORT") throw error;
+    console.warn(`${name} was skipped this cycle after a transient network fault: ${message}`);
+  }
+};
+
 async function main(): Promise<void> {
   const stored = await loadSecretsFile();
   const token = process.env.NOTION_TOKEN ?? stored.get("NOTION_TOKEN");
@@ -118,6 +141,16 @@ async function main(): Promise<void> {
 
   const repositoryPath = resolve(required("--repository-path"));
   const repositoryId = required("--repository-id");
+  // The Epic's integration branch goes to origin the moment its Stories exist:
+  // every Story's draft MR targets it and delivery reads it from origin.
+  const publishEpicBranchFor = async (epicId: string): Promise<void> => {
+    try {
+      const result = await publishEpicBranch({ git: processGitCommand, repositoryPath, epicId });
+      if (result.pushed) console.log(`Published ${result.branch} to origin`);
+    } catch (error) {
+      console.error(`Publishing epic/${epicId} failed; delivery will retry before the first Story worktree is cut:`, (error as Error).message);
+    }
+  };
   // Cards declare the target repository as an owner/name slug; only cards
   // matching this checkout's origin are dispatched by this instance.
   const remoteUrl = (await execFileAsync("git", ["remote", "get-url", "origin"], {
@@ -144,11 +177,18 @@ async function main(): Promise<void> {
   const dbUrl = process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db";
   const handle = openDb(dbUrl);
   await migrate(handle.client);
+  // Before the first card is picked up. A database an older 0001 created
+  // records itself as migrated while enforcing the older constraints, and the
+  // first thing that notices is a write failing inside somebody's Story.
+  await assertSchemaCurrent(handle.client);
   const gateway = new NotionGateway({
     transport: createNotionHttpTransport({ token }),
   });
   const store = new StoryExecutionStore(handle.client);
-  const config = await ConfigStore.load(handle.client);
+  // Per-repository keys (the gate commands, the hotspot paths) are stored
+  // under the card slug, so the store has to be told which repository this
+  // instance manages or those keys silently read as their defaults.
+  const config = await ConfigStore.load(handle.client, { repository: repositorySlug });
   const providerHealth = new LibsqlProviderHealthStore(handle.client);
   const piBinary = defaultPiBinary();
   const credentialFilePath = join(homedir(), ".pi", "agent", "auth.json");
@@ -195,7 +235,7 @@ async function main(): Promise<void> {
     comments,
     new PlanApprovalStore(handle.client, Date.now, {
       maxStories: config.get("decompose.maxStoriesPerEpic"),
-    }),
+    }, publishEpicBranchFor),
   );
   const media = new NotionMediaReconciler(
     handle.client,
@@ -248,11 +288,30 @@ async function main(): Promise<void> {
     await registerActiveStories();
   };
   const reconcileProjections = async (): Promise<void> => {
+    // A parked Story is the Epic's problem too: the board shows the Epic as
+    // blocked while any of its Stories waits for a person, and executing again
+    // once none does.
+    for (const change of await escalateParkedStories(handle.client)) {
+      console.warn(`Epic ${change.epicId} ${change.kind}: Stories ${change.storyIds.join(", ")}`);
+    }
     await surfaceBlockedEpics(handle.client);
+    // The Epic page is where a person sees the review request and each
+    // Story's state; it is derived from the database every cycle and only
+    // travels when something on it changed.
+    await enqueueEpicPages(handle.client, targetBranchDefault);
     const stories = (await handle.client.execute("SELECT id FROM stories ORDER BY id")).rows;
     for (const story of stories) await projection.enqueue(String(story.id));
     // The requirement loop shares this outbox; each side replays only its own rows.
-    await outbox.replay(delivery, { operations: STORY_OUTBOX_OPERATIONS });
+    const replayed = await outbox.replay(delivery, { operations: STORY_OUTBOX_OPERATIONS });
+    for (const failure of replayed.failures) {
+      console.warn(`Notion outbox: ${failure.operation} for ${failure.cardId ?? "no card"} failed (attempt ${failure.attempts}): ${failure.error}`);
+    }
+    for (const letter of replayed.dead) {
+      await reportP0(
+        `Notion outbox gave up on ${letter.operation} for ${letter.cardId ?? "no card"}`,
+        new Error(`${letter.attempts} attempts; last error: ${letter.lastError ?? "unknown"}`),
+      );
+    }
     await media.reconcile();
     await registerActiveStories();
   };
@@ -328,7 +387,7 @@ async function main(): Promise<void> {
     const decompositionLimits = { maxStories: config.get("decompose.maxStoriesPerEpic") };
     const decomposer = new EpicDecomposer(
       handle.client,
-      new PlanApprovalStore(handle.client, Date.now, decompositionLimits),
+      new PlanApprovalStore(handle.client, Date.now, decompositionLimits, publishEpicBranchFor),
       new PiDecomposePort({
         binary: piBinary,
         model: await modelPolicy.resolve("decompose", provider),
@@ -408,6 +467,9 @@ async function main(): Promise<void> {
       if (epicId) {
         const integrationCard = `epic-${epicId}`;
         const epicBranch = `epic/${epicId}`;
+        // Normally already done at approval; this is the retry for an approval
+        // whose push failed, and it must succeed before a Story stacks on it.
+        await publishEpicBranch({ git: processGitCommand, repositoryPath, epicId });
         let integration = locateWorktree(repositoryId, integrationCard, layout);
         if (!(await exists(integration.worktreePath))) {
           integration = await createWorktree({
@@ -476,8 +538,9 @@ async function main(): Promise<void> {
           return;
         }
         // The worker already recorded the phase failure. Bound automatic
-        // reentries: DESIGN and CODE re-dispatch until the budget is spent,
-        // VERIFY/MERGE failures park immediately for a human resume decision.
+        // reentries: DESIGN, CODE and MERGE re-dispatch until the budget is
+        // spent. MERGE fails on the hosting platform as often as on the code
+        // (a CLI timeout, a push refused once), so one strike is not a stop.
         // A card that never left QUEUED failed before the pipeline started, so
         // nothing recorded the attempt: without counting it here the dispatch
         // query selects the same card on every cycle, forever.
@@ -487,7 +550,7 @@ async function main(): Promise<void> {
           const budget = config.get("retry.maxPhaseReentries");
           await store.recordPhaseReentry(cardId);
           const reentries = card.phaseReentries + 1;
-          const reenterable = ["QUEUED", "DESIGN", "CODE"].includes(card.state) && reentries < budget;
+          const reenterable = ["QUEUED", "DESIGN", "CODE", "MERGE"].includes(card.state) && reentries < budget;
           if (!reenterable) {
             await store.stopForInput(cardId, card.state, "retry_limit_exceeded", `reentry-${cardId}`);
             console.warn(`Story ${cardId} parked after ${reentries} failed attempt(s) in ${card.state}`);
@@ -557,8 +620,24 @@ async function main(): Promise<void> {
     if (!finished) return;
     const epicId = String(finished.id);
     const worktreePath = locateWorktree(repositoryId, `epic-${epicId}`, layout).worktreePath;
-    const delivered = await new EpicMrDelivery(handle.client, await mergeRequests(), { worktreePath })
-      .deliver(epicId);
+    // An Epic whose review request cannot be opened must not take the rest of
+    // the cycle down with it: every other Story would stop being dispatched
+    // for a reason that has nothing to do with them.
+    let delivered;
+    try {
+      delivered = await new EpicMrDelivery(handle.client, await mergeRequests(), {
+        worktreePath,
+        targetBranch: targetBranchDefault,
+        regressionClean: (id, revision) => epicRegressionClean(handle.client, id, revision),
+      }).deliver(epicId);
+    } catch (error) {
+      await reportP0(`Epic ${epicId} review request could not be opened`, error);
+      return;
+    }
+    if (delivered.kind === "waiting") {
+      console.log(`Epic ${epicId} review request waits: ${delivered.reason}`);
+      return;
+    }
     await handle.client.execute({
       sql: "UPDATE epics SET state = 'EPIC_ACCEPT', mr_url = ?, updated_at = ? WHERE id = ? AND state = 'EXECUTING'",
       args: [delivered.mrUrl, Date.now(), epicId],
@@ -602,6 +681,24 @@ async function main(): Promise<void> {
       }, layout);
     }
 
+    // Attribution bisects the Epic's Story sequence by checking out revisions,
+    // which detaches HEAD; the sweep tree keeps its branch, so the probe needs
+    // a tree of its own.
+    let probeWorktree: string | null = null;
+    if (epicId) {
+      let probeTree = locateWorktree(repositoryId, `probe-${epicId}`, layout);
+      if (!(await exists(probeTree.worktreePath))) {
+        probeTree = await createWorktree({
+          repositoryPath,
+          repositoryId,
+          cardId: `probe-${epicId}`,
+          branch: `probe/${epicId}`,
+          startPoint: branch,
+        }, layout);
+      }
+      probeWorktree = probeTree.worktreePath;
+    }
+
     const chain = providerOverride ? [providerOverride] : await modelPolicy.providersFor("verify");
     const provider = usableProviders(chain, await providerHealth.snapshot(), Date.now())[0];
     if (!provider) return;
@@ -618,6 +715,7 @@ async function main(): Promise<void> {
       "--provider", provider,
       "--model", model,
       ...(epicId ? ["--epic", epicId] : []),
+      ...(probeWorktree ? ["--probe-worktree", probeWorktree] : []),
     ], {
       cwd: ROOT,
       windowsHide: true,
@@ -626,16 +724,30 @@ async function main(): Promise<void> {
       env: { ...process.env, HIVEMIND_DB_URL: dbUrl, ...(await providerEnvFor(provider)) },
     });
     if (result.stdout.trim()) console.log(`regression sweep (${plan.reason}): ${result.stdout.trim()}`);
+    try {
+      const summary = JSON.parse(result.stdout.trim()) as { attributionsSkipped?: string; attributions?: unknown[] };
+      if (summary.attributionsSkipped) console.warn(`regression cards raised without attribution: ${summary.attributionsSkipped}`);
+    } catch {
+      // The sweep printed something other than its JSON summary; the raw line
+      // above is the record, and there is nothing further to read from it.
+    }
   };
 
   const cycle = async (): Promise<void> => {
     if (running) return;
     running = true;
     try {
-      await syncIntake();
-      await reconcileProjections();
-      await decomposeWaitingEpic();
-      await maintainEpics();
+      await step("intake sync", syncIntake);
+      await step("projection reconciliation", reconcileProjections);
+      await step("epic decomposition", decomposeWaitingEpic);
+      await step("epic maintenance", maintainEpics);
+      // Before dispatch, not after. Called after, it saw the Stories this very
+      // cycle had just put in flight and gave way to them; and the cycle
+      // returns early when there is nothing to dispatch, which is exactly when
+      // the host is idle enough to sweep. Between the two the sweep was
+      // unreachable in both directions, which is why regression_runs was empty
+      // after six delivered Stories.
+      await step("regression sweep", regressionSweep);
 
       const rows = (await handle.client.execute({
         sql: `SELECT id, state, epic_id, repo, branch, target_branch, depends_on, predicted_footprint
@@ -722,7 +834,6 @@ async function main(): Promise<void> {
           .finally(() => inFlight.delete(cardId));
         inFlight.set(cardId, attempt);
       }
-      await regressionSweep();
     } finally {
       running = false;
     }

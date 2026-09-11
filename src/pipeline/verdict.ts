@@ -1,6 +1,7 @@
 import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { isWithinRoot } from "../guard/danger-rules.js";
+import { SCREEN_EVIDENCE_MISSING } from "./failure-classification.js";
 
 export interface ScenarioVerdict {
   id: string;
@@ -31,6 +32,12 @@ export interface VerdictInput {
   allowedHosts: string[];
   roundStartedAt: number;
   roundEndedAt: number;
+  /**
+   * Scenarios with a layer only a browser settles. Each needs a page the
+   * verifier reached and a screenshot no other scenario claims: one shot named
+   * under four scenarios is one look, not four (03 section 9).
+   */
+  screenScenarioIds?: readonly string[];
 }
 
 export interface VerdictValidation {
@@ -39,6 +46,8 @@ export interface VerdictValidation {
   requiresBlindReview: boolean;
   redEvidence: string[];
   greenEvidence: string[];
+  /** Screen scenarios the verifier judged without leaving evidence of its own. */
+  unproven: string[];
 }
 
 /**
@@ -122,6 +131,26 @@ export async function validateVerdict(input: VerdictInput): Promise<VerdictValid
     }
   }
 
+  const unproven: string[] = [];
+  const screen = new Set(input.screenScenarioIds ?? []);
+  const claimedBy = new Map<string, Set<string>>();
+  for (const scenario of input.verdict.scenarios) {
+    for (const shot of scenario.screenshots ?? []) {
+      claimedBy.set(shot, new Set([...(claimedBy.get(shot) ?? []), scenario.id]));
+    }
+  }
+  for (const scenario of input.verdict.scenarios) {
+    if (!screen.has(scenario.id) || scenario.status === "inconclusive") continue;
+    const own = (scenario.screenshots ?? []).filter((shot) => claimedBy.get(shot)?.size === 1);
+    const missing = [
+      ...(scenario.url ? [] : ["no page was reported"]),
+      ...(own.length > 0 ? [] : ["no screenshot belongs to it alone"]),
+    ];
+    if (missing.length === 0) continue;
+    unproven.push(scenario.id);
+    errors.push(`${scenario.id}: ${SCREEN_EVIDENCE_MISSING} (${missing.join("; ")})`);
+  }
+
   const redEvidence = [...red].filter((id) => declared.has(id)).toSorted();
   const greenEvidence = [...green].filter((id) => declared.has(id)).toSorted();
   return {
@@ -130,5 +159,6 @@ export async function validateVerdict(input: VerdictInput): Promise<VerdictValid
     requiresBlindReview: input.declaredScenarioIds.some((id) => !red.has(id)),
     redEvidence,
     greenEvidence,
+    unproven: unproven.toSorted(),
   };
 }

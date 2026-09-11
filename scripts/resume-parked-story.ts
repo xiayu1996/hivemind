@@ -27,11 +27,18 @@ async function main(): Promise<void> {
   const target = restored === "VERIFY" ? "CODE" : restored;
 
   await store.transition(cardId, "NEEDS_INPUT", target, "human", `${cardId.toLowerCase()}-resume-${randomUUID()}`);
+  // The inner-loop budget counts the rounds since a person last acted on the
+  // card, so a resume has to say that one did. Without the stamp the card
+  // rehydrates every round it already spent and stops again on the first
+  // verification - which is what a resume is meant to get it past. The
+  // rejected rounds stay in verify_records: the budget is reset, the history
+  // is not rewritten.
+  const now = Date.now();
   await handle.client.execute({
-    sql: "UPDATE stories SET phase_reentries = 0, updated_at = ? WHERE id = ?",
-    args: [Date.now(), cardId],
+    sql: "UPDATE stories SET phase_reentries = 0, last_human_action_at = ?, updated_at = ? WHERE id = ?",
+    args: [now, now, cardId],
   });
-  console.log(`Story ${cardId} restored to ${target} with a fresh reentry budget`);
+  console.log(`Story ${cardId} restored to ${target} with a fresh reentry and inner-loop budget`);
   handle.close();
 }
 

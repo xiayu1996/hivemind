@@ -95,4 +95,23 @@ describe("@scenario S-M2-06-freshness refreshing from the remote", () => {
     expect(calls.find((args) => args[0] === "merge")).toEqual(["merge", "--no-ff", "origin/trunk"]);
     client.close();
   });
+
+  it("reports a fetch the network refused as this refresh failing, without touching the branch", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    await client.execute(
+      "INSERT INTO epics (id, notion_page_id, title, state, integration_branch, created_at, updated_at) VALUES ('M2','p','M2','EXECUTING','epic/M2',1,1)",
+    );
+    const git = { run: vi.fn(async (_cwd: string, args: string[]) => {
+      if (args[0] === "fetch") throw new Error("fatal: unable to access github.com: SSL_ERROR_SYSCALL");
+      return "";
+    }) };
+    const refresh = new EpicBranchFreshness(client, { worktreePath: "integration", git, intervalMs: 86_400_000, now: () => 100_000_000 });
+
+    const [result] = await refresh.tick();
+    expect(result).toMatchObject({ epicId: "M2", outcome: "failed" });
+    expect((result as { reason?: string }).reason).toContain("SSL_ERROR_SYSCALL");
+    expect(git.run.mock.calls.some(([, args]) => args[0] === "merge")).toBe(false);
+    client.close();
+  });
 });

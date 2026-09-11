@@ -10,6 +10,9 @@ import { capturedFailures, capturedProviders } from "./error-fixtures.js";
  * other in both directions.
  */
 const EXPECTED: Record<string, Array<[string, string]>> = {
+  "command-code": [
+    ["auth", "AUTH"],
+  ],
   deepseek: [
     ["auth", "AUTH"],
   ],

@@ -20,10 +20,25 @@ export interface FeedbackItem {
   body: string;
 }
 
+export interface ScenarioFailure {
+  scenarioId: string;
+  reason: string;
+  /** Which lane refused it: the tests, or the person looking at the screen. */
+  source: "tests" | "screen";
+}
+
 export interface EvidenceRef {
   scenarioId: string;
   path: string;
   note?: string;
+}
+
+export interface RegressionCardRef {
+  scenarioId: string;
+  /** The normalised failure text the card is keyed by. */
+  signature: string;
+  /** The Story the bisection blamed; absent when the card is still unattributed. */
+  attributedStory?: string;
 }
 
 export interface PhaseInput {
@@ -40,6 +55,10 @@ export interface PhaseInput {
   previousRejections: PhaseRejection[];
   evidence: EvidenceRef[];
   failedScenarios: string[];
+  /** Why each scenario was refused, verbatim from the lane that refused it. */
+  scenarioFailures?: ScenarioFailure[];
+  /** Open regression cards this round must close; only REGRESSION_FIX carries them. */
+  regressions?: RegressionCardRef[];
 }
 
 export interface PhaseRejection {
@@ -81,30 +100,19 @@ export function assemblePhasePrompt(input: PhaseInput): string {
     parts.push(`## Specification\n\n${rows.join("\n")}`);
   }
 
-  if (input.artifacts.length > 0) {
-    const blocks = sortBy(input.artifacts, (a) => `${a.phase} ${a.kind}`)
-      .map((a) => `### ${a.phase} / ${a.kind}\n\n${a.body.trim()}`);
-    parts.push(`## Output of earlier phases\n\n${blocks.join(SECTION)}`);
-  }
-
-  if (input.feedback.length > 0) {
-    const rows = sortBy(input.feedback, (f) => f.id)
-      .map((f) => `- ${f.author}${f.specId ? ` on ${f.specId}` : ""}: ${f.body.trim()}`);
-    parts.push(`## Human feedback\n\n${rows.join("\n")}`);
-  }
-
-  if (input.previousRejections.length > 0) {
-    const rows = sortBy(input.previousRejections, (r) => `${r.phase} ${r.reason}`)
-      .map((r) => `- [${r.phase}] ${r.reason}`);
-    parts.push("## Why earlier attempts were rejected\n\n" +
-      "Address every reason below in this attempt; do not repeat the rejected approach. " +
-      "A reason tagged with a later phase is a gate that phase refused this branch at, and only this phase can change the code it names:\n\n" +
-      rows.join("\n"));
-  }
-
-  if (input.failedScenarios.length > 0) {
-    const rows = input.failedScenarios.toSorted().map((s) => `- ${s}`);
-    parts.push(`## Scenarios still failing\n\n${rows.join("\n")}`);
+  // Everything this round is answerable for comes before the history, and
+  // carries a tag. A round that read 18KB of its own earlier artifacts before
+  // reaching the one line a person wrote is the shape every wasted round on
+  // S-E3OVERVIEW-01 had (measured with scripts/inspect-round.ts, 2026-09-10).
+  const todo = roundTasks(input);
+  if (todo.length > 0) {
+    parts.push("## What this round must do\n\n" +
+      "Each item below is a reason this round exists. Do the work each one asks for; " +
+      "an answer from a person is a decision, not a suggestion, and a scenario refused " +
+      "by the screen lane is refused for what the person saw, not for what a test asserts. " +
+      "In your final artifact write one line per tag — `addressed <tag>: <what you changed>` — " +
+      "naming the change; the exit checks refuse the phase while a tag is unaccounted for.\n\n" +
+      todo.map((task) => `- ${task.tag} ${task.text}`).join("\n"));
   }
 
   if (input.evidence.length > 0) {
@@ -113,7 +121,60 @@ export function assemblePhasePrompt(input: PhaseInput): string {
     parts.push(`## Evidence from earlier rounds\n\n${rows.join("\n")}`);
   }
 
+  if (input.artifacts.length > 0) {
+    const blocks = sortBy(input.artifacts, (a) => `${a.phase} ${a.kind}`)
+      .map((a) => `### ${a.phase} / ${a.kind}\n\n${a.body.trim()}`);
+    parts.push(`## Output of earlier phases\n\n${blocks.join(SECTION)}`);
+  }
+
   return `${parts.join(SECTION)}\n`;
+}
+
+export interface RoundTask {
+  tag: string;
+  text: string;
+}
+
+/**
+ * What the round is answerable for, tagged so both the prompt and the exit
+ * checks can name the same item. Ordering is by tag, which is derived from
+ * stable ids, so the prompt stays byte-identical for identical input.
+ */
+export function roundTasks(input: PhaseInput): RoundTask[] {
+  const tasks: RoundTask[] = [];
+  for (const item of sortBy(input.feedback, (f) => f.id)) {
+    tasks.push({
+      tag: `[answer:${item.id}]`,
+      text: `${item.author} answered${item.specId ? ` on ${item.specId}` : ""}: ${item.body.trim()}`,
+    });
+  }
+  for (const rejection of sortBy(input.previousRejections, (r) => `${r.phase} ${r.reason}`)) {
+    tasks.push({
+      tag: `[rejected:${rejection.phase}]`,
+      text: `${rejection.phase} refused the last attempt: ${rejection.reason.trim()}`
+        + " Do not repeat the rejected approach.",
+    });
+  }
+  const reasons = new Map<string, ScenarioFailure[]>();
+  for (const failure of input.scenarioFailures ?? []) {
+    reasons.set(failure.scenarioId, [...(reasons.get(failure.scenarioId) ?? []), failure]);
+  }
+  for (const scenarioId of input.failedScenarios.toSorted()) {
+    const why = (reasons.get(scenarioId) ?? [])
+      .map((failure) => `${failure.source === "screen" ? "the person looking at the screen" : "the tests"}: ${failure.reason.trim()}`)
+      .join(" ");
+    tasks.push({
+      tag: `[scenario:${scenarioId}]`,
+      text: `still failing. ${why || "No reason was recorded; treat the scenario as unverified and prove it."}`,
+    });
+  }
+  for (const card of sortBy(input.regressions ?? [], (c) => `${c.scenarioId} ${c.signature}`)) {
+    tasks.push({
+      tag: `[regression:${card.scenarioId}]`,
+      text: `the scenario fails on the Epic branch since ${card.attributedStory ?? "an unattributed Story"}: ${card.signature.trim()}`,
+    });
+  }
+  return tasks;
 }
 
 /** Sorts by a derived key without mutating the caller's array. */

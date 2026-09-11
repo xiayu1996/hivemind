@@ -40,6 +40,8 @@ export class NotionStoryProjection implements StoryProjectionPort {
   constructor(
     private readonly client: Client,
     private readonly now: () => number = Date.now,
+    /** The inner-loop budget, so the page can say how much of it a person's last action bought. */
+    private readonly innerLoopRounds: number = 6,
   ) {
     this.outbox = new NotionOutbox(client, this.now);
   }
@@ -65,43 +67,110 @@ export class NotionStoryProjection implements StoryProjectionPort {
     });
   }
 
-  /** One line a person can act on: the verdict, the failed set, and the
-   * verifier's reasons plus the code-level checks that rejected the round. */
+  /**
+   * What a person reads about a round: which scenarios were looked at and what
+   * was seen, in their words. An accepted round says what passed, not only
+   * that nothing failed; a rejected one says, per scenario, what each lane saw
+   * and which DoD sentence it rests on.
+   */
   private async roundSummary(cardId: string, latest: Record<string, unknown>): Promise<string> {
     const failed = JSON.parse(String(latest.failed_scenarios)) as string[];
-    const parts = [`${String(latest.verdict)}; failed: ${failed.join(", ") || "none"}`];
+    const verdict = String(latest.verdict);
+    const declared = (await this.client.execute({
+      sql: "SELECT spec_id FROM story_specs WHERE story_id = ? ORDER BY seq",
+      args: [cardId],
+    })).rows.map((row) => String(row.spec_id));
     const artifact = (await this.client.execute({
       sql: `SELECT body FROM phase_artifacts
             WHERE card_id = ? AND phase = 'VERIFY' AND kind = 'verification' AND round = ?
             ORDER BY id DESC LIMIT 1`,
       args: [cardId, Number(latest.round)],
     })).rows[0];
-    if (artifact) {
-      const body = JSON.parse(String(artifact.body)) as {
-        reasons?: Array<{ scenarioId: string; reason: string }>;
-        validationErrors?: string[];
-        uiReview?: { findings?: Array<{ severity: string; note: string }> };
+    const body = artifact ? JSON.parse(String(artifact.body)) as {
+      reasons?: Array<{ scenarioId: string; reason: string }>;
+      validationErrors?: string[];
+      uiReview?: {
+        acceptance?: Array<{ id: string; status: string; reason?: string; cites?: string }>;
+        findings?: Array<{ severity: string; note: string }>;
+        amendments?: Array<{ scenarioId: string; observation: string }>;
+        inconclusive?: string[];
       };
-      const reasons = (body.reasons ?? []).map((item) => `${item.scenarioId}: ${item.reason}`);
-      if (reasons.length > 0) parts.push(`reasons: ${reasons.join("; ")}`);
-      if ((body.validationErrors ?? []).length > 0) parts.push(`checks: ${body.validationErrors!.join("; ")}`);
-      // The UI review's findings never rejected anything, so they would leave
-      // no trace in the verdict; a person still has to be told they exist and
-      // that the card was not held for them.
-      const findings = body.uiReview?.findings ?? [];
-      if (findings.length > 0) {
-        const major = findings.find((finding) => finding.severity === "major");
-        parts.push(`界面走查 ${findings.length} 条（不影响验收）${major ? `，例如: ${major.note}` : ""}`);
-      }
+    } : {};
+    const passed = declared.filter((id) => !failed.includes(id));
+    const lines: string[] = [];
+    if (verdict === "accepted") {
+      // The UI lane's inconclusive scenarios never reject and never consume a
+      // round, so the verdict hides them; the person still has to see which
+      // screens nobody managed to look at.
+      const unreviewed = body.uiReview?.inconclusive ?? [];
+      const walkthrough = unreviewed.length > 0 ? `；走查无结论：${unreviewed.join("、")}` : "";
+      lines.push(`通过：${passed.length} 个场景都验证通过${passed.length > 0 ? `（${passed.join("、")}）` : ""}${walkthrough}`);
+    } else if (verdict === "inconclusive") {
+      lines.push(`无结论：验证环境出了问题，不算这张卡的失败，也不消耗轮次${failed.length > 0 ? `（涉及 ${failed.join("、")}）` : ""}`);
+    } else {
+      lines.push(`未通过：${failed.length} 个场景被打回${passed.length > 0 ? `，${passed.length} 个通过（${passed.join("、")}）` : ""}`);
     }
-    const summary = parts.join(" | ");
+    for (const id of failed) {
+      const fromTests = (body.reasons ?? []).filter((item) => item.scenarioId === id).map((item) => `测试：${item.reason}`);
+      const fromScreen = (body.uiReview?.acceptance ?? [])
+        .filter((item) => item.id === id && item.status === "failed" && item.reason)
+        .map((item) => `走查：${item.reason}${item.cites ? `（依据 DoD「${item.cites}」）` : ""}`);
+      const why = [...fromTests, ...fromScreen];
+      lines.push(`- ${id}：${why.length > 0 ? why.join("；") : "没有记录原因"}`);
+    }
+    if ((body.validationErrors ?? []).length > 0) lines.push(`代码校验拒绝了这些结论：${body.validationErrors!.join("；")}`);
+    // The review's findings and amendments never rejected anything, so they
+    // leave no trace in the verdict; a person still has to be told they exist
+    // and that the card was not held for them.
+    const findings = body.uiReview?.findings ?? [];
+    if (findings.length > 0) {
+      const major = findings.find((finding) => finding.severity === "major");
+      lines.push(`界面走查 ${findings.length} 条（不影响验收）${major ? `，例如：${major.note}` : ""}`);
+    }
+    const amendments = body.uiReview?.amendments ?? [];
+    if (amendments.length > 0) {
+      lines.push(`走查提出了 DoD 没写的要求 ${amendments.length} 条，等你决定：${amendments.map((item) => `${item.scenarioId}：${item.observation}`).join("；")}`);
+    }
+    const summary = lines.join("\n");
     return summary.length > SUMMARY_LIMIT ? `${summary.slice(0, SUMMARY_LIMIT - 1)}…` : summary;
+  }
+
+  /** How many rounds a person's last action has bought so far, and out of how many. */
+  private async budgetLine(cardId: string, since: number): Promise<string> {
+    const spent = Number((await this.client.execute({
+      sql: `SELECT COUNT(*) AS n FROM verify_records
+            WHERE card_id = ? AND verdict = 'rejected' AND created_at > ?`,
+      args: [cardId, since],
+    })).rows[0]?.n ?? 0);
+    return `Budget ${Math.min(spent, this.innerLoopRounds)}/${this.innerLoopRounds}`;
+  }
+
+  /**
+   * The answers a person gave, as the page shows them: who, when, on which
+   * item, and the words. An answer written on the person's behalf by an
+   * operator is shown as exactly that, never as the person's.
+   */
+  private async appliedAnswers(cardId: string): Promise<string[]> {
+    const rows = (await this.client.execute({
+      sql: `SELECT COALESCE(ic.author, 'unknown') AS author, ic.created_time, hf.spec_id, hf.body, hf.applied_at, hf.round
+            FROM human_feedback hf
+            JOIN ingested_comments ic ON ic.comment_id = hf.comment_id
+            WHERE hf.card_id = ? AND hf.channel = 'answer'
+            ORDER BY ic.created_time, hf.id`,
+      args: [cardId],
+    })).rows;
+    return rows.map((row) => {
+      const when = new Date(Number(row.created_time)).toISOString().slice(0, 16).replace("T", " ");
+      const target = row.spec_id ? `，针对 ${String(row.spec_id)}` : "";
+      const state = row.applied_at ? `已用于第 ${Number(row.round) + 1} 轮` : "下一轮使用";
+      return `- ${String(row.author)}（${when} UTC${target}，${state}）：${String(row.body)}`;
+    });
   }
 
   async enqueue(cardId: string): Promise<void> {
     const storyResult = await this.client.execute({
       sql: `SELECT notion_page_id, state, phase, inner_loop_rounds, stop_reason, mr_url,
-                   human_wins_until, notion_ai_status_shadow
+                   human_wins_until, notion_ai_status_shadow, last_human_action_at
             FROM stories WHERE id = ?`,
       args: [cardId],
     });
@@ -141,16 +210,22 @@ export class NotionStoryProjection implements StoryProjectionPort {
           ? `. Last verification round ${Number(latest!.round)}: ${roundSummary}`
           : "")
       : undefined;
+    const answers = await this.appliedAnswers(cardId);
+    const questions = [
+      ...(stopText ? [stopText] : []),
+      ...(answers.length > 0 ? [`已应用的回答：\n${answers.join("\n")}`] : []),
+    ].join("\n\n");
     const desired: DesiredStoryPage = {
       metadata: [
         `Task ${cardId}`,
         `State ${String(story.state)}`,
         `Round ${Number(story.inner_loop_rounds)}`,
+        await this.budgetLine(cardId, Number(story.last_human_action_at ?? 0)),
         `Cost $${Number(cost.rows[0]?.total ?? 0).toFixed(4)}`,
         ...(story.mr_url ? [`MR ${String(story.mr_url)}`] : []),
       ].join(" · "),
       design: value(design.rows[0]?.body) || "Design is pending.",
-      ...(stopText ? { questions: stopText } : {}),
+      ...(questions ? { questions } : {}),
       specs: specs.rows.map((row) => ({
         id: String(row.spec_id),
         seq: Number(row.seq),

@@ -24,6 +24,7 @@ import { RequirementDecomposer } from "../src/orchestrator/requirement-decompose
 import { RequirementStore } from "../src/orchestrator/requirement-store.js";
 import { openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
+import { assertSchemaCurrent } from "../src/persistence/schema-fingerprint.js";
 import { ModelPolicy } from "../src/runner/model-policy.js";
 import { needsApiKeyEnv, providerKeyEnv } from "../src/runner/provider-env.js";
 import { defaultModelCatalog } from "../src/runner/catalog.js";
@@ -60,6 +61,10 @@ async function main(): Promise<void> {
 
   const handle = openDb(process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db");
   await migrate(handle.client);
+  // Before the first card is picked up. A database an older 0001 created
+  // records itself as migrated while enforcing the older constraints, and the
+  // first thing that notices is a write failing inside somebody's Story.
+  await assertSchemaCurrent(handle.client);
   const config = await ConfigStore.load(handle.client);
   const gateway = new NotionGateway({ transport: createNotionHttpTransport({ token }) });
   const store = new RequirementStore(handle.client);
@@ -118,7 +123,7 @@ async function main(): Promise<void> {
   // requirement is advanced so the step acts on the latest word.
   const readHumanInput = async (): Promise<void> => {
     const active = (await handle.client.execute(
-      "SELECT id, state FROM requirements WHERE state NOT IN ('DONE', 'FAILED') ORDER BY id",
+      "SELECT id, state, stop_reason FROM requirements WHERE state NOT IN ('DONE', 'FAILED') ORDER BY id",
     )).rows;
     for (const row of active) {
       const requirementId = String(row.id);
@@ -127,11 +132,16 @@ async function main(): Promise<void> {
         console.log(`${requirementId} status drag: ${property.intent}${property.applied ? "" : " (not applied)"}`);
       }
       const state = String(row.state);
-      if (state === "PRD_CONFIRM" || state === "ACCEPTANCE") {
+      // A stopped requirement, whatever its state, is waiting for a comment.
+      if (state === "PRD_CONFIRM" || state === "ACCEPTANCE" || row.stop_reason !== null) {
         const commented = await humanInput.pollComments(requirementId);
         if (commented.prdConfirmed) console.log(`${requirementId} PRD confirmed by comment`);
         if (commented.revisionRequested) console.log(`${requirementId} PRD revision requested by comment`);
         if (commented.gapsRecorded > 0) console.log(`${requirementId} acceptance gaps noted: ${commented.gapsRecorded}`);
+        if (commented.resumed) {
+          console.log(`${requirementId} resumed by comment`);
+          await projector.publish(requirementId);
+        }
       }
       if (state === "ACCEPTANCE") {
         const ticked = await humanInput.pollContent(requirementId);
@@ -165,6 +175,10 @@ async function main(): Promise<void> {
       console.log(`${requirement.id} decompose: ${outcome.kind}`);
     }
     for (const requirement of await store.listActionable("EXECUTING")) {
+      // Epics and Stories move in the orchestrator's process; re-projecting here
+      // keeps the page's Epic progress current. The outbox dedupes an unchanged
+      // page by payload hash, so a quiet pass costs no Notion call.
+      await projector.publish(requirement.id);
       if (!await decomposer.canEnterAcceptance(requirement.id)) continue;
       const items = await acceptance.open(requirement.id);
       console.log(`${requirement.id} acceptance: ${items.length} scenarios awaiting a verdict`);
@@ -176,6 +190,9 @@ async function main(): Promise<void> {
 
     // The orchestrator shares this outbox; each side replays only its own rows.
     const replayed = await outbox.replay(delivery, { operations: REQUIREMENT_OUTBOX_OPERATIONS });
+    for (const failure of replayed.failures) {
+      console.warn(`Notion outbox: ${failure.operation} for ${failure.cardId ?? "no card"} failed (attempt ${failure.attempts}): ${failure.error}`);
+    }
     if (replayed.sent > 0 || replayed.failed > 0) {
       console.log(`Notion outbox: ${replayed.sent} sent, ${replayed.failed} failed`);
     }

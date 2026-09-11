@@ -153,7 +153,7 @@ describe("NotionRequirementPageDelivery", () => {
 
   afterEach(() => client.close());
 
-  it("builds the five owned sections and fills them from the record", async () => {
+  it("builds the six owned sections and fills them from the record", async () => {
     await store.openClarifyRound(REQUIREMENT_ID, ["谁会用它？"], "run-ask");
     await projector.publish(REQUIREMENT_ID);
     await replay();
@@ -167,7 +167,7 @@ describe("NotionRequirementPageDelivery", () => {
       .toEqual({ select: { name: schema.options.requirementStatus[1] } });
 
     const sections = (await client.execute("SELECT section FROM requirement_notion_sections ORDER BY section")).rows;
-    expect(sections.map((row) => row.section)).toEqual(["acceptance", "clarify", "metadata", "original", "prd"]);
+    expect(sections.map((row) => row.section)).toEqual(["acceptance", "clarify", "metadata", "original", "prd", "questions"]);
   });
 
   it("adds to the clarification log without ever rewriting what is already there", async () => {

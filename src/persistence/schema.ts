@@ -82,6 +82,13 @@ export const epics = sqliteTable("epics", {
   updatedAt: ms("updated_at").notNull(),
 });
 
+export const epicNotionSections = sqliteTable("epic_notion_sections", {
+  epicId: text("epic_id").notNull(),
+  section: text("section").notNull(),
+  payloadHash: text("payload_hash").notNull(),
+  updatedAt: ms("updated_at").notNull(),
+}, (t) => [primaryKey({ columns: [t.epicId, t.section] })]);
+
 export const stories = sqliteTable("stories", {
   id: text("id").primaryKey(),
   epicId: text("epic_id"),
@@ -147,6 +154,7 @@ export const regressionCards = sqliteTable("regression_cards", {
   failureSignature: text("failure_signature").notNull(),
   attributedStory: text("attributed_story"),
   createdAt: ms("created_at").notNull(),
+  resolvedAt: ms("resolved_at"),
 }, (t) => [primaryKey({ columns: [t.scenarioId, t.failureSignature] })]);
 
 export const providerHealth = sqliteTable("provider_health", {

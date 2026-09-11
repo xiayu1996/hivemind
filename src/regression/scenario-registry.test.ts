@@ -55,14 +55,25 @@ describe("ScenarioRegistry", () => {
     await expect(registry.pool("epic")).resolves.toMatchObject([{ lastVerifiedAt: 5_000 }]);
   });
 
-  it("moves a delivered Story's scenarios into the main pool", async () => {
-    await seedStory("S-M2-01", "CODE", ["S-M2-01-a"]);
-    await registry.registerStory("S-M2-01");
+  it("moves a standalone Story's scenarios into the main pool", async () => {
+    await seedStory("S-VAL-02", "CODE", ["S-VAL-02-a"], null);
+    await registry.registerStory("S-VAL-02");
 
-    await registry.promoteToMain("S-M2-01");
+    await registry.promoteToMain("S-VAL-02");
 
     await expect(registry.pool("epic")).resolves.toEqual([]);
-    await expect(registry.pool("main")).resolves.toMatchObject([{ scenarioId: "S-M2-01-a", pool: "main" }]);
+    await expect(registry.pool("main")).resolves.toMatchObject([{ scenarioId: "S-VAL-02-a", pool: "main" }]);
+  });
+
+  it("refuses to promote a Story that delivered onto an Epic rather than onto main", async () => {
+    // Delivering a Story of E1ACTION put twenty-two scenarios in the main pool
+    // while the Epic itself was still an unmerged review request, so the pool
+    // claimed to cover code main did not have.
+    await seedStory("S-M2-01", "DELIVERED", ["S-M2-01-a"]);
+    await registry.registerStory("S-M2-01");
+
+    await expect(registry.promoteToMain("S-M2-01")).rejects.toThrow("when that Epic merges");
+    await expect(registry.pool("main")).resolves.toEqual([]);
   });
 
   it("orders a pool least-recently-verified first, with the never-verified ahead of everything", async () => {
@@ -85,7 +96,7 @@ describe("ScenarioRegistry", () => {
     await registry.registerStory("S-M2-02");
 
     await expect(registry.forEpic("M2")).resolves.toMatchObject([
-      { scenarioId: "S-M2-01-a", pool: "main" },
+      { scenarioId: "S-M2-01-a", pool: "epic" },
       { scenarioId: "S-M2-02-a", pool: "epic" },
     ]);
   });

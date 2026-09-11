@@ -101,10 +101,10 @@ describe("M2 acceptance: one Epic from decomposition to review request", () => {
             VALUES (?, 'epic/M2', ?, ?, '[]', 'applied', ?, ?)`,
       args: [storyId, base, revision, time, time],
     });
-    const flow = { merge: vi.fn(async () => ({ kind: "merged" as const, integrationBranch: "epic/M2", scenarioIds: [] })) };
+    const flow = { merge: vi.fn(async () => ({ kind: "merged" as const, integrationBranch: "epic/M2", scenarioIds: [], mrUrl: null })) };
     await new EpicIntegrator(client, store, flow).integrate(storyId, `${storyId}-merge`);
     await store.transition(storyId, "MERGE", "DELIVERED", "system", `${storyId}-delivered`);
-    await registry.promoteToMain(storyId);
+    // No promotion here: the Story landed on the Epic head, not on main.
   }
 
   it("splits, waits for a human, runs what can run together, and lands each Story on the Epic head", async () => {
@@ -170,7 +170,9 @@ describe("M2 acceptance: one Epic from decomposition to review request", () => {
       mainScenarios: await registry.pool("main"),
       policy: { epicPoolIntervalMs: 900_000, mainPoolIntervalMs: 86_400_000, batchSize: 5 },
     });
-    expect(sweep).toMatchObject({ pool: "main", reason: "idle" });
+    // The Epic pool, not main: the Stories landed on the Epic head, and the
+    // Epic's own review request has not merged yet.
+    expect(sweep).toMatchObject({ pool: "epic", reason: "idle" });
     expect(sweep?.scenarioIds).toEqual(["S-M2-01-a", "S-M2-02-a", "S-M2-03-a"]);
 
     // 7. A regression introduced by the second Story is raised once it
@@ -181,7 +183,7 @@ describe("M2 acceptance: one Epic from decomposition to review request", () => {
       outcomes: [{ scenarioId: "S-M2-01-a", outcome: "failed" as const, output: "TypeError: summary is not iterable" }],
     })) };
     const sweeper = new RegressionSweeper(registry, regressions, broken);
-    const request = { pool: "main" as const, branch: "main", scenarioIds: ["S-M2-01-a"] };
+    const request = { pool: "epic" as const, branch: "epic/M2", scenarioIds: ["S-M2-01-a"] };
     await expect(sweeper.sweep(request, POLICY)).resolves.toMatchObject({ raised: [] });
     const second = await sweeper.sweep(request, POLICY);
     expect(second.raised).toHaveLength(1);

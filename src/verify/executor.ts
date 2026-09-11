@@ -31,6 +31,8 @@ export interface BlindVerifyInput {
   auditPath: string;
   specification: string;
   declaredScenarioIds: string[];
+  /** Scenarios that must be reached in the browser, each with its own screenshot. */
+  screenScenarioIds?: string[];
   allowedHosts: string[];
   /** From verify.chromiumSandbox; undefined keeps the sandbox. */
   chromiumSandbox?: boolean;
@@ -247,6 +249,12 @@ function promptFor(input: BlindVerifyInput): string {
     input.specification,
     "Declared scenarios:",
     [...input.declaredScenarioIds].toSorted().join("\n"),
+    ...(input.screenScenarioIds && input.screenScenarioIds.length > 0
+      ? [
+          "Scenarios judged on a screen (open the page, look, and take a screenshot that belongs to that scenario alone; a scenario with no page and no screenshot of its own is inconclusive, never passed):",
+          [...input.screenScenarioIds].toSorted().join("\n"),
+        ]
+      : []),
   ].join("\n\n");
 }
 
@@ -383,6 +391,7 @@ export class BlindVerifyExecutor {
       ? await validateVerdict({
           verdict: document,
           declaredScenarioIds: input.declaredScenarioIds,
+          ...(input.screenScenarioIds ? { screenScenarioIds: input.screenScenarioIds } : {}),
           trajectory: observed,
           commitMessages: input.commitMessages,
           evidenceRoot: input.evidencePath,

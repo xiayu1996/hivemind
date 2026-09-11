@@ -38,7 +38,11 @@ export class ScenarioRegistry {
     if (scenarios.length === 0) return 0;
 
     const time = this.now();
-    const pool: ScenarioPool = String(row.state) === "DELIVERED" ? "main" : "epic";
+    // A Story that belongs to an Epic delivers onto that Epic's integration
+    // branch, so being delivered says nothing about main. Only a standalone
+    // Story delivers onto the target branch directly.
+    const standalone = row.epic_id === null;
+    const pool: ScenarioPool = standalone && String(row.state) === "DELIVERED" ? "main" : "epic";
     await this.client.batch(scenarios.map((scenarioId) => ({
       sql: `INSERT INTO scenario_registry (scenario_id, story_id, epic_id, pool, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -51,8 +55,25 @@ export class ScenarioRegistry {
     return scenarios.length;
   }
 
-  /** A delivered Story's scenarios are everyone's problem from now on. */
+  /**
+   * A standalone Story's scenarios become everyone's problem once it is
+   * delivered, because it delivered onto the target branch.
+   *
+   * A Story that belongs to an Epic is refused here rather than quietly
+   * ignored: it delivers onto the Epic's integration branch, and promoting it
+   * then left the main pool claiming to cover twenty-six scenarios whose code
+   * main did not have. Those are promoted by EpicCompletion when the platform
+   * confirms the Epic merged.
+   */
   async promoteToMain(storyId: string): Promise<void> {
+    const row = (await this.client.execute({
+      sql: "SELECT epic_id FROM stories WHERE id = ?",
+      args: [storyId],
+    })).rows[0];
+    if (!row) throw new Error(`Story does not exist: ${storyId}`);
+    if (row.epic_id !== null) {
+      throw new Error(`Story ${storyId} belongs to Epic ${String(row.epic_id)}: its scenarios enter the main pool when that Epic merges`);
+    }
     await this.client.execute({
       sql: "UPDATE scenario_registry SET pool = 'main', updated_at = ? WHERE story_id = ? AND pool <> 'main'",
       args: [this.now(), storyId],

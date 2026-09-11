@@ -1,6 +1,6 @@
 import type { Client, InStatement } from "@libsql/client";
 import { z } from "zod";
-import type { NotionGateway } from "./gateway.js";
+import { archiveBlock, type NotionGateway } from "./gateway.js";
 import type { NotionOutboxDelivery, NotionOutboxRecord } from "./outbox.js";
 import {
   planStoryPageUpdate,
@@ -97,7 +97,7 @@ function parseSpec(content: string): { id: string; status: string; text: string 
 const RECENT_INSERT_MS = 10 * 60_000;
 
 function parseRound(content: string): { round: number; summary: string } | undefined {
-  const match = /^Round (\d+):(?: (.*))?$/.exec(content);
+  const match = /^Round (\d+):(?: ([\s\S]*))?$/.exec(content);
   return match ? { round: Number(match[1]), summary: match[2] ?? "" } : undefined;
 }
 
@@ -325,12 +325,7 @@ export class NotionStoryPageDelivery implements NotionOutboxDelivery {
       } else if (operation.type === "archive_verification_rounds") {
         await this.archiveRounds(cardId, pageId, remote, operation.rounds);
       } else {
-        await this.gateway.request({
-          method: "PATCH",
-          path: `/v1/blocks/${encoded(operation.blockId)}`,
-          priority: "projection",
-          body: { archived: true },
-        });
+        await archiveBlock((input) => this.gateway.request(input), operation.blockId);
       }
     }
   }
@@ -365,21 +360,28 @@ export class NotionStoryPageDelivery implements NotionOutboxDelivery {
   ): Promise<void> {
     let historyPageId = remote.historyPageId;
     if (!historyPageId) {
-      const response = await this.append(pageId, [{ object: "block", type: "child_page", child_page: { title: HISTORY_TITLE } }]);
-      historyPageId = response[0]?.id;
-      if (!historyPageId) throw new Error("Notion did not return the verification history page");
+      // A child page is created as a page with this page as its parent; the
+      // API refuses a `child_page` block appended through children (400), and
+      // every retry of that refusal kept the whole Story page from updating.
+      const response = await this.gateway.request({
+        method: "POST",
+        path: "/v1/pages",
+        priority: "projection",
+        body: {
+          parent: { page_id: pageId },
+          properties: { title: { title: [{ type: "text", text: { content: HISTORY_TITLE } }] } },
+        },
+      });
+      const created = z.object({ id: z.string().min(1) }).passthrough().safeParse(response.data);
+      if (!created.success) throw new Error("Notion did not return the verification history page");
+      historyPageId = created.data.id;
     }
     const existing = new Set((await this.listChildren(historyPageId)).map(textOf));
     for (const item of rounds) {
       const summary = remote.snapshot.verificationRounds.find((round) => round.round === item.round)?.summary ?? "";
       const content = `Round ${item.round}: ${summary}`;
       if (!existing.has(content)) await this.append(historyPageId, [notionBlock("paragraph", content)]);
-      await this.gateway.request({
-        method: "PATCH",
-        path: `/v1/blocks/${encoded(item.toggleBlockId)}`,
-        priority: "projection",
-        body: { archived: true },
-      });
+      await archiveBlock((input) => this.gateway.request(input), item.toggleBlockId);
       await this.client.execute({
         sql: `UPDATE notion_verification_rounds SET archived_page_id = ?
               WHERE story_id = ? AND round = ?`,

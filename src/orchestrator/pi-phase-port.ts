@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { parse, stringify } from "yaml";
 import { dirname, join } from "node:path";
 import { z } from "zod";
@@ -9,6 +9,7 @@ import {
   assembleGuardPolicy,
   serializeGuardPolicy,
 } from "../guard/policy.js";
+import { roundTasks } from "../pipeline/phase-input.js";
 import {
   collectCodeExitFacts,
   evaluateCodeExit,
@@ -148,17 +149,56 @@ function parseResult(input: ManagedPhaseInput, raw: string): ManagedPhaseResult[
   throw new Error(`${input.phase} response contained no structurally valid payload`, { cause: lastCause });
 }
 
-/** Models occasionally inline the DoD as a nested object or hide a string
- * criterion inside a labelled object; serialise both back to the string form
- * the frozen contract requires without changing their content. */
+/** Models occasionally inline the DoD as a nested object or hide a criterion's
+ * text inside a labelled object; serialise both back to the form the frozen
+ * contract requires without changing their content. A criterion is kept when
+ * it already has the contract's shape, and otherwise reduced to its text so
+ * the schema's refusal names the criterion rather than "[object Object]". */
+/** A YAML document the model escaped twice arrives as one line holding the
+ * two characters backslash and n where each line break should be. */
+function unescapeLineBreaks(text: string): string {
+  if (text.includes("\n") || !text.includes("\\n")) return text;
+  return text.replaceAll("\\n", "\n").replaceAll("\\t", "  ");
+}
+
+/**
+ * Quotes the plain scalars a model most often leaves bare: a value holding
+ * ": " (YAML reads it as a nested mapping) or starting with a character YAML
+ * gives a meaning to. Applied only after the document failed to parse, line by
+ * line, and only to `key: value` lines whose value is not already quoted or a
+ * block indicator; anything else is left exactly as written.
+ */
+function quoteBareScalars(text: string): string {
+  return text.split("\n").map((line) => {
+    const match = /^(\s*(?:- )?[A-Za-z_][\w-]*): (.+)$/.exec(line);
+    if (!match) return line;
+    const [, key, value] = match as unknown as [string, string, string];
+    if (/^["'|>[{]/.test(value) || /^-?\d+(\.\d+)?$/.test(value) || /^(true|false|null)$/.test(value)) return line;
+    const risky = value.includes(": ") || value.endsWith(":") || /^[@`*&!%#]/.test(value);
+    if (!risky) return line;
+    return `${key}: ${JSON.stringify(value)}`;
+  }).join("\n");
+}
+
+function parseLeniently(text: string): Record<string, unknown> {
+  const unescaped = unescapeLineBreaks(text);
+  try {
+    return parse(unescaped) as Record<string, unknown>;
+  } catch (cause) {
+    const repaired = quoteBareScalars(unescaped);
+    if (repaired === unescaped) throw cause;
+    return parse(repaired) as Record<string, unknown>;
+  }
+}
+
 function normalizeDodYaml(raw: unknown): string {
   if (raw === null || (typeof raw !== "object" && typeof raw !== "string")) return String(raw);
   try {
     const document = typeof raw === "string"
-      ? (parse(raw) as Record<string, unknown>)
+      ? parseLeniently(raw)
       : { ...(raw as Record<string, unknown>) };
     if (Array.isArray(document.acceptance_criteria)) {
-      document.acceptance_criteria = document.acceptance_criteria.map((item) => flattenToString(item));
+      document.acceptance_criteria = document.acceptance_criteria.map((item) => normalizeCriterion(item));
     }
     return stringify(document);
   } catch {
@@ -167,9 +207,19 @@ function normalizeDodYaml(raw: unknown): string {
   }
 }
 
-/** Flattens a criterion to the one-line string form the DoD contract requires.
- * Nesting is descended into: a criterion that collapsed to "[object Object]"
- * would still satisfy the schema and freeze as the Story's acceptance text. */
+function normalizeCriterion(item: unknown): unknown {
+  if (typeof item === "object" && item !== null && !Array.isArray(item)) {
+    const record = item as Record<string, unknown>;
+    if (typeof record.text === "string" && ("scenarios" in record || "constraint" in record)) return record;
+    const { scenarios, constraint, ...rest } = record;
+    const text = flattenToString(Object.keys(rest).length > 0 ? rest : record);
+    return { text, ...(scenarios !== undefined ? { scenarios } : {}), ...(constraint !== undefined ? { constraint } : {}) };
+  }
+  return { text: flattenToString(item) };
+}
+
+/** Flattens a criterion to one line. Nesting is descended into: a criterion
+ * that collapsed to "[object Object]" would freeze as the Story's acceptance text. */
 function flattenToString(item: unknown): string {
   if (typeof item === "string") return item;
   if (item === null || item === undefined) return "";
@@ -223,6 +273,12 @@ export class PiStoryPhasePort implements StoryPhasePort {
       mkdir(sessionDir, { recursive: true }),
       mkdir(runEvidencePath, { recursive: true }),
       mkdir(dirname(this.options.auditPath), { recursive: true }),
+    ]);
+    // The database keeps only the prompt's hash; the text itself lives beside
+    // the session so a round can be read, diffed and replayed after the fact.
+    await Promise.all([
+      writeFile(join(sessionDir, "prompt.md"), input.prompt),
+      writeFile(join(sessionDir, "system-prompt.md"), systemPrompt),
     ]);
     const policy = assembleGuardPolicy({
       phase: input.phase,
@@ -303,11 +359,13 @@ export class PiStoryPhasePort implements StoryPhasePort {
     artifacts: ManagedPhaseResult["artifacts"],
   ): Promise<ManagedPhaseResult["artifacts"]> {
     const dodScenarioIds = input.context.specs.map((spec) => spec.id);
+    const roundTags = roundTasks(input.context).map((task) => task.tag);
     const collect = this.options.collectExitFacts ?? ((gate, scenarioIds) => this.measureCodeExit(gate, scenarioIds));
     const maxRounds = options.maxRounds ?? DEFAULT_CODE_EXIT_ROUNDS;
     let current = artifacts;
     for (let attempt = 1; ; attempt++) {
-      const verdict = evaluateCodeExit(await collect(options, dodScenarioIds));
+      const artifactText = current.map((item) => item.body).join("\n");
+      const verdict = evaluateCodeExit({ ...(await collect(options, dodScenarioIds)), roundTags, artifactText });
       if (verdict.passed) return current;
       if (attempt >= maxRounds) throw new CodeExitNotMetError(verdict.findings);
       const result = await promptWithContinueRetry(

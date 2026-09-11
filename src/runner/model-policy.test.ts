@@ -11,6 +11,10 @@ const catalog = {
       { provider: "openai-codex", id: "gpt-5.6-terra", thinking: true },
       { provider: "openai-codex", id: "gpt-5.6-luna", thinking: false },
     ],
+    "command-code": [
+      { provider: "command-code", id: "deepseek/deepseek-v4.1-flash", thinking: true, images: true },
+      { provider: "command-code", id: "z-ai/glm-5.3-flash", thinking: true, images: true },
+    ],
     "zai-coding-cn": [{ provider: "zai-coding-cn", id: "glm-5" }],
     deepseek: [{ provider: "deepseek", id: "deepseek-flash", thinking: true, images: true }],
   }[provider] ?? []),
@@ -101,6 +105,33 @@ describe("ModelPolicy", () => {
     // triage lands on a model whose catalogue row says it does not reason: pi
     // would accept the argument and do nothing useful with it, so none is sent.
     await expect(policy.resolve("triage", "openai-codex")).resolves.not.toHaveProperty("thinkingLevel");
+  });
+
+  it("leads the brain tier with the best model and every other tier with the cheapest plan", async () => {
+    const policy = new ModelPolicy(config, catalog);
+    // Shipped defaults, no overlay. Brain work starts on gpt-5.6-sol and keeps
+    // two providers behind it, so a spent ChatGPT window degrades the tier
+    // instead of stopping it; the tiers that carry most of the turns start on
+    // the flat-rate plan and end on the metered API.
+    await expect(policy.providersFor("design")).resolves.toEqual(["openai-codex", "command-code", "deepseek"]);
+    await expect(policy.providersFor("ui_review")).resolves.toEqual(["openai-codex", "command-code", "deepseek"]);
+    await expect(policy.providersFor("code")).resolves.toEqual(["command-code", "openai-codex", "deepseek"]);
+    await expect(policy.providersFor("triage")).resolves.toEqual(["command-code", "openai-codex", "deepseek"]);
+    await expect(policy.resolve("code", "command-code")).resolves.toMatchObject({ id: "deepseek/deepseek-v4.1-flash" });
+    await expect(policy.resolve("design", "command-code")).resolves.toMatchObject({ id: "deepseek/deepseek-v4.1-flash" });
+  });
+
+  it("keeps a tier without its own order on the global one", async () => {
+    await config.set("model.tierFailoverChains", { cheap: ["deepseek", "command-code"] }, "test");
+    const policy = new ModelPolicy(config, catalog);
+    await expect(policy.providersFor("triage")).resolves.toEqual(["deepseek", "command-code"]);
+    // brain no longer names an order, so it falls back to the chain's.
+    await expect(policy.providersFor("design")).resolves.toEqual(["command-code", "openai-codex", "deepseek"]);
+  });
+
+  it("refuses a tier order naming a provider the chain does not carry", async () => {
+    await config.set("model.tierFailoverChains", { brain: ["openai-codex", "zai-coding-cn"] }, "test");
+    await expect(assertModelPolicy(config, catalog)).rejects.toThrow(/brain: zai-coding-cn/);
   });
 
   it("passes a changed effort through without touching the tier", async () => {

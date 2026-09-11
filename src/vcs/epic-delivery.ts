@@ -5,9 +5,20 @@ import type { MRPort } from "./mr/types.js";
 
 export interface EpicMrDeliveryOptions {
   worktreePath: string;
+  /** Branch the review request lands on and the base of the evidence log; defaults to main. */
+  targetBranch?: string;
+  /** Holds the review request while the Epic's scenarios carry open regression cards. */
+  /** Judged against the revision the review request would propose, not against
+   * the Epic in the abstract: a sweep of an earlier head says the Epic used to
+   * integrate. */
+  regressionClean?: (epicId: string, revision: string) => Promise<{ clean: boolean; reason?: string }>;
   git?: GitCommandPort;
   now?: () => number;
 }
+
+export type EpicMrDeliveryResult =
+  | { kind: "delivered"; mrUrl: string }
+  | { kind: "waiting"; reason: string };
 
 interface DeliveredStory {
   id: string;
@@ -15,6 +26,8 @@ interface DeliveredStory {
   outcome: string;
   verification: string;
 }
+
+const NO_PAIR_EVIDENCE = "no red/green commit pair on the branch; see the verification report";
 
 /** Red and green commits are named after the scenario they cover, not after
  * the Story, so a Story's evidence is every scenario pair beneath its id. */
@@ -39,9 +52,12 @@ function evidenceForStory(storyId: string, subjects: readonly string[]): Array<{
 
 function renderDescription(epicId: string, title: string, stories: readonly DeliveredStory[], subjects: readonly string[]): string {
   const chapters = stories.map((story) => {
+    // The CODE exit gate also accepts trajectory evidence, so a Story without a
+    // commit pair is still delivered; its verification report carries the proof.
     const evidence = evidenceForStory(story.id, subjects);
-    if (evidence.length === 0) throw new Error(`invalid red-to-green evidence for Story ${story.id}`);
-    const trail = evidence.map((pair) => `\`${pair.red}\` -> \`${pair.green}\``).join("; ");
+    const trail = evidence.length === 0
+      ? NO_PAIR_EVIDENCE
+      : evidence.map((pair) => `\`${pair.red}\` -> \`${pair.green}\``).join("; ");
     return `## ${story.id}: ${story.title}\n\nOutcome: ${story.outcome}\n\nVerification: ${story.verification}\n\nEvidence: ${trail}`;
   });
   return `# Epic ${epicId}: ${title}\n\n${chapters.join("\n\n")}\n`;
@@ -51,6 +67,7 @@ function renderDescription(epicId: string, title: string, stories: readonly Deli
 export class EpicMrDelivery {
   private readonly git: GitCommandPort;
   private readonly now: () => number;
+  private readonly targetBranch: string;
 
   constructor(
     private readonly client: Client,
@@ -59,15 +76,16 @@ export class EpicMrDelivery {
   ) {
     this.git = options.git ?? processGitCommand;
     this.now = options.now ?? Date.now;
+    this.targetBranch = options.targetBranch ?? "main";
   }
 
-  async deliver(epicId: string): Promise<{ mrUrl: string }> {
+  async deliver(epicId: string): Promise<EpicMrDeliveryResult> {
     const epic = (await this.client.execute({
       sql: "SELECT title, repo, integration_branch, mr_url FROM epics WHERE id = ?",
       args: [epicId],
     })).rows[0];
     if (!epic) throw new Error(`Epic ${epicId} does not exist`);
-    if (typeof epic.mr_url === "string") return { mrUrl: epic.mr_url };
+    if (typeof epic.mr_url === "string") return { kind: "delivered", mrUrl: epic.mr_url };
     if (typeof epic.repo !== "string" || typeof epic.integration_branch !== "string") {
       throw new Error(`Epic ${epicId} is missing repository or integration branch`);
     }
@@ -87,13 +105,22 @@ export class EpicMrDelivery {
     if (stories.length === 0 || stories.length !== allStories) {
       throw new Error(`Epic ${epicId} has Stories that are not delivered with verification summaries`);
     }
-    const subjects = (await this.git.run(this.options.worktreePath, ["log", "--format=%s", "--reverse", `main..${epic.integration_branch}`]))
+    if (this.options.regressionClean) {
+      const revision = (await this.git.run(this.options.worktreePath,
+        ["rev-parse", String(epic.integration_branch)])).trim();
+      const gate = await this.options.regressionClean(epicId, revision);
+      if (!gate.clean) {
+        return { kind: "waiting", reason: gate.reason ?? `Epic ${epicId} has open regression cards` };
+      }
+    }
+    const subjects = (await this.git.run(this.options.worktreePath,
+      ["log", "--format=%s", "--reverse", `${this.targetBranch}..${epic.integration_branch}`]))
       .split("\n").filter(Boolean);
     const body = renderDescription(epicId, String(epic.title), stories, subjects);
     const result = await this.mr.create({
       repository: epic.repo,
       sourceBranch: epic.integration_branch,
-      targetBranch: "main",
+      targetBranch: this.targetBranch,
       title: `[${epicId}] ${String(epic.title)}`,
       body,
     });
@@ -103,9 +130,9 @@ export class EpicMrDelivery {
     });
     if (update.rowsAffected !== 1) {
       const current = (await this.client.execute({ sql: "SELECT mr_url FROM epics WHERE id = ?", args: [epicId] })).rows[0];
-      if (typeof current?.mr_url === "string") return { mrUrl: current.mr_url };
+      if (typeof current?.mr_url === "string") return { kind: "delivered", mrUrl: current.mr_url };
       throw new Error(`Epic ${epicId} MR delivery lost a race`);
     }
-    return { mrUrl: result.url };
+    return { kind: "delivered", mrUrl: result.url };
   }
 }

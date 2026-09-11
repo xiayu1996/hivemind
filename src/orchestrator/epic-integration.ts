@@ -1,5 +1,5 @@
 import type { Client } from "@libsql/client";
-import type { MergeResult, MergeStory } from "../vcs/merge-flow.js";
+import type { MergeResult, MergeStory, StoryPublisher } from "../vcs/merge-flow.js";
 import type { StoryExecutionStore } from "./story-execution-store.js";
 
 export interface EpicMergePort {
@@ -7,6 +7,7 @@ export interface EpicMergePort {
     epicId: string;
     story: MergeStory;
     integratedStories: readonly MergeStory[];
+    publish?: StoryPublisher;
   }): Promise<MergeResult>;
 }
 
@@ -24,9 +25,9 @@ export class EpicIntegrator {
     private readonly flow: EpicMergePort,
   ) {}
 
-  async integrate(cardId: string, runId: string): Promise<MergeResult> {
+  async integrate(cardId: string, runId: string, publish?: StoryPublisher): Promise<MergeResult> {
     const row = (await this.client.execute({
-      sql: "SELECT epic_id, branch, predicted_footprint FROM stories WHERE id = ?",
+      sql: "SELECT epic_id, branch, predicted_footprint, state FROM stories WHERE id = ?",
       args: [cardId],
     })).rows[0];
     if (!row) throw new Error(`Story does not exist: ${cardId}`);
@@ -58,10 +59,20 @@ export class EpicIntegrator {
         predictedFootprint: story.predictedFootprint,
         scenarioIds: story.scenarioIds,
       })),
+      ...(publish ? { publish } : {}),
     });
 
     if (result.kind === "merged") {
       await this.store.markIntegrated(cardId, result.integrationBranch);
+      return result;
+    }
+    const reason = result.kind === "conflict"
+      ? result.reason
+      : result.reason ?? `subset re-verification failed for ${result.scenarioIds.join(", ")}`;
+    // A regression fix that the head refuses has no CODE to go back to: the
+    // loop it runs in reads the reason and tries again from where it is.
+    if (row.state === "REGRESSION_FIX") {
+      await this.store.recordRegressionLandingFailure(cardId, runId, reason);
       return result;
     }
     if (result.kind === "conflict") {

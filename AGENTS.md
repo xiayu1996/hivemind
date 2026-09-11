@@ -62,12 +62,15 @@ npx tsx scripts/smoke-runner.ts            # 真实 pi 子进程冒烟
 npx tsx scripts/smoke-context-isolation.ts # 验证 context 文件不泄漏
 npx tsx scripts/smoke-crash-recovery.ts    # SIGKILL 后从 checkpoint 续跑
 npx tsx scripts/smoke-browser-e2e.ts       # 真实 headless 浏览器 + 三层红线
+
+npx tsx scripts/inspect-round.ts --card-id <id> [--round N] [--prompt] [--tools]   # 一轮一屏：prompt 分段、工具、自述、commit、两条道的逐场景结论
+npx tsx scripts/replay-phase.ts --card-id <id> --phase CODE --print-prompt        # 用中央状态重组一个 phase 的 prompt；给 --worktree 则真跑，不写库不动状态机
 ```
 
 Node `>=26`，ESM，包管理用 npm。部署只有 Linux 一条路：Windows 主机跑在 WSL2 Ubuntu 里，不再有原生 Windows 路径。
 `deploy/linux/install.sh` 是唯一入口，每个阶段先查再做，人工步骤（凭据、pi 登录、gh 登录）原地停下、重跑续接；见 [docs/runbooks/linux-single-node.md](docs/runbooks/linux-single-node.md)。
 pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src/runner/pi-binary.ts` 取，shell 经 `node -p` 取，不得再出现字面版本号。
-`scripts/` 只放长期入口（run-* / smoke-* / preflight / notion-bootstrap / install-pi / pi-login / catalog-snapshot / provider-add）；一次性排障脚本用完即删，不进仓库。
+`scripts/` 只放长期入口（run-* / smoke-* / preflight / notion-bootstrap / install-pi / pi-login / catalog-snapshot / provider-add / inspect-round / replay-phase）；一次性排障脚本用完即删，不进仓库。
 
 ### 本地验证顺序
 
@@ -94,6 +97,7 @@ pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src
 - **内环收敛判据是严格真子集**（`failed(N) ⊊ failed(N-1)`）；轮次硬上限（内环 6 / phase 重入 3 / continue 8 / regression 重开 2）只是最终兜底，上限设在离散轮次，不设在时长或 token。
 - **加一个 provider 是数据改动，不是代码改动**：`model.providers`（registry 键，console 可编辑，标了 dangerous）声明每家怎么认证、每档用哪个模型；代码里不出现任何字面 model id。加进 `model.failoverChain` 是另一个决策，分开配、分开审计。
 - **chain 顺序是成本决策：订阅在前、计费 API 在后**。包月的钱花不花都一样，所以订阅能扛的每一轮都是 deepseek 不用出的钱；deepseek 在链上是为了在订阅撞到 usage-limit 窗口时让服务不停，不是分担负载。
+- **大脑档是这条成本序的唯一例外，由 `model.tierFailoverChains` 单独排序**：拆解/设计/界面走查读的是人话、判的是屏幕，这一档最强的模型在前（`gpt-5.6-sol`），便宜的在后。它后面仍挂满整条链——**订阅打满只许降级，不许停工**；全系统唯一能因"没模型可用"停下的原因，是最后那个计费 API 没钱了。per-tier 顺序只能命名 `model.failoverChain` 里的 provider（`assertModelPolicy` 强制），因为链才是发凭据、采错误文案、记熔断状态的那份全集。
 - **provider 目录有两个源**：pinned pi 的实时目录是权威，`fixtures/model-catalogs/` 的采集快照是无 pi / 无该家凭据时的兜底（漂移测试守住一致）。快照进仓库还有第二个作用：它让"这个 model id 是否存在"变成**同步**判据，配置写入当场就能拒绝坏 id，而不是等到 spawn 时卡住一张卡。
 - **验证命令永不硬编码**，由 agent 看现场决定。防造假靠三层：prompt 约束、工具面物理掐断、verdict 代码校验；三层缺一不可，prompt 是最弱的一层。
 - **`VERIFY.session_id != CODE.session_id`** 由 DB CHECK 强制，不靠应用层自觉。

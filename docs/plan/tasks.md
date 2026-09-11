@@ -248,6 +248,28 @@
 | MQ-08 | ✅（真实 gh 实跑待配额恢复） Story draft MR：DELIVERED 时开 story→epic 的 draft MR，链接回写 Notion MR 属性；Epic MR 仍为最终入口 | `src/vcs/story-delivery.ts` | 单测 + 真实 gh 实跑一次 | MQ-06 |
 | MQ-09 | ✅ DECOMPOSE 垂直切片约束：每张 Story 声明用户可见入口与独立验证路径；Epic 内 Story 数上限 config 化（默认 4）；水平切分打回重拆 | `prompts/phases/decompose.md`、`src/orchestrator/epic-decompose*.ts` | 单测：六张同页面验收条目的拆解被拒；现有 E1ACTION 拆解按新约束重拆 | — |
 | MQ-10 | **MQ 验收**：S-E3OVERVIEW-01 在无人干预下从当前 NEEDS_INPUT 恢复后走完 CODE 出口检查→VERIFY→合流→draft MR；随后重拆的第二张 Story 从 QUEUED 走完全程 | `docs/poc/mp-acceptance.md` 追记 | 两张卡各自 event_log 中无 retry_limit_exceeded；供应商故障期间 `stop_reason` 始终为空 | MQ-01..09 |
+| IT-01 | ✅ DoD schema 扩展：scenario `examples`（shows/excludes）与 `source`（含 e2e/ui 层必填）；`acceptance_criteria` 每条挂 `scenarios` 或 `constraint`；顶层 `out_of_scope`、`relies_on`；层归属由系统固定（unit/integration/snapshot→CODE，e2e/ui→VERIFY）；DESIGN prompt 同步 | `src/pipeline/dod.ts`、`prompts/phases/design.md` | dod 单测：旧形态 DoD 被拒并点名原因 | — |
+| IT-02 | ✅ CODE 出口「逐条回应」：每个注入 tag 需 `addressed <tag>:` 一行，缺则 finding 喂回同一 session | `src/pipeline/code-exit-gate.ts`、`src/orchestrator/pi-phase-port.ts` | gate 单测 | IT-06 |
+| IT-03 | ✅ 走查否决回指 DoD：`failed` 必带 `cites` 且真存在；引不到降为 finding + DoD 修订建议写 Notion；`out_of_scope`/`relies_on` 随 prompt 下发 | `src/verify/ui-review.ts`、`src/orchestrator/ui-reviewed-verify-port.ts` | ui-review 单测 | IT-01 |
+| IT-04 | ✅ VERIFY 屏幕证据校验：e2e/ui 场景需独有截图 + 到达页面，缺则 inconclusive（环境类） | `src/pipeline/verdict.ts`、`src/verify/executor.ts` | verdict 单测；smoke-browser-e2e | IT-01 |
+| IT-05 | 环境失败补类：「route not found / 看到旧页面 / 无法复现 worktree UI」归环境 | `src/pipeline/failure-classification.ts` | classification 单测 | — |
+| IT-06 | ✅ prompt 结构：`## What this round must do` 置顶带 tag；只注入每 (phase, kind) 最新产物；从最新验证产物提取逐场景原因 | `src/pipeline/phase-input.ts`、`src/orchestrator/story-execution-store.ts` | phase-input / store 单测 | — |
+| IT-07 | ✅ 人的回答回写 Notion：「已应用的回答」（谁、何时、针对哪条、原文、用于第几轮），代答诚实署名 | `src/notion/story-projection.ts` | projection 单测 | — |
+| IT-08 | ✅ `scripts/inspect-round.ts` 转正：一轮一屏；VERIFY/走查 session 按时间窗口定位 | `scripts/inspect-round.ts` | 对 S-E3OVERVIEW-01 第 7 轮实跑 | — |
+| IT-09 | `scripts/replay-phase.ts`：用存下的轮次输入单跑一个 phase，不写库不动状态机 | `scripts/replay-phase.ts` | 对 S-E3OVERVIEW-01 第 7 轮 CODE 输入实跑一次 | IT-06 |
+| IT-10 | 每轮 prompt 全文落盘到 session 目录；prompt 文件版本 sha 记入 `phase_runs` | `src/orchestrator/pi-phase-port.ts` | 单测 | — |
+| IT-11 | ✅ Notion 验证记录可读：accepted 轮写「N 个场景都验证通过（…）」，rejected 轮逐场景写两条道原因与所依据的 DoD 句子，列出 DoD 修订建议 | `src/notion/story-projection.ts` | projection 单测 | IT-03 |
+| IT-12 | ✅ 轮次账本展示：`Budget x/6` 按 `last_human_action_at` 之后被拒轮数计；round 流水号不重置 | `src/notion/story-projection.ts` | projection 单测 | — |
+| IT-13 | **IT 验收**：S-E3OVERVIEW-01 重置到 DESIGN 重跑；对照旧 8 轮：DoD 一次通过 schema、CODE ≤ 2 轮、环境失败不计轮次、Notion 上能看到回答与可读记录 | `docs/poc/mp-acceptance.md` 追记 | inspect-round 逐轮对照 | IT-01..12 |
+| IT-14 | ✅ Epic 分支在拆解批准时推送；派发前重试；合入后推头 | `src/vcs/epic-branch.ts`, `plan-approval.ts`, `merge-flow.ts` | 单测 + 实跑 origin/epic/E3OVERVIEW 存在 | — |
+| IT-15 | ✅ Story draft MR 在 ff-merge 之前开（rebase → 推分支 → 开 MR → 复验 → 合入）；复用已开 MR；目标已包含则不开 | `merge-flow.ts`, `epic-integration.ts`, `story-worker.ts`, `story-delivery.ts`, `mr/adapters.ts` | 单测顺序断言 + S-E3OVERVIEW-01 resume 实跑 | IT-14 |
+| IT-16 | Epic MR：缺红绿提交对不抛错；目标分支来自 `--target-branch`；等回归池干净；关闭未合并退回 EXECUTING | `src/vcs/epic-delivery.ts`, `epic-completion.ts`, `regression/epic-gate.ts` | 单测 | — |
+| IT-17 | 走查环境：`verify.appStartCommand/appReadyUrl/seedCommand`，DoD `seed`；走查 inconclusive 可见 | `src/verify/app-under-review.ts`, `ui-reviewed-verify-port.ts`, `dod.ts` | 单测 + E3 卡实跑 | — |
+| IT-18 | 需求层 `clearStop` 调用者；停点详情上页；HUMAN_PARKED 空 resume 不抛；EXECUTING 期间重投影 | `requirement-input-sync.ts`, `requirement-page-delivery.ts` | 单测 | — |
+| IT-19 | ✅ MERGE 可重入；✅ 人工/契约触发的回 DESIGN 解冻并作废可复用轮 | `run-local-orchestrator.ts`, `story-execution-store.ts`, `story-worker.ts` | 单测 | — |
+| IT-20 | Story 停牌上浮 Epic BLOCKED，恢复自动回 EXECUTING；escalation 型 BLOCKED 不可被评论触发重拆 | `src/orchestrator/epic-escalation.ts` | 单测 | — |
+| IT-21 | outbox attempts + dead 状态 + 计数日志 + 死信列表 | `src/notion/outbox.ts` | 单测 | — |
+| IT-22 | 回归环路：sweep 传 probe worktree；`regression_cards` resolve；REGRESSION_FIX 可运行 | `scripts/run-regression.ts`, `regression/store.ts`, `story-worker.ts` | 单测 + 人为制造回归实跑 | IT-16 |
 
 ---
 

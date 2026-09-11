@@ -118,7 +118,11 @@ scenarios:
     layers: [integration]
 baseline:
   type: acceptance_test
-acceptance_criteria: [Work resumes.]
+acceptance_criteria:
+  - text: Work resumes.
+    scenarios: [S-EPIC1-01-a]
+out_of_scope: []
+relies_on: []
 predicted_footprint: [src]
 depends_on: []
 `));

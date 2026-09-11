@@ -53,6 +53,14 @@ class FakeNotion {
     if (request.method === "PATCH" && blockMatch) {
       return { status: 200, data: this.patch(decodeURIComponent(blockMatch[1]!), request.body) };
     }
+    if (request.method === "POST" && path === "/v1/pages") {
+      const body = request.body as { parent: { page_id: string }; properties: { title: { title: Array<{ text: { content: string } }> } } };
+      const created = this.create({ object: "block", type: "child_page", child_page: { title: body.properties.title.title[0]!.text.content } });
+      const parent = this.children.get(body.parent.page_id);
+      if (!parent) throw new Error(`unknown fake parent: ${body.parent.page_id}`);
+      parent.push(created);
+      return { status: 200, data: { object: "page", id: created.id } };
+    }
     const pageMatch = /^\/v1\/pages\/([^/]+)$/.exec(path);
     if (request.method === "GET" && pageMatch) {
       return { status: 200, data: { object: "page", id: decodeURIComponent(pageMatch[1]!), properties: this.properties } };
@@ -125,7 +133,11 @@ scenarios:
     layers: [integration]
 baseline:
   type: acceptance_test
-acceptance_criteria: [The page is complete.]
+acceptance_criteria:
+  - text: The page is complete.
+    scenarios: [S-EPIC1-01-a]
+out_of_scope: []
+relies_on: []
 predicted_footprint: [src]
 depends_on: []
 `;
@@ -174,7 +186,7 @@ describe("NotionStoryPageDelivery", () => {
         },
       ], "write");
       await projection.enqueue("S-EPIC1-01");
-      await expect(outbox.replay(delivery)).resolves.toEqual({ sent: 2, failed: 0 });
+      await expect(outbox.replay(delivery)).resolves.toEqual({ sent: 2, failed: 0, failures: [], dead: [] });
       const mapping = await client.execute("SELECT notion_block_id FROM story_specs WHERE spec_id = 'S-EPIC1-01-a'");
       const current = String(mapping.rows[0]?.notion_block_id);
       specBlockId ??= current;
@@ -219,10 +231,10 @@ describe("NotionStoryPageDelivery", () => {
     );
     const outbox = new NotionOutbox(client, () => 20);
     await new NotionStoryProjection(client, () => 20).enqueue("S-EPIC1-01");
-    await expect(outbox.replay(delivery)).resolves.toEqual({ sent: 2, failed: 0 });
+    await expect(outbox.replay(delivery)).resolves.toEqual({ sent: 2, failed: 0, failures: [], dead: [] });
     // A second projection of the same state must find the page complete.
     await client.execute("UPDATE notion_outbox SET state = 'pending'");
-    await expect(outbox.replay(delivery)).resolves.toEqual({ sent: 2, failed: 0 });
+    await expect(outbox.replay(delivery)).resolves.toEqual({ sent: 2, failed: 0, failures: [], dead: [] });
 
     const page = fake.visible("page-1");
     expect(page.filter((item) => item.type === "toggle")).toHaveLength(1);

@@ -13,6 +13,7 @@ import { NotionGateway, NotionGatewayError } from "../src/notion/gateway.js";
 import { createNotionHttpTransport } from "../src/notion/sdk-adapters.js";
 import { openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
+import { assertSchemaCurrent, schemaFingerprint } from "../src/persistence/schema-fingerprint.js";
 import { probeProviderReadiness } from "../src/runner/auth-probe.js";
 import { needsApiKeyEnv, providerKeyEnv } from "../src/runner/provider-env.js";
 import { reapStalePiAuthLock } from "../src/runner/auth-lock.js";
@@ -153,6 +154,13 @@ async function main(): Promise<void> {
     await migrate(handle.client);
     config = await ConfigStore.load(handle.client);
     return dbUrl;
+  });
+  // Separate from the migration probe above: a database created by an earlier
+  // 0001 records itself as migrated, so "migrates" passing says nothing about
+  // what the file enforces.
+  await attempt("the database enforces what the migrations declare", async () => {
+    await assertSchemaCurrent(handle.client);
+    return (await schemaFingerprint(handle.client)).digest.slice(0, 12);
   });
 
   if (config) {

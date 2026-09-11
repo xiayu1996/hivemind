@@ -27,7 +27,11 @@ scenarios:
     layers: [integration]
 baseline:
   type: acceptance_test
-acceptance_criteria: [The page is complete.]
+acceptance_criteria:
+  - text: The page is complete.
+    scenarios: [S-EPIC1-01-a]
+out_of_scope: []
+relies_on: []
 predicted_footprint: [src]
 depends_on: []
 `));
@@ -119,9 +123,14 @@ depends_on: []
     const desired = JSON.parse(String(page?.payload)).desired;
     expect(desired.verificationRound).toEqual({
       round: 2,
-      summary: "rejected; failed: S-EPIC1-03-a | reasons: S-EPIC1-03-a: the page at 127.0.0.1:4321 refused the connection | checks: S-EPIC1-03-a: screenshot is missing",
+      summary: [
+        "未通过：1 个场景被打回",
+        "- S-EPIC1-03-a：测试：the page at 127.0.0.1:4321 refused the connection",
+        "代码校验拒绝了这些结论：S-EPIC1-03-a: screenshot is missing",
+      ].join("\n"),
     });
-    expect(desired.questions).toContain("Execution stopped: verify_loop_exceeded. Last verification round 2: rejected");
+    expect(desired.questions).toContain("Execution stopped: verify_loop_exceeded. Last verification round 2: 未通过");
+    expect(desired.metadata).toContain("Budget 1/6");
     client.close();
   });
 
@@ -143,6 +152,72 @@ depends_on: []
     await projection.enqueue("S-EPIC1-04");
     const pending = await client.execute("SELECT operation FROM notion_outbox WHERE state = 'pending' AND operation = 'sync_story_properties'");
     expect(pending.rows).toHaveLength(1);
+    client.close();
+  });
+});
+
+describe("what a person reads on the page", () => {
+  it("says what an accepted round verified, and shows the answers that were applied with their author", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, () => 10);
+    await store.createStory({ id: "S-EPIC1-04", notionPageId: "page-4", title: "Story", requirement: "Requirement" });
+    await store.freezeDefinitionOfDone("S-EPIC1-04", parseDoD(`story_id: S-EPIC1-04
+design_summary: Design.
+scenarios:
+  - id: S-EPIC1-04-a
+    given: A state
+    when: projected
+    then: it is visible
+    layers: [integration]
+  - id: S-EPIC1-04-b
+    given: A state
+    when: projected
+    then: it is listed
+    layers: [integration]
+baseline:
+  type: acceptance_test
+acceptance_criteria:
+  - text: The page is complete.
+    scenarios: [S-EPIC1-04-a, S-EPIC1-04-b]
+out_of_scope: []
+relies_on: []
+predicted_footprint: [src]
+depends_on: []
+`));
+    await client.execute({
+      sql: `INSERT INTO verify_records (card_id, round, code_session_id, verify_session_id, verdict, failed_scenarios, evidence_dir, created_at)
+            VALUES ('S-EPIC1-04', 1, 'code.jsonl', 'verify.jsonl', 'accepted', '[]', '/ev', 10)`,
+    });
+    await client.execute({
+      sql: `INSERT INTO ingested_comments (comment_id, page_id, author, body, created_time, ingested_at)
+            VALUES ('c-1', 'page-4', 'Claude Code session on behalf of Ryan', 'Use the latest event.', 1757400000000, 10)`,
+    });
+    await client.execute({
+      sql: `INSERT INTO human_feedback (comment_id, card_id, spec_id, round, channel, body, applied_at, created_at)
+            VALUES ('c-1', 'S-EPIC1-04', 'S-EPIC1-04-a', 7, 'answer', 'Use the latest event.', 12, 11)`,
+    });
+    await client.execute({
+      sql: `INSERT INTO phase_runs (run_id, card_id, phase, round, prompt_sha256, status, started_at, ended_at)
+            VALUES ('run-v1', 'S-EPIC1-04', 'VERIFY', 1, ?, 'completed', 5, 10)`,
+      args: ["a".repeat(64)],
+    });
+    await client.execute({
+      sql: `INSERT INTO phase_artifacts (run_id, card_id, phase, round, kind, body, created_at)
+            VALUES ('run-v1', 'S-EPIC1-04', 'VERIFY', 1, 'verification', ?, 10)`,
+      args: [JSON.stringify({
+        verdict: "accepted",
+        failedScenarios: [],
+        uiReview: { verdict: "accepted", acceptance: [], findings: [], amendments: [], inconclusive: ["S-EPIC1-04-b"] },
+      })],
+    });
+    await new NotionStoryProjection(client, () => 20).enqueue("S-EPIC1-04");
+    const page = (await client.execute("SELECT payload FROM notion_outbox WHERE operation = 'sync_story_page'")).rows[0];
+    const desired = JSON.parse(String(page?.payload)).desired;
+    expect(desired.verificationRound.summary).toBe("通过：2 个场景都验证通过（S-EPIC1-04-a、S-EPIC1-04-b）；走查无结论：S-EPIC1-04-b");
+    expect(desired.questions).toBe(
+      "已应用的回答：\n- Claude Code session on behalf of Ryan（2025-09-09 06:40 UTC，针对 S-EPIC1-04-a，已用于第 8 轮）：Use the latest event.",
+    );
     client.close();
   });
 });

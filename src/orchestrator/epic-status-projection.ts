@@ -14,7 +14,22 @@ export const EPIC_BOARD_STATUS = {
   planned: schema.options.epicStatus[1]!,
   executing: schema.options.epicStatus[2]!,
   done: schema.options.epicStatus[3]!,
+  /** The Epic's review request is open and waits for a person to merge it. */
+  accepting: schema.options.epicStatus[4]!,
+  /** A Story of the Epic stopped for a person; the Epic page says which. */
+  blocked: schema.options.epicStatus[5]!,
 } as const;
+
+/** The board column for each state the machine can be in. */
+export const BOARD_STATUS_FOR_STATE: Partial<Record<EpicState, EpicBoardStatus>> = {
+  INTAKE: EPIC_BOARD_STATUS.waiting,
+  DECOMPOSE: EPIC_BOARD_STATUS.waiting,
+  PLAN_APPROVAL: EPIC_BOARD_STATUS.planned,
+  EXECUTING: EPIC_BOARD_STATUS.executing,
+  EPIC_ACCEPT: EPIC_BOARD_STATUS.accepting,
+  BLOCKED: EPIC_BOARD_STATUS.blocked,
+  DONE: EPIC_BOARD_STATUS.done,
+};
 
 export type EpicBoardStatus = (typeof EPIC_BOARD_STATUS)[keyof typeof EPIC_BOARD_STATUS];
 

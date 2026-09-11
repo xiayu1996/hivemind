@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { classifyConvergence } from "../pipeline/convergence.js";
 import { costCeilingVerdict, renderCostCeilingReport, type CardSpend } from "../pipeline/cost-ceiling.js";
-import { parseDoD, type DefinitionOfDone } from "../pipeline/dod.js";
+import { DoDValidationError, parseDoD, type DefinitionOfDone } from "../pipeline/dod.js";
 import { assemblePhasePrompt, type PhaseInput } from "../pipeline/phase-input.js";
 import {
   StoryExecutionStore,
@@ -71,16 +71,25 @@ export interface StoryFrictionPort {
 }
 
 export interface StoryIntegrationPort {
-  /** Puts the Story on its Epic head. A result other than "merged" has already
-   * returned the Story to CODE; the run stops without delivering. */
-  integrate(cardId: string, runId: string): Promise<{ kind: string; reason?: string }>;
+  /** Puts the Story on its Epic head. `publish` opens the Story's review
+   * request while the rebased branch is still ahead of the head; its URL comes
+   * back on a merged result. A result other than "merged" has already returned
+   * the Story to CODE; the run stops without delivering again. */
+  integrate(
+    cardId: string,
+    runId: string,
+    publish?: () => Promise<{ mrUrl: string | null }>,
+  ): Promise<{ kind: string; reason?: string; mrUrl?: string | null }>;
 }
 
 export interface StoryWorkerOptions {
   maxInnerLoopRounds?: number;
-  /** How many consecutive rounds may be lost to the environment before the
-   * card stops for a person. The rounds themselves cost no budget; this is
-   * what keeps a broken host from looping forever. */
+  /** How many times the regression loop may reopen a delivered Story. */
+  maxRegressionReopens?: number;
+  /** How many consecutive verification attempts may be lost to the environment
+   * before the card stops for a person as `retry_limit_exceeded`. The attempts
+   * cost no inner-loop budget and leave the CODE HEAD alone; this is what keeps
+   * a broken host from re-verifying forever. */
   maxInconclusiveRounds?: number;
   integration?: StoryIntegrationPort;
   friction?: StoryFrictionPort;
@@ -106,7 +115,7 @@ export interface StoryWorkerResult {
   state: "DELIVERED" | "NEEDS_INPUT" | "CODE";
   rounds: number;
   mrUrl: string | null;
-  stopReason: "verify_loop_exceeded" | "cost_ceiling_exceeded" | null;
+  stopReason: "verify_loop_exceeded" | "retry_limit_exceeded" | "cost_ceiling_exceeded" | null;
   /** Attached to the card when the run stopped; business language, no thresholds alone. */
   stopReport?: string;
 }
@@ -120,6 +129,7 @@ function artifact(result: ManagedPhaseResult, kind: string): string {
 /** Executes one Story on one host through DESIGN, CODE/VERIFY and MERGE. */
 export class SingleStoryWorker {
   private readonly maxInnerLoopRounds: number;
+  private readonly maxRegressionReopens: number;
   private readonly maxInconclusiveRounds: number;
   private readonly friction: StoryFrictionPort | undefined;
   private readonly createRunId: (cardId: string, phase: StoryPhase, round: number) => string;
@@ -139,6 +149,7 @@ export class SingleStoryWorker {
     this.spend = options.spend;
     this.maxInconclusiveRounds = options.maxInconclusiveRounds ?? 2;
     this.maxInnerLoopRounds = options.maxInnerLoopRounds ?? 6;
+    this.maxRegressionReopens = options.maxRegressionReopens ?? 2;
     if (!Number.isInteger(this.maxInnerLoopRounds) || this.maxInnerLoopRounds < 1) {
       throw new Error("maxInnerLoopRounds must be a positive integer");
     }
@@ -186,10 +197,43 @@ export class SingleStoryWorker {
 
   async run(cardId: string): Promise<StoryWorkerResult> {
     let story = await this.store.getStory(cardId);
+    if (story.state === "REGRESSION_FIX") return this.regressionFixLoop(cardId, story);
+    // A run that died inside VERIFY (a killed process, a provider transport
+    // fault) leaves the Story in a state no phase starts from. The round it
+    // lost recorded no verification, so it cost no budget: the card goes back
+    // to CODE and the inner loop buys the round again. Without this a single
+    // transport fault parks the card and blocks its Epic for good.
+    if (story.state === "VERIFY") {
+      const resumeRunId = this.createRunId(cardId, "VERIFY", story.innerLoopRounds);
+      await this.store.transition(cardId, "VERIFY", "CODE", "system", resumeRunId);
+      await this.friction?.record({
+        cardId,
+        runId: resumeRunId,
+        kind: "verification_interrupted",
+        detail: `round ${story.innerLoopRounds} left VERIFY without a verdict`,
+      });
+      story = await this.store.getStory(cardId);
+    }
     let definitionOfDone: DefinitionOfDone;
     // VERIFY already accepted: re-entering at MERGE skips the inner loop and
     // redoes only the delivery report plus branch publication.
-    const mergeOnly = story.state === "MERGE";
+    let mergeOnly = story.state === "MERGE";
+    if (story.state === "CODE" || story.state === "MERGE") {
+      // The frozen DoD is read under today's contract. One the contract no
+      // longer accepts cannot drive VERIFY, so the Story is designed again
+      // rather than failing every attempt until a person notices.
+      try {
+        await this.store.getDefinitionOfDone(cardId);
+      } catch (cause) {
+        if (!(cause instanceof DoDValidationError)) throw cause;
+        const redesignRunId = this.createRunId(cardId, "DESIGN", 1);
+        await this.store.resetForRedesign(cardId, cause.message);
+        await this.store.transition(cardId, story.state, "DESIGN", "system", redesignRunId);
+        await this.friction?.record({ cardId, runId: redesignRunId, kind: "dod_contract_changed", detail: cause.message });
+        story = await this.store.getStory(cardId);
+        mergeOnly = false;
+      }
+    }
     if (mergeOnly) {
       definitionOfDone = await this.store.getDefinitionOfDone(cardId);
     } else if (story.state === "QUEUED" || story.state === "DESIGN") {
@@ -242,9 +286,9 @@ export class SingleStoryWorker {
         const codeRunId = this.createRunId(cardId, "CODE", round);
         const code = await this.runPhase(cardId, "CODE", round, codeRunId);
         artifact(code, "implementation");
-        const verifyRunId = this.createRunId(cardId, "VERIFY", round);
+        let verifyRunId = this.createRunId(cardId, "VERIFY", round);
         await this.store.transition(cardId, "CODE", "VERIFY", "system", verifyRunId);
-        const verification = await this.runVerification(
+        let verification = await this.runVerification(
           cardId,
           round,
           verifyRunId,
@@ -253,6 +297,45 @@ export class SingleStoryWorker {
         );
         await this.projection.enqueue(cardId);
 
+        // A round the box lost is retried against the same CODE output. Going
+        // back to CODE would buy a model turn to fix something the code never
+        // did - S-E2RESULTS-01 spent rounds 11 and 12 rewriting a page whose
+        // only fault was a dev server that was not listening - and it would
+        // move the HEAD the next attempt is judged on, so a retry could no
+        // longer be compared with the attempt it repeats. Re-verifying stands
+        // the environment up again, which is the repair for the cases this
+        // reaches: a port somebody else held, a server that died, a browser
+        // that failed to launch.
+        while (verification.verdict === "inconclusive") {
+          inconclusiveStreak += 1;
+          if (inconclusiveStreak >= this.maxInconclusiveRounds) {
+            await this.friction?.record({
+              cardId,
+              runId: verifyRunId,
+              kind: "verification_inconclusive",
+              detail: `${inconclusiveStreak} consecutive attempts failed for environmental reasons: ${verification.failedScenarios.join(", ")}`,
+            });
+            await this.store.stopForInput(cardId, "VERIFY", "retry_limit_exceeded", verifyRunId);
+            await this.projection.enqueue(cardId);
+            return { state: "NEEDS_INPUT", rounds: round, mrUrl: null, stopReason: "retry_limit_exceeded" };
+          }
+          // A new round number, because one phase run per (card, phase, round)
+          // is what makes a resumed card idempotent. `spent` stays put: the
+          // number counts what the code was judged on, and this attempt was
+          // not.
+          round += 1;
+          verifyRunId = this.createRunId(cardId, "VERIFY", round);
+          verification = await this.runVerification(
+            cardId,
+            round,
+            verifyRunId,
+            code.sessionId,
+            definitionOfDone,
+          );
+          await this.projection.enqueue(cardId);
+        }
+        inconclusiveStreak = 0;
+
         if (verification.verdict === "accepted" && verification.failedScenarios.length === 0) {
           mergeRunId = this.createRunId(cardId, "MERGE", 1);
           totalRounds = round;
@@ -260,26 +343,6 @@ export class SingleStoryWorker {
           break;
         }
 
-        if (verification.verdict === "inconclusive") {
-          // The round was lost to the environment, not to the code: it says
-          // nothing about convergence, so it costs no budget. Two in a row is
-          // the pipeline's own failure and belongs to a person.
-          inconclusiveStreak += 1;
-          if (inconclusiveStreak >= this.maxInconclusiveRounds) {
-            await this.friction?.record({
-              cardId,
-              runId: verifyRunId,
-              kind: "verification_inconclusive",
-              detail: `${inconclusiveStreak} consecutive rounds failed for environmental reasons: ${verification.failedScenarios.join(", ")}`,
-            });
-            await this.store.stopForInput(cardId, "VERIFY", "verify_loop_exceeded", verifyRunId);
-            await this.projection.enqueue(cardId);
-            return { state: "NEEDS_INPUT", rounds: round, mrUrl: null, stopReason: "verify_loop_exceeded" };
-          }
-          await this.store.transition(cardId, "VERIFY", "CODE", "system", verifyRunId);
-          continue;
-        }
-        inconclusiveStreak = 0;
         spent += 1;
         failureHistory.push([
           ...new Set(verification.codeFailedScenarios ?? verification.failedScenarios),
@@ -305,25 +368,130 @@ export class SingleStoryWorker {
     const merge = await this.runPhase(cardId, "MERGE", 1, mergeRunId);
     const mergeArtifact = artifact(merge, "delivery-report");
     story = await this.store.getStory(cardId);
+    let mrUrl: string | null;
     if (this.integration && story.epicId) {
-      // A Story inside an Epic is delivered by landing on the Epic head, not by
-      // publishing its own branch. Anything but a clean merge is the Story's
-      // problem and it has already been sent back to CODE.
-      const integrated = await this.integration.integrate(cardId, mergeRunId);
+      // A Story inside an Epic is delivered by landing on the Epic head. Its
+      // draft review request is opened from inside the merge, between the
+      // rebase and the fast-forward, which is the only moment it has a diff.
+      // Anything but a clean merge is the Story's problem and it has already
+      // been sent back to CODE.
+      const snapshot = story;
+      const integrated = await this.integration.integrate(
+        cardId,
+        mergeRunId,
+        () => this.delivery.deliver({ story: snapshot, mergeArtifact }),
+      );
       if (integrated.kind !== "merged") {
         await this.projection.enqueue(cardId);
         return { state: "CODE", rounds: totalRounds, mrUrl: null, stopReason: null };
       }
+      mrUrl = integrated.mrUrl ?? null;
+    } else {
+      mrUrl = (await this.delivery.deliver({ story, mergeArtifact })).mrUrl;
     }
-    const delivered = await this.delivery.deliver({ story, mergeArtifact });
-    await this.store.markDelivered(cardId, mergeRunId, delivered.mrUrl);
+    await this.store.markDelivered(cardId, mergeRunId, mrUrl);
     await this.projection.enqueue(cardId);
     return {
       state: "DELIVERED",
       rounds: totalRounds,
-      mrUrl: delivered.mrUrl,
+      mrUrl,
       stopReason: null,
     };
+  }
+
+  /**
+   * A delivered Story the regression sweep attributed a failure to. The loop
+   * is the inner loop with a different writing phase: fix on the Story branch,
+   * re-verify only the scenarios the cards name, land on the Epic head again.
+   * Entries are counted, not rounds: the ceiling is on how often the same Story
+   * may be dragged back, the rounds inside one entry are bounded as usual.
+   */
+  private async regressionFixLoop(cardId: string, story: StorySnapshot): Promise<StoryWorkerResult> {
+    const cards = (await this.store.buildPhaseInput(cardId, "REGRESSION_FIX", story.innerLoopRounds + 1)).regressions ?? [];
+    if (cards.length === 0) {
+      // Resolved elsewhere or retracted; a Story parked here with nothing to
+      // fix would never leave.
+      const runId = this.createRunId(cardId, "REGRESSION_FIX", story.innerLoopRounds);
+      await this.store.transition(cardId, "REGRESSION_FIX", "DELIVERED", "system", runId);
+      await this.projection.enqueue(cardId);
+      return { state: "DELIVERED", rounds: story.innerLoopRounds, mrUrl: story.mrUrl, stopReason: null };
+    }
+    if (!this.integration || !story.epicId) {
+      throw new Error(`Story ${cardId} cannot land a regression fix without its Epic integration`);
+    }
+    if (story.regressionReopens >= this.maxRegressionReopens) {
+      const runId = this.createRunId(cardId, "REGRESSION_FIX", story.innerLoopRounds);
+      await this.store.stopForInput(cardId, "REGRESSION_FIX", "retry_limit_exceeded", runId);
+      await this.projection.enqueue(cardId);
+      return {
+        state: "NEEDS_INPUT",
+        rounds: story.innerLoopRounds,
+        mrUrl: story.mrUrl,
+        stopReason: null,
+        stopReport: `${cardId} stopped: retry.maxRegressionReopens
+
+The regression loop reopened this Story ${story.regressionReopens} times; the cards still open: ${cards.map((card) => card.scenarioId).join(", ")}
+`,
+      };
+    }
+    await this.store.countRegressionReopen(cardId);
+    const fullDoD = await this.store.getDefinitionOfDone(cardId);
+    const wanted = new Set(cards.map((card) => card.scenarioId));
+    const definitionOfDone: DefinitionOfDone = {
+      ...fullDoD,
+      scenarios: fullDoD.scenarios.filter((scenario) => wanted.has(scenario.id)),
+    };
+
+    let round = story.innerLoopRounds;
+    const failureHistory: string[][] = [];
+    let inconclusiveStreak = 0;
+    for (let spent = 0; spent < this.maxInnerLoopRounds;) {
+      const overspent = await this.#costCeilingStop(cardId, "REGRESSION_FIX", round);
+      if (overspent) return overspent;
+      round += 1;
+      const fixRunId = this.createRunId(cardId, "REGRESSION_FIX", round);
+      const fix = await this.runPhase(cardId, "REGRESSION_FIX", round, fixRunId);
+      artifact(fix, "implementation");
+      const verifyRunId = this.createRunId(cardId, "VERIFY", round);
+      const verification = await this.runVerification(cardId, round, verifyRunId, fix.sessionId, definitionOfDone);
+      await this.projection.enqueue(cardId);
+
+      if (verification.verdict === "inconclusive") {
+        inconclusiveStreak += 1;
+        if (inconclusiveStreak >= this.maxInconclusiveRounds) {
+          await this.store.stopForInput(cardId, "REGRESSION_FIX", "verify_loop_exceeded", verifyRunId);
+          await this.projection.enqueue(cardId);
+          return { state: "NEEDS_INPUT", rounds: round, mrUrl: story.mrUrl, stopReason: "verify_loop_exceeded" };
+        }
+        continue;
+      }
+      inconclusiveStreak = 0;
+      spent += 1;
+      const failed = [...new Set(verification.codeFailedScenarios ?? verification.failedScenarios)].toSorted();
+      if (verification.verdict === "accepted" && failed.length === 0) {
+        const landed = await this.integration.integrate(cardId, fixRunId);
+        if (landed.kind === "merged") {
+          const openCards = await this.store.buildPhaseInput(cardId, "REGRESSION_FIX", round);
+          for (const card of openCards.regressions ?? []) {
+            await this.store.resolveRegressionCard(card.scenarioId, card.signature, cardId);
+          }
+          await this.store.transition(cardId, "REGRESSION_FIX", "DELIVERED", "system", fixRunId);
+          await this.projection.enqueue(cardId);
+          return { state: "DELIVERED", rounds: round, mrUrl: story.mrUrl, stopReason: null };
+        }
+        // The head refused the fix; the reason is already recorded as this
+        // round's task and the loop tries again from the tree as it stands.
+        // Every card is still open, so that is the round's failed set.
+        failureHistory.push([...wanted].toSorted());
+        continue;
+      }
+      failureHistory.push(failed);
+      if (!classifyConvergence(failureHistory).mayContinue) break;
+    }
+    const stopRunId = this.createRunId(cardId, "VERIFY", round);
+    await this.store.stopForInput(cardId, "REGRESSION_FIX", "verify_loop_exceeded", stopRunId);
+    await this.projection.enqueue(cardId);
+    return { state: "NEEDS_INPUT", rounds: round, mrUrl: story.mrUrl, stopReason: "verify_loop_exceeded" };
   }
 
   /** Runs the DESIGN phase and freezes its DoD. A persisted result frozen

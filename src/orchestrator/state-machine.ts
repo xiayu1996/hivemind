@@ -42,6 +42,8 @@ export const EPIC_TRANSITIONS: Record<EpicState, readonly EpicState[]> = {
   DECOMPOSE: ["PLAN_APPROVAL", "BLOCKED", "FAILED"],
   PLAN_APPROVAL: ["EXECUTING", "DECOMPOSE", "FAILED"],
   EXECUTING: ["EPIC_ACCEPT", "BLOCKED", "FAILED"],
+  // EXECUTING: a review request closed without merging reopens execution so a
+  // fresh one can be raised.
   EPIC_ACCEPT: ["DONE", "EXECUTING", "FAILED"],
   BLOCKED: ["INTAKE", "DECOMPOSE", "EXECUTING", "FAILED"],
   DONE: [],
@@ -51,9 +53,11 @@ export const EPIC_TRANSITIONS: Record<EpicState, readonly EpicState[]> = {
 export const STORY_TRANSITIONS: Record<StoryState, readonly StoryState[]> = {
   QUEUED: ["DESIGN", "NEEDS_INPUT", "FAILED"],
   DESIGN: ["CODE", "NEEDS_INPUT", "FAILED"],
-  CODE: ["VERIFY", "NEEDS_INPUT", "FAILED"],
+  // DESIGN from CODE and MERGE: a frozen DoD the current contract rejects
+  // sends the Story back to be designed again instead of parking it.
+  CODE: ["VERIFY", "DESIGN", "NEEDS_INPUT", "FAILED"],
   VERIFY: ["CODE", "MERGE", "NEEDS_INPUT", "FAILED"],
-  MERGE: ["DELIVERED", "CODE", "NEEDS_INPUT", "FAILED"],
+  MERGE: ["DELIVERED", "CODE", "DESIGN", "NEEDS_INPUT", "FAILED"],
   DELIVERED: ["REGRESSION_FIX"],
   REGRESSION_FIX: ["DELIVERED", "NEEDS_INPUT", "FAILED"],
   // A Story can stop before its pipeline starts (the worker died in QUEUED);

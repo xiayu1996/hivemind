@@ -40,7 +40,7 @@ describe("EpicIntegrator", () => {
 
   it("merges the Story and records that it is now part of the Epic head", async () => {
     await seedStory("S-M2-01", ["src/a"], "MERGE");
-    const flow = { merge: vi.fn(async () => ({ kind: "merged" as const, integrationBranch: "epic/M2", scenarioIds: ["S-M2-01-a"] })) };
+    const flow = { merge: vi.fn(async () => ({ kind: "merged" as const, integrationBranch: "epic/M2", scenarioIds: ["S-M2-01-a"], mrUrl: null })) };
 
     await expect(new EpicIntegrator(client, store, flow).integrate("S-M2-01", "merge-run"))
       .resolves.toMatchObject({ kind: "merged" });
@@ -53,7 +53,7 @@ describe("EpicIntegrator", () => {
   it("hands the Stories already on the Epic head to the merge flow so the subset can widen", async () => {
     await seedStory("S-M2-01", ["src/a"], "DELIVERED", true);
     await seedStory("S-M2-02", ["src/b"], "MERGE");
-    const flow = { merge: vi.fn(async () => ({ kind: "merged" as const, integrationBranch: "epic/M2", scenarioIds: [] })) };
+    const flow = { merge: vi.fn(async () => ({ kind: "merged" as const, integrationBranch: "epic/M2", scenarioIds: [], mrUrl: null })) };
 
     await new EpicIntegrator(client, store, flow).integrate("S-M2-02", "merge-run");
 
@@ -121,7 +121,7 @@ describe("EpicIntegrator branch bookkeeping", () => {
       "INSERT INTO execution_dispatches (story_id, epic_id, state, created_at) VALUES ('S-M2-01','M2','dispatched',1)",
       "INSERT INTO story_specs (spec_id, story_id, seq, text, status) VALUES ('S-M2-01-a','S-M2-01',1,'t','pending')",
     ], "write");
-    const flow = { merge: vi.fn(async () => ({ kind: "merged" as const, integrationBranch: "epic/M2", scenarioIds: ["S-M2-01-a"] })) };
+    const flow = { merge: vi.fn(async () => ({ kind: "merged" as const, integrationBranch: "epic/M2", scenarioIds: ["S-M2-01-a"], mrUrl: null })) };
 
     await new EpicIntegrator(client, store, flow).integrate("S-M2-01", "merge-run");
 
@@ -145,7 +145,7 @@ describe("EpicIntegrator regression trigger", () => {
       `INSERT INTO scenario_registry (scenario_id, story_id, epic_id, pool, last_verified_at, created_at, updated_at)
          VALUES ('S-M2-00-a','S-M2-01','M2','epic',50,1,1)`,
     ], "write");
-    const flow = { merge: vi.fn(async () => ({ kind: "merged" as const, integrationBranch: "epic/M2", scenarioIds: ["S-M2-01-a"] })) };
+    const flow = { merge: vi.fn(async () => ({ kind: "merged" as const, integrationBranch: "epic/M2", scenarioIds: ["S-M2-01-a"], mrUrl: null })) };
 
     await new EpicIntegrator(client, store, flow).integrate("S-M2-01", "merge-run");
 

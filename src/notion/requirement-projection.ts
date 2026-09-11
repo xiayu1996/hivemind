@@ -3,8 +3,10 @@ import type { RequirementState } from "../orchestrator/requirement-machine.js";
 import type {
   AcceptanceItem,
   ClarifyRound,
+  LinkedEpicProgress,
   PrdRevision,
   RequirementSnapshot,
+  RequirementStop,
   RequirementStore,
 } from "../orchestrator/requirement-store.js";
 import { questionText } from "../orchestrator/human-question.js";
@@ -48,7 +50,39 @@ export interface RequirementPageInput {
   clarify: readonly ClarifyRound[];
   prd: PrdRevision | null;
   acceptance: readonly AcceptanceItem[];
-  linkedEpics: readonly { epicId: string; state: string }[];
+  linkedEpics: readonly LinkedEpicProgress[];
+  /** The last stop, shown only while `requirement.stopReason` is still set. */
+  stop?: RequirementStop | null;
+}
+
+const EPIC_STATE_LABELS: Record<string, string> = {
+  INTAKE: "待开始",
+  DECOMPOSE: "拆解中",
+  PLAN_APPROVAL: "方案待确认",
+  EXECUTING: "开发中",
+  EPIC_ACCEPT: "验收中",
+  DONE: "已完成",
+  BLOCKED: "受阻",
+  FAILED: "失败",
+};
+
+function epicProgressLine(epics: readonly LinkedEpicProgress[]): string {
+  if (epics.length === 0) return "关联 Epic: 暂无";
+  const parts = epics.map((epic) => {
+    const label = EPIC_STATE_LABELS[epic.state] ?? epic.state;
+    const stories = epic.storiesTotal > 0 ? `，Story ${epic.storiesDelivered}/${epic.storiesTotal} 已交付` : "";
+    return `${epic.epicId}（${label}${stories}）`;
+  });
+  return `关联 Epic: ${parts.join("、")}`;
+}
+
+/** What the page says while the system waits on a person, worded like the
+ * Story page's own waiting section so both read the same way. */
+export function requirementQuestionsText(stop: RequirementStop): string {
+  return [
+    `系统已停下等你回答：${stop.detail}`,
+    "如何回答：直接在本页评论区留言，系统读到你的回复后会从停下的地方继续。",
+  ].join("\n\n");
 }
 
 interface PrdBody {
@@ -65,9 +99,10 @@ export function buildRequirementPage(input: RequirementPageInput): DesiredRequir
   const metadata = [
     `状态: ${requirementStatusFor(requirement.state, requirement.clarifyRounds)}`,
     `澄清轮次: ${requirement.clarifyRounds}`,
-    `关联 Epic: ${input.linkedEpics.length === 0 ? "暂无" : input.linkedEpics.map((epic) => epic.epicId).join(", ")}`,
+    epicProgressLine(input.linkedEpics),
     ...(requirement.stopReason ? [`等待人回答: ${requirement.stopReason}`] : []),
   ].join(" · ");
+  const stop = requirement.stopReason ? input.stop ?? null : null;
 
   const clarify: string[] = [];
   for (const round of input.clarify) {
@@ -97,6 +132,9 @@ export function buildRequirementPage(input: RequirementPageInput): DesiredRequir
     prd,
     prdFrozen: input.prd?.status === "confirmed",
     acceptance: input.acceptance.map((item) => item.text),
+    // The heading exists on every requirement page, so the section says that
+    // nothing is waiting rather than standing empty and reading as unfinished.
+    questions: stop ? requirementQuestionsText(stop) : "当前没有等你回答的问题。",
   };
 }
 
@@ -113,13 +151,14 @@ export class RequirementPageProjector implements RequirementPagePublisher {
 
   async publish(requirementId: string): Promise<void> {
     const requirement = await this.store.getRequirement(requirementId);
-    const [clarify, prd, acceptance, linkedEpics] = await Promise.all([
+    const [clarify, prd, acceptance, linkedEpics, stop] = await Promise.all([
       this.store.clarifyHistory(requirementId),
       this.store.getPrd(requirementId),
       this.store.acceptanceItems(requirementId),
       this.store.linkedEpicStates(requirementId),
+      requirement.stopReason ? this.store.latestStop(requirementId) : Promise.resolve(null),
     ]);
-    const desired = buildRequirementPage({ requirement, clarify, prd, acceptance, linkedEpics });
+    const desired = buildRequirementPage({ requirement, clarify, prd, acceptance, linkedEpics, stop });
     await this.outbox.enqueue({
       cardId: requirementId,
       priority: 1,

@@ -12,13 +12,26 @@ export interface MergeRequestResult {
   provider: "github" | "gitlab";
 }
 
-export interface MRPort {
-  create(input: MergeRequestInput): Promise<MergeRequestResult>;
+export interface OpenMergeRequestQuery {
+  repository: string;
+  sourceBranch: string;
+  targetBranch: string;
 }
 
-/** Answers whether the review request at a URL has landed on its target. */
+export interface MRPort {
+  create(input: MergeRequestInput): Promise<MergeRequestResult>;
+  /** The URL of an open review request between the two branches, or null; a
+   * Story that comes back after its draft was opened reuses it instead of
+   * tripping the platform's "already exists" refusal. */
+  findOpen(query: OpenMergeRequestQuery): Promise<string | null>;
+}
+
+export type MergeRequestState = "open" | "merged" | "closed";
+
+/** Reads where the review request at a URL stands: still open, landed on its
+ * target, or closed without landing. */
 export interface MergeRequestStatePort {
-  isMerged(url: string): Promise<boolean>;
+  state(url: string): Promise<MergeRequestState>;
 }
 
 export interface CliResult {

@@ -161,4 +161,30 @@ describe("NotionRequirementInputSync", () => {
       await expect(checklist.settle(REQUIREMENT_ID)).resolves.toEqual({ kind: "accepted" });
     });
   });
+
+  describe("while the requirement is stopped for a person", () => {
+    beforeEach(async () => {
+      // The store clock is past 1_000 here; the stop lands around 1_010.
+      await store.stopForHumanInput(REQUIREMENT_ID, "PRD_CONFIRM", "run-stop", "PRD was unusable: no scenarios");
+    });
+
+    it("stays stopped while nobody has written anything since the stop", async () => {
+      comment("c-old", "先做手机端", 500);
+      await expect(sync.pollComments(REQUIREMENT_ID)).resolves.toMatchObject({ resumed: false });
+      await expect(store.getRequirement(REQUIREMENT_ID)).resolves.toMatchObject({ stopReason: "blocking_question" });
+    });
+
+    it("resumes on the first human comment after the stop and files it where the loop reads", async () => {
+      comment("c-answer", "场景就按澄清里说的两条来", 5_000);
+      await expect(sync.pollComments(REQUIREMENT_ID)).resolves.toMatchObject({ resumed: true });
+      await expect(store.getRequirement(REQUIREMENT_ID)).resolves.toMatchObject({ stopReason: null, state: "PRD_CONFIRM" });
+      await expect(store.listActionable("PRD_CONFIRM")).resolves.toHaveLength(1);
+      const history = await store.clarifyHistory(REQUIREMENT_ID);
+      expect(history).toHaveLength(1);
+      expect(history[0]!.questions[0]!.question).toContain("PRD was unusable: no scenarios");
+      expect(history[0]!.answers).toEqual(["person: 场景就按澄清里说的两条来"]);
+      // The same comment does not resume it twice, nor turn into PRD feedback.
+      await expect(sync.pollComments(REQUIREMENT_ID)).resolves.toMatchObject({ resumed: false, revisionRequested: false });
+    });
+  });
 });
