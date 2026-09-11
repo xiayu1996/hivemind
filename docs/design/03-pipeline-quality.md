@@ -389,4 +389,7 @@ Story 页「待人回答」区列出已应用的回答：谁、何时、针对�
 - **VERIFY 可恢复**：进程死在 VERIFY 里（provider TRANSPORT 故障、被杀）会把卡留在 VERIFY，而这个状态没有任何 phase 能从它起跑——调度器照样派发，`run-story` 的状态守卫拒绝，卡被 park、Epic 被升级为 BLOCKED。改为 worker 进门就把 VERIFY 退回 CODE 并记 `verification_interrupted` friction；丢掉的那一轮没记 verdict，所以不计预算，已完成的 CODE 轮直接复用、只重跑验证，不再买一轮新的 CODE。
 - **网络抖动不吞周期**：周期开头的 Notion/远端步骤（intake、投影对账、拆解、Epic 维护）失败会中止整个周期，后面派卡、落分支、回归 sweep 全部不跑。改为这四步各自隔离：`classifyError` 判为 TRANSPORT 的按告警跳过本周期，其他错误照旧中止。
 - **重复归档不进死信**：对已归档的块再发 `archived: true`，Notion 回 400「Can't edit block that is archived」。目标状态已经达到，所以这条拒绝等于成功；不吞掉它，outbox 会把同一条投影重试到 dead，之后这张页面就再也不更新了。
+- **页面上不留系统标记**：Epic 页曾把重放键（`hivemind-plan:` / `hivemind-progress:`）当作一行正文打印，读页的人得跳过它。键改存 `epic_notion_sections`，下一次写页面时顺手删掉旧标记行；仍带标记行的页面照旧算已投影，不会重复追加。
+- **投影键跟着「页面长什么样」**：outbox 只按 payload 去重，于是改了措辞而事实没变时，线上每一页都还显示旧文案。键改为覆盖渲染后的行。
+- **受阻行说人话**：Epic 页原样打印事件日志里给运维看的理由（含 `verify_loop_exceeded` 这类枚举），而下面的 Story 行已经用中文说过一遍。有卡在等回答时，页面只说等谁；运维那句留在 payload 与日志里。
 
