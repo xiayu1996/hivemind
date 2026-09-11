@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { formatSnapshotAt, hasCompleteOverview, hasFreshSnapshot } from "./overview-client.js";
+import { formatSnapshotAt, hasCompleteOverview, hasFreshSnapshot, primarySections } from "./overview-client.js";
 
 describe("S-E3OVERVIEW-03-timestamp", () => {
   it("formats the completed overview snapshot in the browser's local time", () => {
     expect(formatSnapshotAt(new Date(2026, 2, 15, 12, 3).getTime()))
       .toBe("Overall status updated at 2026-03-15 12:03");
+  });
+});
+
+describe("S-E3OVERVIEW-03-performance", () => {
+  it("puts the answer and active-work regions in the first paint", () => {
+    expect(primarySections([
+      { title: "Waiting for your answer" },
+      { title: "Active work" },
+      { title: "Delivered today" },
+    ]).map((section) => section.title)).toEqual(["Waiting for your answer", "Active work"]);
   });
 });
 
