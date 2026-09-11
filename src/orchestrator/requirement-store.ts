@@ -565,6 +565,23 @@ export class RequirementStore {
    * making someone re-judge what they already approved teaches them to click
    * through the list without reading it.
    */
+  /**
+   * How many acceptance rounds have already been settled with gaps.
+   *
+   * Counted from the event the reopen writes, because that event and the
+   * reopen are one write. Counting the gap Epics instead made the number
+   * depend on a row this very settle had just inserted: a crash between
+   * creating the Epic and reopening the gaps came back as the next round and
+   * raised a second Epic for the same gaps.
+   */
+  async settledAcceptanceGapRounds(id: string): Promise<number> {
+    return Number((await this.client.execute({
+      sql: `SELECT COUNT(*) AS count FROM event_log
+             WHERE card_id = ? AND type = 'requirement.acceptance_gaps_reopened'`,
+      args: [id],
+    })).rows[0]?.count ?? 0);
+  }
+
   async reopenAcceptanceGaps(id: string, runId: string): Promise<number> {
     const time = this.now();
     const [update] = await this.client.batch([

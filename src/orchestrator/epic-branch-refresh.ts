@@ -14,7 +14,8 @@ export type FreshnessResult =
   | { epicId: string; outcome: "succeeded" | "skipped" }
   | { epicId: string; outcome: "failed"; reason: string };
 
-/** Refreshes only clean, active Epic worktrees from main and leaves main untouched. */
+/** Refreshes clean Epic worktrees from main, including those awaiting review,
+ * and leaves main untouched. */
 export class EpicBranchFreshness {
   private readonly git: GitCommandPort;
   private readonly intervalMs: number;
@@ -30,8 +31,16 @@ export class EpicBranchFreshness {
   }
 
   async tick(): Promise<FreshnessResult[]> {
+    // EPIC_ACCEPT as well as EXECUTING. An Epic waiting for a person to merge
+    // it is exactly when main keeps moving and nobody is rebasing: E1ACTION sat
+    // in review for a day, main took 28 commits, and the review request rotted
+    // into a conflict that no part of the system was watching. Dropping the
+    // branch the moment its review request opens abandons it in the window
+    // where it is most likely to go stale.
     const epics = (await this.client.execute(
-      "SELECT id, integration_branch FROM epics WHERE state = 'EXECUTING' AND integration_branch IS NOT NULL ORDER BY created_at, id",
+      `SELECT id, integration_branch FROM epics
+        WHERE state IN ('EXECUTING','EPIC_ACCEPT') AND integration_branch IS NOT NULL
+        ORDER BY created_at, id`,
     )).rows;
     const results: FreshnessResult[] = [];
     for (const epic of epics) results.push(await this.refresh(String(epic.id), String(epic.integration_branch)));
