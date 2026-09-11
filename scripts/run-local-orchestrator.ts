@@ -741,6 +741,13 @@ async function main(): Promise<void> {
       await step("projection reconciliation", reconcileProjections);
       await step("epic decomposition", decomposeWaitingEpic);
       await step("epic maintenance", maintainEpics);
+      // Before dispatch, not after. Called after, it saw the Stories this very
+      // cycle had just put in flight and gave way to them; and the cycle
+      // returns early when there is nothing to dispatch, which is exactly when
+      // the host is idle enough to sweep. Between the two the sweep was
+      // unreachable in both directions, which is why regression_runs was empty
+      // after six delivered Stories.
+      await step("regression sweep", regressionSweep);
 
       const rows = (await handle.client.execute({
         sql: `SELECT id, state, epic_id, repo, branch, target_branch, depends_on, predicted_footprint
@@ -827,7 +834,6 @@ async function main(): Promise<void> {
           .finally(() => inFlight.delete(cardId));
         inFlight.set(cardId, attempt);
       }
-      await regressionSweep();
     } finally {
       running = false;
     }
