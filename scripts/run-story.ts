@@ -335,13 +335,15 @@ async function main(): Promise<void> {
         ...(metered ? { spend: spendPort } : {}),
       },
     ).run(cardId);
-    // The scenarios a Story declares become the regression pools' problem the
-    // moment they exist, and everyone's problem once the Story is delivered.
+    // The scenarios a Story declares become its Epic's pool the moment they
+    // exist. They stay there: a delivered Story is on its Epic's integration
+    // branch, and only the Epic landing on the target branch makes them
+    // everyone's problem. EpicCompletion promotes them when it reads the
+    // merge.
     const registry = new ScenarioRegistry(handle.client);
     await registry.registerStory(cardId).catch((cause: unknown) => {
       console.warn(`scenario registration skipped: ${(cause as Error).message}`);
     });
-    if (result.state === "DELIVERED") await registry.promoteToMain(cardId);
     console.log(JSON.stringify(result));
   } finally {
     handle.close();

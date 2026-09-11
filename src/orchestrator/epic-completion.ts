@@ -52,6 +52,17 @@ export class EpicCompletion {
         if (await this.reopenExecution(epicId, mrUrl, reason)) outcomes.push({ epicId, kind: "review_closed", reason });
         continue;
       }
+      // The Epic landed on the target branch, so its scenarios are now
+      // everyone's to keep passing. This follows the merge rather than the
+      // business acceptance, and it is the only place a scenario enters the
+      // main pool: a Story reaching DELIVERED put its work on the Epic's
+      // integration branch, not on main, and promoting there left the main
+      // pool claiming to cover code that main did not have.
+      await this.client.execute({
+        sql: `UPDATE scenario_registry SET pool = 'main', updated_at = ?
+               WHERE epic_id = ? AND pool <> 'main'`,
+        args: [this.now(), epicId],
+      });
       const standalone = row.requirement_id === null;
       if (standalone && row.notion_status_shadow !== EPIC_BOARD_STATUS.done) {
         outcomes.push({ epicId, kind: "awaiting_acceptance" });

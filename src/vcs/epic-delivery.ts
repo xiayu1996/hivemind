@@ -8,7 +8,10 @@ export interface EpicMrDeliveryOptions {
   /** Branch the review request lands on and the base of the evidence log; defaults to main. */
   targetBranch?: string;
   /** Holds the review request while the Epic's scenarios carry open regression cards. */
-  regressionClean?: (epicId: string) => Promise<{ clean: boolean; reason?: string }>;
+  /** Judged against the revision the review request would propose, not against
+   * the Epic in the abstract: a sweep of an earlier head says the Epic used to
+   * integrate. */
+  regressionClean?: (epicId: string, revision: string) => Promise<{ clean: boolean; reason?: string }>;
   git?: GitCommandPort;
   now?: () => number;
 }
@@ -103,7 +106,9 @@ export class EpicMrDelivery {
       throw new Error(`Epic ${epicId} has Stories that are not delivered with verification summaries`);
     }
     if (this.options.regressionClean) {
-      const gate = await this.options.regressionClean(epicId);
+      const revision = (await this.git.run(this.options.worktreePath,
+        ["rev-parse", String(epic.integration_branch)])).trim();
+      const gate = await this.options.regressionClean(epicId, revision);
       if (!gate.clean) {
         return { kind: "waiting", reason: gate.reason ?? `Epic ${epicId} has open regression cards` };
       }

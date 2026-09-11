@@ -28,6 +28,12 @@ async function epicAwaitingReview(id: string, options: { requirementId?: string;
   });
 }
 
+async function poolOf(scenarioId: string): Promise<string> {
+  return String((await client.execute({
+    sql: "SELECT pool FROM scenario_registry WHERE scenario_id = ?", args: [scenarioId],
+  })).rows[0]?.pool);
+}
+
 async function stateOf(id: string): Promise<string> {
   return String((await client.execute({ sql: "SELECT state FROM epics WHERE id = ?", args: [id] })).rows[0]?.state);
 }
@@ -49,6 +55,22 @@ describe("EpicCompletion", () => {
     expect(await announcedStatuses("E1")).toEqual(["已完成"]);
     // A finished Epic is not looked at again.
     await expect(completion.tick()).resolves.toEqual([]);
+  });
+
+  it("moves the Epic's scenarios into the main pool when the merge is read, and not before", async () => {
+    await epicAwaitingReview("E1", { requirementId: "R-1" });
+    await client.batch([
+      "INSERT INTO stories (id, epic_id, notion_page_id, title, requirement, state, created_at, updated_at) VALUES ('S-E1-01', 'E1', 's-1', 'One', 'r', 'DELIVERED', 1, 1)",
+      "INSERT INTO scenario_registry (scenario_id, story_id, epic_id, pool, created_at, updated_at) VALUES ('S-E1-01-a', 'S-E1-01', 'E1', 'epic', 1, 1)",
+    ], "write");
+
+    const open = new EpicCompletion(client, { state: async () => "open" });
+    await open.tick();
+    expect(await poolOf("S-E1-01-a")).toBe("epic");
+
+    const merged = new EpicCompletion(client, { state: async () => "merged" }, () => 2_000);
+    await merged.tick();
+    expect(await poolOf("S-E1-01-a")).toBe("main");
   });
 
   it("waits while the review request is still open", async () => {

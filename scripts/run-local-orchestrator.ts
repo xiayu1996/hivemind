@@ -628,7 +628,7 @@ async function main(): Promise<void> {
       delivered = await new EpicMrDelivery(handle.client, await mergeRequests(), {
         worktreePath,
         targetBranch: targetBranchDefault,
-        regressionClean: (id) => epicRegressionClean(handle.client, id),
+        regressionClean: (id, revision) => epicRegressionClean(handle.client, id, revision),
       }).deliver(epicId);
     } catch (error) {
       await reportP0(`Epic ${epicId} review request could not be opened`, error);
