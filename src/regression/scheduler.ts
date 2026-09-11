@@ -23,15 +23,29 @@ export interface RegressionScheduleInput {
   policy: RegressionSchedulePolicy;
 }
 
-function stale(
+function due(
   scenarios: readonly RegisteredScenario[],
   now: number,
   intervalMs: number,
-  batchSize: number,
-): string[] {
+): RegisteredScenario[] {
+  // A scenario nobody has verified is as stale as it gets.
+  return scenarios.filter((scenario) =>
+    scenario.lastVerifiedAt === null || now - scenario.lastVerifiedAt >= intervalMs);
+}
+
+/**
+ * One Epic per batch. Every scenario in a sweep runs in one worktree at one
+ * revision, so a batch drawn across two Epics would judge the second Epic's
+ * scenarios against the first Epic's code: they fail for being absent, and the
+ * runs are recorded against a revision their own Epic never had, so the gate
+ * that waits for them is never satisfied. The batch follows whichever Epic owns
+ * the stalest scenario.
+ */
+function firstEpicBatch(scenarios: readonly RegisteredScenario[], batchSize: number): string[] {
+  const leader = scenarios[0];
+  if (!leader) return [];
   return scenarios
-    // A scenario nobody has verified is as stale as it gets.
-    .filter((scenario) => scenario.lastVerifiedAt === null || now - scenario.lastVerifiedAt >= intervalMs)
+    .filter((scenario) => scenario.epicId === leader.epicId)
     .slice(0, batchSize)
     .map((scenario) => scenario.scenarioId);
 }
@@ -50,9 +64,16 @@ export function planRegressionSweep(input: RegressionScheduleInput): RegressionS
   }
   if (input.foregroundBusy) return null;
 
-  const epic = stale(input.epicScenarios, input.now, input.policy.epicPoolIntervalMs, input.policy.batchSize);
+  const epic = firstEpicBatch(
+    due(input.epicScenarios, input.now, input.policy.epicPoolIntervalMs),
+    input.policy.batchSize,
+  );
   if (epic.length > 0) return { pool: "epic", scenarioIds: epic, reason: "idle" };
 
-  const main = stale(input.mainScenarios, input.now, input.policy.mainPoolIntervalMs, input.policy.batchSize);
+  // The main pool is one tree at one revision by definition, so it needs no
+  // such grouping.
+  const main = due(input.mainScenarios, input.now, input.policy.mainPoolIntervalMs)
+    .slice(0, input.policy.batchSize)
+    .map((scenario) => scenario.scenarioId);
   return main.length > 0 ? { pool: "main", scenarioIds: main, reason: "idle" } : null;
 }

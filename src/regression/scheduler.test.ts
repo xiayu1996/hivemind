@@ -93,3 +93,40 @@ describe("planRegressionSweep", () => {
     })).toBeNull();
   });
 });
+
+describe("one Epic per sweep", () => {
+  it("never mixes two Epics into one batch, whatever the batch size allows", () => {
+    // Every scenario in a sweep runs in one worktree at one revision. A mixed
+    // batch judged the second Epic's scenarios against the first Epic's code
+    // and recorded the runs against a revision their Epic never had, so the
+    // gate waiting for them could not be satisfied.
+    const plan = planRegressionSweep({
+      now: 10_000,
+      foregroundBusy: false,
+      epicScenarios: [
+        { scenarioId: "S-A-01-a", storyId: "S-A-01", epicId: "EA", pool: "epic", lastVerifiedAt: null },
+        { scenarioId: "S-A-01-b", storyId: "S-A-01", epicId: "EA", pool: "epic", lastVerifiedAt: null },
+        { scenarioId: "S-B-01-a", storyId: "S-B-01", epicId: "EB", pool: "epic", lastVerifiedAt: null },
+      ],
+      mainScenarios: [],
+      policy: { epicPoolIntervalMs: 1_000, mainPoolIntervalMs: 1_000, batchSize: 5 },
+    });
+
+    expect(plan).toMatchObject({ pool: "epic", scenarioIds: ["S-A-01-a", "S-A-01-b"] });
+  });
+
+  it("moves to the next Epic once the first one has been swept", () => {
+    const plan = planRegressionSweep({
+      now: 10_000,
+      foregroundBusy: false,
+      epicScenarios: [
+        { scenarioId: "S-B-01-a", storyId: "S-B-01", epicId: "EB", pool: "epic", lastVerifiedAt: null },
+        { scenarioId: "S-A-01-a", storyId: "S-A-01", epicId: "EA", pool: "epic", lastVerifiedAt: 9_900 },
+      ],
+      mainScenarios: [],
+      policy: { epicPoolIntervalMs: 1_000, mainPoolIntervalMs: 1_000, batchSize: 5 },
+    });
+
+    expect(plan).toMatchObject({ scenarioIds: ["S-B-01-a"] });
+  });
+});
