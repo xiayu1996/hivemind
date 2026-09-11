@@ -54,6 +54,12 @@ describe("NotionEpicPlanDelivery", () => {
   afterEach(() => client.close());
 
   describe("present_epic_plan", () => {
+    beforeEach(async () => {
+      await client.execute(
+        "INSERT INTO epics (id, notion_page_id, title, state, created_at, updated_at) VALUES ('M2','epic-page','Delivery','PLAN_APPROVAL',1,1)",
+      );
+    });
+
     it("puts the decomposition on the Epic page for a human to read", async () => {
       const delivery = new NotionEpicPlanDelivery(gateway(), client, "stories-ds");
 
@@ -65,8 +71,16 @@ describe("NotionEpicPlanDelivery", () => {
       expect(text).toContain("Customers see one review request per initiative.");
       expect(text).toContain("S-M2-01");
       expect(text).toContain("S-M2-02");
-      // The marker is what makes a replay a no-op rather than a duplicate plan.
-      expect(text).toContain(`hivemind-plan:${"a".repeat(64)}`);
+      // The replay key is kept off the page a person reads.
+      expect(text).not.toContain("hivemind-plan:");
+      const applied = await client.execute("SELECT payload_hash FROM epic_notion_sections WHERE epic_id = 'M2' AND section = 'plan'");
+      expect(applied.rows[0]?.payload_hash).toBe("a".repeat(64));
+    });
+
+    it("recognises the plan it delivered and does not post it twice", async () => {
+      const delivery = new NotionEpicPlanDelivery(gateway(), client, "stories-ds");
+      await delivery.send(record("present_epic_plan", PLAN));
+      await expect(delivery.isApplied(record("present_epic_plan", PLAN))).resolves.toBe(true);
     });
 
     it("carries the split recommendation when the decomposition made one", async () => {
@@ -75,7 +89,7 @@ describe("NotionEpicPlanDelivery", () => {
       expect(JSON.stringify(requests.at(-1)?.body)).toContain("考虑拆分 Epic");
     });
 
-    it("recognises a plan it already delivered and does not post it twice", async () => {
+    it("recognises a plan an older projection marked on the page itself", async () => {
       children = [{
         id: "block-1",
         type: "paragraph",
@@ -256,7 +270,9 @@ describe("NotionEpicPlanDelivery", () => {
       expect(body).toContain("进展");
       expect(body).toContain("S-M2-01 Split — 已交付，MR https://example.test/pull/20");
       expect(body).toContain("S-M2-02 Approve — 开发中");
-      expect(body).toContain("hivemind-progress:new");
+      expect(body).not.toContain("hivemind-progress:");
+      const applied = await client.execute("SELECT payload_hash FROM epic_notion_sections WHERE epic_id = 'M2' AND section = 'progress'");
+      expect(applied.rows[0]?.payload_hash).toBe("new");
       expect(body).not.toContain("goal");
       const row = (await client.execute("SELECT notion_status_shadow FROM epics WHERE id = 'M2'")).rows[0];
       expect(row?.notion_status_shadow).toBe("验收中");

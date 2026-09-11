@@ -82,6 +82,13 @@ export const epics = sqliteTable("epics", {
   updatedAt: ms("updated_at").notNull(),
 });
 
+export const epicNotionSections = sqliteTable("epic_notion_sections", {
+  epicId: text("epic_id").notNull(),
+  section: text("section").notNull(),
+  payloadHash: text("payload_hash").notNull(),
+  updatedAt: ms("updated_at").notNull(),
+}, (t) => [primaryKey({ columns: [t.epicId, t.section] })]);
+
 export const stories = sqliteTable("stories", {
   id: text("id").primaryKey(),
   epicId: text("epic_id"),

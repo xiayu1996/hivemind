@@ -111,6 +111,17 @@ CREATE TABLE IF NOT EXISTS epics (
   updated_at        INTEGER NOT NULL
 );
 
+-- What the Epic page already shows, per section. It used to be a marker line
+-- printed on the page itself, which every reader had to read past; the page is
+-- for a person, so the replay key lives here instead.
+CREATE TABLE IF NOT EXISTS epic_notion_sections (
+  epic_id      TEXT NOT NULL REFERENCES epics(id) ON DELETE CASCADE,
+  section      TEXT NOT NULL CHECK (section IN ('plan','progress')),
+  payload_hash TEXT NOT NULL,
+  updated_at   INTEGER NOT NULL,
+  PRIMARY KEY (epic_id, section)
+);
+
 CREATE TABLE IF NOT EXISTS stories (
   id                TEXT PRIMARY KEY,
   epic_id           TEXT REFERENCES epics(id) ON DELETE CASCADE,

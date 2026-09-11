@@ -52,8 +52,10 @@ export const EPIC_OUTBOX_OPERATIONS = [
   "present_epic_plan", "create_story_page", SYNC_EPIC_STATUS, COMMENT_EPIC_PAGE, SYNC_EPIC_PAGE,
 ] as const;
 
-const MARKER_PREFIX = "hivemind-plan:";
-const PROGRESS_MARKER_PREFIX = "hivemind-progress:";
+// Older projections printed the replay key as a line on the page. The key
+// lives in `epic_notion_sections` now; these prefixes are only how such a
+// line is recognised so it can be removed when the page is next written.
+const LEGACY_MARKER_PREFIXES = ["hivemind-plan:", "hivemind-progress:"] as const;
 
 function encoded(id: string): string {
   return encodeURIComponent(id);
@@ -96,13 +98,14 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
 
   async isApplied(record: NotionOutboxRecord): Promise<boolean> {
     if (record.operation === "present_epic_plan") {
-      return this.planMarkerPresent(record.target, record.payloadHash);
+      const payload = planSchema.parse(record.payload);
+      return this.sectionApplied(payload.epicId, "plan", record.target, record.payloadHash);
     }
     if (record.operation === SYNC_EPIC_STATUS) return this.statusApplied(statusSchema.parse(record.payload));
     if (record.operation === SYNC_EPIC_PAGE) {
       const payload = pageSchema.parse(record.payload);
       const pageId = String((await this.epicRow(payload.epicId)).notion_page_id);
-      return this.markerPresent(pageId, `${PROGRESS_MARKER_PREFIX}${record.payloadHash}`);
+      return this.sectionApplied(payload.epicId, "progress", pageId, record.payloadHash);
     }
     if (record.operation === COMMENT_EPIC_PAGE) return this.commentPresent(commentSchema.parse(record.payload));
     if (record.operation === "create_story_page") {
@@ -147,7 +150,14 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
     });
     if (!humanWins) await this.rememberStatus(payload.epicId, payload.status);
 
-    for (const blockId of await this.progressSectionBlocks(pageId)) {
+    const stale = await this.progressSectionBlocks(pageId);
+    // A page written by an older projection still shows its replay key as a
+    // line of text, and the plan's key sits outside the progress section. This
+    // is the write that takes both away.
+    for (const blockId of await this.legacyMarkerBlocks(pageId)) {
+      if (!stale.includes(blockId)) stale.push(blockId);
+    }
+    for (const blockId of stale) {
       await this.gateway.request({ method: "DELETE", path: `/v1/blocks/${encoded(blockId)}`, priority: "projection" });
     }
     const progress = renderEpicProgress(payload);
@@ -160,10 +170,16 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
           heading(pageText.heading),
           ...progress.lead.map((line) => paragraph(line)),
           ...progress.stories.map((line) => bullet(line)),
-          paragraph(`${PROGRESS_MARKER_PREFIX}${payloadHash}`),
         ],
       },
     });
+    await this.rememberSection(payload.epicId, "progress", payloadHash);
+  }
+
+  private async legacyMarkerBlocks(pageId: string): Promise<string[]> {
+    return (await this.children(pageId))
+      .filter((block) => LEGACY_MARKER_PREFIXES.some((prefix) => plainText(block.paragraph).startsWith(prefix)))
+      .map((block) => String(block.id));
   }
 
   /** The progress heading and every block after it up to the next heading. */
@@ -202,8 +218,37 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
     return blocks;
   }
 
-  private async markerPresent(pageId: string, marker: string): Promise<boolean> {
-    return (await this.children(pageId)).some((block) => plainText(block.paragraph) === marker);
+  /**
+   * Whether the page already shows this payload. A page written before the key
+   * moved into the database still carries its marker line, so that counts too
+   * and the section is not appended a second time.
+   */
+  private async sectionApplied(
+    epicId: string,
+    section: "plan" | "progress",
+    pageId: string,
+    payloadHash: string,
+  ): Promise<boolean> {
+    const row = (await this.client.execute({
+      sql: "SELECT payload_hash FROM epic_notion_sections WHERE epic_id = ? AND section = ?",
+      args: [epicId, section],
+    })).rows[0];
+    if (row && String(row.payload_hash) === payloadHash) return true;
+    const legacy = new Set(LEGACY_MARKER_PREFIXES.map((prefix) => `${prefix}${payloadHash}`));
+    const present = (await this.children(pageId))
+      .some((block) => legacy.has(plainText(block.paragraph)));
+    if (present) await this.rememberSection(epicId, section, payloadHash);
+    return present;
+  }
+
+  private async rememberSection(epicId: string, section: "plan" | "progress", payloadHash: string): Promise<void> {
+    await this.client.execute({
+      sql: `INSERT INTO epic_notion_sections (epic_id, section, payload_hash, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(epic_id, section) DO UPDATE SET
+              payload_hash = excluded.payload_hash, updated_at = excluded.updated_at`,
+      args: [epicId, section, payloadHash, this.now()],
+    });
   }
 
   /** The comment's own text is the replay marker: the page either carries it or it does not. */
@@ -304,9 +349,6 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
       paragraph(plan.businessGoal),
       ...plan.stories.map((story) => bullet(`${story.id} ${story.title}`)),
       ...(plan.recommendation ? [paragraph(plan.recommendation)] : []),
-      // Replay marker: the outbox may hand the same plan back after a crash, and
-      // an appended plan cannot be diffed the way a property can.
-      paragraph(`${MARKER_PREFIX}${record.payloadHash}`),
     ];
     await this.gateway.request({
       method: "PATCH",
@@ -314,6 +356,9 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
       priority: "interaction",
       body: { children },
     });
+    // The outbox may hand the same plan back after a crash, and an appended
+    // plan cannot be diffed the way a property can.
+    await this.rememberSection(plan.epicId, "plan", record.payloadHash);
   }
 
   private async createStoryPage(record: NotionOutboxRecord): Promise<void> {
@@ -349,10 +394,6 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
     });
     const pageId = z.object({ id: z.string().min(1) }).parse(created.data).id;
     await this.rememberPageId(payload.storyId, pageId);
-  }
-
-  private planMarkerPresent(pageId: string, payloadHash: string): Promise<boolean> {
-    return this.markerPresent(pageId, `${MARKER_PREFIX}${payloadHash}`);
   }
 
   private async findStoryPage(storyId: string): Promise<string | null> {
