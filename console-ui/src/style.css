@@ -4,12 +4,12 @@
   background: #0b1118;
 }
 
-body { margin: 0; }
-main { max-width: 1100px; margin: 0 auto; padding: 32px; }
+body { margin: 0; overflow-x: hidden; }
+main { max-width: 1100px; margin: 0 auto; padding: 32px; min-width: 0; }
 header { display: flex; align-items: baseline; gap: 16px; }
 h1 { letter-spacing: -0.04em; }
 header span, .empty { color: #8091a5; }
-nav { display: flex; gap: 8px; margin: 24px 0; }
+nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 24px 0; }
 button, nav a {
   border: 1px solid #29384a;
   border-radius: 8px;
@@ -40,4 +40,17 @@ pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .cost-bar-fill { display: block; width: 100%; border-radius: 6px; background: #61d6c1; }
 .cost-bar-date { color: #8091a5; font-size: 0.75rem; }
 .cost-models { list-style: none; margin: 20px 0 0; padding: 0; }
-.cost-models li { padding: 6px 0; border-top: 1px solid #1a2735; color: #cdd8e3; font-variant-numeric: tabular-nums; }
+.cost-models li { padding: 6px 0; border-top: 1px solid #1a2735; color: #cdd8e3; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+@media (max-width: 600px) {
+  main { max-width: none; padding: 16px; }
+  header { align-items: flex-start; flex-direction: column; gap: 2px; }
+  section { padding: 14px; }
+  .overview-item { flex-direction: column; }
+  .overview-item + .overview-item { margin-top: 12px; }
+  .cost-totals { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .cost-updated { margin-left: 0; }
+  .cost-chart { gap: 4px; }
+  .cost-bar-track { height: 88px; }
+  .cost-bar-amount, .cost-bar-date { font-size: 0.65rem; }
+}
