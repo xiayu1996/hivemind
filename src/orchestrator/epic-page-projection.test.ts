@@ -32,7 +32,7 @@ describe("Epic page projection", () => {
     ]);
   });
 
-  it("names the reason an Epic is blocked from its latest transition", async () => {
+  it("says which Stories an Epic is blocked on in the reader's words", async () => {
     await client.batch([
       "UPDATE epics SET state = 'BLOCKED' WHERE id = 'E1'",
       { sql: "INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data) VALUES ('epic:E1', 0, NULL, NULL, 'epic.transition', 5, ?)",
@@ -40,7 +40,8 @@ describe("Epic page projection", () => {
     ], "write");
     const payload = await epicPagePayload(client, "E1");
     expect(payload).toMatchObject({ status: "受阻", blockedReason: "Story S-E1-02 stopped: verify_loop_exceeded" });
-    expect(renderEpicProgress(payload!).lead.at(-1)).toContain("Story S-E1-02 stopped");
+    // The operator's line stays in the payload; the page shows the person's.
+    expect(renderEpicProgress(payload!).lead.at(-1)).toBe("受阻：在等你回答 S-E1-02");
   });
 
   it("queues one row per changed page and none for an unchanged one", async () => {

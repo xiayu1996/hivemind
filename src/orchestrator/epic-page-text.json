@@ -3,6 +3,7 @@
   "reviewRequest": "Epic MR：{url}（等你审阅合并到 {target}）",
   "integrationBranch": "集成分支：{branch}，Story 逐个合入，全部交付后自动开 Epic MR",
   "blocked": "受阻：{reason}",
+  "blockedWaiting": "受阻：在等你回答 {stories}",
   "storyLine": "{id} {title} — {state}",
   "storyMr": "，MR {url}",
   "storyStop": "（{reason}）",

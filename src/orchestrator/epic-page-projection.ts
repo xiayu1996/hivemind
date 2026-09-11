@@ -101,7 +101,15 @@ export function renderEpicProgress(payload: EpicPagePayload): { lead: string[]; 
   } else if (payload.integrationBranch) {
     lead.push(fill(text.integrationBranch, { branch: payload.integrationBranch }));
   }
-  if (payload.blockedReason) lead.push(fill(text.blocked, { reason: payload.blockedReason }));
+  // The reason kept in the event log is written for an operator and names the
+  // stop by its enum. When the block is Stories waiting on an answer, the page
+  // says so in the reader's words and the Story lines carry the detail.
+  const waiting = payload.stories.filter((story) => story.state === "NEEDS_INPUT").map((story) => story.id);
+  if (waiting.length > 0) {
+    lead.push(fill(text.blockedWaiting, { stories: waiting.join("、") }));
+  } else if (payload.blockedReason) {
+    lead.push(fill(text.blocked, { reason: payload.blockedReason }));
+  }
   const states: Record<string, string> = text.storyStates;
   const stops: Record<string, string> = text.stopReasons;
   const stories = payload.stories.map((story) => {
