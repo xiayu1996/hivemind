@@ -56,7 +56,11 @@ export async function createConsoleServer(
   app.get("/api/config", async () => data.config());
   app.get("/api/stats", async () => data.stats());
   app.get("/api/providers", async () => data.providers());
-  app.get("/api/overview", async () => data.overview?.() ?? ({ questions: [], active: [], events: [], costs: [] }));
+  app.get("/api/overview", async (_request, reply) => {
+    const overview = await (data.overview?.() ?? ({ questions: [], active: [], events: [], costs: [] }));
+    reply.header("Cache-Control", "no-store");
+    return { ...(overview as Record<string, unknown>), snapshotAt: Date.now() };
+  });
 
   const writer = options.configWriter;
   if (writer) {
