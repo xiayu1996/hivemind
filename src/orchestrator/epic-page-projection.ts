@@ -1,4 +1,5 @@
 import type { Client, InStatement } from "@libsql/client";
+import { createHash } from "node:crypto";
 import { payloadHash } from "../notion/outbox.js";
 import text from "./epic-page-text.json" with { type: "json" };
 import { BOARD_STATUS_FOR_STATE, type EpicBoardStatus } from "./epic-status-projection.js";
@@ -68,11 +69,17 @@ export async function epicPagePayload(client: Client, epicId: string, targetBran
 
 export function epicPageStatement(payload: EpicPagePayload, time: number): InStatement {
   const encoded = payloadHash(payload);
+  // What the page shows is the rendering, not the payload: a change in wording
+  // has to reproject the page even when every fact behind it is unchanged.
+  const rendered = renderEpicProgress(payload);
+  const hash = createHash("sha256")
+    .update([encoded.hash, ...rendered.lead, ...rendered.stories].join("\n"), "utf8")
+    .digest("hex");
   return {
     sql: `INSERT INTO notion_outbox (card_id, priority, operation, target, payload, payload_hash, created_at)
           VALUES (?, 2, ?, ?, ?, ?, ?)
           ON CONFLICT(target, payload_hash) DO NOTHING`,
-    args: [payload.epicId, SYNC_EPIC_PAGE, `epic-page:${payload.epicId}`, encoded.json, encoded.hash, time],
+    args: [payload.epicId, SYNC_EPIC_PAGE, `epic-page:${payload.epicId}`, encoded.json, hash, time],
   };
 }
 
