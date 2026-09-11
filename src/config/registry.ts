@@ -168,6 +168,33 @@ export const CONFIG_KEYS = {
   "model.providers": def({
     schema: providerProfiles,
     default: {
+      // The flat-rate plan the standard and cheap tiers run on first, and the
+      // brain tier falls back to. It declares a brain model even though the id
+      // is flash-class: a requirement phase running on a weaker model is worse
+      // than one running on gpt-5.6-sol and far better than a board that stops
+      // until a usage window reopens. Which provider gets a tier *first* is
+      // `model.tierFailoverChains`, not this record.
+      "command-code": {
+        authType: "api_key",
+        envKey: "COMMAND_CODE_API_KEY",
+        // A monthly plan with a credit allowance and no overage: the month
+        // costs the same whether a card spends the allowance or not, so the
+        // per-card ceiling must not charge a card pi's notional token price
+        // for it. `authType` alone would infer metered and park cards short of
+        // what they were allowed to spend.
+        billing: "subscription",
+        // One id for both tiers while deepseek-v4.1-flash is the discounted
+        // one on the plan: it reasons, reads images and carries a 1M window, so
+        // a second id would only spend more of the allowance for nothing. Which
+        // id serves a tier is a price decision that moves, so it is decided
+        // here or in the console and never in a call site; glm-5.3-flash stays
+        // declared to pi so switching is a config write, not a redeploy.
+        tiers: {
+          brain: "deepseek/deepseek-v4.1-flash",
+          standard: "deepseek/deepseek-v4.1-flash",
+          cheap: "deepseek/deepseek-v4.1-flash",
+        },
+      },
       "openai-codex": {
         authType: "oauth",
         // Every tier is a 5.6-or-newer id on purpose: a ChatGPT subscription
@@ -244,14 +271,31 @@ export const CONFIG_KEYS = {
   }),
   "model.failoverChain": def({
     schema: z.array(z.string()).min(1),
-    // Subscription first, metered API behind it: the ChatGPT plan costs the
-    // same whether a card uses it or not, so every turn it can serve is a turn
-    // deepseek is not billed for. deepseek exists to keep the service running
-    // through a usage-limit window rather than to share the load.
-    default: ["openai-codex", "deepseek"],
+    // Every provider hivemind may fall back to, in the order that serves a tier
+    // with no ordering of its own. Subscriptions first, metered API behind
+    // them: a flat-rate plan costs the same whether a card uses it or not, so
+    // every turn one of them serves is a turn deepseek is not billed for.
+    // deepseek is last and is the only provider that can run out of money, so
+    // it is also the only reason the board may stop for want of a model.
+    default: ["command-code", "openai-codex", "deepseek"],
     scope: "global",
     reload: "hot",
-    description: "Provider order tried when one is circuit-broken. Order is a cost decision: flat-rate subscriptions come before metered APIs.",
+    description: "Every provider cards may run on, and the order tried when one is circuit-broken. It is also the provider universe: credentials, captured failure wordings and health are checked per entry. Order is a cost decision: flat-rate subscriptions come before metered APIs.",
+  }),
+  "model.tierFailoverChains": def({
+    schema: z.partialRecord(modelTier, z.array(z.string()).min(1)),
+    // The brain tier is the one place where order is not a cost decision: the
+    // requirement phases read a person's words and judge a screen, and
+    // gpt-5.6-sol is the only configured model bought for that, so it leads
+    // however cheap the alternatives are. The rest of the chain exists so that
+    // a spent ChatGPT window degrades the brain tier instead of stopping it:
+    // command-code next because its plan is already paid for, deepseek behind
+    // it because a metered API keeps answering when both windows are shut.
+    // Tiers named here override the global order; the others inherit it.
+    default: { brain: ["openai-codex", "command-code", "deepseek"] },
+    scope: "global",
+    reload: "hot",
+    description: "Per-tier provider order, overriding model.failoverChain for the tiers it names. It may only name providers that are in the chain, because the chain is what gets credentials, captured failure wordings and health tracking.",
   }),
   "alert.requireOutOfBandChannel": def({
     schema: z.boolean(),

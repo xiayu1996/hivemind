@@ -14,6 +14,11 @@ import type { ProviderProfile } from "../src/runner/model-policy.js";
  *     --env-key DEEPSEEK_API_KEY \
  *     --brain deepseek-v4-pro --standard deepseek-v4-pro --cheap deepseek-v4-flash
  *
+ * `--billing` is how a flat-rate plan that authenticates with a key says so.
+ * Without it the profile follows `authType`, which reads an api_key provider as
+ * metered and would charge a card pi's notional token price for turns the plan
+ * has already paid for, parking it short of the work it was allowed to do.
+ *
  * Adding the provider to `model.failoverChain` stays a separate, deliberate
  * step: declaring how a provider would be used is not the same decision as
  * putting live cards on it.
@@ -25,7 +30,8 @@ function optional(name: string): string | undefined {
 
 const provider = process.argv[2];
 if (!provider || provider.startsWith("--")) {
-  console.error("usage: npx tsx scripts/provider-add.ts <provider> --auth-type <api_key|oauth> [--env-key KEY] [--brain id] [--standard id] [--cheap id]");
+  console.error("usage: npx tsx scripts/provider-add.ts <provider> --auth-type <api_key|oauth> [--env-key KEY]" +
+    " [--billing <subscription|metered>] [--brain id] [--standard id] [--cheap id]");
   process.exit(2);
 }
 
@@ -56,9 +62,16 @@ if (authType !== "api_key" && authType !== "oauth") {
   process.exit(2);
 }
 
+const billing = optional("--billing");
+if (billing !== undefined && billing !== "subscription" && billing !== "metered") {
+  console.error("--billing must be subscription or metered");
+  process.exit(2);
+}
+
 const profile: ProviderProfile = {
   authType,
   ...(optional("--env-key") ? { envKey: optional("--env-key")! } : {}),
+  ...(billing ? { billing } : {}),
   tiers,
 };
 

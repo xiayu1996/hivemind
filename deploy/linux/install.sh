@@ -194,6 +194,7 @@ FEISHU_WEBHOOK_URL=
 # API keys for providers in model.failoverChain, one per provider (the env var name
 # each provider expects is in pi's docs/providers.md). Subscription providers such as
 # openai-codex authenticate through scripts/pi-login.sh instead and need nothing here.
+# COMMAND_CODE_API_KEY=
 # DEEPSEEK_API_KEY=
 EOT
   echo "wrote a template to $SECRETS"

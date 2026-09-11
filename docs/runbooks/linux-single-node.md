@@ -37,6 +37,7 @@ deploy/linux/install.sh --repository-path <被开发仓库的本地 checkout>
 
 - **Notion**：在 Notion 开发者后台建内部 integration，能力勾选读/写/插入内容、读/插入评论、用户信息（不含邮箱）。建一个顶层页面并把 integration 加进该页的 connections，只共享这一页及其子页。token 填 `NOTION_TOKEN`，页面 id 填 `HIVEMIND_NOTION_PARENT_PAGE_ID`。
 - **pi provider（订阅制，如 openai-codex）**：pi 的登录只在其 TUI 里。每台机器各自登录，不复制 `auth.json`。探针一律 `pi auth check --no-refresh`，它在 `not_ready` 时退出码仍为 0，脚本解析 JSON 里的 `status`。
+- **Command Code（包月计划，走 API key）**：在 Command Code Studio 建一个 Provider API key，写进 `secrets.env` 的 `COMMAND_CODE_API_KEY`。它是中脑与小脑两档的第一跳，承担 CODE/VERIFY 与所有机械调用（哪个 model id 服务哪个档是价格决定，在 `model.providers` 里改，console 或 `scripts/provider-add.ts` 都行）。大脑档由 `model.tierFailoverChains` 单独排序：`openai-codex` 的 `gpt-5.6-sol` 在前，Command Code 在后，官方 deepseek 兜底——ChatGPT 窗口打满只会让大脑降级，不会让看板停工；真正能让它停的只有最后那个计费 API 没钱。计划是包月定额、无超额计费，所以 profile 里写明 `billing: "subscription"`，单卡费用上限不对它计数。
 - **pi provider（API key 制）**：把 key 写进 `secrets.env`，变量名以 pi 的 `docs/providers.md` 为准（如 `DEEPSEEK_API_KEY`）。两个 systemd 单元都以 `EnvironmentFile=-` 加载这个文件，runner 再把它透给 pi 子进程。`auth check` 对这类 provider 只验 key 是否存在——实测填一个假 key 也返回 `ready`——所以探针会另跑一次 cheap 档的真实往返来验有效性。
 - **gh / glab**：`gh auth login --git-protocol ssh --web`。最小权限是仓库读写与 PR 创建，不给组织管理。
 - **告警通道**：飞书群自定义机器人的 webhook，或一套 SMTP 应用密码（`SMTP_TO` 支持逗号分隔多人）。配好后 `npx tsx scripts/smoke-alert.ts` 发一条 P0 冒烟，脚本只打印通道名。

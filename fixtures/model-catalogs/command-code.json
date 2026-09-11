@@ -1,0 +1,23 @@
+{
+  "provider": "command-code",
+  "piVersion": "0.85.1",
+  "capturedAt": "2026-09-11T08:02:50.342Z",
+  "models": [
+    {
+      "provider": "command-code",
+      "id": "deepseek/deepseek-v4.1-flash",
+      "contextWindow": 1000000,
+      "maxOutput": 65500,
+      "thinking": true,
+      "images": true
+    },
+    {
+      "provider": "command-code",
+      "id": "z-ai/glm-5.3-flash",
+      "contextWindow": 1000000,
+      "maxOutput": 131100,
+      "thinking": true,
+      "images": true
+    }
+  ]
+}

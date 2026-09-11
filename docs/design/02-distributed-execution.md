@@ -201,6 +201,8 @@ failover 链按档位横移：codex → GLM → grok。
 
 Context 跨供应商重放仅作为优化项后置（PoC-6 验证 codex→GLM 转换实际质量再决定启用）。
 
+**链序按档位分开**：全局 `model.failoverChain` 是 provider 全集与默认顺序（订阅在前、计费 API 兜底），`model.tierFailoverChains` 给单个档位另排一份。大脑档用它把最强模型放在第一位而不是最便宜的那个，后面仍把整条链挂满——订阅撞窗口时大脑降级到包月计划的 flash 档、再降到计费 API，但不停工；唯一允许"没模型可用"的情形是最后那个计费 API 没钱。per-tier 顺序只能命名链上的 provider，`assertModelPolicy` 启动即拒，否则该档会静默跳过一个没凭据、没错误文案采集、没熔断记录的 provider。
+
 ### 5.4 per-provider 熔断矩阵
 
 busybee CredentialHealth 从全局单一扩展为 per-provider 三态机（closed/open/half-open）：
