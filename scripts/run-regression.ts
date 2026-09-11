@@ -88,8 +88,20 @@ async function main(): Promise<void> {
       },
     );
 
+    // The frozen text each scenario was accepted against. The sweep judges the
+    // same words the Story was judged on; naming only the ids asked the
+    // verifier to guess the scenario and then grade its own guess.
+    const specificationFor = async (ids: readonly string[]): Promise<ReadonlyMap<string, string>> => {
+      const rows = (await handle.client.execute({
+        sql: `SELECT spec_id, text FROM story_specs WHERE spec_id IN (${ids.map(() => "?").join(", ")})`,
+        args: [...ids],
+      })).rows;
+      return new Map(rows.map((row) => [String(row.spec_id), String(row.text)]));
+    };
+
     const sweepPort = new BlindSweepPort({
       worktreeFor: async () => worktreePath,
+      specificationFor,
       executor,
       git: processGitCommand,
       evidenceRoot,
@@ -109,6 +121,7 @@ async function main(): Promise<void> {
       const sequence = await attributionSequence(handle.client, epicId);
       const probeSweep = new BlindSweepPort({
         worktreeFor: async () => probeWorktree,
+        specificationFor,
         executor,
         git: processGitCommand,
         evidenceRoot: join(evidenceRoot, "probe"),

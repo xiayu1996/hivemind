@@ -11,10 +11,13 @@ export interface SweepOutcome {
 }
 
 export interface SweepPort {
-  /** Runs the scenarios against the given branch and reports one outcome each. */
+  /** Runs the scenarios against the given branch and reports one outcome each.
+   * Scenarios the run could not judge are named in `inconclusive` and carry no
+   * outcome: a sweep the box lost has not shown a scenario broken. */
   run(input: { pool: ScenarioPool; branch: string; scenarioIds: readonly string[] }): Promise<{
     revision: string;
     outcomes: readonly SweepOutcome[];
+    inconclusive?: readonly string[];
   }>;
 }
 
@@ -23,6 +26,9 @@ export interface SweepResult {
   revision: string;
   verified: readonly string[];
   failed: readonly string[];
+  /** Judged by nothing: reported so a sweep that never ran is visible, and
+   * left unrecorded so it raises no regression card and ages no scenario. */
+  inconclusive: readonly string[];
   raised: ReadonlyArray<{ scenarioId: string; signature: string }>;
 }
 
@@ -45,9 +51,9 @@ export class RegressionSweeper {
     policy: RegressionPolicy,
   ): Promise<SweepResult> {
     if (input.scenarioIds.length === 0) {
-      return { pool: input.pool, revision: "", verified: [], failed: [], raised: [] };
+      return { pool: input.pool, revision: "", verified: [], failed: [], inconclusive: [], raised: [] };
     }
-    const { revision, outcomes } = await this.port.run(input);
+    const { revision, outcomes, inconclusive = [] } = await this.port.run(input);
     const verified: string[] = [];
     const failed: string[] = [];
     const raised: Array<{ scenarioId: string; signature: string }> = [];
@@ -67,6 +73,6 @@ export class RegressionSweeper {
       }
     }
     await this.registry.markVerified(verified);
-    return { pool: input.pool, revision, verified, failed, raised };
+    return { pool: input.pool, revision, verified, failed, inconclusive: [...inconclusive], raised };
   }
 }
