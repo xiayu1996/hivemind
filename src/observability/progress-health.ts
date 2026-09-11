@@ -58,6 +58,8 @@ export interface ProgressSnapshot {
   unmergeableEpics: readonly UnmergeableEpic[];
   /** Creation time of the oldest Notion write still pending, if any. */
   oldestPendingOutboxAt: number | null;
+  /** Scenarios in the registry. Zero means nothing is owed a sweep yet. */
+  registeredScenarios: number;
   regressionRunsEver: number;
   lastPassingRegressionAt: number | null;
 }
@@ -135,16 +137,21 @@ export function assessProgress(
     });
   }
 
-  if (snapshot.regressionRunsEver === 0) {
-    findings.push({
-      severity: "stalled",
-      summary: "No regression run has ever been recorded, so every Epic gate is waiting on evidence nothing is producing.",
-    });
-  } else if (snapshot.lastPassingRegressionAt === null) {
-    findings.push({
-      severity: "stalled",
-      summary: "Regression sweeps have run but none has ever passed, so no Epic can be shown to integrate.",
-    });
+  // Only meaningful once something is registered: a board with no scenarios
+  // owes no evidence, and calling that a stall teaches whoever reads this
+  // report to skim it.
+  if (snapshot.registeredScenarios > 0) {
+    if (snapshot.regressionRunsEver === 0) {
+      findings.push({
+        severity: "stalled",
+        summary: "No regression run has ever been recorded, so every Epic gate is waiting on evidence nothing is producing.",
+      });
+    } else if (snapshot.lastPassingRegressionAt === null) {
+      findings.push({
+        severity: "stalled",
+        summary: "Regression sweeps have run but none has ever passed, so no Epic can be shown to integrate.",
+      });
+    }
   }
 
   if (snapshot.oldestPendingOutboxAt !== null) {
@@ -223,6 +230,10 @@ export async function readProgressSnapshot(client: Client): Promise<ProgressSnap
     "SELECT MIN(created_at) AS oldest FROM notion_outbox WHERE state = 'pending'",
   )).rows[0]?.oldest;
 
+  const registered = Number((await client.execute(
+    "SELECT COUNT(*) AS count FROM scenario_registry",
+  )).rows[0]?.count ?? 0);
+
   const runs = Number((await client.execute(
     "SELECT COUNT(*) AS count FROM regression_runs",
   )).rows[0]?.count ?? 0);
@@ -237,6 +248,7 @@ export async function readProgressSnapshot(client: Client): Promise<ProgressSnap
     waitingEpics,
     unmergeableEpics,
     oldestPendingOutboxAt: typeof oldestPending === "number" ? oldestPending : null,
+    registeredScenarios: registered,
     regressionRunsEver: runs,
     lastPassingRegressionAt: typeof lastPass === "number" ? lastPass : null,
   };

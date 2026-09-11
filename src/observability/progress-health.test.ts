@@ -18,6 +18,7 @@ function snapshot(overrides: Partial<ProgressSnapshot> = {}): ProgressSnapshot {
     waitingEpics: [],
     unmergeableEpics: [],
     oldestPendingOutboxAt: null,
+    registeredScenarios: 1,
     regressionRunsEver: 1,
     lastPassingRegressionAt: NOW - MINUTE,
     ...overrides,
@@ -57,6 +58,19 @@ describe("assessProgress", () => {
     expect(report.findings).toHaveLength(1);
     expect(report.findings[0]).toMatchObject({ severity: "waiting" });
     expect(report.findings[0]?.summary).toContain("blocking_question");
+  });
+
+  it("leaves a board with nothing registered alone, since it owes no evidence", () => {
+    // The state right after a requirement is abandoned, and the state of a
+    // fresh install. Neither is stuck.
+    const report = assessProgress(snapshot({
+      registeredScenarios: 0,
+      regressionRunsEver: 0,
+      lastPassingRegressionAt: null,
+    }), NOW);
+
+    expect(report.healthy).toBe(true);
+    expect(report.findings).toHaveLength(0);
   });
 
   it("calls a registry that has never been swept a stall, not a clean board", () => {
@@ -120,6 +134,7 @@ describe("readProgressSnapshot", () => {
 
     await expect(readProgressSnapshot(client)).resolves.toMatchObject({
       waitingEpics: [{ epicId: "E1", unprovenScenarios: 2 }],
+      registeredScenarios: 2,
       regressionRunsEver: 0,
       lastPassingRegressionAt: null,
     });
