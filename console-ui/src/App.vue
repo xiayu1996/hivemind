@@ -1,20 +1,23 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { formatOverviewItem, overviewSections } from "../../src/console/overview.js";
-import { formatSnapshotAt, hasCompleteOverview, hasFreshSnapshot, SNAPSHOT_MAX_AGE_MS } from "../../src/console/overview-client.js";
+import { formatSnapshotAt, hasCompleteOverview, hasFreshSnapshot, primarySections, SNAPSHOT_MAX_AGE_MS } from "../../src/console/overview-client.js";
 
 const views = ["nodes", "tasks", "costs", "config", "stats", "providers"];
 const current = ref(views.includes(location.pathname.slice(1)) ? location.pathname.slice(1) : "overview");
 const rows = ref([]);
 const overview = ref(null);
 const error = ref("");
+const showSecondary = ref(false);
 let refreshTimer;
 let expiryTimer;
 
 const sections = computed(() => overview.value ? overviewSections(overview.value) : []);
+const visibleSections = computed(() => showSecondary.value ? sections.value : primarySections(sections.value));
 
 function clearOverview() {
   overview.value = null;
+  showSecondary.value = false;
   error.value = "Unable to load current status.";
   clearTimeout(expiryTimer);
 }
@@ -31,8 +34,10 @@ async function loadOverview() {
     const payload = await response.json();
     if (!hasFreshSnapshot(payload) || !hasCompleteOverview(payload)) throw new Error("stale or incomplete snapshot");
     overview.value = payload;
+    showSecondary.value = false;
     error.value = "";
     scheduleExpiry(payload.snapshotAt);
+    requestAnimationFrame(() => { showSecondary.value = true; });
   } catch {
     clearOverview();
   }
@@ -87,7 +92,7 @@ onBeforeUnmount(() => {
       <template v-else-if="overview">
         <p class="snapshot-time">{{ formatSnapshotAt(overview.snapshotAt) }}</p>
         <article
-          v-for="section in sections"
+          v-for="section in visibleSections"
           :key="section.title"
           :class="section.kind === 'cost' ? 'cost-region' : 'overview-group'"
         >

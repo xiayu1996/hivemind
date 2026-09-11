@@ -25,4 +25,9 @@ export function hasFreshSnapshot(value: { snapshotAt?: unknown }, now = Date.now
     && value.snapshotAt <= now;
 }
 
+/** The two attention regions are intentionally painted before historical summaries. */
+export function primarySections<T>(sections: readonly T[]): T[] {
+  return sections.slice(0, 2);
+}
+
 export { SNAPSHOT_MAX_AGE_MS };
