@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, watchEffect } from "vue";
 import { formatOverviewItem, overviewSections } from "../../src/console/overview.js";
+import { formatSnapshotAt } from "../../src/console/overview-client.js";
 
 const views = ["nodes", "tasks", "costs", "config", "stats", "providers"];
 const current = ref(views.includes(location.pathname.slice(1)) ? location.pathname.slice(1) : "overview");
@@ -42,6 +43,7 @@ function navigate(view) {
     <section v-if="current === 'overview'">
       <p v-if="error" class="error">{{ error }}</p>
       <template v-else>
+        <p class="snapshot-time">{{ formatSnapshotAt(overview.snapshotAt) }}</p>
         <article
           v-for="section in sections"
           :key="section.title"
