@@ -651,11 +651,28 @@ async function main(): Promise<void> {
   const registry = new ScenarioRegistry(handle.client);
   const regressionSweep = async (): Promise<void> => {
     await config.reload();
+    // Scenarios an Epic's review request is waiting on. Without this the gate
+    // asks for evidence that only an idle host would ever produce, and a
+    // delivered Epic could sit behind another Epic's Story indefinitely.
+    const awaitedByDelivery = (await handle.client.execute(
+      `SELECT r.scenario_id FROM scenario_registry r
+         JOIN epics e ON e.id = r.epic_id
+        WHERE e.state = 'EXECUTING'
+          AND e.mr_url IS NULL
+          AND NOT EXISTS (SELECT 1 FROM stories s WHERE s.epic_id = e.id AND s.state <> 'DELIVERED')
+          AND NOT EXISTS (
+            SELECT 1 FROM regression_runs u
+             WHERE u.scenario_id = r.scenario_id AND u.outcome = 'passed'
+          )
+        ORDER BY r.scenario_id`,
+    )).rows.map((row) => String(row.scenario_id));
+
     const plan = planRegressionSweep({
       now: Date.now(),
       foregroundBusy: inFlight.size > 0,
       epicScenarios: await registry.pool("epic"),
       mainScenarios: await registry.pool("main"),
+      triggered: awaitedByDelivery,
       policy: {
         epicPoolIntervalMs: config.get("regression.epicPoolIntervalMs"),
         mainPoolIntervalMs: config.get("regression.mainPoolIntervalMs"),

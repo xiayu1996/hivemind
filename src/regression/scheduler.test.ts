@@ -14,15 +14,31 @@ function scenario(scenarioId: string, lastVerifiedAt: number | null, pool: "epic
 }
 
 describe("planRegressionSweep", () => {
-  it("runs what a merge just invalidated, even while a Story is running", () => {
+  it("runs what the foreground is waiting on, even while a Story is running", () => {
+    // An Epic ready to open its review request is held until these pass, so
+    // the sweep that would release it does not queue behind a Story belonging
+    // to some other Epic.
+    expect(planRegressionSweep({
+      now: NOW,
+      foregroundBusy: true,
+      epicScenarios: [scenario("S-M2-01-a", 0), scenario("S-M2-02-a", 0)],
+      mainScenarios: [],
+      triggered: ["S-M2-02-a", "S-M2-01-a"],
+      policy,
+    })).toEqual({ pool: "epic", scenarioIds: ["S-M2-01-a", "S-M2-02-a"], reason: "event" });
+  });
+
+  it("ignores a triggered scenario the registry no longer knows about", () => {
+    // Its Story was withdrawn or re-decomposed; there is no Epic to sweep it
+    // against, and inventing one would run it in the wrong worktree.
     expect(planRegressionSweep({
       now: NOW,
       foregroundBusy: true,
       epicScenarios: [],
       mainScenarios: [],
-      triggered: ["S-M2-02-a", "S-M2-01-a"],
+      triggered: ["S-GONE-01-a"],
       policy,
-    })).toEqual({ pool: "epic", scenarioIds: ["S-M2-01-a", "S-M2-02-a"], reason: "event" });
+    })).toBeNull();
   });
 
   it("gives way to the foreground when it is only polling", () => {

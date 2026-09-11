@@ -18,7 +18,9 @@ export interface RegressionScheduleInput {
   foregroundBusy: boolean;
   epicScenarios: readonly RegisteredScenario[];
   mainScenarios: readonly RegisteredScenario[];
-  /** Scenarios a merge just made worth re-running immediately. */
+  /** Scenarios the foreground is waiting on: an Epic ready to open its review
+   * request cannot do so until these pass. Swept before anything else and
+   * without waiting for the host to go idle. */
   triggered?: readonly string[];
   policy: RegressionSchedulePolicy;
 }
@@ -58,9 +60,18 @@ function firstEpicBatch(scenarios: readonly RegisteredScenario[], batchSize: num
  * safety net into a queue.
  */
 export function planRegressionSweep(input: RegressionScheduleInput): RegressionSweep | null {
-  const triggered = input.triggered ?? [];
-  if (triggered.length > 0) {
-    return { pool: "epic", scenarioIds: [...triggered].toSorted(), reason: "event" };
+  // Work the foreground is waiting on, not background hygiene. An Epic whose
+  // Stories have all landed cannot open its review request until its scenarios
+  // have passed, so this sweep is the thing standing between it and delivery -
+  // it does not queue behind a Story running for some other Epic, and it does
+  // not queue behind another Epic's never-verified scenarios sorting first.
+  const triggeredIds = new Set(input.triggered ?? []);
+  if (triggeredIds.size > 0) {
+    const triggered = firstEpicBatch(
+      input.epicScenarios.filter((scenario) => triggeredIds.has(scenario.scenarioId)),
+      input.policy.batchSize,
+    );
+    if (triggered.length > 0) return { pool: "epic", scenarioIds: triggered, reason: "event" };
   }
   if (input.foregroundBusy) return null;
 
