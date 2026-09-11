@@ -8,6 +8,8 @@ import type { NotionGateway } from "./gateway.js";
 import { interpretRequirementComment, interpretRequirementPropertyChange } from "./intent-interpreter.js";
 import schema from "./notion-schema.json" with { type: "json" };
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export interface RequirementPropertyPollResult {
   requirementId: string;
   intent: "initialized" | "none" | "approve_prd" | "accept" | "park" | "resume" | "unsupported_property_change";
@@ -224,7 +226,11 @@ export class NotionRequirementInputSync {
     if (!stop) return false;
     const answers = await this.unclaimedComments(pageId, stop.stoppedAt);
     if (answers.length === 0) return false;
-    const bodies = answers.map((comment) => `${comment.author}: ${comment.body}`);
+    // An author the user directory could not resolve is stored as the raw
+    // Notion user id. That id means nothing to a reader, so the answer is
+    // attributed to nobody rather than to a string of hex.
+    const bodies = answers.map((comment) =>
+      UUID.test(comment.author) ? comment.body : `${comment.author}: ${comment.body}`);
     const open = await this.store.latestClarifyRound(requirementId);
     if (open && open.answers === null) {
       await this.store.recordClarifyAnswers(requirementId, open.round, bodies, runId(requirementId));

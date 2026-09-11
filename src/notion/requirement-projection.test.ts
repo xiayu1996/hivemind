@@ -84,7 +84,7 @@ describe("RequirementPageProjector", () => {
     rows = (await client.execute("SELECT payload FROM notion_outbox ORDER BY id")).rows;
     expect(rows).toHaveLength(2);
     desired = (JSON.parse(String(rows.at(-1)!.payload)) as { desired: { questions?: string } }).desired;
-    expect(desired.questions).toBeUndefined();
+    expect(desired.questions).toBe("当前没有等你回答的问题。");
   });
 
   it("re-projects the page as the Epics underneath it make progress", async () => {

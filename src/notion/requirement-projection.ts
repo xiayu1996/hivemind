@@ -132,7 +132,9 @@ export function buildRequirementPage(input: RequirementPageInput): DesiredRequir
     prd,
     prdFrozen: input.prd?.status === "confirmed",
     acceptance: input.acceptance.map((item) => item.text),
-    ...(stop ? { questions: requirementQuestionsText(stop) } : {}),
+    // The heading exists on every requirement page, so the section says that
+    // nothing is waiting rather than standing empty and reading as unfinished.
+    questions: stop ? requirementQuestionsText(stop) : "当前没有等你回答的问题。",
   };
 }
 
