@@ -44,10 +44,18 @@ export interface WaitingEpic {
   unprovenScenarios: number;
 }
 
+export interface UnmergeableEpic {
+  epicId: string;
+  /** Why the last attempt to bring main into the Epic branch did not work. */
+  reason: string;
+  at: number;
+}
+
 export interface ProgressSnapshot {
   workingCards: readonly WorkingCard[];
   stoppedCards: readonly StoppedCard[];
   waitingEpics: readonly WaitingEpic[];
+  unmergeableEpics: readonly UnmergeableEpic[];
   /** Creation time of the oldest Notion write still pending, if any. */
   oldestPendingOutboxAt: number | null;
   regressionRunsEver: number;
@@ -117,6 +125,16 @@ export function assessProgress(
     });
   }
 
+  // A review request that cannot be merged is not waiting on a person: the
+  // person cannot act until somebody brings main into the branch, and the last
+  // attempt to do that failed.
+  for (const epic of snapshot.unmergeableEpics) {
+    findings.push({
+      severity: "stalled",
+      summary: `Epic ${epic.epicId} cannot take main into its branch: ${epic.reason}. Its review request cannot be merged until that is resolved.`,
+    });
+  }
+
   if (snapshot.regressionRunsEver === 0) {
     findings.push({
       severity: "stalled",
@@ -183,6 +201,24 @@ export async function readProgressSnapshot(client: Client): Promise<ProgressSnap
     unprovenScenarios: Number(row.unproven),
   }));
 
+  // The latest refresh outcome per Epic that is still open, and only when that
+  // outcome is a failure: a conflict recorded and then resolved is history.
+  const unmergeableEpics = (await client.execute(
+    `SELECT e.id AS epic_id, f.failure_reason, f.ts
+       FROM epics e
+       JOIN epic_branch_refresh_events f ON f.id = (
+         SELECT id FROM epic_branch_refresh_events
+          WHERE epic_id = e.id AND outcome IN ('succeeded','failed')
+          ORDER BY ts DESC, id DESC LIMIT 1
+       )
+      WHERE e.state IN ('EXECUTING','EPIC_ACCEPT') AND f.outcome = 'failed'
+      ORDER BY e.id`,
+  )).rows.map((row) => ({
+    epicId: String(row.epic_id),
+    reason: String(row.failure_reason ?? "the reason was not recorded"),
+    at: Number(row.ts),
+  }));
+
   const oldestPending = (await client.execute(
     "SELECT MIN(created_at) AS oldest FROM notion_outbox WHERE state = 'pending'",
   )).rows[0]?.oldest;
@@ -199,6 +235,7 @@ export async function readProgressSnapshot(client: Client): Promise<ProgressSnap
     workingCards: working,
     stoppedCards: stopped,
     waitingEpics,
+    unmergeableEpics,
     oldestPendingOutboxAt: typeof oldestPending === "number" ? oldestPending : null,
     regressionRunsEver: runs,
     lastPassingRegressionAt: typeof lastPass === "number" ? lastPass : null,

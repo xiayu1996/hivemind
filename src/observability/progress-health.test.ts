@@ -16,6 +16,7 @@ function snapshot(overrides: Partial<ProgressSnapshot> = {}): ProgressSnapshot {
     workingCards: [],
     stoppedCards: [],
     waitingEpics: [],
+    unmergeableEpics: [],
     oldestPendingOutboxAt: null,
     regressionRunsEver: 1,
     lastPassingRegressionAt: NOW - MINUTE,
@@ -76,6 +77,17 @@ describe("assessProgress", () => {
 
     expect(report.healthy).toBe(false);
     expect(report.findings[0]?.summary).toContain("40 minutes");
+  });
+
+  it("calls a review request that cannot take main a stall, not a wait", () => {
+    // Nobody can act on it: the person cannot merge, and the last attempt to
+    // bring main into the branch failed.
+    const report = assessProgress(snapshot({
+      unmergeableEpics: [{ epicId: "E1ACTION", reason: "Merge conflict in src/orchestrator/story-execution-store.ts", at: NOW }],
+    }), NOW);
+
+    expect(report.healthy).toBe(false);
+    expect(report.findings[0]?.summary).toContain("story-execution-store.ts");
   });
 
   it("names the Epic held at its own gate and how much evidence it lacks", () => {
