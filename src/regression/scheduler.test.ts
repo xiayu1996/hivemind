@@ -14,15 +14,31 @@ function scenario(scenarioId: string, lastVerifiedAt: number | null, pool: "epic
 }
 
 describe("planRegressionSweep", () => {
-  it("runs what a merge just invalidated, even while a Story is running", () => {
+  it("runs what the foreground is waiting on, even while a Story is running", () => {
+    // An Epic ready to open its review request is held until these pass, so
+    // the sweep that would release it does not queue behind a Story belonging
+    // to some other Epic.
+    expect(planRegressionSweep({
+      now: NOW,
+      foregroundBusy: true,
+      epicScenarios: [scenario("S-M2-01-a", 0), scenario("S-M2-02-a", 0)],
+      mainScenarios: [],
+      triggered: ["S-M2-02-a", "S-M2-01-a"],
+      policy,
+    })).toEqual({ pool: "epic", scenarioIds: ["S-M2-01-a", "S-M2-02-a"], reason: "event" });
+  });
+
+  it("ignores a triggered scenario the registry no longer knows about", () => {
+    // Its Story was withdrawn or re-decomposed; there is no Epic to sweep it
+    // against, and inventing one would run it in the wrong worktree.
     expect(planRegressionSweep({
       now: NOW,
       foregroundBusy: true,
       epicScenarios: [],
       mainScenarios: [],
-      triggered: ["S-M2-02-a", "S-M2-01-a"],
+      triggered: ["S-GONE-01-a"],
       policy,
-    })).toEqual({ pool: "epic", scenarioIds: ["S-M2-01-a", "S-M2-02-a"], reason: "event" });
+    })).toBeNull();
   });
 
   it("gives way to the foreground when it is only polling", () => {
@@ -91,5 +107,42 @@ describe("planRegressionSweep", () => {
       mainScenarios: [],
       policy,
     })).toBeNull();
+  });
+});
+
+describe("one Epic per sweep", () => {
+  it("never mixes two Epics into one batch, whatever the batch size allows", () => {
+    // Every scenario in a sweep runs in one worktree at one revision. A mixed
+    // batch judged the second Epic's scenarios against the first Epic's code
+    // and recorded the runs against a revision their Epic never had, so the
+    // gate waiting for them could not be satisfied.
+    const plan = planRegressionSweep({
+      now: 10_000,
+      foregroundBusy: false,
+      epicScenarios: [
+        { scenarioId: "S-A-01-a", storyId: "S-A-01", epicId: "EA", pool: "epic", lastVerifiedAt: null },
+        { scenarioId: "S-A-01-b", storyId: "S-A-01", epicId: "EA", pool: "epic", lastVerifiedAt: null },
+        { scenarioId: "S-B-01-a", storyId: "S-B-01", epicId: "EB", pool: "epic", lastVerifiedAt: null },
+      ],
+      mainScenarios: [],
+      policy: { epicPoolIntervalMs: 1_000, mainPoolIntervalMs: 1_000, batchSize: 5 },
+    });
+
+    expect(plan).toMatchObject({ pool: "epic", scenarioIds: ["S-A-01-a", "S-A-01-b"] });
+  });
+
+  it("moves to the next Epic once the first one has been swept", () => {
+    const plan = planRegressionSweep({
+      now: 10_000,
+      foregroundBusy: false,
+      epicScenarios: [
+        { scenarioId: "S-B-01-a", storyId: "S-B-01", epicId: "EB", pool: "epic", lastVerifiedAt: null },
+        { scenarioId: "S-A-01-a", storyId: "S-A-01", epicId: "EA", pool: "epic", lastVerifiedAt: 9_900 },
+      ],
+      mainScenarios: [],
+      policy: { epicPoolIntervalMs: 1_000, mainPoolIntervalMs: 1_000, batchSize: 5 },
+    });
+
+    expect(plan).toMatchObject({ scenarioIds: ["S-B-01-a"] });
   });
 });

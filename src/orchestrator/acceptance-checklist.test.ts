@@ -142,4 +142,36 @@ describe("AcceptanceChecklist", () => {
     const outbox = (await client.execute("SELECT operation FROM notion_outbox WHERE card_id = 'RABC123G1'")).rows;
     expect(outbox).toMatchObject([{ operation: "create_epic_page" }]);
   });
+
+  it("raises one gap Epic, not a second one, when settling is interrupted and retried", async () => {
+    // The round used to be counted from the gap Epics themselves, so a settle
+    // that died between writing the Epic and reopening the items came back as
+    // round two and raised a second Epic for the same gap.
+    await addEpic("CONSOLE1", "DONE");
+    await checklist.open(REQUIREMENT_ID);
+    await store.decideAcceptanceItem(REQUIREMENT_ID, "A01", "accepted", "verdict-1", "comment", "run-a1");
+    await checklist.recordGap(REQUIREMENT_ID, "A02", "手机上打开是空白的", "verdict-2");
+
+    // The Epic lands; the host dies before the items are reopened.
+    const interruptedStore = Object.create(store) as RequirementStore;
+    interruptedStore.reopenAcceptanceGaps = async () => {
+      throw new Error("the host died before the gaps were reopened");
+    };
+    let epicTime = 6_000;
+    const interrupted = new AcceptanceChecklist(
+      client,
+      interruptedStore,
+      { publish: async () => undefined },
+      () => epicTime++,
+    );
+    await expect(interrupted.settle(REQUIREMENT_ID)).rejects.toThrow("the host died");
+    expect((await client.execute("SELECT id FROM epics WHERE id LIKE 'RABC123G%'")).rows).toHaveLength(1);
+
+    // The retry settles the same round rather than opening a new one.
+    await expect(checklist.settle(REQUIREMENT_ID)).resolves.toMatchObject({ kind: "gap" });
+    const gapEpics = (await client.execute(
+      "SELECT id FROM epics WHERE id LIKE 'RABC123G%' ORDER BY id",
+    )).rows;
+    expect(gapEpics).toMatchObject([{ id: "RABC123G1" }]);
+  });
 });

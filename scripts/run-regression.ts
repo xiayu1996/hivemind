@@ -140,9 +140,12 @@ async function main(): Promise<void> {
           attributions.push({ ...card, attribution });
         }
       } finally {
-        // Bisection leaves the probe worktree detached; the next sweep expects
-        // the branch checked out, and a failed probe must not change that.
-        await execFileAsync("git", ["checkout", branch], { cwd: probeWorktree, windowsHide: true });
+        // Back to the tip, still detached. Checking the branch out here claimed
+        // a branch the sweep worktree already holds, and git refuses that: the
+        // restore failed, the sweep exited non-zero, and no regression could
+        // run for any Epic that had a live worktree. Detached is the right
+        // resting state anyway - the sweep reads HEAD, never the branch name.
+        await execFileAsync("git", ["checkout", "--detach", branch], { cwd: probeWorktree, windowsHide: true });
       }
     }
     console.log(JSON.stringify({ ...result, attributions, ...(attributionsSkipped ? { attributionsSkipped } : {}) }));

@@ -50,6 +50,7 @@ npm run typecheck # tsc --noEmit，strict
 npm run build     # tsc 产出 dist/
 npm run db:migrate
 npm run preflight -- --repository-path <repo>   # 就绪探针：pi/凭据/Notion/CLI/systemd/浏览器，不打印任何凭据
+npm run health                                 # 推进探针：卡/Epic/回归/outbox 是否真在动；只有"卡住"才非零退出，"等人"不算
 npm run orchestrator:run -- --repository-path <repo> --repository-id <id>   # Epic/Story 执行常驻
 npm run requirements:run -- --repository-slug <owner/name>                  # 产品经理常驻（与上者共用一库一 outbox）
 
@@ -70,7 +71,7 @@ npx tsx scripts/replay-phase.ts --card-id <id> --phase CODE --print-prompt      
 Node `>=26`，ESM，包管理用 npm。部署只有 Linux 一条路：Windows 主机跑在 WSL2 Ubuntu 里，不再有原生 Windows 路径。
 `deploy/linux/install.sh` 是唯一入口，每个阶段先查再做，人工步骤（凭据、pi 登录、gh 登录）原地停下、重跑续接；见 [docs/runbooks/linux-single-node.md](docs/runbooks/linux-single-node.md)。
 pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src/runner/pi-binary.ts` 取，shell 经 `node -p` 取，不得再出现字面版本号。
-`scripts/` 只放长期入口（run-* / smoke-* / preflight / notion-bootstrap / install-pi / pi-login / catalog-snapshot / provider-add / inspect-round / replay-phase）；一次性排障脚本用完即删，不进仓库。
+`scripts/` 只放长期入口（run-* / smoke-* / preflight / health-check / notion-bootstrap / install-pi / pi-login / catalog-snapshot / provider-add / inspect-round / replay-phase）；一次性排障脚本用完即删，不进仓库。
 
 ### 本地验证顺序
 

@@ -145,8 +145,7 @@ export class AcceptanceChecklist {
     }
 
     const notes = await this.store.acceptanceGapNotes(requirementId);
-    const round = (await this.store.linkedEpicStates(requirementId))
-      .filter((epic) => /G\d+$/.test(epic.epicId)).length + 1;
+    const round = (await this.store.settledAcceptanceGapRounds(requirementId)) + 1;
     const epic = await this.writeGapEpic(requirement.id, requirement.repo, round, gaps, notes);
     await this.store.reopenAcceptanceGaps(requirementId, runId(requirementId));
     await this.store.transition(requirementId, "ACCEPTANCE", "DECOMPOSING", "system", runId(requirementId));
