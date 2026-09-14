@@ -6,7 +6,7 @@ import type { PiRunner, PromptImage, RpcEvent, TokenUsage } from "../runner/type
 import { promptWithContinueRetry } from "../runner/continue-retry.js";
 import { jsonPayloadCandidates } from "../util/json-payload.js";
 import { browserLaneInstructions } from "./executor.js";
-import { writePlaywrightCliConfig } from "./browser-config.js";
+import { browserLaneEnv } from "./browser-config.js";
 
 /**
  * The product manager's acceptance of a delivered screen, run as its own
@@ -308,7 +308,9 @@ export function splitRefusals(
 }
 
 export interface UiReviewRunnerFactory {
-  create(policy: GuardPolicy, images: readonly PromptImage[]): PiRunner;
+  /** `env` carries the browser lane's own copy of the host allowlist; it is
+   * empty when the round has no browser lane. */
+  create(policy: GuardPolicy, images: readonly PromptImage[], env: Record<string, string>): PiRunner;
 }
 
 function assistantText(events: readonly RpcEvent[]): string | null {
@@ -361,14 +363,14 @@ export class UiReviewExecutor {
       auditPath: input.auditPath,
       e2eHostAllowlist: [...input.allowedHosts],
     });
-    if (input.allowedHosts.length > 0) {
-      await writePlaywrightCliConfig(input.worktreePath, {
+    const browserEnv = input.allowedHosts.length > 0
+      ? browserLaneEnv({
         allowedHosts: [...input.allowedHosts],
         outputDir: input.evidencePath,
         ...(input.chromiumSandbox === undefined ? {} : { chromiumSandbox: input.chromiumSandbox }),
-      });
-    }
-    const runner = this.runners.create(policy, attached.images);
+      })
+      : {};
+    const runner = this.runners.create(policy, attached.images, browserEnv);
     let events: RpcEvent[] = [];
     let usage: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, costUsd: 0 };
     let reviewSessionId = "";

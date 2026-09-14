@@ -1,3 +1,4 @@
+import { matchesAnyGlob } from "./path-glob.js";
 import { redGreenFromCommits, type TrajectoryEvidence } from "./verdict.js";
 
 /** One repository-declared check, e.g. lint or the full test run. */
@@ -5,6 +6,18 @@ export interface ProjectCheck {
   name: string;
   /** argv, never a shell string: the gate must not depend on a shell. */
   command: readonly string[];
+  /** Globs deciding whether the round's changes make this check relevant.
+   * Absent means always. A documentation-only round should not have to sit
+   * through a full browser suite to be told nothing broke. */
+  when?: readonly string[] | undefined;
+  /** Checks that must pass before this one runs, for generator-then-consumer
+   * orders: running the consumer against last week's generated output answers
+   * a question nobody asked. */
+  requires?: readonly string[] | undefined;
+  /** Paths that must still be unchanged once the check has run. A suite can
+   * stay green while quietly rewriting the snapshots it is checked against, so
+   * exit code zero is necessary and not sufficient. */
+  assertCleanPaths?: readonly string[] | undefined;
 }
 
 export interface ProjectCheckResult {
@@ -12,6 +25,10 @@ export interface ProjectCheckResult {
   passed: boolean;
   /** Tail of the output, for the list handed back to CODE. */
   detail: string;
+  /** Why the check did not run. A skipped check is neither pass nor fail and
+   * produces no finding: the round it was irrelevant to should not be told it
+   * failed, and a prerequisite that failed has already said so itself. */
+  skipped?: "not-relevant" | "prerequisite-failed";
 }
 
 /** What the orchestrator measured in the worktree after CODE ended. */
@@ -25,6 +42,12 @@ export interface CodeExitFacts {
   markedScenarioIds: readonly string[];
   dodScenarioIds: readonly string[];
   projectChecks: readonly ProjectCheckResult[];
+  /** Test files SPECIFY froze that this phase changed anyway. The guard fences
+   * them at the entrance; this is the exit proof, because the guard enumerates
+   * shell write forms and cannot claim to have enumerated them all. */
+  changedFrozenTestPaths?: readonly string[];
+  /** Generated outputs edited by hand instead of regenerated. */
+  changedProtectedPaths?: readonly string[];
   /** Tags of the round's tasks (a person's answer, a rejection, a failing scenario), from the prompt. */
   roundTags?: readonly string[];
   /** The implementation artifact, where each tag must be accounted for. */
@@ -104,8 +127,16 @@ export function evaluateCodeExit(facts: CodeExitFacts): CodeExitVerdict {
     findings.push(`No changed test file names these scenarios: ${unmarked.join(", ")}. Mark the test with the scenario id.`);
   }
 
+  if ((facts.changedFrozenTestPaths?.length ?? 0) > 0) {
+    findings.push(`These tests were frozen by SPECIFY and this phase changed them: ${facts.changedFrozenTestPaths!.join(", ")}. Restore them and make the implementation satisfy them; changing the test is how a card passes without doing the work.`);
+  }
+  if ((facts.changedProtectedPaths?.length ?? 0) > 0) {
+    findings.push(`These generated outputs were edited by hand: ${facts.changedProtectedPaths!.join(", ")}. Regenerate them through the repository's own command instead.`);
+  }
+
   for (const check of facts.projectChecks) {
-    if (!check.passed) findings.push(`${check.name} failed: ${check.detail}`);
+    if (check.skipped || check.passed) continue;
+    findings.push(`${check.name} failed: ${check.detail}`);
   }
 
   const unaddressed = unaddressedTags(facts.artifactText ?? "", facts.roundTags ?? []);
@@ -132,6 +163,40 @@ export interface CodeExitCollectInput {
   projectChecks: readonly ProjectCheck[];
   /** Test events the session emitted, the second of the two red/green channels. */
   trajectory?: readonly TrajectoryEvidence[];
+  /** What counts as a test path, from `codeExit.testPathPatterns`. */
+  testPathPatterns?: readonly string[] | undefined;
+  /** Generated outputs no phase may edit by hand. */
+  protectedPaths?: readonly string[] | undefined;
+  /** The commit SPECIFY froze the tests in. Without it there is nothing to
+   * diff against, and the frozen-test check does not run at all -- a card
+   * driven without SPECIFY is measured by the checks that still apply. */
+  frozenTestCommit?: string | undefined;
+}
+
+/**
+ * Declaration order, with every prerequisite ahead of the check that names it.
+ * A cycle keeps the declared order: a repository that declares one has a
+ * configuration problem, and refusing to run any check would hide it behind a
+ * silence rather than behind a failing check.
+ */
+export function orderProjectChecks(checks: readonly ProjectCheck[]): ProjectCheck[] {
+  const byName = new Map(checks.map((check) => [check.name, check]));
+  const ordered: ProjectCheck[] = [];
+  const placed = new Set<string>();
+  const visiting = new Set<string>();
+  const visit = (check: ProjectCheck): void => {
+    if (placed.has(check.name) || visiting.has(check.name)) return;
+    visiting.add(check.name);
+    for (const name of check.requires ?? []) {
+      const prerequisite = byName.get(name);
+      if (prerequisite) visit(prerequisite);
+    }
+    visiting.delete(check.name);
+    placed.add(check.name);
+    ordered.push(check);
+  };
+  for (const check of checks) visit(check);
+  return ordered;
 }
 
 function lines(output: string): string[] {
@@ -175,10 +240,38 @@ export async function collectCodeExitFacts(input: CodeExitCollectInput): Promise
 
   const evidence = redGreenFromCommits(commitMessages, input.trajectory ?? []);
   const projectChecks: ProjectCheckResult[] = [];
-  for (const check of input.projectChecks) {
+  const failedChecks = new Set<string>();
+  for (const check of orderProjectChecks(input.projectChecks)) {
+    if (check.when && !changed.some((path) => matchesAnyGlob(path, check.when!))) {
+      projectChecks.push({ name: check.name, passed: true, detail: "", skipped: "not-relevant" });
+      continue;
+    }
+    if ((check.requires ?? []).some((name) => failedChecks.has(name))) {
+      projectChecks.push({ name: check.name, passed: true, detail: "", skipped: "prerequisite-failed" });
+      continue;
+    }
     const result = await input.runCheck(check);
-    projectChecks.push({ name: check.name, passed: result.passed, detail: result.detail });
+    let { passed, detail } = result;
+    if (passed && (check.assertCleanPaths?.length ?? 0) > 0) {
+      const dirty = (await git.run(["status", "--porcelain", "--", ...check.assertCleanPaths!]))
+        .split(/\r?\n/)
+        .filter((line) => line.length > 3)
+        .map((line) => line.slice(3).trim());
+      if (dirty.length > 0) {
+        passed = false;
+        detail = `it passed but changed files it must leave alone: ${dirty.join(", ")}`;
+      }
+    }
+    if (!passed) failedChecks.add(check.name);
+    projectChecks.push({ name: check.name, passed, detail });
   }
+
+  const testPatterns = input.testPathPatterns ?? [];
+  const changedFrozenTestPaths = input.frozenTestCommit
+    ? lines(await git.run(["diff", "--name-only", input.frozenTestCommit, "HEAD"]))
+      .filter((path) => matchesAnyGlob(path, testPatterns))
+    : [];
+  const changedProtectedPaths = changed.filter((path) => matchesAnyGlob(path, input.protectedPaths ?? []));
 
   return {
     uncommittedPaths,
@@ -189,6 +282,8 @@ export async function collectCodeExitFacts(input: CodeExitCollectInput): Promise
     markedScenarioIds: [...marked].toSorted(),
     dodScenarioIds: [...input.dodScenarioIds],
     projectChecks,
+    changedFrozenTestPaths,
+    changedProtectedPaths,
   };
 }
 

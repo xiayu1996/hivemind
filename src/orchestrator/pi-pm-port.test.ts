@@ -1,12 +1,12 @@
 // oxlint-disable unicorn/no-thenable -- the scenario grammar names a "then" field
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { resolveModel, staticCatalog } from "../runner/model-resolver.js";
+import { testAgentSpec } from "../runner/agent-spec.testing.js";
 import type { PiRunner, PromptResult } from "../runner/types.js";
 import { PiPmPort } from "./pi-pm-port.js";
 
 const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, reasoning: 0, costUsd: 0 };
-const MODEL = await resolveModel(staticCatalog([{ provider: "mock", id: "mock-1" }]), "mock", "mock-1");
+const SPEC = await testAgentSpec({ purpose: "product_manager" });
 const REQUIREMENT_ID = "R-abc123def456";
 
 function runner(reply: string): PiRunner & { prompts: string[] } {
@@ -32,7 +32,7 @@ function runner(reply: string): PiRunner & { prompts: string[] } {
 function port(instance: PiRunner, seen?: Array<Record<string, unknown>>) {
   return new PiPmPort({
     binary: "pi",
-    model: MODEL,
+    spec: SPEC,
     promptRoot: resolve("prompts"),
     cwd: resolve("."),
     createRunner: (config) => {
@@ -43,6 +43,30 @@ function port(instance: PiRunner, seen?: Array<Record<string, unknown>>) {
 }
 
 describe("PiPmPort", () => {
+  it("reports what the session cost even when the answer is unusable", async () => {
+    const spent: unknown[] = [];
+    const instance = runner("not json at all");
+    const unusable = new PiPmPort({
+      binary: "pi",
+      spec: SPEC,
+      promptRoot: resolve("prompts"),
+      cwd: resolve("."),
+      createRunner: () => instance,
+      recordUsage: async (input) => { spent.push(input); },
+    });
+    await expect(unusable.run({
+      requirementId: REQUIREMENT_ID,
+      title: "控制台",
+      originalRequest: "我想随时知道现在在做什么。",
+      history: [],
+      maxQuestions: 1,
+      previousRejections: [],
+    })).rejects.toThrow(/contract/);
+    // The tokens were spent whether or not the answer parsed; a lane that only
+    // billed successful sessions would under-report exactly the bad ones.
+    expect(spent).toMatchObject([{ phase: "CLARIFY" }]);
+  });
+
   it("asks the clarification contract and hands back the parsed batch", async () => {
     const instance = runner(JSON.stringify({ status: "ask", questions: ["谁会用它？"] }));
     const configs: Array<Record<string, unknown>> = [];
@@ -77,7 +101,9 @@ describe("PiPmPort", () => {
       previousRejections: [],
     });
 
-    expect(configs[0]?.tools).toEqual(["read", "grep", "find", "ls"]);
+    // Read-only, and declared once in the registry rather than written out
+    // beside this spawn: the product manager describes work, it does not do it.
+    expect(configs[0]?.tools).toEqual(["find", "grep", "ls", "read"]);
     expect(configs[0]?.contextFiles).toBe("explicit");
     const systemPrompt = configs[0]?.systemPrompt as { mode: string; text: string };
     expect(systemPrompt.mode).toBe("replace");

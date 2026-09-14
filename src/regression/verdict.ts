@@ -40,10 +40,19 @@ const NOISE: Array<[RegExp, string]> = [
  * opening a new one every sweep.
  */
 export function failureSignature(output: string): string {
+  return createHash("sha256").update(normalizeFailureText(output)).digest("hex").slice(0, 32);
+}
+
+/**
+ * The readable half of a signature: the same text the hash is taken over, with
+ * everything that identifies a particular run replaced by a placeholder. Kept
+ * separate so a reader can be shown what was grouped and why, rather than a
+ * hash they have to take on faith.
+ */
+export function normalizeFailureText(output: string): string {
   let normalized = output.trim().toLowerCase();
   for (const [pattern, replacement] of NOISE) normalized = normalized.replaceAll(pattern, replacement);
-  normalized = normalized.replaceAll(/\s+/g, " ").trim();
-  return createHash("sha256").update(normalized).digest("hex").slice(0, 32);
+  return normalized.replaceAll(/\s+/g, " ").trim();
 }
 
 /**

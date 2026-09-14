@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { loadPmPromptLayers, type PmPhase } from "../pipeline/prompt-loader.js";
 import { lastAssistantText } from "../runner/assistant-text.js";
-import type { ResolvedModel } from "../runner/model-resolver.js";
+import type { ResolvedAgentSpec } from "../runner/agent-spec.js";
 import { RpcPiRunner, type RpcRunnerConfig } from "../runner/rpc-runner.js";
-import type { PiRunner } from "../runner/types.js";
+import type { PiRunner, PromptResult } from "../runner/types.js";
 import { jsonPayloadCandidates } from "../util/json-payload.js";
 import type { ClarifyPort, ClarifyRequest, ClarifyRound } from "./clarify-loop.js";
 import { humanQuestionInputSchema, questionLines } from "./human-question.js";
@@ -46,13 +46,27 @@ const decompositionSchema = z.object({
 
 export interface PiPmPortOptions {
   binary: string;
-  model: ResolvedModel;
+  /** Model, tools, skills and limits for this call site, from the one resolver.
+   * Taking a bare model here is what let the tool surface be written out again
+   * beside every spawn, each copy free to drift from the others. */
+  spec: ResolvedAgentSpec;
   promptRoot: string;
   cwd: string;
   extensions?: string[];
   /** Extra variables for the pi spawn; an API-key provider needs its key here. */
   env?: Record<string, string>;
   createRunner?: (config: RpcRunnerConfig) => PiRunner;
+  /** What one session cost, reported per session. The requirement lane spends
+   * real money and used to record none of it, so a card's total was the
+   * execution half of a bill nobody could see the other half of. */
+  recordUsage?: (input: SessionUsage) => Promise<void>;
+}
+
+/** One product-manager session's bill, attributed to what it ran on. */
+export interface SessionUsage {
+  phase: PmPhase;
+  usage: PromptResult["usage"];
+  spec: ResolvedAgentSpec;
 }
 
 /**
@@ -77,10 +91,12 @@ export class PiPmPort implements ClarifyPort, PrdPort, RequirementDecomposePort 
     const layers = await loadPmPromptLayers(this.options.promptRoot, phase);
     const runner = (this.options.createRunner ?? ((config) => new RpcPiRunner(config)))({
       binary: this.options.binary,
-      provider: this.options.model.provider,
-      model: this.options.model,
+      provider: this.options.spec.model.provider,
+      model: this.options.spec.model,
       cwd: this.options.cwd,
-      tools: ["read", "grep", "find", "ls"],
+      tools: [...this.options.spec.tools],
+      skillDiscovery: "explicit",
+      skills: [...this.options.spec.skills],
       contextFiles: "explicit",
       ...(this.options.extensions ? { extensions: this.options.extensions } : {}),
       ...(this.options.env ? { env: this.options.env } : {}),
@@ -92,6 +108,9 @@ export class PiPmPort implements ClarifyPort, PrdPort, RequirementDecomposePort 
       await runner.setAutoRetry(false);
       const result = await runner.prompt(prompt);
       if (result.failure) throw new Error(result.failure.errorMessage);
+      // Reported before the contract is checked: the tokens were spent whether
+      // or not the answer turns out to be usable.
+      await this.options.recordUsage?.({ phase, usage: result.usage, spec: this.options.spec });
       const raw = lastAssistantText(await runner.getMessages());
       for (const payload of jsonPayloadCandidates(raw)) {
         const parsed = schema.safeParse(payload);

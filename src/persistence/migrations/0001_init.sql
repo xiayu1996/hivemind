@@ -129,7 +129,7 @@ CREATE TABLE IF NOT EXISTS stories (
   title             TEXT NOT NULL,
   requirement       TEXT NOT NULL,
   state             TEXT NOT NULL CHECK (state IN (
-                      'QUEUED','DESIGN','CODE','VERIFY','MERGE','DELIVERED',
+                      'QUEUED','SHAPE','DESIGN','SPECIFY','CODE','VERIFY','MERGE','DELIVERED',
                       'REGRESSION_FIX','NEEDS_INPUT','HUMAN_PARKED','FAILED')),
   phase             TEXT,
   priority          INTEGER NOT NULL DEFAULT 2,
@@ -148,7 +148,7 @@ CREATE TABLE IF NOT EXISTS stories (
                       'blocking_question','verify_loop_exceeded','retry_limit_exceeded',
                       'cost_ceiling_exceeded')),
   resume_state      TEXT CHECK (resume_state IS NULL OR resume_state IN (
-                      'QUEUED','DESIGN','CODE','VERIFY','MERGE','REGRESSION_FIX','NEEDS_INPUT')),
+                      'QUEUED','SHAPE','DESIGN','SPECIFY','CODE','VERIFY','MERGE','REGRESSION_FIX','NEEDS_INPUT')),
   notion_ai_status_shadow TEXT,
   human_wins_until  INTEGER,
   last_human_action_at INTEGER,
@@ -264,7 +264,7 @@ CREATE TABLE IF NOT EXISTS phase_runs (
   run_id            TEXT PRIMARY KEY,
   card_id           TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
   phase              TEXT NOT NULL CHECK (phase IN (
-                     'DESIGN','CODE','VERIFY','MERGE','REGRESSION_FIX')),
+                     'SHAPE','DESIGN','SPECIFY','CODE','VERIFY','MERGE','REGRESSION_FIX')),
   round              INTEGER NOT NULL CHECK (round > 0),
   session_id         TEXT,
   prompt_sha256      TEXT NOT NULL CHECK (length(prompt_sha256) = 64),
@@ -284,7 +284,7 @@ CREATE TABLE IF NOT EXISTS phase_artifacts (
   run_id             TEXT NOT NULL REFERENCES phase_runs(run_id) ON DELETE CASCADE,
   card_id            TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
   phase              TEXT NOT NULL CHECK (phase IN (
-                     'DESIGN','CODE','VERIFY','MERGE','REGRESSION_FIX')),
+                     'SHAPE','DESIGN','SPECIFY','CODE','VERIFY','MERGE','REGRESSION_FIX')),
   round              INTEGER NOT NULL CHECK (round > 0),
   kind               TEXT NOT NULL,
   body               TEXT NOT NULL,
@@ -335,6 +335,31 @@ CREATE TABLE IF NOT EXISTS leases (
   expires_at   INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_leases_expiry ON leases(expires_at);
+
+-- Per-provider concurrency, one row per live spawn.
+--
+-- Two layers, deliberately separate: the card lease above is ownership (who may
+-- advance this card), this is throttling (how many spawns one account may have
+-- in flight). They cannot be the same thing, because the provider is resolved
+-- per phase and may change mid-card through failover, so a slot taken once when
+-- the card was claimed would guarantee nothing about the phases after it.
+--
+-- It lives in the central store rather than in a process, because `story:run`
+-- is already a separate subprocess: an in-process counter cannot see its
+-- siblings. Slots expire and are heartbeaten, so a killed holder's capacity
+-- comes back without anybody sweeping it.
+CREATE TABLE IF NOT EXISTS provider_slots (
+  slot_id      TEXT PRIMARY KEY,
+  provider     TEXT NOT NULL,
+  card_id      TEXT NOT NULL,
+  holder       TEXT NOT NULL,
+  purpose      TEXT NOT NULL,
+  acquired_at  INTEGER NOT NULL,
+  heartbeat_at INTEGER NOT NULL,
+  expires_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_provider_slots_live ON provider_slots(provider, expires_at);
+CREATE INDEX IF NOT EXISTS idx_provider_slots_holder ON provider_slots(holder);
 
 -- Append-only canonical event log. seq is monotonic per run.
 CREATE TABLE IF NOT EXISTS event_log (
@@ -489,6 +514,10 @@ CREATE TABLE IF NOT EXISTS human_feedback (
   channel     TEXT NOT NULL CHECK (channel IN ('answer','rework','defect','preference','unclassified')),
   body        TEXT NOT NULL,
   applied_at  INTEGER,
+  -- The round the comment actually reached, which is not the round it arrived
+  -- in: a card page that says "used in round N" about something nothing has
+  -- read yet is a claim a person acts on.
+  applied_round INTEGER,
   created_at  INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_channel ON human_feedback(channel, created_at);
@@ -510,6 +539,96 @@ CREATE TABLE IF NOT EXISTS verify_records (
   CHECK (verify_session_id <> code_session_id)
 );
 CREATE INDEX IF NOT EXISTS idx_verify_card ON verify_records(card_id, round);
+
+-- Per-scenario verification conclusions, append-only.
+--
+-- verify_records above is one row per round with no scenario column, which is
+-- enough while every round verifies the whole card. It stops being enough the
+-- moment a reworded scenario is re-verified on its own: the remaining
+-- scenarios need conclusions of their own, carried forward rather than
+-- reasserted, and a carry-forward has to say what it was carried from.
+--
+-- Rows are never updated. A conclusion is about one scenario, at one contract
+-- version, on one tree; rewriting it in place would erase the evidence that it
+-- was ever true of something else.
+CREATE TABLE IF NOT EXISTS verify_scenario_results (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  card_id           TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  scenario_id       TEXT NOT NULL,
+  round             INTEGER NOT NULL CHECK (round > 0),
+  -- The whole card's contract hash, for reading the history back.
+  dod_version       TEXT NOT NULL,
+  -- This scenario's own hash. Invalidation is judged on it, not on the card's:
+  -- judging on the card's would void every scenario whenever any one of them
+  -- was reworded, which is the same as tearing the card down.
+  scenario_version  TEXT NOT NULL,
+  -- The tree the conclusion is about. A contract that did not change does not
+  -- prove the conclusion still holds: the fix for another scenario may have
+  -- changed code they share.
+  verified_tree_sha TEXT NOT NULL,
+  outcome           TEXT NOT NULL CHECK (outcome IN ('passed','failed','inconclusive')),
+  evidence          TEXT,
+  -- Set when this row is a carry-forward of an earlier conclusion rather than
+  -- a fresh verification.
+  carried_from      INTEGER REFERENCES verify_scenario_results(id),
+  created_at        INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_verify_scenario_card ON verify_scenario_results(card_id, scenario_id, id);
+
+-- Questions SHAPE raised, and what a person answered.
+--
+-- Only SHAPE may produce them. A phase that can ask is a phase that can park
+-- the board, and every phase after SHAPE reads a frozen contract precisely so
+-- that unattended delivery has somewhere to run to.
+CREATE TABLE IF NOT EXISTS open_questions (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  card_id      TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  question_key TEXT NOT NULL,
+  question     TEXT NOT NULL,
+  -- The answer SHAPE proposed. A question without one asks a person to compose
+  -- from scratch; with one they pick a letter.
+  suggestion   TEXT NOT NULL,
+  blocking     INTEGER NOT NULL CHECK (blocking IN (0, 1)),
+  answer       TEXT,
+  answered_at  INTEGER,
+  created_at   INTEGER NOT NULL,
+  UNIQUE (card_id, question_key),
+  CHECK ((answer IS NULL AND answered_at IS NULL) OR (answer IS NOT NULL AND answered_at IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_open_questions_card ON open_questions(card_id, blocking);
+
+-- What SPECIFY froze, and the two commits its exit is measured against.
+--
+-- Two shas per execution, deliberately: the entry one is the baseline the
+-- tree-pin cleans against, and re-entry and regression each take whatever tree
+-- was legal when they started -- cleaning against a hardcoded DESIGN commit
+-- would revert every legitimate implementation the card already has. The exit
+-- one is the frozen tree CODE is fenced against.
+CREATE TABLE IF NOT EXISTS story_test_contracts (
+  card_id             TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  attempt             INTEGER NOT NULL CHECK (attempt > 0),
+  mode                TEXT NOT NULL CHECK (mode IN ('full','narrow')),
+  contract_yaml       TEXT NOT NULL,
+  specify_base_commit TEXT NOT NULL,
+  specify_commit      TEXT,
+  specify_tree_sha    TEXT,
+  test_paths          TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(test_paths)),
+  created_at          INTEGER NOT NULL,
+  frozen_at           INTEGER,
+  PRIMARY KEY (card_id, attempt),
+  CHECK ((specify_commit IS NULL AND frozen_at IS NULL) OR (specify_commit IS NOT NULL AND frozen_at IS NOT NULL))
+);
+
+-- The frozen acceptance contract's content hashes, so an artifact can say which
+-- version it was built against without re-deriving it.
+CREATE TABLE IF NOT EXISTS story_dod_versions (
+  card_id          TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+  dod_version      TEXT NOT NULL,
+  scenario_id      TEXT NOT NULL,
+  scenario_version TEXT NOT NULL,
+  created_at       INTEGER NOT NULL,
+  PRIMARY KEY (card_id, scenario_id)
+);
 
 CREATE TABLE IF NOT EXISTS notion_media_delivery (
   evidence_id       TEXT PRIMARY KEY,

@@ -178,3 +178,126 @@ describe("collectCodeExitFacts", () => {
     expect(collected.markedScenarioIds).toEqual([]);
   });
 });
+
+describe("the repository's own checks", () => {
+  const TEST_PATTERNS = ["**/*.test.*", "tests/**"];
+
+  /** A worktree where CODE also rewrote a frozen test and a generated file. */
+  const trespassing = async (args: readonly string[]): Promise<string> => {
+    const command = args.join(" ");
+    if (command === "status --porcelain") return "";
+    if (command.startsWith("merge-base")) return "abc123\n";
+    if (command.startsWith("log")) return "feat(S-DEMO-01-listing): green\n";
+    if (command.startsWith("diff --name-only specify9")) return "src/console/data.test.ts\nsrc/console/data.ts\n";
+    if (command.startsWith("diff --name-only")) return "src/console/data.ts\nsrc/generated/api.ts\n";
+    if (command.startsWith("diff --check")) return "";
+    throw new Error(`unexpected git command: ${command}`);
+  };
+
+  it("catches a phase that rewrote the tests SPECIFY froze, even though the guard let the write through", async () => {
+    const collected = await collectCodeExitFacts({
+      git: { run: trespassing },
+      readWorktreeFile: async () => "",
+      runCheck: async () => ({ passed: true, detail: "" }),
+      baseRef: "main",
+      dodScenarioIds: [],
+      projectChecks: [],
+      testPathPatterns: TEST_PATTERNS,
+      frozenTestCommit: "specify9",
+    });
+    expect(collected.changedFrozenTestPaths).toEqual(["src/console/data.test.ts"]);
+    const verdict = evaluateCodeExit(facts({ changedFrozenTestPaths: ["src/console/data.test.ts"] }));
+    expect(verdict.passed).toBe(false);
+    expect(verdict.findings[0]).toContain("src/console/data.test.ts");
+  });
+
+  it("leaves the frozen-test check out entirely when no SPECIFY commit exists", async () => {
+    const collected = await collectCodeExitFacts({
+      git: { run: trespassing },
+      readWorktreeFile: async () => "",
+      runCheck: async () => ({ passed: true, detail: "" }),
+      baseRef: "main",
+      dodScenarioIds: [],
+      projectChecks: [],
+      testPathPatterns: TEST_PATTERNS,
+    });
+    expect(collected.changedFrozenTestPaths).toEqual([]);
+  });
+
+  it("names a generated output that was edited by hand instead of regenerated", async () => {
+    const collected = await collectCodeExitFacts({
+      git: { run: trespassing },
+      readWorktreeFile: async () => "",
+      runCheck: async () => ({ passed: true, detail: "" }),
+      baseRef: "main",
+      dodScenarioIds: [],
+      projectChecks: [],
+      protectedPaths: ["src/generated/**"],
+    });
+    expect(collected.changedProtectedPaths).toEqual(["src/generated/api.ts"]);
+  });
+
+  it("does not run a check the round's changes make irrelevant", async () => {
+    const ran: string[] = [];
+    const collected = await collectCodeExitFacts({
+      git: { run: trespassing },
+      readWorktreeFile: async () => "",
+      runCheck: async (check) => { ran.push(check.name); return { passed: true, detail: "" }; },
+      baseRef: "main",
+      dodScenarioIds: [],
+      projectChecks: [
+        { name: "browser suite", command: ["npm", "run", "e2e"], when: ["src/ui/**"] },
+        { name: "unit", command: ["npm", "test"] },
+      ],
+    });
+    expect(ran).toEqual(["unit"]);
+    expect(collected.projectChecks).toMatchObject([
+      { name: "browser suite", skipped: "not-relevant" },
+      { name: "unit", passed: true },
+    ]);
+    // A check nobody ran is not a check that failed.
+    expect(evaluateCodeExit(facts({ projectChecks: collected.projectChecks })).passed).toBe(true);
+  });
+
+  it("runs a generator before its consumer, and skips the consumer when the generator failed", async () => {
+    const ran: string[] = [];
+    const collected = await collectCodeExitFacts({
+      git: { run: trespassing },
+      readWorktreeFile: async () => "",
+      runCheck: async (check) => { ran.push(check.name); return { passed: false, detail: "generator exploded" }; },
+      baseRef: "main",
+      dodScenarioIds: [],
+      projectChecks: [
+        { name: "typecheck", command: ["npm", "run", "typecheck"], requires: ["codegen"] },
+        { name: "codegen", command: ["npm", "run", "codegen"] },
+      ],
+    });
+    expect(ran).toEqual(["codegen"]);
+    expect(collected.projectChecks).toMatchObject([
+      { name: "codegen", passed: false },
+      { name: "typecheck", skipped: "prerequisite-failed" },
+    ]);
+    // One finding, from the check that actually failed.
+    expect(evaluateCodeExit(facts({ projectChecks: collected.projectChecks })).findings)
+      .toEqual(["codegen failed: generator exploded"]);
+  });
+
+  it("fails a check that passed while rewriting the baseline it is checked against", async () => {
+    const dirtying = async (args: readonly string[]): Promise<string> => {
+      if (args.join(" ") === "status --porcelain -- tests/__snapshots__") return " M tests/__snapshots__/list.snap\n";
+      return trespassing(args);
+    };
+    const collected = await collectCodeExitFacts({
+      git: { run: dirtying },
+      readWorktreeFile: async () => "",
+      runCheck: async () => ({ passed: true, detail: "42 passing" }),
+      baseRef: "main",
+      dodScenarioIds: [],
+      projectChecks: [
+        { name: "unit", command: ["npm", "test"], assertCleanPaths: ["tests/__snapshots__"] },
+      ],
+    });
+    expect(collected.projectChecks[0]).toMatchObject({ name: "unit", passed: false });
+    expect(collected.projectChecks[0]?.detail).toContain("tests/__snapshots__/list.snap");
+  });
+});

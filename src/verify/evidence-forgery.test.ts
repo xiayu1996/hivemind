@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { testAgentSpec } from "../runner/agent-spec.testing.js";
 import type { PiRunner, PromptResult, RpcEvent } from "../runner/types.js";
 import { BlindVerifyExecutor, type TreePinPort } from "./executor.js";
 
@@ -43,8 +44,12 @@ const claimsPassed: RpcEvent = {
   message: { role: "assistant", content: JSON.stringify({ scenarios: [{ id: "S-EPIC-01-unit", status: "passed" }] }) },
 };
 
+/** The verifier's spawn spec, the same for every case here. */
+const VERIFY_SPEC = await testAgentSpec({ purpose: "verify" });
+
 function input() {
   return {
+    spec: VERIFY_SPEC,
     cardId: "story-1",
     round: 1,
     codeSessionId: "code.jsonl",

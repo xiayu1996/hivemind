@@ -16,6 +16,7 @@ describe("retryLimits", () => {
       maxContinueRetries: 8,
       maxRegressionReopens: 2,
       promptTimeoutMs: 900_000,
+      oscillationLookback: 3,
     });
 
     await config.set("retry.maxInnerLoopRounds", 3, "test");

@@ -1,23 +1,10 @@
+import type { ModelPurpose, ModelTier } from "../pipeline/phase.js";
 import type { ConfigStore } from "../config/store.js";
+import { isMeteredProvider } from "./provider-env.js";
 import { resolveModel, withThinkingLevel, type ModelCatalog, type ResolvedModel, type ThinkingLevel } from "./model-resolver.js";
 
-/** Every call site that spends tokens. A new one must be declared here and
- * given a tier in config; there is no default tier for an unknown purpose. */
-export const MODEL_PURPOSES = [
-  "product_manager",
-  "decompose",
-  "design",
-  "code",
-  "verify",
-  "ui_review",
-  "merge",
-  "capacity_probe",
-  "triage",
-  "distiller",
-] as const;
-
-export type ModelPurpose = (typeof MODEL_PURPOSES)[number];
-export type ModelTier = "brain" | "standard" | "cheap";
+export { MODEL_PURPOSES, MODEL_TIERS } from "../pipeline/phase.js";
+export type { ModelPurpose, ModelTier } from "../pipeline/phase.js";
 
 export interface ProviderProfile {
   authType: "api_key" | "oauth";
@@ -61,6 +48,12 @@ export class ModelPolicy {
     if (!id) throw new Error(`provider ${provider} has no model configured for the ${tier} tier`);
     // The effort rides on the model so that every port relays it for free.
     return withThinkingLevel(await resolveModel(this.catalog, provider, id), this.thinkingFor(purpose));
+  }
+
+  /** Whether tokens on this provider cost money as they are spent. Declared by
+   * the profile when it says so, and inferred from the auth type otherwise. */
+  async isMetered(provider: string): Promise<boolean> {
+    return isMeteredProvider(await this.profileOf(provider));
   }
 
   /** The profile of a provider hivemind is configured to spawn. */

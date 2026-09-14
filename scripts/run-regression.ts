@@ -7,6 +7,7 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { ConfigStore } from "../src/config/store.js";
+import { cacheRetentionEnv } from "../src/runner/cache-retention.js";
 import { POLICY_ENV_VAR, serializeGuardPolicy, type GuardPolicy } from "../src/guard/policy.js";
 import { CANONICAL_CAPTURE_ENV } from "../src/observability/capture-contract.js";
 import { openDb } from "../src/persistence/client.js";
@@ -17,6 +18,7 @@ import { ScenarioRegistry, type ScenarioPool } from "../src/regression/scenario-
 import { RegressionStore, regressionPolicy } from "../src/regression/store.js";
 import { RegressionSweeper } from "../src/regression/sweeper.js";
 import { resolveModel } from "../src/runner/model-resolver.js";
+import { resolveAgentSpec } from "../src/runner/agent-spec.js";
 import { defaultModelCatalog } from "../src/runner/catalog.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
@@ -55,6 +57,19 @@ async function main(): Promise<void> {
   try {
     await migrate(handle.client);
     const config = await ConfigStore.load(handle.client);
+    // The sweep spawns the verifier once per pool run, on the provider this
+    // invocation names; there is no failover chain to walk inside a sweep and
+    // no provider capacity to hold beyond it.
+    const sweepSpec = await resolveAgentSpec({
+      config,
+      policy: {
+        resolve: async () => model,
+        providersFor: async () => [provider],
+        tierOf: async () => "standard",
+        isMetered: async () => false,
+      },
+    }, "verify", provider);
+    const sweepGrant = async () => ({ spec: sweepSpec, release: async () => undefined });
     const registry = new ScenarioRegistry(handle.client);
     const store = new RegressionStore(handle.client);
     const policy = await regressionPolicy(config);
@@ -63,18 +78,22 @@ async function main(): Promise<void> {
 
     const executor = new BlindVerifyExecutor(
       {
-        create: (guard: GuardPolicy) => new RpcPiRunner({
+        create: (guard: GuardPolicy, _spec, browserEnv) => new RpcPiRunner({
           binary: piBinary,
           provider: model.provider,
           model,
           cwd: guard.extraWriteRoots[0] ?? worktreePath,
           sessionDir: join(evidenceRoot, "sessions"),
-          tools: ["read", "bash", "grep", "find", "ls"],
+          tools: [...sweepSpec.tools],
+          skillDiscovery: "explicit",
+          skills: [...sweepSpec.skills],
           extensions: [join(ROOT, "extensions", "hive-guard.ts"), join(ROOT, "extensions", "canonical-capture.ts")],
           contextFiles: "explicit",
           systemPrompt: { mode: "replace", text: verifyLayers.combined },
           env: {
             PATH: browserLanePath(ROOT),
+            ...browserEnv,
+            ...cacheRetentionEnv(config),
             [POLICY_ENV_VAR]: serializeGuardPolicy(guard),
             [CANONICAL_CAPTURE_ENV]: join(guard.extraWriteRoots[0] ?? evidenceRoot, "provider-requests.jsonl"),
             [EVIDENCE_DIR_ENV]: guard.extraWriteRoots[0] ?? evidenceRoot,
@@ -106,6 +125,7 @@ async function main(): Promise<void> {
       git: processGitCommand,
       evidenceRoot,
       auditPath,
+      resolveSpec: sweepGrant,
       allowedHosts,
       chromiumSandbox: config.get("verify.chromiumSandbox"),
     });
@@ -126,7 +146,8 @@ async function main(): Promise<void> {
         git: processGitCommand,
         evidenceRoot: join(evidenceRoot, "probe"),
         auditPath,
-        allowedHosts,
+        resolveSpec: sweepGrant,
+      allowedHosts,
       chromiumSandbox: config.get("verify.chromiumSandbox"),
       });
       try {

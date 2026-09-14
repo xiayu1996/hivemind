@@ -6,18 +6,24 @@
 
 ### 1.1 拓扑
 
-- **Redis 与中央 libsql 都放 Linux 主机**（与 orchestrator 同机，消除一跳网络故障域）。三台机器 Tailscale 组网 + Redis requirepass。
+- **中央 libsql 放 Linux 主机**（与 orchestrator 同机，消除一跳网络故障域）。三台机器 Tailscale 组网。（原文还有 Redis，随 §1.2 的 BullMQ 一并撤销。）
 - 任务/phase/事件/成本在中央 libsql；worker 本地只留 scratch（worktree、pi session 文件、evidence 暂存后经 orchestrator HTTP 端点上传）。
 - **租约上移**：busybee LeaseService 的 CAS 条件更新语义（`INSERT ... ON CONFLICT DO UPDATE ... WHERE owner=self OR expired`）原样搬到中央 libsql，即为跨机安全的分布式租约；worker 经 orchestrator API 在 phase 边界续租。**不引 Redlock**——卡所有权已有单一数据库仲裁。
 
-### 1.2 分发机制：BullMQ over Redis（验证通过），但废除两条 busybee 单机不变量
+### 1.2 分发机制：DB 队列 + 租约 CAS（2026-09-14 改写，取代 BullMQ）
 
-BullMQ worker 本质是 Redis 客户端，跨主机是原生场景。必须改造：
+> **原方案是 BullMQ over Redis，已撤销。** 撤销理由见 `07-agent-runtime.md` §5.3：MQ 能提供的每一项在中央 libsql 里都已有对等物（任务持久化 = `stories` 表、优先级 = `stories.priority`、能力路由 = `stories.capabilities`、stalled 重派 = 租约过期、防重复消费 = 租约 CAS + 单调 fence），而代价是一个必须常驻的 Redis、跨机网络依赖，以及**第二份状态**——"避免第二个真相源"是本设计的核心不变量。§1.3 自己也写明防双执行的始终是租约，不是队列。
+>
+> 唯一真缺的"推送式唤醒"，对跑几分钟到几十分钟的卡，5–10 秒轮询延迟无影响；协调器可主动唤醒 worker，推送失败由轮询兜底，与 05 §4.3 的配置分发同源。
+>
+> 下面两条改造保留为历史记录：它们描述的失效模式在新方案里同样要避开（能力路由仍按最稀缺能力选，启动清理仍只清自己的本地孤儿）。
+
+原 BullMQ 方案的必要改造：
 
 1. **obliterate/StartupRecovery 上移 orchestrator 独占**（busybee 的"一个 prefix 一个进程，启动清空队列安全"在多机下会互删 job）；worker 启动只回扫自己的本地 worktree 孤儿。
-2. **capability 路由用按能力命名的 queue，不用 job 属性过滤**（BullMQ 无服务端筛选，"拉了不匹配再放回"正撞 requeue 深坑）。队列集合：`cap.web` / `cap.browser-e2e` / `cap.ios`（未来）/ `cap.windows`。**路由键 = 卡需求能力集合中的最稀缺能力**（需要 web+browser-e2e 的卡直接进 cap.browser-e2e——Mac mini 本身具备 web 能力），避免组合队列爆炸。目标队列无存活 worker → "能力真空"告警而非让 job 沉底。
+2. **capability 路由按能力分组，不做"拉了不匹配再放回"**（BullMQ 无服务端筛选，放回正撞 requeue 深坑；DB 查询天生能筛，所以这条在新方案里是免费的）。能力集合：`cap.web` / `cap.browser-e2e` / `cap.ios`（未来）/ `cap.windows`。**路由键 = 卡需求能力集合中的最稀缺能力**（需要 web+browser-e2e 的卡直接归 cap.browser-e2e——Mac mini 本身具备 web 能力），避免组合爆炸。无存活 worker 具备该能力 → "能力真空"告警，而不是让卡沉底。
 
-jobId 幂等规则（`task-<cardId>[-r<N>][-c<M>]`）、removeOnComplete:true、TaskInFlightError 语义全部原样移植——踩坑换来的，不重新发明。
+~~jobId 幂等规则、removeOnComplete:true、TaskInFlightError 语义原样移植~~——这三样是 BullMQ 特有的坑，不引入 BullMQ 就不存在（tasks.md M3-03 已标注撤销）。**撤销的是坑不是教训**：「重投必须幂等」在 DB 队列里由租约 CAS 的条件 UPDATE 承担，且那是唯一承担它的地方。
 
 ### 1.3 job 粒度：整卡 + 主机粘性 + 派单信封
 
@@ -25,14 +31,14 @@ jobId 幂等规则（`task-<cardId>[-r<N>][-c<M>]`）、removeOnComplete:true、
 
 - worktree、pi Context 快照、构建缓存全在本地盘；VERIFY 依赖 CODE 刚构建出的环境状态，跨机重建成本 > 任何并行收益；跨机传 WIP（untracked/.env/构建产物）失败模式一堆；phase 级分发把 orchestrator↔worker 交互放大一个量级，每次都是分布式故障面。
 - **胖 worker**：phase 状态机代码以库形式在 worker 进程内执行；orchestrator 保留控制面——收 phase.enter/exit/escalation 事件写中央 EventLog、执行 escalation 决策、Notion 同步、成本账本。状态转移规则是同一份代码，只是执行位置贴着数据。
-- **派单信封模式**（驯服 BullMQ stalled 自动重派与粘性租约的冲突）：cap.* 队列的 job 只是"派单信封"——worker 领单后立即在中央 DB 落卡级租约并 ack 完成 job；执行进度不由 BullMQ job 生命周期承载，靠中央 DB phase checkpoint。stalled/重试只影响"派单"这个瞬时幂等动作，绝不会把执行中的卡重派给没有 worktree 的机器。
+- **~~派单信封模式~~ → 直接从 DB 领单**（2026-09-14，随 §1.2 改写）：worker 按 capability 从中央 DB 的可派发集里取一张卡，立即落卡级租约（CAS + 单调 fence），执行进度靠中央 DB phase checkpoint。信封这一层是为了驯服 BullMQ 的 stalled 自动重派才存在的，没有 BullMQ 就不需要它。**防双执行的判据一字不变**：第二个领取者必须被 CAS 拒绝，绝不会把执行中的卡重派给没有 worktree 的机器。
 - **跨平台验证不破坏粘性**：建模为独立"探针 job"（如 web 卡需要 Windows 浏览器兼容检查）——投 cap.windows，对**已 push 分支**只读 clone + 跑 e2e + 回传证据，绝不触碰主 worktree。
 
 ### 1.4 worker daemon 与失联语义
 
 每机一个 Node daemon，注册时声明 hostId、能力标签、并发度（建议 1；Mac mini 跑 e2e 时并发 2 会互抢浏览器）、hivemind/pi/协议版本。
 
-- **心跳**：Redis `SETEX hm:worker:<hostId>`（TTL 15s，每 5s 刷），payload 带能力/版本三元组/当前卡/**内网 IP 与机器指标（loadavg/内存/磁盘余量）/凭据探针结果**（供 Web 控制台节点健康页，05 文档 §5）；心跳响应 piggyback `configVersion` 实现动态配置分发（每次心跳重申期望态，漏事件可自愈——busybee RemoteControl 教训）。
+- **心跳**：中央 libsql 的 worker 心跳行（TTL 语义 15s，每 5s 刷；2026-09-14 从 Redis `SETEX` 改来），payload 带能力/版本三元组/当前卡/**内网 IP 与机器指标（loadavg/内存/磁盘余量）/凭据探针结果**（供 Web 控制台节点健康页，05 文档 §5）；心跳响应 piggyback `configVersion` 实现动态配置分发（每次心跳重申期望态，漏事件可自愈——busybee RemoteControl 教训）。
 - **失联两段式**：断 45s → offline 告警不打断（沿用"静默检测而非时长上限"哲学）；断 >30min（覆盖重启/更新窗口）→ orchestrator 撤销主机租约，卡带 freshWorktree 标记重投 capability 队列，当前 phase 从头重入（全量注入模式使跨机重建廉价，见 §2.3）；孤儿 worktree 等主机回归后本地回扫 quarantine。EventLog/证据都在中央，记录无损失。
 - worker 带同 hostId 回归 → 本地 StartupRecovery：从中央 DB 回扫属于本机的 in-flight 卡 → 从 phase checkpoint 重入（worktree 还在本地盘，恢复廉价）。
 
@@ -76,6 +82,8 @@ StallWatchdog 原样移植：静默检测而非时长上限，信号源换成 RP
 
 ### 2.3 跨 phase 上下文延续：无状态全量注入（不做 session fork）
 
+> **2026-09-14 补充**：这条不变量依旧成立，但它此前有一个未兑现的前提——"全量注入靠 provider 前缀缓存省钱"。实测发现 pi 把 `prompt_cache_key` 设成每次 spawn 都不同的 session id，等于主动打散缓存，所以前缀缓存**一直没有在工作**。修法是让同一张卡同一道的各 phase 共享一个**只含 header、零消息**的 session 文件 id——共享的是路由标签，不是会话，全量注入与字节确定性不受影响。完整方案与两条必须补回的断言见 07 §4。
+
 - busybee 教训直接平移（跨仓 fork 失败 #247；MR-plan 的全量注入模式反而稳）：phase prompt 自包含，注入前序 phase 的**结构化产物**（分析文档/DoD/验证证据摘要），不注入原始对话。
 - pi 下更成立：session 文件在本地盘（破坏可移植性）+ JSONL 尾部损坏 bug；且无状态模式是**跨机 fresh 重建（§1.4）与跨供应商 failover（§5）的共同前提**——三件事共享同一机制，本设计中杠杆率最高的一条决策。
 - session 文件保留但降级为审计/trace 原料，不承载执行语义。
@@ -107,23 +115,29 @@ RPC 下 pi 进程活着 session 就在内存：检测到流中断类终态错误
 1. 主通道：runner 消费 RPC 事件流全部 tool 事件（含被 block 的）写中央 EventLog（append-only，审计 source of truth）；
 2. 副通道：extension 自己往 `$EVIDENCE_DIR/tool-audit.jsonl` 追加（含 deny 决策与原因，payload 截断 500 字符）——runner 与 pi 之间管道出问题时的本地铁证。
 
-### 3.3 VERIFY 物理禁写
+### 3.3 VERIFY 的真实防线（2026-09-14 改写）
 
-真正的文件系统只读不可行（build/test 要写 node_modules/dist/缓存），三层界定：
+原方案的第 1 层是"disallowedTools 全列写/编辑类工具 + bash 写模式启发式"。**它挡不住它声称要挡的事故**——busybee 的 file:// 假页面冒充 e2e，伪造者只需要 navigate + screenshot，两个都是读操作。论证见 07 §6。
 
-1. **主控**：disallowedTools 全列写/编辑类工具 + bash 写模式启发式（重定向/sed -i/tee，承认枚举不完备所以有第 2 层）；extraWriteRoots 只留证据目录；若 pi 支持 per-run 工具注册裁剪（PoC-3），更进一步——不存在的工具比被拦的工具更"物理"；
-2. **侦测**：CODE 结束 VERIFY 开始前记 tree-pin 指纹（busybee 现成资产），VERIFY 结束后比对，失配 → quarantine + verdict 作废；
-3. evidence（截图等）经 extraWriteRoots 白名单落卡片证据目录，不污染 diff。
+真正承重的是另外两层，都保留并加强：
 
-### 3.4 per-phase 工具矩阵
+1. **导航层**：`e2eHostAllowlist`（`src/guard/policy.ts:118`）禁 file:// 与白名单外 host。这是唯一挡得住假页面的一层。
+2. **侦测层**：CODE 结束 VERIFY 开始前记 tree-pin 指纹（busybee 现成资产），VERIFY 结束后比对，失配 → quarantine + verdict 作废。
+3. **verdict 层**：e2e/ui 场景需要属于该场景**独有**的截图 + 到达的页面，缺则 inconclusive（03 §2.2 / IT-04）。S-E3OVERVIEW-01 曾用同一张截图通过四个场景，正是这一层抓的。
 
-| Phase | 允许 | 禁止 |
-|---|---|---|
-| ANALYZE/DECOMPOSE | read/grep/glob/bash（受红线） | 全部写/编辑、git push |
-| CODE | 全量（受红线+fenced+worktree 边界） | — |
-| VERIFY / E2E runner | read/grep/bash（构建测试）、browser 工具 | 全部写/编辑（除证据目录）、git push、file:// 导航 |
-| MR | git/gh CLI、read | 写/编辑源码 |
-| DISTILL/REPORT | read | 一切写（产出经 runner 落中央存储） |
+evidence（截图等）经 extraWriteRoots 白名单落卡片证据目录，不污染 diff。
+
+### 3.4 工具面：全阶段统一（2026-09-14 改写）
+
+**原 per-phase 工具矩阵已撤销。** 工具集全阶段统一，阶段差异由 prompt 尾部约束 + 确定性出口判据承担。完整论证见 07 §6，三条要点：
+
+- 参照项目（GacUI）两个时期都是零工具面限制，用 prompt 重复表达约束，跑了大半年没塌；
+- hivemind 引以为据的那次事故，工具面禁写从来没挡住过（见 §3.3）；
+- 每切一刀工具面就废掉一段缓存前缀（07 §4.3），而收益是零。
+
+工具面收口后还顺带修掉一个已有的不一致：实采数据显示 VERIFY 是 `[read, bash, grep, find, ls]`、DESIGN 是 `[read, bash]`，两个都"只读"却完全不同，因为 VERIFY 走 `blind-verify-port.ts` 另一条路。统一到 `agent.purposeTools` 这个唯一来源。
+
+保留的物理约束只有两条运行时红线，都不改工具 schema：`e2eHostAllowlist`（导航层）与 `fencedPatterns`（hook 层，挡 CODE 改 SPECIFY 冻结的测试）。
 
 ## 4. system prompt 与目标仓资产装载
 
@@ -165,7 +179,7 @@ RPC 下 pi 进程活着 session 就在内存：检测到流中断类终态错误
 >
 > 放弃 MCP 的代价与理由：pi 无原生 MCP，走 MCP 要同时押注 pi 侧社区 adapter 与 MCP server 两条外部生命线，而换来的通用接缝本设计并不需要——iOS 本就走 XCUITest/simctl + bash。**若将来某能力只有 MCP server 形态，再按本节原方案单独接，不影响两条车道。**
 >
-> **浏览器侧红线三层同源**（同一份 `guard.e2eHostAllowlist`）：① `src/guard/tool-decision.ts` 对 bash 命令行里的导航目标过闸，`file://` 一律拒（一个从磁盘加载的页面不是被交付的系统），非白名单 host 拒，非 VERIFY/E2E 阶段一律不许开浏览器；② `src/verify/browser-config.ts` 生成 `.playwright/cli.config.json`，`network.allowedOrigins` 让浏览器自己 abort 掉名单外请求，`outputDir` 指向该 run 的证据目录；③ 既有 `validateVerdict(allowedHosts)` 事后校验判据。第一层挡命令，第二层挡请求，第三层挡声称。
+> **浏览器侧红线三层同源**（同一份 `guard.e2eHostAllowlist`）：① `src/guard/tool-decision.ts` 对 bash 命令行里的导航目标过闸，`file://` 一律拒（一个从磁盘加载的页面不是被交付的系统），非白名单 host 拒，非 VERIFY/E2E 阶段一律不许开浏览器；② `src/verify/browser-config.ts` 把同一份名单写成 `PLAYWRIGHT_MCP_ALLOWED_ORIGINS` / `PLAYWRIGHT_MCP_OUTPUT_DIR` / `PLAYWRIGHT_MCP_ISOLATED` 等环境变量，随验证会话的 runner env 下发，`network.allowedOrigins` 让浏览器自己 abort 掉名单外请求，`outputDir` 指向该 run 的证据目录。**走环境变量而不是往 worktree 写 `.playwright/cli.config.json`，有两个不可让步的理由**：写文件会改动 VERIFY 正在被树指纹钉住的那棵树——每一轮带浏览器的验证都会被判成篡改（实测：`tree changed during VERIFY`）；且目标仓库自己可能带一份同名配置，CLI 读文件在读环境变量之前，那份配置会把白名单放宽。环境变量层排在配置文件之后合并，我们的名单一定生效；③ 既有 `validateVerdict(allowedHosts)` 事后校验判据。第一层挡命令，第二层挡请求，第三层挡声称。
 >
 > **已知风险**：`@playwright/cli` 仍是 0.1.x 且依赖 pin 在 `playwright@1.63.0-alpha`（`@playwright/mcp` 同样如此）。兜底是纯 `@playwright/test` 稳定版——车道 2 只是加速器，坏了不阻断验收。
 
@@ -173,7 +187,7 @@ RPC 下 pi 进程活着 session 就在内存：检测到流中断类终态错误
 
 ### 5.1 三档抽象与 per-provider 映射
 
-见 00-overview 决策与 03-pipeline 角色表。三档：**大脑**（重决策：拆解/根因/反思提案）/ **中脑**（执行：CODE/VERIFY/DESIGN/E2E）/ **小脑**（机械：triage/completion verifier/distiller/compaction/文案）。
+见 00-overview 决策与 03-pipeline 角色表。三档：**大脑**（重决策：拆解/根因/反思提案）/ **中脑**（执行：CODE/VERIFY/DESIGN/E2E）/ **小脑**（机械：triage/distiller/compaction/文案）。
 
 | 档位 | openai-codex（day1 主力） | zai GLM | xai Grok | anthropic（预留） |
 |---|---|---|---|---|
@@ -186,6 +200,7 @@ RPC 下 pi 进程活着 session 就在内存：检测到流中断类终态错误
 ### 5.2 enforceModelPolicy（cumora 移植，双 chokepoint）
 
 - `resolveModel(purpose): {tier, provider, modelId}` 是所有 pi run model 参数的**唯一入口**；purpose → 最高允许档位白名单；超档请求强制降级 + P0 告警（fire-and-forget 不阻塞）。
+- **2026-09-14 扩展**：这条纪律从"模型一个维度"扩到七个维度——`resolveAgentSpec` 成为模型 / effort / prompt / 工具 / 守卫 / context / limits 的唯一入口，结果带 brand，`RunnerSpawnOptions` 不再接受散装参数（07 §2.3）。原因是单有 `resolveModel` 拦不住 `run-local-orchestrator.ts:851` 那种"只取 `.id`"的写法，thinking 与 tier 因此在 Story 侧整条链路静默丢失。
 - extension 侧 before_provider_request hook 兜底：payload.model 越级则改写强制降档 + 违规事件——兜住 run 内部漂移（skill/意外切换）。cumora 只有单点，pi 的 hook 给了纵深。
 
 ### 5.3 跨供应商 failover（phase 级重入为主，Context 重放为辅）
@@ -211,13 +226,23 @@ busybee CredentialHealth 从全局单一扩展为 per-provider 三态机（close
 - 错误分类优先消费 RPC 结构化错误事件（PoC-5，不带则退回按 provider 录制的文案正则）；区分"凭据死了（要人）"与"容量限了（等窗口）"，处置沿用 escalation-policy 的 delay/circuit_break 分流；
 - 某 provider open → 新 run 按档位表横移 fallback 列；**三家全开才触发全局 intake 暂停**——单 provider 故障不再停摆全系统，多供应商的核心红利。
 
+### 5.5 凭据刷新单点化与 pi 自刷新（2026-09-14 核 pi 0.85.1 补写）
+
+一台机上跑着的每个 pi 子进程共用同一份 `~/.pi/agent/auth.json`，而 OAuth 刷新会轮换 token：新 token 一签发，旧的立刻作废。所以刷新必须单点。hivemind 的做法是 orchestrator 在派单循环里持 `~/.hivemind/auth-refresh.lock` 调一次 `pi auth`，间隔由 `provider.credentialRefreshIntervalMs`（默认 10 分钟）限住，其余进程一律只读探针。
+
+**但这不是全部——子进程跑到一半自己也会刷新，而且 pi 没给关掉它的开关。** 核 0.85.1 的二进制：`--no-refresh` 只挂在 `pi auth check` 这条命令上（`command.noRefresh ? new ReadOnlyAuthStorage : AuthStorage.create()`），agent 运行时那条路构造 `RuntimeCredentials` 时无条件走 `AuthStorage.create()`，没有 CLI 开关也没有环境变量能把它换成只读。所以一个跑得比 token 寿命还长的 phase，必然由子进程自己发起刷新。
+
+**这件事之所以不出双刷新，是因为 pi 自己上锁**：`AuthStorage` 写之前取 `~/.pi/agent/auth.json.lock`（proper-lockfile），同机的并发子进程因此被串起来。我们要做的只有两件，都已经做了：一是 spawn 前清掉被 SIGKILL 的进程留下的陈旧锁（`src/runner/auth-lock.ts`，只认 mtime 超 30s，即 pi 自己的判据），否则下一个 pi 会静默等满 30s 夺锁窗口；二是握手超时设得高于那个窗口。
+
+结论落成两条纪律：**跨机不复制 auth.json**（副本刷新会让真实例的 token 当场作废，这是一机一账号纪律的根），**同机不与 pi 抢锁**（破锁会让两个进程轮换同一个 refresh token，双双作废）。预刷新只能降低子进程自刷新的频率，不能消灭它——把它当成"少一次锁竞争"的优化，不要当成"只有 orchestrator 会写这个文件"的保证。
+
 ## 6. 部署与自更新
 
 ### 6.1 三平台进程管理
 
 | 平台 | 方案 | 关键点 |
 |---|---|---|
-| Linux | systemd（orchestrator.service + worker.service 分 unit） | Restart=always；Redis 同机 systemd 管理；分开 drain |
+| Linux | systemd（orchestrator.service + worker.service + console.service 分 unit） | Restart=always；分开 drain |
 | Mac mini | **LaunchAgent（用户会话）而非 LaunchDaemon** | 模拟器/浏览器 e2e 需要 GUI 会话；开机自动登录 + KeepAlive + caffeinate 防休眠；busybee launchd PATH 坑已知（幂等生成 plist 重写 PATH） |
 | Windows | **WSL2 Ubuntu 内的 systemd 用户单元**，与 Linux 行同一脚本（2026-09-05 更正，原计划任务 + 看门狗方案作废） | `/etc/wsl.conf` 启用 systemd；`loginctl enable-linger`；headless 浏览器可用，有头 e2e 不在此机承接 |
 

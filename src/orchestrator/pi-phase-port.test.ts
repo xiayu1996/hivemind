@@ -1,9 +1,9 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PiRunner, PromptResult } from "../runner/types.js";
-import { resolveModel } from "../runner/model-resolver.js";
+import { testAgentSpec } from "../runner/agent-spec.testing.js";
 import type { CodeExitFacts } from "../pipeline/code-exit-gate.js";
 import { CodeExitNotMetError, PiStoryPhasePort } from "./pi-phase-port.js";
 import type { ManagedPhaseInput } from "./story-worker.js";
@@ -61,15 +61,14 @@ describe("PiStoryPhasePort", () => {
     temporary = await mkdtemp(join(tmpdir(), "hivemind-pi-phase-"));
     const reply = JSON.stringify({
       design_summary: "Persist artifacts centrally.",
-      dod_yaml: "story_id: S-EPIC1-01",
+      declarations: [{ file: "src/pipeline/phase.ts", note: "the phase enum every table keys off" }],
     });
     const runner = fakeRunner(reply, "fresh-design-session");
-    const model = await resolveModel({ list: async () => [{ provider: "mock", id: "mock-1" }] }, "mock", "mock-1");
     const configs: unknown[] = [];
-    const telemetry = vi.fn(async () => undefined);
+    const telemetry = vi.fn(() => undefined);
     const port = new PiStoryPhasePort({
       binary: "pi",
-      model,
+      resolveSpec: async () => ({ spec: await testAgentSpec(), release: async () => undefined }),
       worktreePath: resolve("."),
       promptRoot: resolve("prompts"),
       sessionRoot: join(temporary, "sessions"),
@@ -78,28 +77,127 @@ describe("PiStoryPhasePort", () => {
       guardExtension: resolve("extensions/hive-guard.ts"),
       canonicalCaptureExtension: resolve("extensions/canonical-capture.ts"),
       createRunner: (config) => { configs.push(config); return runner; },
-      recordTelemetry: telemetry,
+      emit: telemetry,
       readProviderPayloads: async () => [{ model: "mock-1", messages: [] }],
     });
 
-    await expect(port.run(phaseInput("DESIGN"))).resolves.toEqual({
+    await expect(port.run(phaseInput("DESIGN"))).resolves.toMatchObject({
       sessionId: "fresh-design-session",
       artifacts: [
         { kind: "design-summary", body: "Persist artifacts centrally." },
-        { kind: "dod", body: "story_id: S-EPIC1-01" },
+        {
+          kind: "declarations",
+          body: JSON.stringify([{ file: "src/pipeline/phase.ts", note: "the phase enum every table keys off" }], null, 2),
+        },
       ],
     });
     expect(configs).toMatchObject([{
       contextFiles: "explicit",
-      tools: ["read", "bash"],
+      // One tool set for every phase: a per-phase set is a cache prefix break
+      // that bought nothing, and the constraints live in the prompt tail and
+      // the deterministic exits instead.
+      tools: ["bash", "edit", "find", "grep", "ls", "read", "write"],
       env: { PI_GUARD_POLICY: expect.stringContaining('"phase":"DESIGN"') },
     }]);
     expect(telemetry).toHaveBeenCalledOnce();
   });
 
+  it("finishes the phase even when the observability emitter throws", async () => {
+    temporary = await mkdtemp(join(tmpdir(), "hivemind-pi-phase-"));
+    const port = new PiStoryPhasePort({
+      binary: "pi",
+      resolveSpec: async () => ({ spec: await testAgentSpec(), release: async () => undefined }),
+      worktreePath: resolve("."),
+      promptRoot: resolve("prompts"),
+      sessionRoot: join(temporary, "sessions"),
+      evidencePath: join(temporary, "evidence"),
+      auditPath: join(temporary, "audit", "tool-audit.jsonl"),
+      guardExtension: resolve("extensions/hive-guard.ts"),
+      canonicalCaptureExtension: resolve("extensions/canonical-capture.ts"),
+      createRunner: () => fakeRunner(JSON.stringify({ delivery_report: "Shipped the thing." })),
+      readProviderPayloads: async () => [{ model: "mock-1", messages: [] }],
+      // The buffer does not throw; an axiom that holds only while every caller
+      // is well behaved is a convention, so the port does not rely on it.
+      emit: () => { throw new Error("observer is broken"); },
+    });
+
+    await expect(port.run(phaseInput("MERGE"))).resolves.toMatchObject({
+      artifacts: [{ kind: "delivery-report" }],
+    });
+  });
+
+  it("puts the repository context ahead of the per-phase layer so phases share a prefix", async () => {
+    temporary = await mkdtemp(join(tmpdir(), "hivemind-pi-phase-"));
+    const contextFile = join(temporary, "AGENTS.md");
+    await writeFile(contextFile, "# repository conventions\n\nA long, stable block.\n");
+    const spawn = async (phase: ManagedPhaseInput["phase"], reply: string): Promise<string> => {
+      const configs: { systemPrompt?: { text: string } }[] = [];
+      const port = new PiStoryPhasePort({
+        binary: "pi",
+        resolveSpec: async () => ({ spec: await testAgentSpec(), release: async () => undefined }),
+        worktreePath: resolve("."),
+        promptRoot: resolve("prompts"),
+        sessionRoot: join(temporary, "sessions"),
+        evidencePath: join(temporary, "evidence"),
+        auditPath: join(temporary, "audit", "tool-audit.jsonl"),
+        guardExtension: resolve("extensions/hive-guard.ts"),
+        canonicalCaptureExtension: resolve("extensions/canonical-capture.ts"),
+        contextFiles: [{ label: "repository", path: contextFile }],
+        createRunner: (config) => {
+          configs.push(config as { systemPrompt?: { text: string } });
+          return fakeRunner(reply, `${phase}-session`);
+        },
+        readProviderPayloads: async () => [{ model: "mock-1", messages: [] }],
+      });
+      await port.run(phaseInput(phase));
+      return configs[0]!.systemPrompt!.text;
+    };
+
+    const design = await spawn("DESIGN", JSON.stringify({ design_summary: "Summary.", declarations: [] }));
+    const merge = await spawn("MERGE", JSON.stringify({ delivery_report: "Shipped the thing." }));
+    // Most stable first: the baseline, then the repository context, then the
+    // layer that differs per phase. Two phases of one card therefore share
+    // everything up to the context's last byte, which is the whole point --
+    // with the context last, the shared prefix was the baseline alone.
+    const shared = design.slice(0, [...design].findIndex((_, index) => design[index] !== merge[index]));
+    expect(shared).toContain("# repository conventions");
+    expect(shared).toContain("A long, stable block.");
+    expect(design.indexOf("# repository conventions")).toBeLessThan(design.indexOf("# DESIGN"));
+    // Byte determinism: the same phase assembled twice is the same string.
+    expect(await spawn("MERGE", JSON.stringify({ delivery_report: "Shipped the thing." }))).toBe(merge);
+  });
+
+  it("spawns with the credential of the provider the phase was granted", async () => {
+    temporary = await mkdtemp(join(tmpdir(), "hivemind-pi-phase-"));
+    const reply = JSON.stringify({ design_summary: "Persist artifacts centrally.", declarations: [] });
+    const configs: { env?: Record<string, string> }[] = [];
+    const port = new PiStoryPhasePort({
+      binary: "pi",
+      resolveSpec: async () => ({
+        spec: await testAgentSpec({ provider: "deepseek" }),
+        release: async () => undefined,
+      }),
+      worktreePath: resolve("."),
+      promptRoot: resolve("prompts"),
+      sessionRoot: join(temporary, "sessions"),
+      evidencePath: join(temporary, "evidence"),
+      auditPath: join(temporary, "audit", "tool-audit.jsonl"),
+      guardExtension: resolve("extensions/hive-guard.ts"),
+      canonicalCaptureExtension: resolve("extensions/canonical-capture.ts"),
+      createRunner: (config) => {
+        configs.push(config as { env?: Record<string, string> });
+        return fakeRunner(reply, "fresh-design-session");
+      },
+      readProviderPayloads: async () => [{ model: "mock-1", messages: [] }],
+      providerEnv: (provider) => provider === "deepseek" ? { DEEPSEEK_API_KEY: "from-secrets" } : {},
+    });
+
+    await port.run(phaseInput("DESIGN"));
+    expect(configs[0]?.env).toMatchObject({ DEEPSEEK_API_KEY: "from-secrets" });
+  });
+
   it("hands the CODE exit findings back to the same session instead of failing the phase", async () => {
     temporary = await mkdtemp(join(tmpdir(), "hivemind-pi-phase-"));
-    const model = await resolveModel({ list: async () => [{ provider: "mock", id: "mock-1" }] }, "mock", "mock-1");
     const runner = fakeRunner(JSON.stringify({ implementation: "Done; committed." }));
     const measured: CodeExitFacts[] = [
       {
@@ -125,7 +223,7 @@ describe("PiStoryPhasePort", () => {
     ];
     const port = new PiStoryPhasePort({
       binary: "pi",
-      model,
+      resolveSpec: async () => ({ spec: await testAgentSpec(), release: async () => undefined }),
       worktreePath: resolve("."),
       promptRoot: resolve("prompts"),
       sessionRoot: join(temporary, "sessions"),
@@ -150,10 +248,9 @@ describe("PiStoryPhasePort", () => {
 
   it("gives up on a CODE exit that never satisfies its checks, with the findings attached", async () => {
     temporary = await mkdtemp(join(tmpdir(), "hivemind-pi-phase-"));
-    const model = await resolveModel({ list: async () => [{ provider: "mock", id: "mock-1" }] }, "mock", "mock-1");
     const port = new PiStoryPhasePort({
       binary: "pi",
-      model,
+      resolveSpec: async () => ({ spec: await testAgentSpec(), release: async () => undefined }),
       worktreePath: resolve("."),
       promptRoot: resolve("prompts"),
       sessionRoot: join(temporary, "sessions"),
@@ -181,7 +278,6 @@ describe("PiStoryPhasePort", () => {
 
   it("asks MERGE to rewrite a report whose business section reads like a transcript", async () => {
     temporary = await mkdtemp(join(tmpdir(), "hivemind-pi-phase-"));
-    const model = await resolveModel({ list: async () => [{ provider: "mock", id: "mock-1" }] }, "mock", "mock-1");
     const replies = [
       JSON.stringify({ delivery_report: "Fixed src/console/data.ts." }),
       JSON.stringify({ delivery_report: "The board now shows the cards waiting on a person." }),
@@ -192,7 +288,7 @@ describe("PiStoryPhasePort", () => {
     ]);
     const port = new PiStoryPhasePort({
       binary: "pi",
-      model,
+      resolveSpec: async () => ({ spec: await testAgentSpec(), release: async () => undefined }),
       worktreePath: resolve("."),
       promptRoot: resolve("prompts"),
       sessionRoot: join(temporary, "sessions"),
@@ -213,10 +309,9 @@ describe("PiStoryPhasePort", () => {
 
   it("ships a report that is still technical after its rewrites rather than stalling the card", async () => {
     temporary = await mkdtemp(join(tmpdir(), "hivemind-pi-phase-"));
-    const model = await resolveModel({ list: async () => [{ provider: "mock", id: "mock-1" }] }, "mock", "mock-1");
     const port = new PiStoryPhasePort({
       binary: "pi",
-      model,
+      resolveSpec: async () => ({ spec: await testAgentSpec(), release: async () => undefined }),
       worktreePath: resolve("."),
       promptRoot: resolve("prompts"),
       sessionRoot: join(temporary, "sessions"),
@@ -236,10 +331,9 @@ describe("PiStoryPhasePort", () => {
 
   it("fails closed before persistence when the phase output is not the declared JSON contract", async () => {
     temporary = await mkdtemp(join(tmpdir(), "hivemind-pi-phase-"));
-    const model = await resolveModel({ list: async () => [{ provider: "mock", id: "mock-1" }] }, "mock", "mock-1");
     const port = new PiStoryPhasePort({
       binary: "pi",
-      model,
+      resolveSpec: async () => ({ spec: await testAgentSpec(), release: async () => undefined }),
       worktreePath: resolve("."),
       promptRoot: resolve("prompts"),
       sessionRoot: join(temporary, "sessions"),
@@ -255,7 +349,7 @@ describe("PiStoryPhasePort", () => {
   });
 });
 
-describe("DESIGN acceptance criteria flattening", () => {
+describe("SHAPE acceptance criteria flattening", () => {
   let temporary: string;
 
   afterEach(async () => {
@@ -265,7 +359,6 @@ describe("DESIGN acceptance criteria flattening", () => {
   it("keeps the text of a nested criterion instead of stringifying the object away", async () => {
     temporary = await mkdtemp(join(tmpdir(), "hivemind-dod-"));
     const reply = JSON.stringify({
-      design_summary: "Persist artifacts centrally.",
       dod_yaml: {
         story_id: "S-EPIC1-01",
         acceptance_criteria: [
@@ -274,10 +367,9 @@ describe("DESIGN acceptance criteria flattening", () => {
         ],
       },
     });
-    const model = await resolveModel({ list: async () => [{ provider: "mock", id: "mock-1" }] }, "mock", "mock-1");
     const port = new PiStoryPhasePort({
       binary: "pi",
-      model,
+      resolveSpec: async () => ({ spec: await testAgentSpec(), release: async () => undefined }),
       worktreePath: resolve("."),
       promptRoot: resolve("prompts"),
       sessionRoot: join(temporary, "sessions"),
@@ -286,23 +378,22 @@ describe("DESIGN acceptance criteria flattening", () => {
       guardExtension: resolve("extensions/hive-guard.ts"),
       canonicalCaptureExtension: resolve("extensions/canonical-capture.ts"),
       createRunner: () => fakeRunner(reply, "fresh-design-session"),
-      recordTelemetry: async () => undefined,
+      emit: () => undefined,
       readProviderPayloads: async () => [{ model: "mock-1", messages: [] }],
     });
 
-    const result = await port.run(phaseInput("DESIGN"));
+    const result = await port.run(phaseInput("SHAPE"));
     const dod = result.artifacts.find((item) => item.kind === "dod")?.body ?? "";
     expect(dod).not.toContain("[object Object]");
     expect(dod).toContain("has a coupon");
     expect(dod).toContain("the discount is deducted once");
   });
 
-  async function designPort(reply: string): Promise<PiStoryPhasePort> {
+  async function shapePort(reply: string): Promise<PiStoryPhasePort> {
     temporary = await mkdtemp(join(tmpdir(), "hivemind-dod-"));
-    const model = await resolveModel({ list: async () => [{ provider: "mock", id: "mock-1" }] }, "mock", "mock-1");
     return new PiStoryPhasePort({
       binary: "pi",
-      model,
+      resolveSpec: async () => ({ spec: await testAgentSpec(), release: async () => undefined }),
       worktreePath: resolve("."),
       promptRoot: resolve("prompts"),
       sessionRoot: join(temporary, "sessions"),
@@ -311,17 +402,16 @@ describe("DESIGN acceptance criteria flattening", () => {
       guardExtension: resolve("extensions/hive-guard.ts"),
       canonicalCaptureExtension: resolve("extensions/canonical-capture.ts"),
       createRunner: () => fakeRunner(reply, "fresh-design-session"),
-      recordTelemetry: async () => undefined,
+      emit: () => undefined,
       readProviderPayloads: async () => [{ model: "mock-1", messages: [] }],
     });
   }
 
   it("reads a DoD whose line breaks arrived as the two characters backslash and n", async () => {
     const reply = JSON.stringify({
-      design_summary: "Escaped twice.",
       dod_yaml: "story_id: S-EPIC1-01\\nscenarios:\\n  - id: S-EPIC1-01-a\\n    then: it works",
     });
-    const result = await (await designPort(reply)).run(phaseInput("DESIGN"));
+    const result = await (await shapePort(reply)).run(phaseInput("SHAPE"));
     const dod = result.artifacts.find((item) => item.kind === "dod")?.body ?? "";
     expect(dod).toContain("story_id: S-EPIC1-01\n");
     expect(dod).toContain("then: it works");
@@ -329,10 +419,9 @@ describe("DESIGN acceptance criteria flattening", () => {
 
   it("quotes a bare scenario sentence that YAML would otherwise read as a nested mapping", async () => {
     const reply = JSON.stringify({
-      design_summary: "Colon in prose.",
       dod_yaml: "story_id: S-EPIC1-01\nscenarios:\n  - id: S-EPIC1-01-a\n    then: the page shows Unable to load: HTTP 503 and a Retry button\n",
     });
-    const result = await (await designPort(reply)).run(phaseInput("DESIGN"));
+    const result = await (await shapePort(reply)).run(phaseInput("SHAPE"));
     const dod = result.artifacts.find((item) => item.kind === "dod")?.body ?? "";
     expect(dod).toContain("Unable to load: HTTP 503 and a Retry button");
   });

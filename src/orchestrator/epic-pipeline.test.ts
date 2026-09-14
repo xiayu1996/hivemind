@@ -74,7 +74,7 @@ describe("M2 acceptance: one Epic from decomposition to review request", () => {
 
   afterEach(() => client.close());
 
-  /** Freezes the DoD the way DESIGN would, so the scenarios exist to verify. */
+  /** Freezes the DoD the way SHAPE would, so the scenarios exist to verify. */
   async function design(storyId: string): Promise<void> {
     const story = PLAN.stories.find((candidate) => candidate.id === storyId)!;
     await client.batch(story.scenarios.map((scenario, index) => ({
@@ -89,7 +89,7 @@ describe("M2 acceptance: one Epic from decomposition to review request", () => {
     // claimStart enforces; the branch does not exist before that.
     const claim = await new IntegrationDispatchStore(client).claimStart(storyId, `story/${storyId.toLowerCase()}`);
     expect(claim).toMatchObject({ kind: "started", integrationBranch: "epic/M2" });
-    for (const [from, to] of [["QUEUED", "DESIGN"], ["DESIGN", "CODE"], ["CODE", "VERIFY"], ["VERIFY", "MERGE"]] as const) {
+    for (const [from, to] of [["QUEUED", "SHAPE"], ["SHAPE", "DESIGN"], ["DESIGN", "SPECIFY"], ["SPECIFY", "CODE"], ["CODE", "VERIFY"], ["VERIFY", "MERGE"]] as const) {
       await store.transition(storyId, from, to, "system", `${storyId}-${to}`);
     }
   }
@@ -202,7 +202,8 @@ describe("M2 acceptance: one Epic from decomposition to review request", () => {
     const afterAttribution = (await client.execute("SELECT id, state, priority FROM stories ORDER BY id")).rows;
     expect(afterAttribution).toMatchObject([
       { id: "S-M2-01", state: "DELIVERED" },
-      { id: "S-M2-02", state: "REGRESSION_FIX", priority: 0 },
+      // Reopened at the narrow SPECIFY: the reproduction test comes before the fix.
+      { id: "S-M2-02", state: "SPECIFY", priority: 0 },
       { id: "S-M2-03", state: "DELIVERED" },
     ]);
     await expect(regressions.openCards()).resolves.toMatchObject([{ attributedStory: "S-M2-02" }]);

@@ -13,10 +13,11 @@
 | [docs/design/00-overview.md](docs/design/00-overview.md) | 总览：背景、决策、总体架构、路线图、风险与 PoC 清单 |
 | [docs/design/01-notion-integration.md](docs/design/01-notion-integration.md) | Notion 信息架构与集成层：双 DB + 页内区段、读写协议、人操作语义、故障降级 |
 | [docs/design/02-distributed-execution.md](docs/design/02-distributed-execution.md) | 分布式执行层：多机队列、pi 运行器、守卫审计、模型分层与 failover、部署自更新 |
-| [docs/design/03-pipeline-quality.md](docs/design/03-pipeline-quality.md) | 流水线与质量闭环：两层状态机、并行调度、TDD 契约、E2E 回归 loop、反馈自迭代 |
+| [docs/design/03-pipeline-quality.md](docs/design/03-pipeline-quality.md) | 流水线与质量闭环：三层状态机、六段 TDD 脊柱（SHAPE/SPECIFY 在内）、并行调度、E2E 回归 loop、反馈自迭代 |
 | [docs/design/04-observability.md](docs/design/04-observability.md) | 可观测性与成本账本：事件溯源三层模型、TokenUsage 归一、循环检测、invariants |
 | [docs/design/05-web-console.md](docs/design/05-web-console.md) | 内网 Web 控制台：节点健康、动态配置子系统、Prompt 工作台、成本/统计读面 |
 | [docs/design/06-codex-oauth.md](docs/design/06-codex-oauth.md) | Codex（ChatGPT 订阅 OAuth）集成机制：登录/刷新/多机分发/失效告警 |
+| [docs/design/07-agent-runtime.md](docs/design/07-agent-runtime.md) | Agent 运行时：阶段契约注册表、`resolveAgentSpec` 七维唯一入口、缓存三件套、派单与 per-provider 分桶 |
 | [docs/plan/tasks.md](docs/plan/tasks.md) | 实施任务清单：M0–M5 全量任务拆解，每项含输出物与验证方式 |
 | [AGENTS.md](AGENTS.md) | 面向 agent 的仓库工作约定：架构不变量、pi 运行器铁律、代码风格、移植 checklist（`CLAUDE.md` 为其符号链接） |
 
@@ -24,13 +25,13 @@
 
 ```
 src/
-  orchestrator/   状态机(Epic/Story 两层) + intake + 调度纯函数(拓扑/footprint/hotspot)
+  orchestrator/   状态机(需求/Epic/Story 三层) + intake + 调度纯函数(拓扑/footprint/hotspot)
   notion/         gateway(令牌桶+优先级+outbox) / sync(水位) / blocks(页面 builder) / intent-interpreter
   runner/         PiRunner port + rpc adapter + context-checkpoint + continue-retry
-  guard/          danger-rules(移植) + per-phase policy 组装
-  queue/          BullMQ 封装(busybee 移植 + 多机化改造)
+  guard/          danger-rules(移植) + 运行时红线(CODE 冻结测试 / VERIFY 导航白名单)；工具面全阶段统一
+  queue/          DB 可派发集 + 租约 CAS 领单(取代 BullMQ, 见 02 §1.2)
   worker/         worker daemon: 心跳/能力声明/粘性恢复/探针 job
-  pipeline/       DoD schema / 收敛判据 / verdict 校验 / completion-verifier / 业务语言 lint
+  pipeline/       DoD schema / 收敛判据 / verdict 校验 / 阶段契约与确定性出口检查 / 业务语言 lint
   regression/     RegressionScheduler + 场景注册表 + 归因二分 + 失败签名
   vcs/            worktree(移植) + mr(gh 优先, glab 第二)
   console/        内网 Web 控制台(Vue3 SPA + REST): 节点健康/动态配置/prompt 工作台/成本统计
@@ -41,9 +42,11 @@ extensions/       pi extensions(hive-guard / mcp-adapter vendor / model-policy �
 
 ## 状态
 
-设计冻结于 2026-08-22。当前进度：
+设计冻结于 2026-08-22，之后按实测结论增补（最近一次：2026-09-14 的 MR 里程碑，07 为新增文档）。当前进度：
 
 - **M0 地基 PoC**：15/16 结案（PoC-1 Windows 已在目标机 10/10 通过；仅 C5 Mac mini 待接入）。执行记录与逐项 go/no-go 见 [docs/poc/](docs/poc/)。
 - **M1 单机闭环**：29/37 已验证，7 项外部活体验收待凭据，M1-37 出口验收尚未执行；Windows 本机单测、真实 pi、可观测链、浏览器控制台与真实 MR 创建均已跑通。
+- **MP 产品经理层 / MQ 主流程收敛**：离线判据全过并接过真实 Notion 看板，遗留的活体项列在 tasks.md 对应段。
+- **MR TDD 脊柱与 Agent 运行时**：MR-01..37 已落地，`SHAPE→DESIGN→SPECIFY→CODE⇄VERIFY→MERGE→DELIVERED` 与回归道 `SPECIFY(narrow)→REGRESSION_FIX→VERIFY` 在本机以确定性 mock provider 端到端跑通（`npx tsx scripts/smoke-story-pipeline.ts`，含真实 Epic 合流与推送）；MR-38 / MR-39 仍开放，它们要的是真实卡与真实 provider。
 
 任务级拆解与验收判据见 [docs/plan/tasks.md](docs/plan/tasks.md)。

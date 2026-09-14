@@ -1,83 +1,46 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  PLAYWRIGHT_CLI_CONFIG_PATH,
-  buildPlaywrightCliConfig,
-  writePlaywrightCliConfig,
-} from "./browser-config.js";
+import { describe, expect, it } from "vitest";
+import { browserLaneEnv } from "./browser-config.js";
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const path of tempDirs.splice(0)) rmSync(path, { recursive: true, force: true });
-});
-
-describe("buildPlaywrightCliConfig", () => {
+describe("browserLaneEnv", () => {
   it("turns the host allowlist into origins the browser can match, ports included", () => {
-    const config = buildPlaywrightCliConfig({
+    const env = browserLaneEnv({
       allowedHosts: ["localhost", "127.0.0.1"],
       outputDir: "/ev/card-12/browser",
     });
-    expect(config.network.allowedOrigins).toEqual([
-      "http://127.0.0.1:*",
-      "http://localhost:*",
-      "https://127.0.0.1:*",
-      "https://localhost:*",
-    ]);
+    expect(env.PLAYWRIGHT_MCP_ALLOWED_ORIGINS).toBe(
+      "http://127.0.0.1:*;http://localhost:*;https://127.0.0.1:*;https://localhost:*",
+    );
+  });
+
+  it("reads a leading dot as a domain and everything under it", () => {
+    const env = browserLaneEnv({
+      allowedHosts: [".staging.example"],
+      outputDir: "/ev/card-12/browser",
+    });
+    expect(env.PLAYWRIGHT_MCP_ALLOWED_ORIGINS).toBe("http://*.staging.example:*;https://*.staging.example:*");
   });
 
   it("keeps Chromium's sandbox unless a host is explicitly configured without one", () => {
     const base = { allowedHosts: ["localhost"], outputDir: "/ev/card-12/browser" };
-    expect(buildPlaywrightCliConfig(base).browser.launchOptions).toEqual({ headless: true });
-    expect(buildPlaywrightCliConfig({ ...base, chromiumSandbox: true }).browser.launchOptions).toEqual({ headless: true });
-    expect(buildPlaywrightCliConfig({ ...base, chromiumSandbox: false }).browser.launchOptions)
-      .toEqual({ headless: true, chromiumSandbox: false });
-  });
-
-  it("reads a leading dot as a domain and everything under it", () => {
-    const config = buildPlaywrightCliConfig({
-      allowedHosts: [".staging.example"],
-      outputDir: "/ev/card-12/browser",
-    });
-    expect(config.network.allowedOrigins).toEqual([
-      "http://*.staging.example:*",
-      "https://*.staging.example:*",
-    ]);
+    expect(browserLaneEnv(base).PLAYWRIGHT_MCP_SANDBOX).toBeUndefined();
+    expect(browserLaneEnv({ ...base, chromiumSandbox: true }).PLAYWRIGHT_MCP_SANDBOX).toBeUndefined();
+    expect(browserLaneEnv({ ...base, chromiumSandbox: false }).PLAYWRIGHT_MCP_SANDBOX).toBe("false");
   });
 
   it("starts cold and headless, and puts the evidence where the card's evidence lives", () => {
-    const config = buildPlaywrightCliConfig({
-      allowedHosts: ["localhost"],
-      outputDir: "/ev/card-12/browser",
-    });
-    expect(config.browser).toEqual({
-      browserName: "chromium",
-      isolated: true,
-      launchOptions: { headless: true },
-    });
-    expect(config.outputDir).toBe("/ev/card-12/browser");
+    const env = browserLaneEnv({ allowedHosts: ["localhost"], outputDir: "/ev/card-12/browser" });
+    expect(env.PLAYWRIGHT_MCP_ISOLATED).toBe("true");
+    expect(env.PLAYWRIGHT_MCP_HEADLESS).toBe("true");
+    expect(env.PLAYWRIGHT_MCP_OUTPUT_DIR).toBe("/ev/card-12/browser");
   });
 
-  it("refuses an empty allowlist rather than writing a config that aborts everything", () => {
-    expect(() => buildPlaywrightCliConfig({ allowedHosts: [], outputDir: "/ev" }))
+  it("names no file in the worktree, so a browser round cannot change the tree it verifies", () => {
+    const env = browserLaneEnv({ allowedHosts: ["localhost"], outputDir: "/ev/card-12/browser" });
+    expect(Object.values(env).some((value) => value.includes(".playwright"))).toBe(false);
+  });
+
+  it("refuses an empty allowlist rather than configuring a browser that aborts everything", () => {
+    expect(() => browserLaneEnv({ allowedHosts: [], outputDir: "/ev" }))
       .toThrow(/at least one allowed host/);
-  });
-});
-
-describe("writePlaywrightCliConfig", () => {
-  it("writes where playwright-cli looks by default", async () => {
-    const worktree = mkdtempSync(join(tmpdir(), "hivemind-worktree-"));
-    tempDirs.push(worktree);
-
-    const path = await writePlaywrightCliConfig(worktree, {
-      allowedHosts: ["localhost"],
-      outputDir: join(worktree, "evidence"),
-    });
-
-    expect(path).toBe(join(worktree, PLAYWRIGHT_CLI_CONFIG_PATH));
-    const written = JSON.parse(readFileSync(path, "utf8")) as { network: { allowedOrigins: string[] } };
-    expect(written.network.allowedOrigins).toContain("http://localhost:*");
   });
 });

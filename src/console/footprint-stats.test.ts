@@ -34,7 +34,8 @@ describe("S-M2-07-stats footprint deviation on the statistics page", () => {
       costs: async () => [],
       config: async () => [],
       stats: async () => ({ footprintDeviation: { stories: 0, deviationRate: 0, unpredictedStoryRate: 0, perStory: [] } }),
-      providers: async () => [],
+      queue: async () => ({ waiting: [], running: [], providerSlots: [] }),
+  providers: async () => [],
     };
     const app = await createConsoleServer(data, { serveUi: false });
     const response = await app.inject({ method: "GET", url: "/api/stats" });

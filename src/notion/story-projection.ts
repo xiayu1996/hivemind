@@ -152,7 +152,8 @@ export class NotionStoryProjection implements StoryProjectionPort {
    */
   private async appliedAnswers(cardId: string): Promise<string[]> {
     const rows = (await this.client.execute({
-      sql: `SELECT COALESCE(ic.author, 'unknown') AS author, ic.created_time, hf.spec_id, hf.body, hf.applied_at, hf.round
+      sql: `SELECT COALESCE(ic.author, 'unknown') AS author, ic.created_time, hf.spec_id, hf.body,
+                   hf.applied_at, hf.applied_round
             FROM human_feedback hf
             JOIN ingested_comments ic ON ic.comment_id = hf.comment_id
             WHERE hf.card_id = ? AND hf.channel = 'answer'
@@ -162,7 +163,7 @@ export class NotionStoryProjection implements StoryProjectionPort {
     return rows.map((row) => {
       const when = new Date(Number(row.created_time)).toISOString().slice(0, 16).replace("T", " ");
       const target = row.spec_id ? `，针对 ${String(row.spec_id)}` : "";
-      const state = row.applied_at ? `已用于第 ${Number(row.round) + 1} 轮` : "下一轮使用";
+      const state = row.applied_at ? `已用于第 ${Number(row.applied_round)} 轮` : "下一轮使用";
       return `- ${String(row.author)}（${when} UTC${target}，${state}）：${String(row.body)}`;
     });
   }

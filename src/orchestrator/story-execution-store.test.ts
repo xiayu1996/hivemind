@@ -4,6 +4,21 @@ import { migrate } from "../persistence/migrate.js";
 import { assemblePhasePrompt } from "../pipeline/phase-input.js";
 import { StoryExecutionStore } from "./story-execution-store.js";
 
+/**
+ * Walks the front of the pipeline. SHAPE and SPECIFY are not what these tests
+ * are about, so they get their own run ids and the caller's names the phase it
+ * actually came for.
+ */
+async function enterDesign(store: StoryExecutionStore, cardId: string, runId: string): Promise<void> {
+  await store.transition(cardId, "QUEUED", "SHAPE", "system", `${runId}-shape`);
+  await store.transition(cardId, "SHAPE", "DESIGN", "system", runId);
+}
+
+async function designToCode(store: StoryExecutionStore, cardId: string, runId: string): Promise<void> {
+  await store.transition(cardId, "DESIGN", "SPECIFY", "system", `${runId}-specify`);
+  await store.transition(cardId, "SPECIFY", "CODE", "system", runId);
+}
+
 describe("StoryExecutionStore", () => {
   let client: ReturnType<typeof createClient>;
   let store: StoryExecutionStore;
@@ -29,26 +44,26 @@ describe("StoryExecutionStore", () => {
   });
 
   it("moves a Story with a compare-and-set transition and records the event atomically", async () => {
-    await store.transition("S-EPIC1-01", "QUEUED", "DESIGN", "system", "run-design");
+    await enterDesign(store, "S-EPIC1-01", "run-design");
     await expect(store.getStory("S-EPIC1-01")).resolves.toMatchObject({
       state: "DESIGN",
       phase: "DESIGN",
       requirement: "A later phase can rebuild all prior inputs from the central database.",
     });
     await expect(
-      store.transition("S-EPIC1-01", "QUEUED", "DESIGN", "system", "lost-race"),
+      store.transition("S-EPIC1-01", "SHAPE", "DESIGN", "system", "lost-race"),
     ).rejects.toThrow(/lost a race/);
     const events = await client.execute(
       "SELECT type, data FROM event_log WHERE run_id = 'run-design' ORDER BY seq",
     );
     expect(events.rows).toMatchObject([{
       type: "story.transition",
-      data: JSON.stringify({ from: "QUEUED", to: "DESIGN", actor: "system" }),
+      data: JSON.stringify({ from: "SHAPE", to: "DESIGN", actor: "system" }),
     }]);
   });
 
   it("persists a completed phase and rebuilds a byte-identical later prompt without local files", async () => {
-    await store.transition("S-EPIC1-01", "QUEUED", "DESIGN", "system", "run-design");
+    await enterDesign(store, "S-EPIC1-01", "run-design");
     const designInput = await store.buildPhaseInput("S-EPIC1-01", "DESIGN", 1);
     const designPrompt = assemblePhasePrompt(designInput);
     await store.beginPhase({
@@ -66,7 +81,7 @@ describe("StoryExecutionStore", () => {
         { kind: "dod", body: "story_id: S-EPIC1-01" },
       ],
     });
-    await store.transition("S-EPIC1-01", "DESIGN", "CODE", "system", "run-code");
+    await designToCode(store, "S-EPIC1-01", "run-code");
 
     const first = assemblePhasePrompt(await store.buildPhaseInput("S-EPIC1-01", "CODE", 1));
     const second = assemblePhasePrompt(await store.buildPhaseInput("S-EPIC1-01", "CODE", 1));
@@ -105,7 +120,7 @@ describe("StoryExecutionStore", () => {
   });
 
   it("rolls back artifacts when completing the same run twice", async () => {
-    await store.transition("S-EPIC1-01", "QUEUED", "DESIGN", "system", "run-design");
+    await enterDesign(store, "S-EPIC1-01", "run-design");
     await store.beginPhase({
       runId: "run-design",
       cardId: "S-EPIC1-01",
@@ -136,8 +151,8 @@ describe("StoryExecutionStore merge recovery", () => {
     await migrate(client);
     store = new StoryExecutionStore(client, () => 10);
     await store.createStory({ id: "S-M2-05-conflict", notionPageId: "page-conflict", title: "Conflict", requirement: "Resolve an integration conflict." });
-    await store.transition("S-M2-05-conflict", "QUEUED", "DESIGN", "system", "design");
-    await store.transition("S-M2-05-conflict", "DESIGN", "CODE", "system", "code");
+    await enterDesign(store, "S-M2-05-conflict", "design");
+    await designToCode(store, "S-M2-05-conflict", "code");
     await store.transition("S-M2-05-conflict", "CODE", "VERIFY", "system", "verify");
     await store.transition("S-M2-05-conflict", "VERIFY", "MERGE", "system", "merge");
   });
@@ -167,18 +182,18 @@ describe("StoryExecutionStore resume budget", () => {
   afterEach(() => client.close());
 
   it("counts a person's resume as the moment the round budget starts again", async () => {
-    await store.transition("S-MQ-10-resume", "QUEUED", "DESIGN", "system", "design");
+    await enterDesign(store, "S-MQ-10-resume", "design");
     const beforeResume = await store.getStory("S-MQ-10-resume");
     expect(beforeResume.lastHumanActionAt ?? null).toBeNull();
-    await store.transition("S-MQ-10-resume", "DESIGN", "CODE", "human", "resume");
+    await store.transition("S-MQ-10-resume", "DESIGN", "SPECIFY", "human", "resume");
     const afterResume = await store.getStory("S-MQ-10-resume");
     expect(afterResume.lastHumanActionAt).toBeGreaterThan(0);
   });
 
   it("leaves the mark alone when the system moves the card", async () => {
-    await store.transition("S-MQ-10-resume", "QUEUED", "DESIGN", "human", "human-start");
+    await store.transition("S-MQ-10-resume", "QUEUED", "SHAPE", "human", "human-start");
     const stamped = (await store.getStory("S-MQ-10-resume")).lastHumanActionAt;
-    await store.transition("S-MQ-10-resume", "DESIGN", "CODE", "system", "code");
+    await store.transition("S-MQ-10-resume", "SHAPE", "DESIGN", "system", "code");
     await expect(store.getStory("S-MQ-10-resume")).resolves.toMatchObject({ lastHumanActionAt: stamped });
   });
 });
@@ -218,7 +233,7 @@ describe("StoryExecutionStore phase slot guard", () => {
       requirement: "A rejected phase start must not destroy the attempt it refused to supersede.",
       branch: "story/epic1-01",
     });
-    await store.transition("S-EPIC1-01", "QUEUED", "DESIGN", "system", "run-0");
+    await enterDesign(store, "S-EPIC1-01", "run-0");
     await client.execute({
       sql: `INSERT INTO phase_runs (run_id, card_id, phase, round, prompt_sha256, status, failure, started_at, ended_at)
             VALUES ('run-old', 'S-EPIC1-01', 'DESIGN', 1, ?, 'failed', 'runner died', 1, 2)`,
@@ -265,25 +280,25 @@ describe("StoryExecutionStore invalidation audit", () => {
       requirement: "Discarding a completed phase result leaves a trace.",
       branch: "story/epic1-01",
     });
-    await store.transition("S-EPIC1-01", "QUEUED", "DESIGN", "system", "run-0");
+    await enterDesign(store, "S-EPIC1-01", "run-0");
     await store.beginPhase({ runId: "run-design", cardId: "S-EPIC1-01", phase: "DESIGN", round: 1, prompt: "design" });
-    await store.completePhase({ runId: "run-design", sessionId: "session-design", artifacts: [{ kind: "dod", body: "story_id: S-EPIC1-01" }] });
+    await store.completePhase({ runId: "run-design", sessionId: "session-design", artifacts: [{ kind: "design-summary", body: "A design" }] });
 
-    await store.invalidateCompletedPhase("S-EPIC1-01", "DESIGN", 1, "DoD is missing a scenario id");
+    await store.invalidateCompletedPhase("S-EPIC1-01", "DESIGN", 1, "the design names no interface boundary");
 
     const events = (await client.execute(
       "SELECT run_id, type, data FROM event_log WHERE type = 'phase.invalidated'",
     )).rows;
     expect(events).toMatchObject([{
       run_id: "run-design",
-      data: JSON.stringify({ round: 1, reason: "DoD is missing a scenario id" }),
+      data: JSON.stringify({ round: 1, reason: "the design names no interface boundary" }),
     }]);
     client.close();
   });
 });
 
-describe("StoryExecutionStore redesign", () => {
-  it("unfreezes the DoD and discards reusable results when a person sends the Story back to DESIGN", async () => {
+describe("StoryExecutionStore reshape", () => {
+  it("unfreezes the DoD and discards reusable results when a person sends the Story back to SHAPE", async () => {
     const client = createClient({ url: ":memory:" });
     await migrate(client);
     let time = 1_000;
@@ -292,14 +307,15 @@ describe("StoryExecutionStore redesign", () => {
       id: "S-EPIC1-01",
       notionPageId: "page-1",
       title: "Redesign",
-      requirement: "A Story sent back to DESIGN is designed again.",
+      requirement: "A Story sent back to SHAPE is shaped again.",
       branch: "story/epic1-01",
     });
-    await store.transition("S-EPIC1-01", "QUEUED", "DESIGN", "system", "run-0");
-    await store.beginPhase({ runId: "run-design", cardId: "S-EPIC1-01", phase: "DESIGN", round: 1, prompt: "design" });
-    await store.completePhase({ runId: "run-design", sessionId: "s-design", artifacts: [{ kind: "dod", body: "story_id: S-EPIC1-01" }] });
+    await store.transition("S-EPIC1-01", "QUEUED", "SHAPE", "system", "run-0-shape");
+    await store.beginPhase({ runId: "run-shape", cardId: "S-EPIC1-01", phase: "SHAPE", round: 1, prompt: "shape" });
+    await store.completePhase({ runId: "run-shape", sessionId: "s-shape", artifacts: [{ kind: "dod", body: "story_id: S-EPIC1-01" }] });
     await client.execute("INSERT INTO story_specs (spec_id, story_id, seq, text, status) VALUES ('S-EPIC1-01-a','S-EPIC1-01',1,'a','pending')");
-    await store.transition("S-EPIC1-01", "DESIGN", "CODE", "system", "run-0");
+    await store.transition("S-EPIC1-01", "SHAPE", "DESIGN", "system", "run-0");
+    await designToCode(store, "S-EPIC1-01", "run-0");
     // Round 1 reached a verdict; round 2 is a CODE result nobody verified.
     await store.beginPhase({ runId: "run-code-1", cardId: "S-EPIC1-01", phase: "CODE", round: 1, prompt: "code" });
     await store.completePhase({ runId: "run-code-1", sessionId: "s-code-1", artifacts: [{ kind: "implementation", body: "x" }] });
@@ -315,9 +331,9 @@ describe("StoryExecutionStore redesign", () => {
     await store.completePhase({ runId: "run-code-2", sessionId: "s-code-2", artifacts: [{ kind: "implementation", body: "y" }] });
     await store.stopForInput("S-EPIC1-01", "CODE", "retry_limit_exceeded", "run-stop");
 
-    await store.transition("S-EPIC1-01", "NEEDS_INPUT", "DESIGN", "human", "run-human");
+    await store.transition("S-EPIC1-01", "NEEDS_INPUT", "SHAPE", "human", "run-human");
 
-    expect(await store.getCompletedPhase("S-EPIC1-01", "DESIGN", 1)).toBeNull();
+    expect(await store.getCompletedPhase("S-EPIC1-01", "SHAPE", 1)).toBeNull();
     expect(await store.getCompletedPhase("S-EPIC1-01", "CODE", 2)).toBeNull();
     expect(await store.getCompletedPhase("S-EPIC1-01", "CODE", 1)).not.toBeNull();
     expect(await store.findFrozenDefinitionOfDone("S-EPIC1-01")).toBeNull();
@@ -339,8 +355,8 @@ describe("StoryExecutionStore regression input", () => {
       requirement: "Open cards are the round's tasks.",
       branch: "story/epic1-01",
     });
-    await store.transition("S-EPIC1-01", "QUEUED", "DESIGN", "system", "run-0");
-    await store.transition("S-EPIC1-01", "DESIGN", "CODE", "system", "run-0");
+    await enterDesign(store, "S-EPIC1-01", "run-0");
+    await designToCode(store, "S-EPIC1-01", "run-0");
     const before = assemblePhasePrompt(await store.buildPhaseInput("S-EPIC1-01", "CODE", 1));
     await client.execute(
       "INSERT INTO regression_cards (scenario_id, failure_signature, attributed_story, created_at) VALUES ('S-EPIC1-01-a', 'sig', 'S-EPIC1-01', 5)",
@@ -358,27 +374,58 @@ describe("StoryExecutionStore regression input", () => {
   });
 });
 
-describe("StoryExecutionStore design retry", () => {
-  it("tells the next DESIGN attempt why the last DoD was thrown away", async () => {
+describe("StoryExecutionStore narrow specify input", () => {
+  it("gives the SPECIFY in front of a regression fix the cards it must reproduce, and an ordinary SPECIFY none", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, () => 1_000);
+    await store.createStory({
+      id: "S-EPIC1-01",
+      notionPageId: "page-1",
+      title: "Narrow specify input",
+      requirement: "A reopened card writes one reproduction.",
+      branch: "story/epic1-01",
+    });
+    await enterDesign(store, "S-EPIC1-01", "run-0");
+    await client.execute(
+      "INSERT INTO regression_cards (scenario_id, failure_signature, attributed_story, created_at) VALUES ('S-EPIC1-01-a', 'sig', 'S-EPIC1-01', 5)",
+    );
+    await store.transition("S-EPIC1-01", "DESIGN", "SPECIFY", "system", "run-1");
+
+    // On the way to CODE the phase is SPECIFY and the cards stay out of the
+    // prompt, so an ordinary contract is written.
+    const ordinary = await store.buildPhaseInput("S-EPIC1-01", "SPECIFY", 1);
+    expect(ordinary.regressions).toBeUndefined();
+
+    await store.markNarrowSpecify("S-EPIC1-01");
+    const narrow = await store.buildPhaseInput("S-EPIC1-01", "SPECIFY", 1);
+    expect(narrow.regressions).toEqual([{ scenarioId: "S-EPIC1-01-a", signature: "sig", attributedStory: "S-EPIC1-01" }]);
+    expect(assemblePhasePrompt(narrow)).toContain("[regression:S-EPIC1-01-a]");
+    client.close();
+  });
+});
+
+describe("StoryExecutionStore shape retry", () => {
+  it("tells the next SHAPE attempt why the last DoD was thrown away", async () => {
     const client = createClient({ url: ":memory:" });
     await migrate(client);
     const store = new StoryExecutionStore(client, (() => { let time = 1_000; return () => time++; })());
     await store.createStory({
       id: "S-EPIC1-01",
       notionPageId: "page-1",
-      title: "Retry design",
+      title: "Retry shape",
       requirement: "A refused DoD is a task for the next attempt.",
       branch: "story/epic1-01",
     });
-    await store.transition("S-EPIC1-01", "QUEUED", "DESIGN", "system", "run-0");
-    await store.beginPhase({ runId: "run-design", cardId: "S-EPIC1-01", phase: "DESIGN", round: 1, prompt: "design" });
-    await store.completePhase({ runId: "run-design", sessionId: "s-design", artifacts: [{ kind: "dod", body: "story_id: S-EPIC1-01" }] });
-    await store.invalidateCompletedPhase("S-EPIC1-01", "DESIGN", 1, "DoD contract is invalid: scenario ids must match the pattern");
-    await store.beginPhase({ runId: "run-design-2", cardId: "S-EPIC1-01", phase: "DESIGN", round: 1, prompt: "design" });
+    await store.transition("S-EPIC1-01", "QUEUED", "SHAPE", "system", "run-0");
+    await store.beginPhase({ runId: "run-shape", cardId: "S-EPIC1-01", phase: "SHAPE", round: 1, prompt: "shape" });
+    await store.completePhase({ runId: "run-shape", sessionId: "s-shape", artifacts: [{ kind: "dod", body: "story_id: S-EPIC1-01" }] });
+    await store.invalidateCompletedPhase("S-EPIC1-01", "SHAPE", 1, "DoD contract is invalid: scenario ids must match the pattern");
+    await store.beginPhase({ runId: "run-shape-2", cardId: "S-EPIC1-01", phase: "SHAPE", round: 1, prompt: "shape" });
 
-    const input = await store.buildPhaseInput("S-EPIC1-01", "DESIGN", 1);
-    expect(input.previousRejections).toEqual([{ phase: "DESIGN", reason: "DoD contract is invalid: scenario ids must match the pattern" }]);
-    expect(assemblePhasePrompt(input)).toContain("[rejected:DESIGN] DESIGN refused the last attempt: DoD contract is invalid");
+    const input = await store.buildPhaseInput("S-EPIC1-01", "SHAPE", 1);
+    expect(input.previousRejections).toEqual([{ phase: "SHAPE", reason: "DoD contract is invalid: scenario ids must match the pattern" }]);
+    expect(assemblePhasePrompt(input)).toContain("[rejected:SHAPE] SHAPE refused the last attempt: DoD contract is invalid");
     client.close();
   });
 });
@@ -395,8 +442,8 @@ describe("StoryExecutionStore phase input", () => {
       requirement: "Requirement",
       branch: "story/epic1-01",
     });
-    await store.transition("S-EPIC1-01", "QUEUED", "DESIGN", "system", "run-0");
-    await store.transition("S-EPIC1-01", "DESIGN", "CODE", "system", "run-1");
+    await enterDesign(store, "S-EPIC1-01", "run-0");
+    await designToCode(store, "S-EPIC1-01", "run-1");
     await store.transition("S-EPIC1-01", "CODE", "VERIFY", "system", "run-2");
     await store.transition("S-EPIC1-01", "VERIFY", "MERGE", "system", "run-3");
     await store.beginPhase({ runId: "run-merge", cardId: "S-EPIC1-01", phase: "MERGE", round: 1, prompt: "merge" });

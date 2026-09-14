@@ -97,3 +97,32 @@ export async function credentialRefreshHolder(lockPath: string): Promise<{ pid: 
     return null;
   }
 }
+
+/**
+ * Refusing a schedule that cannot cover a phase.
+ *
+ * The single refresher only rotates when its own interval has elapsed, and it
+ * only gets the chance between cycles. If that interval is longer than one
+ * prompt may run, a phase can begin on a credential that expires inside it with
+ * nothing scheduled to renew it, and the card takes a 401 halfway through work
+ * it will not get back.
+ *
+ * Investigated and deliberately not relied on: pi 0.85.1 has no way to stop a
+ * subprocess refreshing on its own -- `--no-refresh` exists only on
+ * `pi auth check`, and no environment variable turns it off. What keeps two
+ * refreshes from invalidating each other on one host is that every refresh,
+ * ours included, goes through pi and takes pi's own `auth.json` lock. Across
+ * hosts nothing coordinates them, which is why a credential file is never
+ * copied to a second machine.
+ */
+export function assertCredentialRefreshCoverage(input: {
+  credentialRefreshIntervalMs: number;
+  promptTimeoutMs: number;
+}): void {
+  if (input.credentialRefreshIntervalMs > input.promptTimeoutMs) {
+    throw new Error(
+      `provider.credentialRefreshIntervalMs (${input.credentialRefreshIntervalMs}ms) is longer than one prompt may run `
+      + `(retry.promptTimeoutMs ${input.promptTimeoutMs}ms): a phase can start on a credential that expires inside it`,
+    );
+  }
+}

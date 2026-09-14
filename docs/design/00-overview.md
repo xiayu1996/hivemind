@@ -1,6 +1,6 @@
 # hivemind 系统设计总览
 
-> 状态：2026-08-22 设计冻结。详细设计见同目录 01–04 文档。
+> 状态：2026-08-22 设计冻结，其后按日期标注增补。详细设计见同目录 01–07 文档。
 
 ## 1. 背景与动机
 
@@ -25,6 +25,7 @@ hivemind 以 pi（earendil-works/pi，provider 无关）为执行底座、Notion
 | Web 控制台（08-25 增补） | day1 提供内网运维面：节点健康（IP/机器指标）、动态配置、Prompt 工作台、成本/统计。Notion=业务面，控制台=运维面 |
 | 重试上限族（08-25 增补） | 收敛判据提前停 + 可配置硬上限最终停（上限设在离散重试轮次，不设在单次运行时长/token）；到限即失败 + 诊断报告 @人（需求侧 vs 系统侧两分法） |
 | 单节点全能力（09-01 增补） | Linux worker day1 具备完整开发 + headless 浏览器 e2e 能力（~~Playwright MCP~~ **09-01 改选双车道：`@playwright/test` 验证/回归 + `@playwright/cli` 探索/自愈，全部经 bash，见 02 §4.3**）；Mac mini 仅为 Apple 生态（Safari/iOS）验证保留。浏览器自动化（原 M3-09）前移至 MP 里程碑、脱离 Mac mini 依赖 |
+| **TDD 脊柱与 Agent 运行时解耦（09-14 增补）** | 三件事同一批做：①TDD 从"CODE 内部的 micro-cycle"提升为跨阶段脊柱——新增 **SHAPE**（需求硬化 + 消歧，持有 DoD 与 `open_questions`，全系统唯一有权提问）与 **SPECIFY**（写测试、证明断言失败、commit 冻结），拓扑变为 `SHAPE→DESIGN→SPECIFY→CODE⇄VERIFY→MERGE`；②"用什么 Agent 跑"与"阶段产出什么"拆开——`resolveAgentSpec` 七维唯一入口 + `PhaseContract` 注册表取代五套阶段枚举；③观测全部旁路，三个可执行解耦判据进验收。详见 07、03 §12、04 §5 |
 | 产品经理层（09-01 增补） | 新增 Requirements DB + PM agent（大脑档）：模糊大需求 → 多轮业务澄清（需求页评论；通道抽象为 port，Notion 是唯一信息源，旁路通道结论必须回写才生效）→ PRD 人批 → 拆解为 Epic → 场景化验收清单。人与 PM 只谈业务方向与场景，与技术面只谈少量实现细节；代码质量由自动化流程 + 定期优化单（M4-18）管控，不进人的验收面。详见 01 §8、03 §7 |
 
 ## 3. 调研结论摘要
@@ -37,11 +38,21 @@ hivemind 以 pi（earendil-works/pi，provider 无关）为执行底座、Notion
 
 ### cumora（拿模式不拿拓扑）
 
-不采用对等多 agent：其实证结论是协调正确性是概率性的、治理成本极高（46KB 反模式文档 + 6 层服务端 gate 才稳住基本协作）。直接移植的模式：builder/verifier 分离靠约束强制、completion verifier（小模型 fail-closed 裁判）、失败自动物化成 regression/friction 资产、大脑/小脑模型强制（enforceModelPolicy + 全量成本账本）、行为回归测试用样本级统计判据。
+不采用对等多 agent：其实证结论是协调正确性是概率性的、治理成本极高（46KB 反模式文档 + 6 层服务端 gate 才稳住基本协作）。直接移植的模式：builder/verifier 分离靠约束强制、~~completion verifier（小模型 fail-closed 裁判）~~（**09-09 撤销，见 03 §8.1：内环只保留一个 LLM 判定，出口改为确定性检查**）、失败自动物化成 regression/friction 资产、大脑/小脑模型强制（enforceModelPolicy + 全量成本账本）、行为回归测试用样本级统计判据。
 
 ### busybee 生产教训（设计硬约束）
 
 验证方式不可硬编码；验证造假需三层防御（prompt / 工具面物理掐断 / verdict 代码校验）；人为 turn/时长/预算上限只伤真实工作（用静默 watchdog + 收敛判据）；全局故障熔断不逐卡烧人工；HUMAN_PARKED 优先于所有权；memory 进料通道需闭环流速观测；md+DB 双写是漏账源头。
+
+### GacUI（.github/prompts 的完整生命周期 TDD，09-14 增补）
+
+一个需求的完整落地是 `review`（任务硬化，只写文档，产出 `## VERIFICATION`）→ `investigate` 六步 → `refine`（蒸馏 learning）→ `kb`。拿到的三条：
+
+1. **红靠时序保证，不靠 revert**：`investigate` Step 3 跑测试必须看到它按预期失败，而此时实现还不存在（Step 4 才提方案）。`# TEST [CONFIRMED]` + commit 是那一刻的凭证。hivemind 的 SPECIFY 阶段就是这个时刻。
+2. **无人值守靠一根保险丝**：`investigate` 明令 "DO NOT ASK ANY QUESTION… I am not watching you in realtime"，所以歧义必须在它开始前清空，而这正是 `review` 存在的全部理由——**只有 review 能提问**。保险丝要两端，所以 hivemind 的 SHAPE 与 DESIGN 必须分开。
+3. **零工具面限制**：两个时期都没有 chatmode 文件、没有 `tools:` 元数据，全靠 prompt 文本重复表达约束，跑了大半年没塌。这直接反驳了 hivemind 原有的 per-phase 工具面设计（07 §6）。
+
+**不照搬的**：它的反骨架四层里，第 1 层（框架物理判据：一帧无可见 UI 变化即崩溃）植不进别人的仓库；"测试单独成 task"的分离层级在 hivemind 降到 phase 而不是 Story。
 
 ### deepseek-harness（dsh，DeepSeek 官方 harness）
 
@@ -52,10 +63,10 @@ hivemind 以 pi（earendil-works/pi，provider 无关）为执行底座、Notion
 ```
                    ┌────────────── Linux 主机（常开, systemd）──────────────┐
  Notion 看板 ◄───► │ Orchestrator（确定性状态机 + intake + NotionGateway）    │
- (webhook+轮询)    │ Redis(BullMQ) · 中央 libsql（执行真相源/EventLog/账本）  │
-                   │ RegressionScheduler(E2E loop 排程) · 状态 API/Bull Board │
+ (webhook+轮询)    │ 中央 libsql（执行真相源 / 派单队列 / EventLog / 账本）   │
+                   │ RegressionScheduler(E2E loop 排程) · 状态 API / 控制台   │
                    └──────┬──────────────────┬──────────────────┬───────────┘
-                    cap.web             cap.browser-e2e     cap.windows       ← capability 队列
+                    cap.web             cap.browser-e2e     cap.windows       ← capability 路由（DB 领单）
                                         cap.ios(未来)
                    ┌──────▼─────┐      ┌──────▼──────┐     ┌──────▼──────┐
                    │Linux worker│      │Mac mini      │     │Windows      │
@@ -66,7 +77,7 @@ hivemind 以 pi（earendil-works/pi，provider 无关）为执行底座、Notion
 
 两条脊柱决策：
 
-1. **job = 整卡（Story）而非单 phase，卡对主机粘性**：worktree/构建缓存/Context 快照都在本地盘；worker 本地跑完 DESIGN→CODE⇄VERIFY→MERGE 全内环，phase 边界经 orchestrator API 回报中央 DB + 续租；跨平台验证建模为独立"探针 job"（对已 push 分支只读 clone + e2e + 回传证据），不打破粘性。
+1. **job = 整卡（Story）而非单 phase，卡对主机粘性**：worktree/构建缓存/Context 快照都在本地盘；worker 本地跑完 SHAPE→DESIGN→SPECIFY→CODE⇄VERIFY→MERGE 全内环，phase 边界经 orchestrator API 回报中央 DB + 续租；跨平台验证建模为独立"探针 job"（对已 push 分支只读 clone + e2e + 回传证据），不打破粘性。
 2. **字段级单向所有权的真相源模型**：中央 libsql 是系统状态/执行历史的唯一真相源；Notion 是人类输入的诞生地 + 唯一 UI。系统 owner 字段只由 orchestrator 写，人为改动解释为"指令/反馈"而非状态；人 owner 字段只被 ingest。同一字段永不双向合并 → 结构上无冲突，由单写者架构直接支撑（Notion 读写全部收敛在 orchestrator 的 NotionGateway，worker 永不直连 Notion）。
 
 ## 5. 实施路线图
@@ -74,12 +85,13 @@ hivemind 以 pi（earendil-works/pi，provider 无关）为执行底座、Notion
 | 里程碑 | 内容 |
 |---|---|
 | **M0 地基 PoC**（先证伪最贵假设，~1 周） | pi RPC Context 导出/载入（PoC-2）、Windows Git Bash 冒烟（PoC-1）、RPC 错误事件结构（PoC-5）、Notion 评论 resolve 丢失与 @mention 通知实测（R1/R2）、pi 默认 vs 自建 prompt A/B（PoC-4）、**Codex OAuth 五项（PoC-C1–C5：device code 登录/自动刷新/usage-limit 文案解析/无副作用探针/同机并发锁，06 文档 §9）** |
-| **M1 单机闭环** | Linux 上 orchestrator + 本机 worker + guard extension + Notion 双 DB + Story 页 builder，跑通 1 张真实卡全流水线（TDD 红绿证据链 + 盲审 + completion verifier + Notion 报告回写）；**Web 控制台骨架**（节点健康 + 任务视图 + 成本/config 只读） |
+| **M1 单机闭环** | Linux 上 orchestrator + 本机 worker + guard extension + Notion 双 DB + Story 页 builder，跑通 1 张真实卡全流水线（TDD 红绿证据链 + 盲审 + 确定性出口检查 + Notion 报告回写）；**Web 控制台骨架**（节点健康 + 任务视图 + 成本/config 只读） |
 | **M2 并行与回归** | DECOMPOSE 拆解 + footprint 调度 + epic 集成分支合流 + 常驻 E2E 双池回归 + regression 物化；**控制台动态配置写面 + 重试上限族接入** |
 | **M3 多机化** | capability 队列 + 派单信封 + 心跳失联 + 中央租约 + Mac mini（浏览器 e2e worker）接入 |
 | **M4 供应商矩阵与反馈闭环** | per-provider 熔断 + failover + 模型策略双 chokepoint + 成本账本 + 反馈 triage/friction/反思提案 + memory 投影；**Prompt 工作台完整版（灰度 + 行为回归对比）+ 供应商健康页** |
 | **M5 收口** | Windows 探针 worker + 三平台 self-update 滚动升级 + 行为回归统计基线 + 运行周报 |
 | **MP 产品经理层 + 单机全能力**（09-01 增补，**排期在 M2 之后、M3 之前**） | Requirements DB + PM 澄清/PRD/拆解/场景化验收闭环；Linux headless 浏览器 e2e（原 M3-09 前移）；任务见 tasks.md MP 段 |
+| **MR TDD 脊柱与 Agent 运行时**（09-14 增补，**排期在 MQ/IT 收尾之前**） | 阶段契约注册表 + Agent 规格分表 + 缓存三件套 + SHAPE/SPECIFY 两阶段 + 三通道人在环 + DB 领单与 per-provider 分桶 + 观测三环；任务见 tasks.md MR 段 |
 
 ## 6. 风险与 PoC 清单
 
@@ -99,7 +111,7 @@ hivemind 以 pi（earendil-works/pi，provider 无关）为执行底座、Notion
 | RPC 协议 pre-1.0 漂移 / MCP 社区扩展存续 | — | 中 | pin + fixture 契约测试 + PiRunner port；vendor 进仓 + defineTool 备胎 |
 | E2E flaky 淹没 regression | — | 中 | 样本级统计 + 失败签名去重 |
 | epic 分支长命偏离 / 大 MR 人审负担 | — | 中 | 每日 merge main；Notion 为主审阵地 + >8 Story 提示拆 |
-| Redis/Linux 单点、GUI 会话自动登录安全弱化 | — | 低 | 接受：中央 DB 为真相源可重建；盘加密 + 内网隔离 |
+| Linux 单点、GUI 会话自动登录安全弱化 | — | 低 | 接受：中央 DB 为真相源可重建；盘加密 + 内网隔离。（Redis 已随 BullMQ 撤销，见 02 §1.2，这个单点少了一个。） |
 
 ## 6.5 M0 执行结果（2026-08-27）
 
@@ -122,6 +134,7 @@ hivemind 以 pi（earendil-works/pi，provider 无关）为执行底座、Notion
 ## 7. 验证策略
 
 - **M0**：每个 PoC 有明确判据（RPC Context 往返 diff 为空、Windows 10 次冒烟全过、@mention 手机收到推送等）。
+- **MR 验收**：一张真实 Story 走完 `SHAPE→DESIGN→SPECIFY→CODE⇄VERIFY→MERGE`，再人为制造一次回归走完 `SPECIFY(narrow)→REGRESSION_FIX`；十条判据见 tasks.md MR-38，其中三条是硬的——观测三个解耦判据全过、同道各阶段 `prompt_cache_key` 相同且跨道不同、SPECIFY 的红是断言失败且三字段匹配 `expected_failure`。
 - **M1 验收**：一张真实卡从 Notion 建卡到 MR 创建全程无人干预；Notion 页面呈现完整（Spec 状态/设计/验证 toggle/成本）；EventLog/trace/成本账本三面可查；danger-rules 拦截注入测试（故意让 agent 试红线命令，被 block 且审计留痕）。
 - **系统自测**：纯函数决策逻辑（收敛判据/footprint 相交/拓扑调度/triage 路由/去重键/业务语言 lint）全部单测；Notion client 与 PiRunner 用罐头回放契约测试；prompt/规则变更走样本级统计行为回归（N trials 置信区间，nightly，不 gate PR）。
 

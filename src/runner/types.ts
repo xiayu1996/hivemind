@@ -35,6 +35,17 @@ export interface RunnerSpawnOptions {
    * must then be passed deliberately.
    */
   contextFiles?: "explicit" | "inherit";
+  /**
+   * pi also discovers skills and prompt templates from the host, and appends
+   * them to the system prompt. A captured payload carried nine of the host
+   * owner's personal skills, 5,199 bytes of them, none related to the task.
+   * The cost is the smaller half: the list differs per machine, so it breaks
+   * the invariant that the same inputs rebuild the same prompt byte for byte.
+   * "explicit" turns discovery off; `skills` below is then the whole surface.
+   */
+  skillDiscovery?: "explicit" | "inherit";
+  /** Skill files or directories loaded deliberately, in a stable order. */
+  skills?: string[];
   env?: Record<string, string>;
 }
 

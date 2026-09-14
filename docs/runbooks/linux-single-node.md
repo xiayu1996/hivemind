@@ -62,13 +62,16 @@ systemctl --user restart hivemind-orchestrator hivemind-requirements
 
 两单元 `Restart=always`；常驻模式下单轮失败只记日志并触发 P0 告警（同一错误十分钟内只报一次）。改配置走 `data/hivemind.db` 的 `config_overrides`，热更语义见 registry；改 `secrets.env` 后重跑安装脚本或手动 restart。
 
+**控制台没有自己的 unit，它跟着 orchestrator 起。** `console.enabled` 打开后由 `run-local-orchestrator.ts` 在同一进程内 listen，地址取 `console.host` / `console.port`（默认只绑回环，公网通配绑定会被拒）。这样安排的理由是控制台的写面改的就是这个进程正在读的那份配置：同进程意味着热更语义不需要跨进程通知，而多一个 unit 只会多一份要对齐的环境与一条会和主进程各说各话的路径。要临时关掉控制台就把 `console.enabled` 置 false 再 restart，卡照跑。
+
 ## 5. 单节点闭环的验收顺序
 
 1. 在 Requirements 看板建一张十句话级模糊需求卡 → 需求页评论出现 PM 的第一轮业务问题 → 在评论里回答（不要 resolve）。
 2. PM 判充分后 PRD 写入需求页、状态置「PRD 待确认」→ 评论「批准」或拖列。
 3. PM 拆出 Epic 写入 Epics 库 → orchestrator 接单拆 Story → Epic 页出现拆解方案、状态「拆解待确认」→ 拖到「进行中」批准。
-4. Story 依次 DESIGN/CODE/VERIFY/MERGE，落到 `epic/<id>` 分支；全部交付后 orchestrator 建 Epic MR，Epic 置 EPIC_ACCEPT。
+4. Story 依次 SHAPE/DESIGN/SPECIFY/CODE⇄VERIFY/MERGE，落到 `epic/<id>` 分支；SPECIFY 那一步会先把红测试冻结成 `specify_commit`，CODE 之后改不动它。全部交付后 orchestrator 建 Epic MR，Epic 置 EPIC_ACCEPT。
 5. 人在平台合并 MR → 下一轮 orchestrator 读到 merged，Epic → DONE → 需求进 ACCEPTANCE，需求页出现按 PRD 场景的验收清单。
 6. 逐条勾选 → 需求 DONE；有缺口的项留言不勾 → PM 立增量 Epic 回 EXECUTING。
+7. 已交付的卡上再报一个缺陷（Notion 评论），走的是回归道：卡回 SPECIFY 但标记 `phase = REGRESSION_FIX`，只为这条失败签名写窄版复现测试并证红，再进 REGRESSION_FIX→VERIFY。看板上能区分这两次 SPECIFY 的依据是 `story_test_contracts.mode`（`full` / `narrow`）。
 
 四类设计内人工 gate 之外若出现人工干预（临时脚本、手改库），记入 `docs/poc/mp-acceptance.md`，不得静默。

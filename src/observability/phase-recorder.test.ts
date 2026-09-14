@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { migrate } from "../persistence/migrate.js";
 import { parseCanonicalLog, rebuildProviderPayload, validateCoordinates } from "./canonical-log.js";
-import { LibsqlPhaseRecorder } from "./phase-recorder.js";
+import { LibsqlPhaseRecorder, type PhaseEvidenceInput } from "./phase-recorder.js";
+import { testAgentSpec } from "../runner/agent-spec.testing.js";
 
 describe("LibsqlPhaseRecorder", () => {
   it("round-trips exact provider payloads and records RPC events and cost", async () => {
@@ -18,10 +19,8 @@ describe("LibsqlPhaseRecorder", () => {
     ];
     const recorder = new LibsqlPhaseRecorder(client, {
       evidenceRoot: directory,
-      provider: "mock",
-      modelId: "mock-1",
     }, () => 100);
-    await recorder.record({
+    const telemetry: PhaseEvidenceInput = {
       runId: "run-1",
       cardId: "card-1",
       phase: "CODE",
@@ -36,19 +35,24 @@ describe("LibsqlPhaseRecorder", () => {
         { role: "assistant", content: "done", usage: { input: 100, cacheRead: 3072, cacheWrite: 0, output: 10 } },
       ],
       providerPayloads: payloads,
+      spec: await testAgentSpec(),
       result: {
         settled: true,
         failure: null,
         usage: { input: 3, output: 2, cacheRead: 1, cacheWrite: 0, reasoning: 1, costUsd: 0.05 },
         events: [{ type: "agent_settled" }],
       },
-    });
+    };
+    // Two entry points, two rules: the cost row is written on the delivery
+    // path, the evidence behind it by the drain loop.
+    const cost = await recorder.recordCost(telemetry);
+    await recorder.writeEvidence({ ...telemetry, cost: cost.data });
 
     const canonical = parseCanonicalLog(await readFile(join(directory, "run-1", "run-events.jsonl"), "utf8"));
     expect(rebuildProviderPayload(canonical)).toEqual(payloads[1]);
     expect(() => validateCoordinates(canonical)).not.toThrow();
-    const cost = await client.execute("SELECT provider, model_id, cost_usd FROM cost_entries");
-    expect(cost.rows).toMatchObject([{ provider: "mock", model_id: "mock-1", cost_usd: 0.05 }]);
+    const costs = await client.execute("SELECT provider, model_id, cost_usd FROM cost_entries");
+    expect(costs.rows).toMatchObject([{ provider: "mock", model_id: "mock-1", cost_usd: 0.05 }]);
     const events = await client.execute("SELECT type FROM event_log WHERE run_id = 'run-1'");
     expect(events.rows).toMatchObject([{ type: "rpc.agent_settled" }]);
 

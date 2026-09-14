@@ -5,9 +5,9 @@
 | # | 教训来源 | 落成的设计约束 |
 |---|---|---|
 | 1 | busybee 旧验证阶梯硬编码 Maven 导致前端卡死循环 | 验证阶梯只定义**证据形态与裁决规则**，不定义命令；执行命令由 agent 现场决定，verdict 由代码从轨迹核验 |
-| 2 | busybee 验证造假事故（file:// 假页面截图冒充 e2e） | 所有 agent 自报结论通道 = L2 物理掐断 + L3 代码校验双层；VERIFY/E2E runner 工具面禁写 |
+| 2 | busybee 验证造假事故（file:// 假页面截图冒充 e2e） | 所有 agent 自报结论通道 = L2 物理掐断 + L3 代码校验双层。**掐断点是导航层的 `e2eHostAllowlist`（`guard/policy.ts:118`）与 verdict 层的屏幕证据校验（§9.2），不是工具面禁写**——伪造只需 navigate + screenshot，两个都是读操作，禁写从来挡不住它（2026-09-14 更正，见 07 §6） |
 | 3 | cumora builder/verifier 分离（DB CHECK 三层强制） | `VERIFY.session_id != CODE.session_id` DB CHECK；VERIFY 永远 fresh session 盲审 |
-| 4 | cumora completion verifier | 每个 phase 出口一次独立小脑调用看 side effects，fail-closed |
+| 4 | cumora completion verifier | ~~每个 phase 出口一次独立小脑调用看 side effects，fail-closed~~ **09-09 撤销**：内环只保留一个 LLM 判定（盲审），phase 出口改为确定性检查（§8.1）——一个会看走眼的裁判加在一个会看走眼的执行者后面，只是把不确定性乘了两次 |
 | 5 | busybee 基线红绿（D7） | TDD 红证据从执行轨迹挖，挖不到 → skipped 升级 reviewer，不信自报 |
 | 6 | cumora 失败物化 | regression 卡唯一索引去重；friction 计数器；24h 否决 ≥3 → 改进提案 |
 | 7 | busybee "人为上限只伤真实工作" | 只兜 CODE⇄VERIFY 收敛性；真停点仅 blocking_question / verify_loop_exceeded |
@@ -16,7 +16,9 @@
 
 ## 1. 流水线 DAG
 
-### 1.1 两层状态机
+### 1.1 三层状态机（需求 / Epic / Story）
+
+> 需求级见 §7.1（2026-09-01 增补）；本节描述 Epic 级与 Story 级。
 
 **Epic 级**（orchestrator 确定性状态机，权威真相在中央 DB，Notion 是投影）：
 
@@ -40,15 +42,18 @@ stateDiagram-v2
 ```mermaid
 stateDiagram-v2
     [*] --> QUEUED : 依赖满足即可调度
-    QUEUED --> DESIGN : worker 领单（派单信封 + 中央租约）
-    DESIGN --> CODE : 核心设计总结冻结进 Story DoD
+    QUEUED --> SHAPE : worker 领单（派单信封 + 中央租约）
+    SHAPE --> DESIGN : DoD 冻结；非 blocking 的 open_questions 不挡开工
+    SHAPE --> BLOCKED : blocking_question（全系统唯一有权提问的阶段）
+    BLOCKED --> SHAPE : 人回答（只重跑 SHAPE，不重跑 DESIGN）
+    DESIGN --> SPECIFY : 设计总结 + 接口声明草稿落盘；DoD 未被改动
+    SPECIFY --> CODE : 测试写完、证明断言失败、commit 冻结
     state "CODE ⇄ VERIFY 内环" as LOOP {
-        CODE --> VERIFY : agent 自称完成 + completion verifier 判真
+        CODE --> VERIFY : CODE 出口确定性检查通过（§8.1）
         VERIFY --> CODE : fail 且失败集合严格收敛
     }
     LOOP --> MERGE : VERIFY 全绿
     LOOP --> STOPPED : 不收敛 → verify_loop_exceeded → Notion @人
-    LOOP --> BLOCKED : blocking_question
     MERGE --> DELIVERED : rebase→解冲突→子集重验→合入 epic 分支
     DELIVERED --> REGRESSION_FIX : E2E loop 归因到本 Story（重开内环，最高优先级）
     REGRESSION_FIX --> DELIVERED
@@ -122,6 +127,7 @@ DECOMPOSE 为每个 Story 产出：
 | maxPhaseReentries | 单 phase 重入次数（failover/崩溃恢复/跨机重建合并计数） | 3 |
 | maxContinueRetries | 断线 continue 重试 | 8 |
 | maxRegressionReopens | 同一 Story 被 E2E loop 打回 REGRESSION_FIX 的次数 | 2 |
+| maxInconclusiveRounds | 连续 inconclusive（跑不起来，§9.3）的容忍轮数，超出物化 friction | 2 |
 
 **上限设在"离散重试轮次"，不设在单次运行的时长/token/预算上**——与 busybee 教训一致（后者只伤害真实工作，前者才是"系统在原地打转"的信号；busybee 自己也保留了 MAX_TEST_ITERS）。
 
@@ -136,9 +142,15 @@ DECOMPOSE 为每个 Story 产出：
 - **需求侧**：需求太难或拆解粒度不合理 → 建议人工拆卡、补充上下文或调整 Spec；
 - **系统侧**：中间流程/逻辑存在缺陷（如验证契约歧义、prompt 误导、调度错误）→ 自动物化 friction 进反思提案管道（§4），累积后产出流程优化提案。
 
-全系统真停点因此为四类：`blocking_question`、`verify_loop_exceeded`（不收敛提前停）、`retry_limit_exceeded`（上限停 + 诊断）、`cost_ceiling_exceeded`（费用停，无诊断）。四者由 `stories.stop_reason` 的 CHECK 强制。（"每轮修一个"拖长的钻空子风险：收敛曲线附在 Notion 卡供人随时叫停 + 上限族最终兜底。）
+全系统真停点因此为四类：`blocking_question`、`verify_loop_exceeded`（不收敛提前停）、`retry_limit_exceeded`（上限停 + 诊断）、`cost_ceiling_exceeded`（费用停，无诊断）。四者由 `stories.stop_reason` 的 CHECK 强制。
+
+**停点详情必须带收敛分类（2026-09-14）。** `src/pipeline/convergence.ts:37` 早已算出 `stalled` / `oscillating` / `expanded` 三种分类，但 `story-worker.ts:351` 把它们连同"轮次烧满"一起塌缩成同一个 `verify_loop_exceeded`，人看到"验证循环超限"看不出"第 2 轮就原地打转"。停点**类别不变**（仍是四类，不违反 CHECK），但详情里如实写出分类。**"重复几轮算停滞"不参数化**（2026-09-14 复审撤回原方案）：`convergence.ts:38` 现在就是 `same(current, previous) → mayContinue: false`，第一次持平即停，这已经是「两轮完全一样就是缺陷，不等」。把它提成 `stagnantRoundsBeforeStop` 只有两个结果——取 1 等于现状（配置没有作用），取 >1 等于允许持平续跑，而那**直接违反 `failed(N) ⊊ failed(N-1)` 这条架构不变量**。一个只能取现状值的配置项不是灵活性，是误导。`oscillationLookback` 则可以配：震荡停是严格真子集之外的**额外**停点，放宽收紧都不触碰不变量。
+
+真正的「停止条件可快速迭代」不靠阈值，靠 04 §5.5 的 invariant 层——新判据是数据不是主流程里的 if 分支，改一条不发版，违反只产生 finding 不阻断。**续跑规则本身是不变量，不参与迭代。** 同理，**不新增任何"为什么没进展"的判断逻辑**：停点交给人，人用 §12 的 `rework` 通道决定是否解冻。（"每轮修一个"拖长的钻空子风险：收敛曲线附在 Notion 卡供人随时叫停 + 上限族最终兜底。）
 
 ## 2. TDD 执行契约
+
+> **2026-09-14 结构变更**：TDD 从"CODE 内部的 micro-cycle"提升为跨阶段的脊柱。测试的编写、证红与冻结移到独立的 SPECIFY 阶段（§12.2），CODE 只负责让冻结的测试转绿。本节 §2.3 描述的红绿证据链因此从"同一个 agent 自证时序"变成"两个阶段之间的物理时序"。
 
 ### 2.1 Spec → 测试映射
 
@@ -168,12 +180,13 @@ CODE micro-cycle：按 scenario 逐条 `写测试 → 跑红 → 实现 → 转�
 
 | 角色 | 职责边界 | 档位 | 升级条件 | 工具面 |
 |---|---|---|---|---|
-| 需求分析/拆解（DECOMPOSE） | Epic→Story→Spec 清单、依赖声明、footprint 预测 | **大脑** | —（拆解质量决定全局，恒大脑） | 读代码+读 Notion；无写 |
-| Story 设计总结（DESIGN） | 核心设计一页纸 + 测试矩阵声明 | 中脑 | footprint 跨 ≥3 模块或 complexity=high → 大脑 | 读代码；无写 |
+| 需求分析/拆解（DECOMPOSE） | Epic→Story→Spec 清单、依赖声明、footprint 预测 | **大脑** | —（拆解质量决定全局，恒大脑） | 统一工具集；prompt 约束不写代码 |
+| 需求硬化与消歧（SHAPE） | DoD（冻结）+ open_questions；全系统唯一有权提问的阶段 | **大脑** | —（它定的是整张卡的验收基准） | 统一工具集；prompt 约束只写文档产物 |
+| Story 设计总结（DESIGN） | 核心设计一页纸 + 接口声明草稿；**禁止提问** | 中脑 | footprint 跨 ≥3 模块或 complexity=high → 大脑 | 统一工具集；prompt 约束写声明不写实现 |
+| 测试契约（SPECIFY） | test-contract + 测试代码，证明断言失败并 commit 冻结 | **大脑** | — | 统一工具集；出口 tree-pin 把非测试改动 revert |
 | 编码（CODE） | TDD micro-cycle、解合流冲突 | 中脑 | 内环第 2 次重启 → 大脑（最多升一次，再挂走 ops_alert） | 读写 worktree+测试+git（不可 push main） |
 | 盲审验收（VERIFY） | fresh session 盲审、逐场景 verdict | 中脑 | inconclusive 或基线争议 → 大脑 | **只读**+测试+浏览器（L2 掐 file://、禁写） |
 | UI 验收走查（VERIFY 内独立道） | 产品经理视角逐场景验收界面 + 出界面 findings（不否决） | **大脑** | —（判"是否是当初要的东西"，恒大脑；需目录宣告图片输入） | **只读**+浏览器+截图作图片输入；无写 |
-| completion verifier | 看 side effects 判 done 真伪，fail-closed | 小脑 | 永不升级（保持廉价快速） | 只读轨迹/diff，单次调用 |
 | E2E 回归 runner | 执行场景、采证 | 中脑 | — | 只读+浏览器+测试；禁写代码 |
 | 回归归因分析 | 失败签名、二分定位 | 中脑 | 归因矛盾/多 Story 疑凶 → 大脑 | 只读+git log/bisect |
 | MR 文案 | 按 Story 分章的 MR 描述 | 小脑 | — | 只读 diff+DoD |
@@ -181,7 +194,9 @@ CODE micro-cycle：按 scenario 逐条 `写测试 → 跑红 → 实现 → 转�
 | 反思提案生成 | friction 累积 → prompt/规则/契约改进提案 | **大脑** | —（改系统自身规则是最高风险决策） | 只读 memory/轨迹；提案只落 Notion 待批 |
 | memory distiller | 终局蒸馏 episode→lesson | 小脑 | — | 只读轨迹；写 memory 库 |
 
-硬约束（代码级非 prompt 级）：`VERIFY.session_id != CODE.session_id` DB CHECK；VERIFY/E2E 工具面在 hook 层物理禁写与禁 file://。
+**"工具面"一列在 2026-09-14 变了含义**：取消 per-phase 工具面限制后工具集全阶段统一，阶段差异由 prompt 尾部约束 + 确定性出口判据承担。理由见 07 §6——工具面禁写挡不住它声称要挡的事故，而它每切一刀就废掉一段缓存前缀。
+
+硬约束（代码级非 prompt 级，且都不改工具 schema）：`VERIFY.session_id != CODE.session_id` DB CHECK（`0001_init.sql:510`）+ 运行时复检（`verify/executor.ts:343`）；`e2eHostAllowlist` 在导航层禁 file://（`guard/policy.ts:118`）；`fencedPatterns` 在 hook 层禁改 SPECIFY 冻结的测试。
 
 ## 4. 人类反馈闭环
 
@@ -200,14 +215,15 @@ Notion 评论/打回/needs_input 回答
 
 ## 5. 交付定义（DoD）契约
 
-**Story DoD**（DESIGN 出口冻结，后续不漂移的 setpoint）：
+**Story DoD**（**SHAPE 出口冻结**，后续不漂移的 setpoint；2026-09-14 起产出方从 DESIGN 改为 SHAPE，理由见 §12.5。`design_summary` 随之移出 DoD，成为 DESIGN 自己的 `design-summary` 产物）：
 
 ```yaml
 story_id: S-EPIC12-03
-design_summary: <一页纸核心设计，业务语言>
+dod_version: <整卡验收契约的内容 hash；覆盖范围与归一化规则见本节末>
 scenarios:
   - id: S-EPIC12-03-a
     given/when/then: <业务语言；then 点名可观察物与边界>
+    scenario_version: <该条自己的 hash；§12.5 的逐条失效判据读它，由系统算出，作者不写>
     layers: [unit, e2e]          # 测试矩阵声明（§2.2 裁剪结果；层归属由系统固定）
     source: <含 e2e/ui 层时必填：数据从哪张表、哪类事件、哪个既有接口来>
     seed: <可选：given 在屏幕上需要的样例数据，人话一句；走查前经仓库的 verify.seedCommand 造出>
@@ -228,7 +244,36 @@ predicted_footprint: [module/dir]
 depends_on: [story_id]
 ```
 
-**DoD 写到什么程度（2026-09-10）**：只读代码的 CODE 与只看屏幕的走查，对着同一条 `then` 必须得出同一个结论。「简洁」「清晰」「摘要」这类词必须由 `examples` 的字面样例定义；schema（`src/pipeline/dod.ts`）在 DESIGN 出口强制上述字段，含糊的 DoD 出不了 DESIGN。依据：S-E3OVERVIEW-01 八轮中两轮（第 6、7 轮）源于 `then` 只写「简洁活动摘要」，CODE 按最小解释做、走查按用户语义打回，两边都没错，错在 DoD 允许两种解释；另有三条验收标准无任何场景归宿，只能靠评审人眼发现。
+**`dod_version` 覆盖什么（2026-09-14 二次复审修正）。** 初稿写的是「scenarios 的 id / given / when / then / layers / examples」，漏掉了两类同样决定"做成什么算对"的字段，会产生**漏失效**——比 hash 抖动严重得多的方向：
+
+| 进 hash | 为什么 |
+|---|---|
+| `scenarios[].id / given / when / then / layers` | 验收语义本体 |
+| `scenarios[].source` | **初稿漏了**。把数据来源从"模拟数据"改成"真实事件表"，其余字段一字不动，实现要重写而 hash 不变，下游会整套复用旧产物 |
+| `scenarios[].seed` | **初稿漏了**。走查前由 `verify.seedCommand` 逐字喂进去，改 seed 就是改了走查看到的那块屏幕 |
+| `scenarios[].examples[].kind / text` | 字面样例正是"简洁""清晰"这类词的定义 |
+| `acceptance_criteria[].text` 与它的 `scenarios[]` / `constraint` 归宿 | 验收条目与场景的映射改了，同一组场景全绿也不再等于这张卡做完了 |
+| `baseline`（含 `exempt` 的 reason） | 它决定这张卡是否需要一条红测试 |
+| `out_of_scope` / `relies_on` | 走查能否据以否决、哪些失败不算本卡的，都是验收边界 |
+
+不进 hash：`design_summary`（已移出 DoD）、`predicted_footprint`、`depends_on`（调度信息，不是验收基准）、`open_questions` 的开闭状态。
+
+**两个层级的版本，各管一件事（2026-09-14 三次复审补齐）。** 只有整卡一个 `dod_version` 是不够用的：改一条 scenario 就会让整卡版本变，于是"未受影响的 scenario 保留结论"与"结论必须带当前版本"直接打架（§12.5 展开）。所以定义两个：
+
+| 版本 | 覆盖 | 用途 |
+|---|---|---|
+| `dod_version` | 上表全部字段 | 契约身份：这份 DoD 是哪一版，记在每条产物与结论上 |
+| `scenarios[].scenario_version` | **该 scenario 自己的字段** + **对它生效的全局字段**（`baseline`、`out_of_scope`、`relies_on`，以及 `acceptance_criteria` 里引用了它的那些条目的 `text` 与归宿） | 失效判据：这一条的验收基准变没变 |
+
+两者用同一套归一化与同一个 hash 函数，区别只在喂进去的字段集合。这样"受影响"就是可计算的，不再是一个需要人判断的词：**`scenario_version` 变了的就是受影响的**。改一个全局字段会让所有 scenario 的版本一起变，这是对的——`out_of_scope` 变了，每一条走查结论的边界都变了。
+
+**归一化只做结构规范化，不碰文本内容**（2026-09-14 三次复审收紧）：Unicode NFC → 集合类数组按稳定键排序（scenarios 按 id、examples 按 (kind, text)、criteria 按 text、`layers` / `out_of_scope` / `relies_on` 等字符串数组按码点序）→ 对象键按码点序的规范 JSON 序列化 → SHA-256。
+
+**不再做"去首尾空白 + 内部连续空白折成单空格"**。初稿那一步会漏掉真实的验收变化：`examples[].text` 定义的正是用户在屏幕上看到的**字面**内容，`seed` 是逐字喂给 `verify.seedCommand` 的造数输入，两者的换行、缩进、连续空格都可能是有意义的；折叠之后改了它们 hash 却不变，而这正是本节刚刚宣布要避免的漏失效方向。首尾空白无须归一化器处理——`dod.ts` 的 schema 已在 `z.string().trim()` 层面削掉，进 hash 的文本本来就没有首尾空白；内部空白一律原样保留。
+
+因此**撤回"改措辞不改验收语义时 hash 不变"这条判据**（2026-09-14）：普通 hash 做不到语义等价判断，写成验收判据等于要求一个不存在的实现。真实性质是单向的——**覆盖字段里任何一个字符变了（空白也算），hash 必变**；唯一被吸收的差异是集合元素的书写顺序与 JSON 的键序，那两者确实不携带验收语义。失效方向因此是保守的：可能因为改个错别字或多敲一个空格而多作废一次下游产物，**不会漏掉一次真正的验收变更**。多作废的代价是重跑，漏作废的代价是对着旧需求交付。
+
+**DoD 写到什么程度（2026-09-10）**：只读代码的 CODE 与只看屏幕的走查，对着同一条 `then` 必须得出同一个结论。「简洁」「清晰」「摘要」这类词必须由 `examples` 的字面样例定义；schema（`src/pipeline/dod.ts`）在 **SHAPE** 出口强制上述字段，含糊的 DoD 出不了 SHAPE。依据：S-E3OVERVIEW-01 八轮中两轮（第 6、7 轮）源于 `then` 只写「简洁活动摘要」，CODE 按最小解释做、走查按用户语义打回，两边都没错，错在 DoD 允许两种解释；另有三条验收标准无任何场景归宿，只能靠评审人眼发现。
 
 **Epic 完成判定**（可代码判定，非 agent 自报）：全部 Story delivered ∧ epic 回归池连续 K 轮全绿（或 24h 无新增 regression 卡）∧ MR 合并 ∧ Notion 人工验收勾选。
 
@@ -268,7 +313,7 @@ stateDiagram-v2
 - **不新增真停点类别**：澄清等待人回答复用 blocking_question 语义（needs_input 呈现）；PRD 确认与验收勾选是状态机人工 gate（同 PLAN_APPROVAL），不是停点。澄清轮次上限 config 化，超限 → blocking_question @人。
 - **业务语言约束扩展**：PM 的提问与 PRD 全文适用业务语言 lint（不得含实现词汇）。用户在需求层只谈方向与场景；实现细节问题只允许在 Story 层以 blocking_question 出现且应少量。
 - **字段所有权不变**：原始需求区段人 owner；澄清记录/PRD/验收清单系统 owner，人的勾选与评论作为输入被 ingest——同一字段仍永不双向合并。
-- **验收关注行为不关注代码**：验收清单逐条对应 PRD 场景（业务语言）；代码质量由既有自动化（盲审/completion verifier/回归 loop）+ 定期优化单（tasks.md M4-18）管控，不进入人的验收面。
+- **验收关注行为不关注代码**：验收清单逐条对应 PRD 场景（业务语言）；代码质量由既有自动化（盲审/确定性出口检查/回归 loop）+ 定期优化单（tasks.md M4-18）管控，不进入人的验收面。
 - **Epic 完成判定的归属（2026-09-02 补记）**：§1.1 的 `EPIC_ACCEPT → DONE : MR 合并 + 人验收` 中，「人验收」对隶属需求的 Epic 上移到需求层——MR 合并（`EpicCompletion` 经平台 CLI 读回 merged 状态，代码判定）即 DONE，人的验收只在需求页按场景勾选做一次；独立 Epic（无 requirement）仍需人在看板拖到「已完成」+ MR 合并两者齐备。此前无任何代码执行该迁移，需求永远到不了 ACCEPTANCE。
 
 ### 7.3 角色与模型分配表扩展（§3 增补行）
@@ -379,7 +424,7 @@ Story 页「待人回答」区列出已应用的回答：谁、何时、针对�
 - **走查环境**（§9）：仓库级 `verify.appStartCommand` / `verify.appReadyUrl` / `verify.seedCommand`，DoD 场景以 `seed` 声明样本数据；系统起服务、造数据、把 URL 交给评审。起不来记 friction、场景 inconclusive，不否决；走查 inconclusive 在 Notion 上可见，不再被功能道结论吞掉。
 - **需求层停点**：`clearStop` 有了调用者——人的回答清掉 stop 并进入下一轮澄清；需求页渲染停点详情与回答方式，而不是一个枚举词。HUMAN_PARKED 且无 resume_state 不再抛错。EXECUTING 期间 Epic 进度变化重新投影需求页。
 - **MERGE 可重入**：MERGE 阶段失败与 DESIGN/CODE 同样在预算内自动重入；平台瞬时错误不是停牌理由。
-- **重置解冻**：人把 Story 拖回 DESIGN，或冻结 DoD 不再满足当前契约，系统解冻 specs、作废 DESIGN/MERGE 第 1 轮与未验证的 CODE 轮，自动回 DESIGN；不再靠幂等复用把旧结果递回来。
+- **重置解冻**：人把 Story 拖回 DESIGN，或冻结 DoD 不再满足当前契约，系统解冻 specs、作废 DESIGN/MERGE 第 1 轮与未验证的 CODE 轮，自动回 DESIGN；不再靠幂等复用把旧结果递回来。（2026-09-14 §12.5 收紧：`dod_version` 变更时，受影响 scenario **已经 accepted 的 VERIFY 与走查结论也一并作废**，"已验过"不是豁免。）
 - **停牌上浮**：任一 Story NEEDS_INPUT，Epic 转 BLOCKED 并在 Epic 页写明哪张卡停在什么原因；全部恢复后自动回 EXECUTING。这种 BLOCKED 不能被评论「回答」成重新拆解。
 - **回归环路接通**：sweep 传 probe worktree，归因能跑；`regression_cards` 有 resolve 语义；REGRESSION_FIX 是可运行的 phase（见 tasks IT-2x）。
 - **outbox 死信**：每行计 attempts，超过上限转 dead 并保留错误；周期日志报 failed/dead 计数，`inspect` 可列死信。
@@ -393,3 +438,219 @@ Story 页「待人回答」区列出已应用的回答：谁、何时、针对�
 - **投影键跟着「页面长什么样」**：outbox 只按 payload 去重，于是改了措辞而事实没变时，线上每一页都还显示旧文案。键改为覆盖渲染后的行。
 - **受阻行说人话**：Epic 页原样打印事件日志里给运维看的理由（含 `verify_loop_exceeded` 这类枚举），而下面的 Story 行已经用中文说过一遍。有卡在等回答时，页面只说等谁；运维那句留在 payload 与日志里。
 
+
+## 12. 增补（2026-09-14）：TDD 脊柱、SHAPE 阶段与人在环
+
+本节回答三件事：TDD 为什么要跨阶段、消歧窗口为什么必须有界、人怎么介入方案而不只是回答问题。Agent 侧的运行时（模型/effort/工具/缓存）见 `07-agent-runtime.md`。
+
+### 12.1 为什么 TDD 现在不成立
+
+- `prompts/phases/code.md:3` 与 `regression-fix.md:6` 是全仓仅有的两处 TDD 字样；`prompts/baseline.md` 一个字没提。
+- DESIGN 只产出 `layers: [unit, e2e]` 这种层声明，**测试用例本身不是产物**。
+- `src/pipeline/verdict.ts:59` 的 `redGreenFromCommits` 只检查红 commit 与绿 commit **是否都存在，不检查时序**。先写实现、再补一个必然失败的空测试、再补绿 commit，能原样过闸。
+- CODE 可以随手改测试，只有 `prompts/baseline.md:31` 一句话拦着。
+- REGRESSION_FIX 直接进入修代码，对已交付代码完全放弃了 TDD。
+
+参照 GacUI 的 `investigate` 六步：**Step 3 的红不靠 revert**——执行时实现还不存在（Step 4 才提方案），红是**时序物理保证**的，`# TEST [CONFIRMED]` + commit 是那一刻的凭证。hivemind 缺的正是这个"实现不存在时把测试冻结下来"的时刻。
+
+### 12.2 SPECIFY：把红冻结成一个阶段
+
+拓扑变为：
+
+```
+QUEUED → SHAPE → DESIGN → SPECIFY → CODE ⇄ VERIFY → MERGE → DELIVERED
+回归：REGRESSION_OPEN → SPECIFY(narrow) → REGRESSION_FIX → VERIFY → ...
+```
+
+**产物 `test-contract`**（schema 见实施任务 MR-15）关键字段：
+
+| 字段 | 作用 |
+|---|---|
+| `mode: full \| narrow` | narrow = 回归卡，只为一条失败签名写复现测试 |
+| `cases[].kind: happy \| boundary \| negative` | 一个 scenario 一组用例而不是一个 |
+| `expected_failure.{kind,file,assertion,actual}` | 出口第 5 项的原料，逐字段比对。`kind` 只能是 `assertion` 或 `not_implemented` |
+| `expected_failure.already_passing` | 证明不是整体崩了 |
+| `observations` | GacUI 的"非测试成功判据"：日志里要看到什么 |
+| `downgraded_to: e2e \| ui` | 无法用 CODE 层证明时的唯一出路 |
+| `scaffolding[].{path,symbol,rationale}` | SPECIFY 为「让测试跑得起来」补的签名与占位，逐条声明。tree-pin 只放行这里列出的非测试改动 |
+| `specify_base_commit` | 本次 SPECIFY **入场**时的 sha，出口第 1 项 tree-pin 用它做基准；重入与回归各自取当时的合法树 |
+| `specify_commit` | SPECIFY **冻结**那一刻的 sha，CODE 出口第 5 项用它做基准 |
+| `modified_existing_tests[].rationale` | 改已有测试必须写明理由 |
+
+**出口七项检查**（确定性，不计预算，清单喂回同一 session）：
+
+1. **tree-pin 先做**：基准是**本次 SPECIFY 入场时冻结的 `specify_base_commit`**（首次入场通常等于 DESIGN 的 commit，重入与回归则是当时的合法代码树，见下）；非测试路径只允许**声明级**改动（补签名、补占位，不含行为逻辑），且每一条都要列进 `scaffolding[]` 并写理由；其余改动一律 revert（对应 GacUI 的 "revert all other changes"）；
+2. 已有测试无改动，或改动已在 `modified_existing_tests` 里有理由；
+3. 每条 CODE 归属层 scenario 都被改动过的测试文件以 `@scenario` 标记点名；
+4. **在清理后的树上**跑测试：每条 scenario 至少一个测试**在目标符号处失败**。可接受的红只有两种形态，且 `expected_failure.kind` 必须点名是哪一种：
+   - `assertion`：断言不成立（最强，默认要求）；
+   - `not_implemented`：调用到了**已声明的占位**并抛出约定标记。
+   一律**不算红**：编译错、模块找不到、测试未执行、以及任何来自非目标符号的异常。
+5. 失败原因匹配 `expected_failure`：`kind` / `file` / `actual` / `assertion` 各自比对，**不用启发式文本规则**；
+6. commit 为 `test(S-xx): red`，worktree 干净，落 `specify_commit`；**证红那一刻的树 sha 必须等于 `specify_commit` 的树 sha**，不等则证据作废、整套出口重跑；
+7. 无 CODE 层测试的 scenario 必须已 `downgraded_to: e2e|ui` 且有理由，DoD 的 `layers` 同步更新。
+
+**revert 要同时处理"改过的"和"新建但没入库的"（2026-09-14 实测补齐）。** 清理逐条问 git 这个路径在基线里有没有：有就 checkout 回去，没有就是本阶段新建的、删掉。但 `git rm --ignore-unmatch` 只认索引里的条目，而越界写下的源码往往从未 `git add` 过——它会静默地留在盘上，接着被冻结 commit 的 `git add --all` 一并收进去。换句话说，最该被撤掉的那类改动恰好是它漏掉的那类。所以删除动作分两步：先删索引条目，再删文件本身。
+
+**基准必须是每次执行各自冻结的，不能写死成 DESIGN commit（2026-09-14 五次复审修正）。** 初稿的"基准是 DESIGN 的 commit"只在**首次执行**这一条路径上成立，另外两条会把合法实现整片撤掉：
+
+- **人工解冻重入**（§12.6 的 `rework` 通道）：CODE 已经实现了一部分，人回答后 `scenario_version` 变、卡退回 SPECIFY。此刻树相对旧 DESIGN commit 的差异里，绝大部分是 **CODE 合法写下的实现**；按旧规则 revert，等于把这张卡做过的活清零。
+- **交付后的窄版 SPECIFY**（§12.4）：基线是已交付的代码，跟 DESIGN commit 隔着整张卡的实现。
+
+所以 SPECIFY **入场时**把当时的 HEAD 冻结为 `specify_base_commit` 落库，tree-pin 只清理**本次执行产生的**越界改动。三条路径于是统一：首次入场时 HEAD 恰好就是 DESIGN 的 commit，规则没变；重入与回归各自取当时的合法树，实现被原样保留。`specify_commit`（出口那一刻的 sha）不变，仍是 CODE 冻结测试的基准——**一次执行落两个 sha**：进场的 `specify_base_commit` 与出场的 `specify_commit`。
+
+**第 1 项为什么必须排在证红之前（2026-09-14 二次复审调序）。** 初稿的顺序是"先证红、再 tree-pin 恢复越界改动、最后 commit"，这留下一条会产出**假红证据**的路径：SPECIFY 顺手改了一个非测试源文件，那处改动本身就是测试失败的原因；tree-pin 把它 revert 掉之后测试已经变绿，而冻结用的还是 revert 之前那次运行的红。CODE 拿到的于是是一组"在当前树上根本不红"的测试——TDD 的第一步在证据层面被架空，且没有任何后续闸门能发现，因为 CODE 的职责恰好就是让它们变绿。
+
+红是一个**关于某棵具体的树**的性质，不是一个一次取得就永久有效的凭证。所以：清理在前，证红在后，并且第 6 项把证据与最终 `specify_commit` 的树 sha 绑定——两者不等就说明证红之后树又动过，证据当场失效。这与 GacUI Step 3 的形状一致：`# TEST [CONFIRMED]` 与 commit 是**同一时刻**的凭证，中间没有任何改树的动作。
+
+"测试路径"由 per-repo config `codeExit.testPathPatterns` 定义（默认 `**/*.test.*`、`**/*.spec.*`、`test/`、`tests/`、`__tests__/`）。
+
+**「让测试跑得起来」是 SPECIFY 的责任，不是 DESIGN 的**（2026-09-14 复审补齐）。原方案有一条走不通的合法路径：DESIGN 被允许写不编译的接口草稿（§12.5），而 SPECIFY 既被要求看到断言失败、又被禁止改非测试路径——草稿一旦不可加载，SPECIFY 无路可走。GacUI 对这件事的分工是明确的：`review` 的输出「if the code does not compile, it is fine, **as all following work will be done when executing the task**」，而 `investigate` Step 2 要求**把测试写到能编译**。照搬：
+
+- **DESIGN**：写接口声明草稿，不要求编译、不要求可加载。
+- **SPECIFY**：负责把树补到「测试能加载并执行到目标符号」，允许的改动限于 `scaffolding[]` 里逐条声明的签名与占位。占位应返回类型正确的零值（红落在 `assertion`）；给不出零值时抛约定的 not-implemented 标记（红落在 `not_implemented`）。
+- **CODE**：只让冻结的测试转绿，`scaffolding` 里的占位由它换成真实实现。
+
+第 1 项仍然是**越界检测器**：DESIGN 若把功能实现了，SPECIFY 出口第 4 项红不起来直接拒；`scaffolding[]` 只放行签名与占位，放不进一个能让测试变绿的实现。
+
+**豁免不等于没人证**：无法用 CODE 层测试证明的 scenario 可以 `downgraded_to: e2e|ui`，但必须同步更新 DoD 的 `layers` 交给 VERIFY 证明。不存在"没人证"这个选项。
+
+### 12.3 CODE 出口新增两项
+
+在 §8.1 已有四项之外：
+
+5. **冻结测试未被改动**：`git diff <SPECIFY_COMMIT>..HEAD -- <测试路径>` 必须为空。**`SPECIFY_COMMIT` 必须在 SPECIFY 出口落库**（`phase_runs` 或 `test-contract` 产物的字段），否则 CODE 无从计算这个基准——它与 §8.1 现有四项用的基准**不是同一个**：那四项走 `merge-base(baseRef, HEAD)`，是分支基准。两个基准不能互相代用，也不能只记一个。guard 的 `fencedPatterns` 是入口拦，这里是出口证——`guard/policy.ts:83-86` 已自觉承认 bash 写形态枚举不全，出口用 git 复验零额外成本。
+6. **"通过不等于成功"的附加条件**：`codeExit.projectChecks` 扩展形态，退出码 0 之外还要满足各 check 声明的 `assertCleanPaths`。对应 GacUI 的 "passing test cases are necessary but not sufficient"。
+
+`codeExit.projectChecks` 从扁平命令数组扩展为：
+
+```ts
+{
+  name: string;
+  command: string[];
+  when?: string[];              // glob：改了哪类文件才跑这条
+  requires?: string[];          // 前置 check 名，表达生成器→消费者顺序
+  assertCleanPaths?: string[];  // 跑完后这些路径必须无改动（快照/基线/生成物）
+}
+```
+
+顶层再加 `protectedPaths`（不得直接修改的生成物目录，同时进 guard 的 `fencedPatterns`）。
+
+**不做 revert 重跑**。它本质是"摘掉实现这些测试必须变红"，与 SPECIFY 的时序冻结功能重叠，而限度相同——**都不管断言粗细**。GacUI 自己也没有确定性的反骨架判据（`0-scrum.prompt.md` 明说不拿覆盖率当判据；`Learning.md:163` 记着"positive control 在两种实现下都能过"的真实教训）。真正能挡弱断言的是带计数器的失败语料层，那是后续里程碑。
+
+### 12.4 REGRESSION_FIX 前置窄版 SPECIFY
+
+回归卡先产 `mode: narrow` 的 test-contract：只为这条失败签名写复现测试、证红、冻结，再进修复。对应 GacUI 的 `# Repro` 重开一整轮。
+
+**"已有测试已红时复用"跳掉的只是写测试，不是跳掉 SPECIFY（2026-09-14 五次复审收紧）。** 初稿写的"直接复用，跳过 SPECIFY"会一并丢掉三样东西，而它们正是 REGRESSION_FIX 的入口凭证：**在当前树上证红**（一条在别处红过的测试不等于在这棵树上红）、`test-contract` 的契约记录、以及冻结那一刻的 `specify_commit`。没有它们，CODE 出口第 5 项的基准不存在，冻结测试形同虚设。
+
+复用路径因此是：SPECIFY 照常入场并冻结 `specify_base_commit`，`test-contract` 的 `reuse.covered_by` 点名复用的是哪条已有测试，跳过"写测试"这一步，然后照常跑第 4、5、6 项——在当前树上证红、比对 `expected_failure`、冻结 `specify_commit`。省下的是创作成本，不是证据。
+
+**窄版 SPECIFY 必须看得见它要复现的是哪条签名（2026-09-14 端到端实测补齐）。** `regression_cards` 原本只注入 REGRESSION_FIX 的 prompt，理由是"其余阶段不读这张表，prompt 才字节确定"；但出口要求窄版 SPECIFY 交出 `mode: narrow`，而它的 prompt 与整卡那次一字不差——阶段被要求猜一个它无从知道的事实，实跑里稳定产出 `mode: full` 并被出口打回。现在的判据是**卡上的 `phase` 标记**：`state = SPECIFY` 且 `phase = REGRESSION_FIX` 时才注入回归卡，走向 CODE 的那次 SPECIFY 一条都不注入，字节确定性因此仍然成立。
+
+这条标记也是**人报缺陷与回归清扫的汇合点**：`transition()` 按目标状态推导 `phase`，所以 `defect` 通道把已交付的卡送回 SPECIFY 之后必须显式补上 `markNarrowSpecify`，否则它进的是整卡 SPECIFY，而清扫走的是另一条 SQL——同一件事两条路，只有一条是对的。
+
+### 12.5 SHAPE：消歧窗口必须有界
+
+GacUI 的无人值守靠一根保险丝——`investigate.prompt.md` 的第一条约束是：
+
+> **DO NOT ASK ANY QUESTION**, you are going to complete the work to the end, **I am not watching you in realtime**.
+
+一个不能提问的阶段遇到歧义只有两条路：猜，或者失败。所以歧义必须在它开始之前清空，这就是 `review` 存在的全部理由，也是为什么**只有 review 能提问**。把提问权发给每个阶段，等于拆掉这根保险丝——那就一定会有卡永远在等人，7x24 无人值守就没了。
+
+保险丝要两端，所以 SHAPE 与 DESIGN 必须是两个阶段：
+
+| 阶段 | 产物 | 提问权 |
+|---|---|---|
+| **SHAPE** | `dod`（冻结）、`open_questions` | **唯一有** |
+| DESIGN | `design-summary`、接口声明草稿 | **明令禁止** |
+
+**DoD 从 DESIGN 移到 SHAPE**，理由有二：一是 `dod.ts:30-47` 的 scenario 是 given/when/then + `seed` + `examples`，全是业务语言，唯一半技术的 `layers` 还被 `LAYER_OWNER`（`dod.ts:16`）固定归属——它本来就是需求产物，挂在 DESIGN 名下只因为 DESIGN 恰好是第一个阶段；二是只有这样 §0 第 3 条那个不变量（验收基准由一个对执行者只读的阶段写定并提交）才真正成立，否则 DESIGN 既写验收基准又写实现方案，被打回时又重写一遍自己的验收基准。
+
+**人回答后只重入 SHAPE**，不重跑 DESIGN——但这一条**有条件**，条件由 DoD 的内容 hash 判定（见下）。人机交互路径是唯一一条「人已经等在那里」的路径，必须让它最短，但不能因此让下游对着旧需求继续跑。
+
+`open_questions` 每条含：问题、**agent 的建议解答**、是否 `blocking`、`closed` 状态。三级漏斗写进 `prompts/phases/shape.md`（GacUI 原文移植）：
+
+> - You should **de-ambiguous proactively**, if there is an obvious best answer, you should **also propose your solution**
+> - If there are ambiguity or missing details, but **you are able to figure it out**, just add them to `## DETAILS` or `## VERIFICATION`, **instead of putting a review comment**
+> - Review comments should only be created when you **can't find any reasonable solution**
+
+漏斗第一级能工作的前提是有决策依据——GacUI 指向 `Guidelines/Coding.md`，hivemind 的对等物是目标仓库的 context 文件（`--context` 已在传）。**目标仓库没有偏好声明时漏斗第一级失效、问题量暴涨**，所以 SHAPE 必须显式写明"本仓库无偏好声明，以下决定按通用惯例做出"并列出假设，人看到这句就知道该补一份。
+
+- 非 `blocking` 的问题不阻塞开工，卡继续往 DESIGN 走。**代价是回答到来时下游可能已经在跑**，所以必须有失效规则（下一条），否则「非阻塞」等于「允许对着旧需求交付」。
+- **下游失效按 `scenario_version` 逐条判定，不按整卡的 `dod_version`**（§5 末尾给出两个版本的覆盖字段与归一化规则）：
+  - 整卡 `dod_version` 未变 → 回答只改变了解释而非验收基准，DESIGN / SPECIFY / CODE 的产物与冻结测试**全部复用**，卡从中断处继续；
+  - `dod_version` 变了 → 逐条比对 `scenario_version`。**变了的那些**：冻结测试、引用它的 DESIGN 声明、所有尚未通过 VERIFY 的 CODE 轮、**以及它已经通过的 VERIFY 与走查结论**，一并作废，走 §11 已有的解冻路径（写 `phase.invalidated`，来源 `human`）。**没变的那些**：冻结测试与结论保留，并由系统写一条**顺延记录**把旧证据挂到新的 `dod_version` 上（下面展开）——整卡推倒会让人不敢回答问题。
+  - 已 DELIVERED 的卡不适用本条：那是缺陷，走 `defect` 通道开回归卡（§12.6）。
+
+**「已通过 VERIFY」不是豁免，这是二次复审补的一个洞（2026-09-14）。** 初稿只作废"尚未通过 VERIFY 的 CODE 轮"，于是有一条合法但错误的路径：卡已跑完 VERIFY、还没 MERGE，人这时回答了一个 `open_question` 改掉了验收要求——旧的 accepted 结论仍然挂在那里，MERGE 直接拿它推进，交付的是对着旧需求验过的东西。**一个在旧契约下得出的通过结论，在新契约下不构成证据**，与它当时通过与否无关。
+
+落地形态两条，缺一不可：
+
+1. **逐 scenario 的结论明细落库**（新表 `verify_scenario_results`，形状见下），每行记 `dod_version` / `scenario_version` / `verified_tree_sha`。整轮一行的 `verify_records` 给不出这些，失效只能靠时间戳猜。
+2. **`VERIFY → MERGE` 这条转移边上加一个系统前置条件**："每条 scenario 都有一条 `passed` 结论，且那条结论记的 `scenario_version` 等于当前值、`verified_tree_sha` 等于待合流的树"，不满足则不放行，回 VERIFY 重验不满足的那些。它由系统确定性地跑，**不是 MERGE agent 的门禁**——§8.2 撤销 MERGE 的否决权那一条不受影响，这里的形态与它说的"门禁前移、合流时由系统再跑一次"一致。
+
+**判据必须落在 `scenario_version` 上，落在 `dod_version` 上就自相矛盾**（2026-09-14 三次复审修正）。只改 scenario A，整卡 `dod_version` 必变；此时保留下来的 B 的结论记的仍是旧 `dod_version`，若转移边检查整卡版本，B 会连同 A 一起被判失效——"未受影响的保留"这句话当场作废，等于整卡推倒。逐条版本让两件事同时成立：A 重验、B 复用。
+
+**复用不靠改写旧记录，靠一条顺延记录。** `dod_version` 变化时，系统对每条仍然有效的 scenario 追加一条 carry-forward 行：记新的 `dod_version`、不变的 `scenario_version`、以及指向原始结论行的引用，并标明它是顺延而非重验。原记录**不可变**——它是"在那一版契约下、对着那棵树验过"的事实，篡改它就毁掉了证据链，而事后追责与 §11 的档案投影都读它。转移边读的是顺延后的最新行，所以 B 能正常放行。
+
+**但"结论只加两个版本列"不成立，现有表的粒度就是错的（2026-09-14 四次复审）。** `verify_records`（`0001_init.sql:498`）是**整轮一行**：`UNIQUE (card_id, round)`，字段只有 `verdict` 与 `failed_scenarios`，**没有 `scenario_id`**。`recordVerification`（`story-execution-store.ts:534`）随之把"不在失败集合里的全部 scenario"一律置为 passed：
+
+```sql
+UPDATE story_specs
+  SET status = CASE WHEN spec_id IN (...failed...) THEN 'failed' ELSE 'passed' END
+  WHERE story_id = ?
+```
+
+**今天这条逻辑是对的，因为 VERIFY 每轮验全量**——"没进失败集合"等价于"验过且通过"。它在**引入逐条重验的那一刻**变成错的：只重验 A 的那一轮，B 根本没被验，却会被同一条 UPDATE 刷成 passed，而 MERGE 的转移边随后读到一个凭空出现的通过结论。这不是"顺延"，是伪造。
+
+所以 per-scenario 的结论明细必须是一张**独立的、追加式的表**（暂名 `verify_scenario_results`），而不是给 `verify_records` 加两列：
+
+| 列 | 说明 |
+|---|---|
+| `card_id` / `scenario_id` / `round` | 定位 |
+| `dod_version` / `scenario_version` | 这条结论是在哪一版契约下得出的 |
+| `verified_tree_sha` | **在哪棵树上得出的**，见下一条 |
+| `outcome` | `passed` / `failed` / `inconclusive` |
+| `evidence` | 证据目录与截图引用 |
+| `carried_from` | 非空即表示这是顺延行，指向原始结论行；原始行永不改写 |
+
+`recordVerification` 的入参相应增加**本轮实际验证的 scenario 集合**，只更新这个集合里的行；集合外的 scenario 保持原状，**不得被推断为 passed**。`story_specs.status` 降为"最新结论的投影"，判据不再读它。
+
+**契约没变不等于结论还能用：代码树变了就不能顺延。** `scenario_version` 只证明"B 的验收要求没变"，证明不了"B 还是好的"。为适配 A 的新要求改动 A、B 共用的代码之后，B 的需求一字未动而行为可能已经坏了，旧的 accepted 不能自动接着算数。所以顺延的条件是**两个都不变**：`scenario_version` 不变 **且** `verified_tree_sha` 等于当前待合流的树。
+
+树一变就把全部顺延行作废、重验全量——**本轮不做任何依赖分析**，"这次改动会不会影响 B"是一个需要调用图与运行时覆盖才答得准的问题，猜错的方向恰好是漏检。保守做法的代价也小：它退化成的正是今天的行为（VERIFY 每轮验全量）。
+
+顺延真正省下的只有一种情形：**人改了 A 的要求，重验后发现不需要改代码**，树没动，于是 B 不必陪跑一遍。这一种值得省；其余情形一律全量。把话说死在这里，是为了避免下一个人把它读成"该建一套影响面分析系统"。
+
+代价被刻意限制在最小：实现代码保留、未受影响 scenario 的冻结测试保留，重验的范围由上面两个条件确定性地算出来。
+- `closed` 状态存中央库而不是文档里（Notion 单写者不变量）。
+- SHAPE 重入时把未 `closed` 的问题重新带上并可提新问题。
+- 其余阶段遇到定不了的事仍走 `blocking_question` 停点，那是已有四类真停点之一。
+
+**接口声明草稿写进 worktree 的真实源码文件，不约束能否编译。** GacUI 的 "if the code does not compile, it is fine" 是**豁免不是禁止**——别为了让它编译去补实现，而不是不准编译。写声明的价值是把"设计对不对"从不可判定变成可判定：它要检查的四类问题（接口不合理 / 错误处理 / 并发 / 性能）全是接口层才看得出来的。写进源码文件而不是文档，下一个 agent 打开文件就看到，不必从文档翻译回代码。
+
+### 12.6 人在环：三个通道
+
+`src/notion/story-input-sync.ts:170-233` 的链路今天只通了一半——`:216` 只消费 `answer`，`rework` 通道**零消费者**。人在卡跑着时评论"这个方案不对"，它落库、下一轮注入 prompt 成 `[answer:]` tag，但不打断、不打回、不改任何状态。`human_feedback.channel` 的 CHECK 声明了 5 个值，消费了 1 个。
+
+| channel | 语义 | 处置 |
+|---|---|---|
+| `answer` | 回答阻塞问题 | 已有：解除 NEEDS_INPUT，回 resumeState |
+| `rework` | 否决当前阶段的方案 | **新**：写 `phase.invalidated`（来源 `human`），按契约的 `rejectReturnsTo` 回退重入；**与系统解冻走同一条转移路径** |
+| `defect` | 指出一个缺陷 | **新**：开 regression 卡，进 §12.4 的回归路径 |
+| `preference` / `unclassified` | **补充 context，不是打断** | **新**：不改状态、不消耗轮次、不算打回；只进下一轮 prompt 的独立小节 |
+
+补充 context 在 `assemblePhasePrompt` 里是**独立小节**而不是 `[answer:]` tag：tag 会带来"出口检查要求逐条回应"的义务（§10.2 / IT-02），而补充材料不该产生义务。小节标题 `## Additional context from a person`，排在 `## What this round must do` 之后、`## Evidence` 之前，仍按稳定键排序以保持字节确定。
+
+并列修 `applied_at` 语义：它今天在循环里无条件 UPDATE（`:229`），所以含义是"已读"不是"已应用"，于是 `story-projection.ts:165` 给人看的「已用于第 N 轮」对 `rework` 评论是假话。改为只有真触发了转移或真进了某一轮 prompt 才写。
+
+**干预点是阶段自己的属性**：`PhaseContract.humanCanReject` / `rejectReturnsTo`（07 §3.1）。人工否决与系统否决走同一条路，只是来源不同。
+
+**运行中打断不做**。它需要 pi RPC 的 `clear_queue`→`abort` 顺序、被中断轮次的账划归属、checkpoint 保留策略、abort 后 worktree 状态四件事都定下来；人的介入在 phase 边界生效已经够用。
+
+### 12.7 阶段不再是硬编码
+
+`story-worker.ts:198-400` 用一个 200 行的方法写死流程，且"阶段"在全仓有五套互不重合的枚举（`Phase` 6 值 / `GuardPhase` 9 值 / `StoryPhase` / `PmPhase` 4 值 / `ModelPurpose` 10 值），新增一个阶段要改九处。本节新增的两个阶段如果按老办法加，就是改十八处。
+
+所以 §12 的阶段变更与 `PhaseContract` 注册表（07 §3）**必须同一批做**：`story-worker` 改为读注册表的解释器，此后加阶段 = 加一行契约 + 一个出口函数 + 一条转移边 + 一处 DB CHECK。

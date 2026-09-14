@@ -33,6 +33,88 @@ predicted_footprint: [src/orchestrator]
 depends_on: []
 `;
 
+const TEST_CONTRACT = `story_id: S-EPIC1-01
+mode: full
+scenarios:
+  - id: S-EPIC1-01-a
+    layer: integration
+    cases:
+      - name: "@scenario S-EPIC1-01-a carries the earlier artifact forward"
+        kind: happy
+        asserts: the CODE prompt contains the DESIGN artifact verbatim
+      - name: "@scenario S-EPIC1-01-a with no earlier artifact"
+        kind: negative
+        asserts: assembling refuses rather than emitting an empty section
+    expected_failure:
+      file: src/pipeline/phase-input.test.ts:12
+      assertion: expect(prompt).toContain("DESIGN / dod")
+      actual: "undefined"
+  - id: S-EPIC1-01-b
+    layer: unit
+    cases:
+      - name: "@scenario S-EPIC1-01-b shrinking failure set"
+        kind: happy
+        asserts: a strictly smaller failure set may continue
+      - name: "@scenario S-EPIC1-01-b equal failure set"
+        kind: boundary
+        asserts: an equal failure set stops the loop
+    expected_failure:
+      file: src/pipeline/convergence.test.ts:8
+      assertion: expect(result.mayContinue).toBe(false)
+      actual: "true"
+`;
+
+const NARROW_CONTRACT = `story_id: S-EPIC1-01
+mode: narrow
+scenarios:
+  - id: S-EPIC1-01-a
+    layer: integration
+    cases:
+      - name: "@scenario S-EPIC1-01-a reproduces the reported break"
+        kind: happy
+        asserts: the artifact reaches the next phase again
+      - name: "@scenario S-EPIC1-01-a with the artifact removed"
+        kind: negative
+        asserts: the assembler refuses rather than emitting an empty section
+    expected_failure:
+      file: src/pipeline/phase-input.test.ts:40
+      assertion: expect(prompt).toContain("DESIGN / dod")
+      actual: "undefined"
+`;
+
+/**
+ * The three phases in front of the inner loop: SHAPE freezes the acceptance
+ * contract, DESIGN reads it frozen, SPECIFY turns it into tests. Returns null
+ * for every other phase so each test only says what its own loop does.
+ */
+function frontPhase(input: ManagedPhaseInput, dod: string = DOD) {
+  switch (input.phase) {
+    case "SHAPE":
+      return {
+        sessionId: "session-shape",
+        artifacts: [
+          { kind: "dod", body: dod },
+          { kind: "open-questions", body: "[]" },
+        ],
+      };
+    case "DESIGN":
+      return {
+        sessionId: "session-design",
+        artifacts: [
+          { kind: "design-summary", body: "Use central phase artifacts." },
+          { kind: "declarations", body: "[]" },
+        ],
+      };
+    case "SPECIFY":
+      return {
+        sessionId: "session-specify",
+        artifacts: [{ kind: "test-contract", body: TEST_CONTRACT }],
+      };
+    default:
+      return null;
+  }
+}
+
 describe("SingleStoryWorker", () => {
   let client: ReturnType<typeof createClient>;
   let store: StoryExecutionStore;
@@ -57,15 +139,8 @@ describe("SingleStoryWorker", () => {
   afterEach(() => client.close());
 
   const designAndCode = vi.fn(async (input: ManagedPhaseInput) => {
-    if (input.phase === "DESIGN") {
-      return {
-        sessionId: "session-design",
-        artifacts: [
-          { kind: "design-summary", body: "Use central phase artifacts." },
-          { kind: "dod", body: DOD },
-        ],
-      };
-    }
+    const front = frontPhase(input);
+    if (front) return front;
     if (input.phase === "CODE") {
       return {
         sessionId: `session-code-${input.round}`,
@@ -217,19 +292,12 @@ describe("SingleStoryWorker", () => {
     await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED", rounds: 3 });
   });
 
-  it("runs DESIGN, a converging CODE/VERIFY loop, MERGE and delivery", async () => {
+  it("runs the front phases, a converging CODE/VERIFY loop, MERGE and delivery", async () => {
     const phases = vi.fn(async (input: ManagedPhaseInput) => {
-      if (input.phase === "DESIGN") {
-        return {
-          sessionId: "session-design",
-          artifacts: [
-            { kind: "design-summary", body: "Use central phase artifacts." },
-            { kind: "dod", body: DOD },
-          ],
-        };
-      }
+      const front = frontPhase(input);
+      if (front) return front;
       if (input.phase === "CODE") {
-        expect(input.prompt).toContain("DESIGN / dod");
+        expect(input.prompt).toContain("SHAPE / dod");
         return {
           sessionId: `session-code-${input.round}`,
           artifacts: [{ kind: "implementation", body: `Implementation round ${input.round}` }],
@@ -274,9 +342,9 @@ describe("SingleStoryWorker", () => {
       mrUrl: "https://github.com/example/repo/pull/1",
     });
     expect(phases.mock.calls.map(([input]) => `${input.phase}:${input.round}`)).toEqual([
-      "DESIGN:1", "CODE:1", "CODE:2", "CODE:3", "MERGE:1",
+      "SHAPE:1", "DESIGN:1", "SPECIFY:1", "CODE:1", "CODE:2", "CODE:3", "MERGE:1",
     ]);
-    expect(projection.enqueue).toHaveBeenCalledTimes(5);
+    expect(projection.enqueue).toHaveBeenCalledTimes(7);
     const records = await client.execute(
       "SELECT code_session_id, verify_session_id, verdict FROM verify_records ORDER BY round",
     );
@@ -294,18 +362,10 @@ describe("SingleStoryWorker", () => {
 
   it("stops at the only verification stop when the failure set stalls", async () => {
     const phases = {
-      run: async (input: ManagedPhaseInput) => input.phase === "DESIGN"
-        ? {
-            sessionId: "session-design",
-            artifacts: [
-              { kind: "design-summary", body: "Design" },
-              { kind: "dod", body: DOD },
-            ],
-          }
-        : {
-            sessionId: `session-${input.phase.toLowerCase()}-${input.round}`,
-            artifacts: [{ kind: "implementation", body: "Implementation" }],
-          },
+      run: async (input: ManagedPhaseInput) => frontPhase(input) ?? {
+        sessionId: `session-${input.phase.toLowerCase()}-${input.round}`,
+        artifacts: [{ kind: "implementation", body: "Implementation" }],
+      },
     };
     const verifier: StoryVerifyPort = {
       run: async (input) => ({
@@ -319,12 +379,20 @@ describe("SingleStoryWorker", () => {
       deliver: async () => { throw new Error("delivery must not run"); },
     }, { enqueue: async () => undefined }, { runId: (_cardId, phase, round) => `run-${phase}-${round}` });
 
-    await expect(worker.run("S-EPIC1-01")).resolves.toEqual({
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({
       state: "NEEDS_INPUT",
       rounds: 2,
       mrUrl: null,
       stopReason: "verify_loop_exceeded",
+      // The one reason the database accepts, with the situation that produced
+      // it written alongside: two rounds failing on the same check is not the
+      // same problem as a budget running out while progress was real.
+      convergence: "stalled",
     });
+    const stopped = JSON.parse(String((await client.execute(
+      "SELECT data FROM event_log WHERE type = 'story.stopped' ORDER BY id DESC LIMIT 1",
+    )).rows[0]?.data)) as { reason: string; convergence: string };
+    expect(stopped).toMatchObject({ reason: "verify_loop_exceeded", convergence: "stalled" });
     await expect(store.getStory("S-EPIC1-01")).resolves.toMatchObject({
       state: "NEEDS_INPUT",
       stopReason: "verify_loop_exceeded",
@@ -332,12 +400,11 @@ describe("SingleStoryWorker", () => {
   });
 
   async function spendInnerLoop(): Promise<void> {
-    // One real round freezes the DoD through DESIGN; the remaining rounds of the
+    // One real round freezes the DoD through SHAPE; the remaining rounds of the
     // budget are recorded directly, as a long inner loop would have left them.
     const first = new SingleStoryWorker(store, {
-      run: async (input: ManagedPhaseInput) => input.phase === "DESIGN"
-        ? { sessionId: "session-design", artifacts: [{ kind: "design-summary", body: "Design" }, { kind: "dod", body: DOD }] }
-        : { sessionId: "session-code-1", artifacts: [{ kind: "implementation", body: "First" }] },
+      run: async (input: ManagedPhaseInput) => frontPhase(input)
+        ?? { sessionId: "session-code-1", artifacts: [{ kind: "implementation", body: "First" }] },
     }, {
       run: async () => ({ sessionId: "session-verify-1", verdict: "rejected", failedScenarios: ["S-EPIC1-01-a"], artifact: "Failed" }),
     }, { deliver: async () => { throw new Error("delivery must not run"); } }, { enqueue: async () => undefined },
@@ -381,7 +448,7 @@ describe("SingleStoryWorker", () => {
     const phases = {
       run: async (input: ManagedPhaseInput) => {
         seenRounds.push(input.round);
-        return {
+        return frontPhase(input) ?? {
           sessionId: `session-${input.phase.toLowerCase()}-${input.round}`,
           artifacts: [{ kind: input.phase === "MERGE" ? "delivery-report" : "implementation", body: "Done" }],
         };
@@ -433,18 +500,10 @@ describe("SingleStoryWorker", () => {
 
   it("resumes a reopened CODE state from central DoD and verification history", async () => {
     const initialPhases = {
-      run: async (input: ManagedPhaseInput) => input.phase === "DESIGN"
-        ? {
-            sessionId: "session-design",
-            artifacts: [
-              { kind: "design-summary", body: "Design" },
-              { kind: "dod", body: DOD },
-            ],
-          }
-        : {
-            sessionId: "session-code-1",
-            artifacts: [{ kind: "implementation", body: "First implementation" }],
-          },
+      run: async (input: ManagedPhaseInput) => frontPhase(input) ?? {
+        sessionId: "session-code-1",
+        artifacts: [{ kind: "implementation", body: "First implementation" }],
+      },
     };
     const rejected: StoryVerifyPort = {
       run: async () => ({
@@ -503,7 +562,7 @@ describe("SingleStoryWorker", () => {
   });
 });
 
-describe("SingleStoryWorker DESIGN re-entry after a crash", () => {
+describe("SingleStoryWorker SHAPE re-entry after a crash", () => {
   let client: ReturnType<typeof createClient>;
   let store: StoryExecutionStore;
 
@@ -526,18 +585,18 @@ describe("SingleStoryWorker DESIGN re-entry after a crash", () => {
 
   afterEach(() => client.close());
 
-  it("reuses the frozen Definition of Done instead of burning DESIGN sessions against it", async () => {
-    await store.transition("S-EPIC1-01", "QUEUED", "DESIGN", "system", "run-design");
-    await store.beginPhase({ runId: "run-design", cardId: "S-EPIC1-01", phase: "DESIGN", round: 1, prompt: "design" });
+  it("reuses the frozen Definition of Done instead of burning SHAPE sessions against it", async () => {
+    await store.transition("S-EPIC1-01", "QUEUED", "SHAPE", "system", "run-shape");
+    await store.beginPhase({ runId: "run-shape", cardId: "S-EPIC1-01", phase: "SHAPE", round: 1, prompt: "shape" });
     await store.completePhase({
-      runId: "run-design",
-      sessionId: "session-design",
-      artifacts: [{ kind: "design-summary", body: "Design" }, { kind: "dod", body: DOD }],
+      runId: "run-shape",
+      sessionId: "session-shape",
+      artifacts: [{ kind: "dod", body: DOD }, { kind: "open-questions", body: "[]" }],
     });
-    // The crash lands here: the setpoint is frozen but the Story never left DESIGN.
+    // The crash lands here: the setpoint is frozen but the Story never left SHAPE.
     await store.freezeDefinitionOfDone("S-EPIC1-01", parseDoD(DOD));
 
-    const phases = vi.fn(async (input: ManagedPhaseInput) => (input.phase === "CODE"
+    const phases = vi.fn(async (input: ManagedPhaseInput) => frontPhase(input) ?? (input.phase === "CODE"
       ? { sessionId: `session-code-${input.round}`, artifacts: [{ kind: "implementation", body: "done" }] }
       : { sessionId: "session-merge", artifacts: [{ kind: "delivery-report", body: "Both scenarios passed." }] }));
     const verifier: StoryVerifyPort = {
@@ -557,30 +616,31 @@ describe("SingleStoryWorker DESIGN re-entry after a crash", () => {
     );
 
     await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
-    expect(phases.mock.calls.map(([input]) => input.phase)).not.toContain("DESIGN");
+    expect(phases.mock.calls.map(([input]) => input.phase)).not.toContain("SHAPE");
     const artifacts = await client.execute(
-      "SELECT kind FROM phase_artifacts WHERE card_id = 'S-EPIC1-01' AND phase = 'DESIGN' ORDER BY kind",
+      "SELECT kind FROM phase_artifacts WHERE card_id = 'S-EPIC1-01' AND phase = 'SHAPE' ORDER BY kind",
     );
-    expect(artifacts.rows).toMatchObject([{ kind: "design-summary" }, { kind: "dod" }]);
+    expect(artifacts.rows).toMatchObject([{ kind: "dod" }, { kind: "open-questions" }]);
   });
 
-  it("designs a CODE Story again when its frozen DoD no longer satisfies the contract", async () => {
-    await store.transition("S-EPIC1-01", "QUEUED", "DESIGN", "system", "run-design");
-    await store.beginPhase({ runId: "run-design", cardId: "S-EPIC1-01", phase: "DESIGN", round: 1, prompt: "design" });
+  it("shapes a CODE Story again when its frozen DoD no longer satisfies the contract", async () => {
+    await store.transition("S-EPIC1-01", "QUEUED", "SHAPE", "system", "run-shape");
+    await store.beginPhase({ runId: "run-shape", cardId: "S-EPIC1-01", phase: "SHAPE", round: 1, prompt: "shape" });
     // A DoD frozen under an older contract: no examples, no source, no criteria.
     const stale = "story_id: S-EPIC1-01\nscenarios:\n  - id: S-EPIC1-01-old\n    given: a\n    when: b\n    then: c\n    layer: ui\n";
     await store.completePhase({
-      runId: "run-design",
-      sessionId: "session-design",
-      artifacts: [{ kind: "design-summary", body: "Design" }, { kind: "dod", body: stale }],
+      runId: "run-shape",
+      sessionId: "session-shape",
+      artifacts: [{ kind: "dod", body: stale }, { kind: "open-questions", body: "[]" }],
     });
     await client.execute("INSERT INTO story_specs (spec_id, story_id, seq, text, status) VALUES ('S-EPIC1-01-old','S-EPIC1-01',1,'old','pending')");
-    await store.transition("S-EPIC1-01", "DESIGN", "CODE", "system", "run-design");
+    await store.transition("S-EPIC1-01", "SHAPE", "DESIGN", "system", "run-shape");
+    await store.transition("S-EPIC1-01", "DESIGN", "SPECIFY", "system", "run-design");
+    await store.transition("S-EPIC1-01", "SPECIFY", "CODE", "system", "run-specify");
 
     const phases = vi.fn(async (input: ManagedPhaseInput) => {
-      if (input.phase === "DESIGN") {
-        return { sessionId: "session-design-2", artifacts: [{ kind: "design-summary", body: "Design" }, { kind: "dod", body: DOD }] };
-      }
+      const front = frontPhase(input);
+      if (front) return front;
       if (input.phase === "CODE") return { sessionId: `session-code-${input.round}`, artifacts: [{ kind: "implementation", body: "done" }] };
       return { sessionId: "session-merge", artifacts: [{ kind: "delivery-report", body: "Both scenarios passed." }] };
     });
@@ -592,7 +652,7 @@ describe("SingleStoryWorker DESIGN re-entry after a crash", () => {
       { deliver: vi.fn(async () => ({ mrUrl: null })) }, { enqueue: vi.fn(async () => undefined) }, { friction });
 
     await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
-    expect(phases.mock.calls.map(([input]) => input.phase)).toEqual(["DESIGN", "CODE", "MERGE"]);
+    expect(phases.mock.calls.map(([input]) => input.phase)).toEqual(["SHAPE", "DESIGN", "SPECIFY", "CODE", "MERGE"]);
     expect(friction.record).toHaveBeenCalledWith(expect.objectContaining({ kind: "dod_contract_changed" }));
     const specs = await client.execute("SELECT spec_id FROM story_specs WHERE story_id = 'S-EPIC1-01' ORDER BY seq");
     expect(specs.rows.map((row) => row.spec_id)).not.toContain("S-EPIC1-01-old");
@@ -628,12 +688,8 @@ describe("SingleStoryWorker inside an Epic", () => {
 
   function ports() {
     const phases = vi.fn(async (input: ManagedPhaseInput) => {
-      if (input.phase === "DESIGN") {
-        return { sessionId: "session-design", artifacts: [
-          { kind: "design-summary", body: "Design" },
-          { kind: "dod", body: DOD },
-        ] };
-      }
+      const front = frontPhase(input);
+      if (front) return front;
       if (input.phase === "CODE") {
         return { sessionId: `session-code-${input.round}`, artifacts: [{ kind: "implementation", body: "done" }] };
       }
@@ -692,10 +748,9 @@ describe("SingleStoryWorker inside an Epic", () => {
 });
 
 function regressionPorts(accept: boolean) {
-  const phases = vi.fn(async (input: ManagedPhaseInput) => ({
-    sessionId: `session-fix-${input.round}`,
-    artifacts: [{ kind: "implementation", body: "fixed" }],
-  }));
+  const phases = vi.fn(async (input: ManagedPhaseInput) => (input.phase === "SPECIFY"
+    ? { sessionId: "session-narrow", artifacts: [{ kind: "test-contract", body: NARROW_CONTRACT }] }
+    : { sessionId: `session-fix-${input.round}`, artifacts: [{ kind: "implementation", body: "fixed" }] }));
   const verifier: StoryVerifyPort = {
     run: vi.fn(async (input) => ({
       sessionId: `session-verify-${input.round}`,
@@ -723,12 +778,14 @@ describe("SingleStoryWorker regression fix", () => {
       requirement: "A delivered Story whose scenario broke on the Epic head fixes it.",
       repo: "xiayu1996/hivemind", branch: "story/epic1-01",
     });
-    await store.transition("S-EPIC1-01", "QUEUED", "DESIGN", "system", "run-design");
-    await store.beginPhase({ runId: "run-design", cardId: "S-EPIC1-01", phase: "DESIGN", round: 1, prompt: "design" });
-    await store.completePhase({ runId: "run-design", sessionId: "s-design", artifacts: [{ kind: "dod", body: DOD }] });
+    await store.transition("S-EPIC1-01", "QUEUED", "SHAPE", "system", "run-shape");
+    await store.beginPhase({ runId: "run-shape", cardId: "S-EPIC1-01", phase: "SHAPE", round: 1, prompt: "shape" });
+    await store.completePhase({ runId: "run-shape", sessionId: "s-shape", artifacts: [{ kind: "dod", body: DOD }] });
     await store.freezeDefinitionOfDone("S-EPIC1-01", parseDoD(DOD));
     await client.execute("UPDATE stories SET state = 'DELIVERED', phase = NULL, inner_loop_rounds = 3, mr_url = 'https://example.test/pull/1' WHERE id = 'S-EPIC1-01'");
-    await store.transition("S-EPIC1-01", "DELIVERED", "REGRESSION_FIX", "system", "run-attributed");
+    // Exactly what the attribution runner writes: the card reenters at the
+    // narrow SPECIFY, its phase naming where that SPECIFY leads.
+    await client.execute("UPDATE stories SET state = 'SPECIFY', phase = 'REGRESSION_FIX' WHERE id = 'S-EPIC1-01'");
   }
 
   async function openCard(scenarioId = "S-EPIC1-01-a", signature = "sig-1"): Promise<void> {
@@ -753,7 +810,8 @@ describe("SingleStoryWorker regression fix", () => {
     const worker = new SingleStoryWorker(store, { run: phases }, verifier, delivery, projection, { integration });
 
     await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED", rounds: 4, mrUrl: "https://example.test/pull/1" });
-    const [input] = phases.mock.calls[0]!;
+    expect(phases.mock.calls[0]![0].phase).toBe("SPECIFY");
+    const [input] = phases.mock.calls[1]!;
     expect(input.phase).toBe("REGRESSION_FIX");
     expect(input.round).toBe(4);
     expect(input.prompt).toContain("[regression:S-EPIC1-01-a]");
@@ -787,7 +845,8 @@ describe("SingleStoryWorker regression fix", () => {
     const result = await worker.run("S-EPIC1-01");
     expect(result).toMatchObject({ state: "NEEDS_INPUT" });
     expect(result.stopReport).toContain("retry.maxRegressionReopens");
-    expect(phases).not.toHaveBeenCalled();
+    // The narrow SPECIFY ran; the fix itself never did.
+    expect(phases.mock.calls.map(([input]) => input.phase)).toEqual(["SPECIFY"]);
     expect(await store.getStory("S-EPIC1-01")).toMatchObject({ stopReason: "retry_limit_exceeded" });
   });
 
@@ -812,8 +871,149 @@ describe("SingleStoryWorker regression fix", () => {
     const worker = new SingleStoryWorker(store, { run: phases }, verifier, delivery, projection, { integration });
 
     await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED", rounds: 5 });
-    expect(phases).toHaveBeenCalledTimes(2);
-    expect(phases.mock.calls[1]![0].prompt).toContain("re-verification on the Epic head failed");
+    expect(phases.mock.calls.map(([input]) => input.phase)).toEqual(["SPECIFY", "REGRESSION_FIX", "REGRESSION_FIX"]);
+    expect(phases.mock.calls[2]![0].prompt).toContain("re-verification on the Epic head failed");
   });
 });
 
+
+describe("SingleStoryWorker scenario carry-forward", () => {
+  let client: ReturnType<typeof createClient>;
+  let store: StoryExecutionStore;
+  /** The worktree's tree sha, which the tests move to stand for a code change. */
+  let tree: string;
+
+  beforeEach(async () => {
+    client = createClient({ url: ":memory:" });
+    await migrate(client);
+    tree = "tree-1";
+    store = new StoryExecutionStore(client, (() => { let time = 1_000; return () => time++; })());
+    await store.createStory({
+      id: "S-EPIC1-01",
+      notionPageId: "page-1",
+      title: "Carry a conclusion forward",
+      requirement: "A scenario nobody touched is not verified twice.",
+      repo: "xiayu1996/hivemind",
+      branch: "story/epic1-01",
+    });
+  });
+
+  afterEach(() => client.close());
+
+  function worker(
+    phases: (input: ManagedPhaseInput) => Promise<{ sessionId: string; artifacts: Array<{ kind: string; body: string }> }>,
+    verifier: StoryVerifyPort,
+  ): SingleStoryWorker {
+    return new SingleStoryWorker(
+      store,
+      { run: phases },
+      verifier,
+      { deliver: async () => ({ mrUrl: null }) },
+      { enqueue: async () => undefined },
+      { treeSha: async () => tree },
+    );
+  }
+
+  const passing: StoryVerifyPort = {
+    run: async (input) => ({
+      sessionId: `session-verify-${input.round}`,
+      verdict: "accepted",
+      failedScenarios: [],
+      artifact: "{}",
+    }),
+  };
+
+  const build = async (input: ManagedPhaseInput) => frontPhase(input) ?? (input.phase === "CODE"
+    ? { sessionId: `session-code-${input.round}`, artifacts: [{ kind: "implementation", body: "done" }] }
+    : { sessionId: "session-merge", artifacts: [{ kind: "delivery-report", body: "Both scenarios passed." }] });
+
+  it("records a conclusion per scenario against the contract wording and the tree it was reached on", async () => {
+    await expect(worker(build, passing).run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
+    const rows = (await client.execute(
+      "SELECT scenario_id, outcome, verified_tree_sha FROM verify_scenario_results ORDER BY scenario_id",
+    )).rows;
+    expect(rows).toMatchObject([
+      { scenario_id: "S-EPIC1-01-a", outcome: "passed", verified_tree_sha: "tree-1" },
+      { scenario_id: "S-EPIC1-01-b", outcome: "passed", verified_tree_sha: "tree-1" },
+    ]);
+  });
+
+  it("reuses the untouched scenario's conclusion when only the other scenario's wording changed", async () => {
+    await expect(worker(build, passing).run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
+
+    // A person reworded scenario a. Its own conclusion is void; b's is not.
+    const reworded = parseDoD(DOD.replace(
+      "then: its prompt contains the earlier artifact",
+      "then: its prompt contains the earlier artifact verbatim",
+    ));
+    await store.refreezeDefinitionOfDone("S-EPIC1-01", reworded);
+    const versions = await store.definitionVersions("S-EPIC1-01");
+    const before = await store.scenarioConclusions("S-EPIC1-01");
+    expect(before.get("S-EPIC1-01-a")?.scenarioVersion).not.toBe(versions.scenarios.get("S-EPIC1-01-a"));
+    expect(before.get("S-EPIC1-01-b")?.scenarioVersion).toBe(versions.scenarios.get("S-EPIC1-01-b"));
+
+    // Verifying only a, on the same tree, is enough to settle the card again.
+    const narrowed = { ...reworded, scenarios: reworded.scenarios.filter((entry) => entry.id === "S-EPIC1-01-a") };
+    await store.recordVerification("rerun-a", {
+      cardId: "S-EPIC1-01",
+      round: 9,
+      codeSessionId: "code-9",
+      verifySessionId: "verify-9",
+      verdict: "accepted",
+      failedScenarios: [],
+      verifiedScenarios: narrowed.scenarios.map((entry) => entry.id),
+      verifiedTreeSha: tree,
+    });
+    const carried = await store.carryForwardScenarios({ cardId: "S-EPIC1-01", round: 9, treeSha: tree });
+    expect(carried).toEqual({ carried: ["S-EPIC1-01-b"], stale: [] });
+    await expect(store.scenariosSettled("S-EPIC1-01", tree)).resolves.toEqual({ ready: true, outstanding: [] });
+  });
+
+  it("refuses to carry anything onto a tree that moved, however small the change was", async () => {
+    await expect(worker(build, passing).run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
+    tree = "tree-2";
+    const carried = await store.carryForwardScenarios({ cardId: "S-EPIC1-01", round: 9, treeSha: tree });
+    expect(carried).toEqual({ carried: [], stale: ["S-EPIC1-01-a", "S-EPIC1-01-b"] });
+    await expect(store.scenariosSettled("S-EPIC1-01", tree)).resolves.toMatchObject({
+      ready: false,
+      outstanding: ["S-EPIC1-01-a", "S-EPIC1-01-b"],
+    });
+  });
+
+  it("verifies again instead of merging when a scenario was reworded after the verdict", async () => {
+    const verified: number[] = [];
+    let reworded = false;
+    const delivered: string[] = [];
+    const result = await new SingleStoryWorker(
+      store,
+      { run: build },
+      {
+        run: async (input) => {
+          verified.push(input.round);
+          return { sessionId: `session-verify-${input.round}`, verdict: "accepted", failedScenarios: [], artifact: "{}" };
+        },
+      },
+      { deliver: async () => { delivered.push("delivered"); return { mrUrl: null }; } },
+      {
+        // The projection runs after the verdict is recorded, which is where a
+        // person rewording a scenario lands: the round that was just accepted
+        // no longer covers the card.
+        enqueue: async () => {
+          if (reworded || verified.length === 0) return;
+          reworded = true;
+          await store.refreezeDefinitionOfDone("S-EPIC1-01", parseDoD(DOD.replace(
+            "then: the failure set strictly shrinks",
+            "then: the failure set strictly shrinks every round",
+          )));
+        },
+      },
+      { treeSha: async () => tree, maxInnerLoopRounds: 3 },
+    ).run("S-EPIC1-01");
+
+    // The accepted first round did not deliver: one of the two scenarios was no
+    // longer the scenario that verdict was about.
+    expect(verified).toEqual([1, 2]);
+    expect(result).toMatchObject({ state: "DELIVERED" });
+    expect(delivered).toEqual(["delivered"]);
+  });
+});

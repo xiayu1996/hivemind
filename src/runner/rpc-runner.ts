@@ -326,5 +326,14 @@ export function buildArgs(config: RpcRunnerConfig): string[] {
   // CLAUDE.md/AGENTS.md files that have nothing to do with the run.
   if ((config.contextFiles ?? "explicit") === "explicit") args.push("--no-context-files");
 
+  // Same reasoning one level over: skills and prompt templates are discovered
+  // from the host and appended to the system prompt, so discovery off is what
+  // makes the prompt a function of the configuration rather than of the
+  // machine. Declared skills are still loaded, in the order given.
+  if ((config.skillDiscovery ?? "explicit") === "explicit") {
+    args.push("--no-skills", "--no-prompt-templates");
+  }
+  for (const skill of config.skills ?? []) args.push("--skill", skill);
+
   return args;
 }

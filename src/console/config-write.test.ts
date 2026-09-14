@@ -11,6 +11,7 @@ const data: ConsoleDataSource = {
   costs: async () => [],
   config: async () => [],
   stats: async () => ({}),
+  queue: async () => ({ waiting: [], running: [], providerSlots: [] }),
   providers: async () => [],
 };
 
@@ -88,6 +89,31 @@ describe("M2-13 console configuration write plane", () => {
       payload: { ...payload, confirm: true },
     });
     expect(confirmed.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("writes a prompt but never the tool surface", async () => {
+    const app = await server();
+    const prompt = await app.inject({
+      method: "POST",
+      url: "/api/config/value",
+      payload: {
+        key: "agent.purposePrompts",
+        value: { code: { append: "Prefer the smallest change that makes the test pass." } },
+        updatedBy: "ryan",
+      },
+    });
+    expect(prompt.statusCode).toBe(200);
+
+    // The tool surface is the physical boundary the exits are argued against;
+    // widening it from a web form would leave no diff to review.
+    const tools = await app.inject({
+      method: "POST",
+      url: "/api/config/value",
+      payload: { key: "agent.purposeTools", value: { code: ["bash"] }, updatedBy: "ryan", confirm: true },
+    });
+    expect(tools.statusCode).toBe(422);
+    expect(tools.json()).toMatchObject({ error: expect.stringContaining("read-only") });
     await app.close();
   });
 

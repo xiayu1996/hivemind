@@ -113,11 +113,20 @@ function wantsToolCall(messages) {
   return (/USE_(?:TOOL|WRITE):/.test(text) || text.includes("Perform an independent blind verification")) && !alreadyRan;
 }
 
+// The verifier is told which scenarios were declared; that section is the only
+// reliable place to read an id from, because the prompt also names the run
+// (`S-MOCK-01-verify-1`), which matches the same shape.
+function declaredScenario(text) {
+  const declared = /Declared scenarios:\s*\n\s*([^\n]+)/.exec(text)?.[1]?.trim();
+  if (declared) return declared.split(/\s+/)[0];
+  return /\bS-[A-Z0-9]+-\d{2}-[a-z0-9]+\b/.exec(text)?.[0] ?? "S-MOCK-01-unit";
+}
+
 function toolRequest(messages) {
   const lastUser = messages.toReversed().find((m) => m.role === "user");
   const text = messageText(lastUser);
   if (text.includes("Perform an independent blind verification")) {
-    const scenario = /\bS-[A-Z0-9]+-\d{2}-[a-z0-9]+\b/.exec(text)?.[0] ?? "S-MOCK-01-unit";
+    const scenario = declaredScenario(text);
     return { name: "bash", arguments: { command: `echo HIVEMIND_TEST_RESULT ${scenario} passed` } };
   }
   const write = /USE_WRITE:([^\n]*)/.exec(text);
@@ -131,6 +140,15 @@ function toolRequest(messages) {
   };
 }
 
+// The CODE exit requires one `addressed <tag>` line per round task, so a round
+// that read a person's answer cannot quietly do the smallest thing. The mock
+// changes nothing, but it answers in contract for whatever tags the round
+// carries.
+function addressedLines(phaseInput) {
+  const tags = [...new Set(phaseInput.match(/\[(?:scenario|regression|rejected|answer):[^\]\n]+\]/g) ?? [])];
+  return tags.map((tag) => `addressed ${tag}: the deterministic implementation already covers it.`).join("\n");
+}
+
 function scriptedReply(messages) {
   const assistantCount = messages.filter((m) => m.role === "assistant").length;
   const scripted = SCRIPT[assistantCount] ?? `ACK-${assistantCount + 1} hivemind poc context anchor omega`;
@@ -139,14 +157,14 @@ function scriptedReply(messages) {
     return JSON.stringify({ done: true, reason: "Mock side effects are complete." });
   }
   if (messageText(lastUser).includes("Perform an independent blind verification")) {
-    const scenario = /\bS-[A-Z0-9]+-\d{2}-[a-z0-9]+\b/.exec(messageText(lastUser))?.[0] ?? "S-MOCK-01-unit";
+    const scenario = declaredScenario(messageText(lastUser));
     return JSON.stringify({ scenarios: [{ id: scenario, status: "passed" }] });
   }
   const phaseInput = messageText(lastUser);
-  if (phaseInput.includes("Phase: DESIGN")) {
-    const storyId = /# Task (S-[A-Z0-9]+-\d{2})\b/.exec(phaseInput)?.[1] ?? "S-MOCK-01";
+  const storyId = /# Task (S-[A-Z0-9]+-\d{2})\b/.exec(phaseInput)?.[1] ?? "S-MOCK-01";
+  // SHAPE owns the acceptance contract; every later phase reads it frozen.
+  if (phaseInput.includes("Phase: SHAPE")) {
     return JSON.stringify({
-      design_summary: "Use the central phase ledger and an independent verifier.",
       dod_yaml: [
         `story_id: ${storyId}`,
         "design_summary: Persist phase artifacts and verify them independently.",
@@ -159,14 +177,61 @@ function scriptedReply(messages) {
         "baseline:",
         "  type: acceptance_test",
         "acceptance_criteria:",
-        "  - The Story reaches delivered after an accepted verdict.",
+        "  - text: The Story reaches delivered after an accepted verdict.",
+        `    scenarios: [${storyId}-unit]`,
+        "out_of_scope: []",
+        "relies_on: []",
         "predicted_footprint: [src/orchestrator]",
         "depends_on: []",
       ].join("\n"),
+      open_questions: [],
+      assumptions: ["The smoke repository declares no preferences, so the general convention is used."],
     });
   }
-  if (phaseInput.includes("Phase: CODE")) {
-    return JSON.stringify({ implementation: "The deterministic integration implementation is ready." });
+  if (phaseInput.includes("Phase: DESIGN")) {
+    return JSON.stringify({
+      design_summary: "Use the central phase ledger and an independent verifier.",
+      declarations: [{ file: "src/orchestrator/story-worker.ts", note: "the phase the verdict is judged against" }],
+    });
+  }
+  if (phaseInput.includes("Phase: SPECIFY")) {
+    // A regression reopen enters SPECIFY narrow: one reproduction for the
+    // signature that broke, not the whole contract again.
+    const narrow = phaseInput.includes("[regression:");
+    return JSON.stringify({
+      test_contract_yaml: [
+        `story_id: ${storyId}`,
+        narrow ? "mode: narrow" : "mode: full",
+        "scenarios:",
+        `  - id: ${storyId}-unit`,
+        "    layer: integration",
+        "    cases:",
+        `      - name: "@scenario ${storyId}-unit passes on observed evidence"`,
+        "        kind: happy",
+        "        asserts: the verdict names the scenario as passed",
+        `      - name: "@scenario ${storyId}-unit rejects an unobserved pass"`,
+        "        kind: negative",
+        "        asserts: a verdict without evidence is refused",
+        "    expected_failure:",
+        "      file: test/story.test.ts:1",
+        "      assertion: the scenario passes from observed evidence",
+        "      actual: undefined",
+        "    observations:",
+        "      - the run log names the scenario",
+      ].join("\n"),
+    });
+  }
+  // The deterministic CODE exit hands its findings back to the same session.
+  // The mock cannot fix anything, so it answers in contract and lets the exit
+  // decide again; the smoke asserts the exit, not the model.
+  if (phaseInput.includes("The deterministic CODE exit checks did not pass")
+    || phaseInput.includes("Phase: CODE")
+    || phaseInput.includes("Phase: REGRESSION_FIX")) {
+    return JSON.stringify({
+      implementation: ["The deterministic integration implementation is ready.", addressedLines(phaseInput)]
+        .filter(Boolean)
+        .join("\n"),
+    });
   }
   if (phaseInput.includes("Phase: MERGE")) {
     return JSON.stringify({ delivery_report: "The declared scenario passed blind verification." });

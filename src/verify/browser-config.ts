@@ -1,5 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, join } from "node:path";
 
 export interface BrowserConfigInput {
   /** The same list the guard and the verdict validation use. */
@@ -15,17 +14,6 @@ export interface BrowserConfigInput {
   chromiumSandbox?: boolean;
 }
 
-export interface PlaywrightCliConfig {
-  browser: {
-    browserName: "chromium";
-    isolated: boolean;
-    launchOptions: { headless: boolean; chromiumSandbox?: boolean };
-  };
-  outputDir: string;
-  snapshot: { mode: "full" };
-  network: { allowedOrigins: string[] };
-}
-
 /**
  * Playwright reads an entry as a URL glob: a wildcard port has to be written
  * out, and a leading dot in our allowlist means "this domain and anything
@@ -37,49 +25,36 @@ function originsFor(host: string): string[] {
 }
 
 /**
- * The browser's own copy of the host allowlist.
+ * The browser's own copy of the host allowlist, carried in the environment.
  *
  * With `network.allowedOrigins` set, playwright-cli aborts every request the
  * list does not cover, inside the browser context. That is the second of the
  * three layers: the guard refuses the command, this refuses the request, and
  * verdict validation refuses the claim. A page loaded off local disk is the
- * guard's job — a file:// main frame is a navigation, not a request, so it
+ * guard's job -- a file:// main frame is a navigation, not a request, so it
  * never reaches this one.
+ *
+ * It is the environment rather than `<worktree>/.playwright/cli.config.json`
+ * for two reasons. Writing that file changes the tree the verifier is pinned
+ * against, so every browser round would be quarantined as a forgery; and a
+ * target repository may ship a config of its own, which the CLI reads before
+ * the environment and would otherwise use to widen the allowlist.
  */
-export function buildPlaywrightCliConfig(input: BrowserConfigInput): PlaywrightCliConfig {
+export function browserLaneEnv(input: BrowserConfigInput): Record<string, string> {
   if (input.allowedHosts.length === 0) {
     throw new Error("a browser run needs at least one allowed host; an empty list would abort every request");
   }
   return {
-    browser: {
-      browserName: "chromium",
-      // No profile on disk: a run must not inherit a session an earlier card
-      // left behind, and evidence has to come from a cold start.
-      isolated: true,
-      launchOptions: {
-        headless: input.headed !== true,
-        ...(input.chromiumSandbox === false ? { chromiumSandbox: false } : {}),
-      },
-    },
-    outputDir: input.outputDir,
-    snapshot: { mode: "full" },
-    network: {
-      allowedOrigins: [...new Set(input.allowedHosts.flatMap((host) => originsFor(host)))].toSorted(),
-    },
+    PLAYWRIGHT_MCP_ALLOWED_ORIGINS: [...new Set(input.allowedHosts.flatMap((host) => originsFor(host)))]
+      .toSorted()
+      .join(";"),
+    PLAYWRIGHT_MCP_OUTPUT_DIR: input.outputDir,
+    // No profile on disk: a run must not inherit a session an earlier card
+    // left behind, and evidence has to come from a cold start.
+    PLAYWRIGHT_MCP_ISOLATED: "true",
+    PLAYWRIGHT_MCP_HEADLESS: input.headed === true ? "false" : "true",
+    ...(input.chromiumSandbox === false ? { PLAYWRIGHT_MCP_SANDBOX: "false" } : {}),
   };
-}
-
-export const PLAYWRIGHT_CLI_CONFIG_PATH = join(".playwright", "cli.config.json");
-
-/** Writes the config into a worktree and returns its absolute path. */
-export async function writePlaywrightCliConfig(
-  worktreePath: string,
-  input: BrowserConfigInput,
-): Promise<string> {
-  const path = join(worktreePath, PLAYWRIGHT_CLI_CONFIG_PATH);
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, `${JSON.stringify(buildPlaywrightCliConfig(input), null, 2)}\n`, "utf8");
-  return path;
 }
 
 /**

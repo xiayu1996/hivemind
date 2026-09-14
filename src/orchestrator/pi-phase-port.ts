@@ -3,7 +3,6 @@ import { promisify } from "node:util";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { parse, stringify } from "yaml";
 import { dirname, join } from "node:path";
-import { z } from "zod";
 import {
   POLICY_ENV_VAR,
   assembleGuardPolicy,
@@ -19,6 +18,12 @@ import {
 } from "../pipeline/code-exit-gate.js";
 import { CANONICAL_CAPTURE_ENV } from "../observability/capture-contract.js";
 import { loadPromptLayers } from "../pipeline/prompt-loader.js";
+import { phaseContract } from "../pipeline/phase-contract.js";
+import { fencedSourcesFor } from "../pipeline/path-glob.js";
+import { PHASE_LANE, type ModelPurpose } from "../pipeline/phase.js";
+import { pinSessionFile, type CacheKeyScope } from "../runner/session-file.js";
+import type { ResolvedAgentSpec } from "../runner/agent-spec.js";
+import type { AgentSpawnGrant } from "../runner/spawn-broker.js";
 import {
   lintBusinessLanguage,
   renderBusinessLanguageFindings,
@@ -27,7 +32,6 @@ import { lastAssistantText } from "../runner/assistant-text.js";
 import { jsonPayloadCandidates } from "../util/json-payload.js";
 import { loadExplicitContextBundle, type ExplicitContextFile } from "../runner/context-files.js";
 import { promptWithContinueRetry } from "../runner/continue-retry.js";
-import type { ResolvedModel } from "../runner/model-resolver.js";
 import { RpcPiRunner, type RpcRunnerConfig } from "../runner/rpc-runner.js";
 import type { PiRunner, PromptResult } from "../runner/types.js";
 import type {
@@ -36,13 +40,14 @@ import type {
   StoryPhasePort,
 } from "./story-worker.js";
 import type { StoryPhase } from "./story-execution-store.js";
+import { emitSafely } from "../observability/emit-safely.js";
 
-const designResult = z.object({
-  design_summary: z.string().trim().min(1),
-  dod_yaml: z.string().trim().min(1),
-}).strict();
-const codeResult = z.object({ implementation: z.string().trim().min(1) }).strict();
-const mergeResult = z.object({ delivery_report: z.string().trim().min(1) }).strict();
+/** What the ledger wrote, carried into the evidence log so it is not written
+ * twice. Structural rather than imported, to keep the port free of the
+ * observability module. */
+export interface PhaseCostRow {
+  data: unknown;
+}
 
 export interface PhaseTelemetryInput {
   runId: string;
@@ -51,11 +56,11 @@ export interface PhaseTelemetryInput {
   messages: unknown[];
   result: PromptResult;
   providerPayloads: unknown[];
+  /** What this execution ran on; the cost row is attributed from it. */
+  spec: ResolvedAgentSpec;
 }
 
 const execFileAsync = promisify(execFile);
-
-const WRITING_PHASES = new Set<ManagedPhaseInput["phase"]>(["CODE", "REGRESSION_FIX"]);
 
 /** How the deterministic CODE exit is measured for this repository. */
 export interface CodeExitOptions {
@@ -69,7 +74,18 @@ export interface CodeExitOptions {
    * a session that cannot satisfy a deterministic check in this many tries is
    * not going to. */
   maxRounds?: number;
+  /** What counts as a test path in this repository. */
+  testPathPatterns?: readonly string[] | undefined;
+  /** Generated outputs no phase may edit by hand. */
+  protectedPaths?: readonly string[] | undefined;
+  /** The commit SPECIFY froze the tests in; the base of the frozen-test diff.
+   * Absent on a card driven without SPECIFY, which then rests on the checks
+   * that still apply. */
+  frozenTestCommit?: string | undefined;
 }
+
+/** The phases the CODE exit is about. */
+const IMPLEMENTING_PHASES = new Set<string>(["CODE", "REGRESSION_FIX"]);
 
 const DEFAULT_CODE_EXIT_ROUNDS = 3;
 const DEFAULT_REPORT_REWRITES = 2;
@@ -85,7 +101,20 @@ export class CodeExitNotMetError extends Error {
 
 export interface PiStoryPhasePortOptions {
   binary: string;
-  model: ResolvedModel;
+  /**
+   * Everything about this spawn that configuration decides, resolved through
+   * `resolveAgentSpec` once per phase rather than once per process.
+   *
+   * Per phase, because the purpose changes with the phase and so do the tier,
+   * the reasoning effort, the provider the failover chain picks and therefore
+   * the price and the billing. Resolving once at startup is what made a card
+   * run every phase on the CODE tier, and what left a subscription-started
+   * card with no spend ceiling after it failed over to a metered API.
+   *
+   * It carries the model, so a caller that only read `.id` off a model -- the
+   * shape that dropped tier and effort on the floor -- no longer compiles.
+   */
+  resolveSpec: (purpose: ModelPurpose) => Promise<AgentSpawnGrant>;
   worktreePath: string;
   promptRoot: string;
   sessionRoot: string;
@@ -101,36 +130,44 @@ export interface PiStoryPhasePortOptions {
   e2eHostAllowlist?: string[];
   extensions?: string[];
   env?: Record<string, string>;
+  /** The credential a spawn needs for the provider it was granted. Resolved
+   * per phase, so it cannot be part of the static env above: a card that fails
+   * over mid-run would spawn on the second provider with the first one's key. */
+  providerEnv?: (provider: string) => Record<string, string>;
   maxContinueRetries?: number;
   /** Wall clock for one prompt; a turn that outruns it is resumed, not failed. */
   promptTimeoutMs?: number;
   /** How many rewrites the delivery report gets before it ships as written. */
   maxReportRewrites?: number;
+  /** What a provider cache key groups; from `cache.keyScope`. */
+  cacheKeyScope?: CacheKeyScope;
+  /** Grouping value when the scope is a repository. */
+  repoId?: string;
   createRunner?: (config: RpcRunnerConfig) => PiRunner;
-  recordTelemetry?: (input: PhaseTelemetryInput) => Promise<void>;
+  /** The cost row. Execution state, not observation: the per-card ceiling is a
+   * real stop point derived from it, so this one is awaited and a failure to
+   * write it fails the phase. */
+  recordCost?: (input: PhaseTelemetryInput) => Promise<PhaseCostRow | void>;
+  /** Ring 0. Synchronous, no I/O, never throws; everything a reader wants
+   * afterwards is written by the drain loop from what this enqueues. Replacing
+   * it with an empty function must leave the pipeline compiling and behaving
+   * exactly as it does now -- that is the test that it stayed a side channel. */
+  emit?: (type: string, data: unknown) => void;
   readProviderPayloads?: (path: string) => Promise<unknown[]>;
   /** Measures the CODE exit; defaults to git plus the declared checks. */
   collectExitFacts?: (options: CodeExitOptions, dodScenarioIds: readonly string[]) => Promise<CodeExitFacts>;
 }
 
 /** Collects JSON payloads the model may have wrapped in prose or a code fence.
- * Schema validation below decides whether a candidate is the real phase result. */
+ * The phase contract decides whether a candidate is the real phase result. */
 function parseArtifacts(input: ManagedPhaseInput, value: unknown): ManagedPhaseResult["artifacts"] {
-  switch (input.phase) {
-    case "DESIGN": {
-      const candidate = value as { design_summary?: unknown; dod_yaml?: unknown };
-      const parsed = designResult.parse({ ...candidate, dod_yaml: normalizeDodYaml(candidate.dod_yaml) });
-      return [
-        { kind: "design-summary", body: parsed.design_summary },
-        { kind: "dod", body: parsed.dod_yaml },
-      ];
-    }
-    case "CODE":
-    case "REGRESSION_FIX":
-      return [{ kind: "implementation", body: codeResult.parse(value).implementation }];
-    case "MERGE":
-      return [{ kind: "delivery-report", body: mergeResult.parse(value).delivery_report }];
-  }
+  const candidate = value as Record<string, unknown>;
+  // Models write the frozen contract as a nested object or escape it twice;
+  // both are repaired back to the form the schema requires before it judges.
+  const repaired = typeof candidate === "object" && candidate !== null && "dod_yaml" in candidate
+    ? { ...candidate, dod_yaml: normalizeDodYaml(candidate.dod_yaml) }
+    : candidate;
+  return phaseContract(input.phase).parse(repaired);
 }
 
 function parseResult(input: ManagedPhaseInput, raw: string): ManagedPhaseResult["artifacts"] {
@@ -240,12 +277,6 @@ function sessionId(state: Record<string, unknown>): string {
   return value;
 }
 
-function toolsFor(phase: ManagedPhaseInput["phase"]): string[] {
-  return phase === "CODE" || phase === "REGRESSION_FIX"
-    ? ["read", "bash", "edit", "write"]
-    : ["read", "bash"];
-}
-
 async function readProviderPayloads(path: string): Promise<unknown[]> {
   const text = await readFile(path, "utf8");
   return text.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as unknown);
@@ -260,12 +291,36 @@ export class PiStoryPhasePort implements StoryPhasePort {
   }
 
   async run(input: ManagedPhaseInput): Promise<ManagedPhaseResult> {
+    const contract = phaseContract(input.phase);
+    // The grant carries the provider capacity this spawn holds; releasing it in
+    // the same `finally` as the runner is what makes a failover to another
+    // provider hand the first one's slot back instead of leaking it.
+    const grant = await this.options.resolveSpec(contract.purpose);
+    const spec = grant.spec;
     const [layers, context] = await Promise.all([
       loadPromptLayers(this.options.promptRoot, input.phase),
       loadExplicitContextBundle(this.options.contextFiles ?? []),
     ]);
-    const systemPrompt = `${layers.combined}${context.text}`;
-    const tools = toolsFor(input.phase);
+    // Most stable first. The repository context is the largest block and the
+    // one that does not change between phases, so putting it behind the
+    // per-phase layer left the shared prefix at the baseline's few hundred
+    // bytes and re-billed the context on every phase. Configuration may
+    // replace the phase layer or append to it; both sit after the context so
+    // that editing either leaves the prefix intact.
+    const phaseLayer = spec.prompt.text ?? layers.phase.trim();
+    const appended = spec.prompt.append ? `\n\n${spec.prompt.append.trim()}` : "";
+    const systemPrompt = `${layers.baseline.trim()}\n\n${context.text}${phaseLayer}${appended}\n`;
+    const tools = [...spec.tools];
+    const session = await pinSessionFile({
+      sessionRoot: this.options.sessionRoot,
+      cardId: input.context.cardId,
+      phase: input.phase,
+      round: input.context.round,
+      attempt: input.attempt ?? 1,
+      lane: PHASE_LANE[input.phase],
+      scope: this.options.cacheKeyScope ?? "card",
+      ...(this.options.repoId ? { repoId: this.options.repoId } : {}),
+    }, { resuming: input.resuming ?? false });
     const sessionDir = join(this.options.sessionRoot, input.runId);
     const runEvidencePath = join(this.options.evidencePath, input.runId);
     const capturePath = join(runEvidencePath, "provider-requests.jsonl");
@@ -287,15 +342,30 @@ export class PiStoryPhasePort implements StoryPhasePort {
       worktreePath: this.options.worktreePath,
       evidencePath: this.options.evidencePath,
       auditPath: this.options.auditPath,
-      ...(this.options.e2eHostAllowlist ? { e2eHostAllowlist: this.options.e2eHostAllowlist } : {}),
+      // The tests SPECIFY froze are fenced for the phases that implement
+      // against them. The guard is the entrance; the exit diffs them again,
+      // because a fence made of shell write patterns cannot claim to have
+      // enumerated every way a file gets written.
+      fencedPatterns: [
+        ...(spec.guard.fencedPatterns ?? []),
+        ...(IMPLEMENTING_PHASES.has(input.phase)
+          ? fencedSourcesFor(this.options.codeExit?.testPathPatterns ?? [])
+          : []),
+      ],
+      ...(spec.guard.e2eHostAllowlist ?? this.options.e2eHostAllowlist
+        ? { e2eHostAllowlist: spec.guard.e2eHostAllowlist ?? this.options.e2eHostAllowlist ?? [] }
+        : {}),
     });
     const runner = this.createRunner({
       binary: this.options.binary,
-      provider: this.options.model.provider,
-      model: this.options.model,
+      provider: spec.model.provider,
+      model: spec.model,
       cwd: this.options.worktreePath,
       sessionDir,
+      sessionFile: session.path,
       tools,
+      skillDiscovery: "explicit",
+      skills: [...spec.skills],
       extensions: [
         ...(this.options.extensions ?? []),
         this.options.guardExtension,
@@ -305,6 +375,7 @@ export class PiStoryPhasePort implements StoryPhasePort {
       systemPrompt: { mode: "replace", text: systemPrompt },
       env: {
         ...this.options.env,
+        ...this.options.providerEnv?.(spec.model.provider),
         [POLICY_ENV_VAR]: serializeGuardPolicy(policy),
         [CANONICAL_CAPTURE_ENV]: capturePath,
       },
@@ -317,8 +388,8 @@ export class PiStoryPhasePort implements StoryPhasePort {
       const result = await promptWithContinueRetry(
         runner,
         input.prompt,
-        { maxContinueRetries: this.options.maxContinueRetries ?? 8 },
-        this.options.promptTimeoutMs,
+        { maxContinueRetries: spec.limits.maxContinueRetries ?? this.options.maxContinueRetries ?? 8 },
+        spec.limits.promptTimeoutMs ?? this.options.promptTimeoutMs,
       );
       if (result.failure) throw new Error(result.failure.errorMessage);
       const messages = await runner.getMessages();
@@ -326,23 +397,34 @@ export class PiStoryPhasePort implements StoryPhasePort {
       if (providerPayloads.length === 0) throw new Error("phase provider request was not captured");
       let artifacts = parseResult(input, lastAssistantText(messages));
       const codeExit = this.options.codeExit;
-      if (codeExit && WRITING_PHASES.has(input.phase)) {
+      // Only the phases that produce an implementation. DESIGN and SPECIFY also
+      // write the worktree, but their exits are different questions entirely --
+      // asking a phase that must leave its tests failing for green evidence
+      // would refuse every correct SPECIFY.
+      if (codeExit && IMPLEMENTING_PHASES.has(input.phase)) {
         artifacts = await this.enforceCodeExit(input, runner, codeExit, artifacts);
       }
       if (input.phase === "MERGE") {
         artifacts = await this.rewriteUntilReadable(input, runner, artifacts);
       }
-      await this.options.recordTelemetry?.({
+      const telemetry: PhaseTelemetryInput = {
         runId: input.runId,
         cardId: input.context.cardId,
         phase: input.phase,
         messages,
         result,
         providerPayloads,
-      });
-      return { sessionId: phaseSessionId, artifacts };
+        // The spec this execution actually ran on, not the one the process
+        // started with: purpose, tier, provider and billing are all per
+        // execution once the provider is resolved per phase.
+        spec,
+      };
+      const cost = await this.options.recordCost?.(telemetry);
+      emitSafely(this.options.emit, { ...telemetry, ...(cost ? { cost: cost.data } : {}) });
+      return { sessionId: phaseSessionId, artifacts, spec };
     } finally {
       await runner.stop().catch(() => undefined);
+      await grant.release().catch(() => undefined);
     }
   }
 
@@ -440,6 +522,9 @@ export class PiStoryPhasePort implements StoryPhasePort {
       baseRef: options.baseRef,
       dodScenarioIds,
       projectChecks: options.projectChecks,
+      ...(options.testPathPatterns ? { testPathPatterns: options.testPathPatterns } : {}),
+      ...(options.protectedPaths ? { protectedPaths: options.protectedPaths } : {}),
+      ...(options.frozenTestCommit ? { frozenTestCommit: options.frozenTestCommit } : {}),
     });
   }
 }

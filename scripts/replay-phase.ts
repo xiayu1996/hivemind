@@ -20,11 +20,14 @@ import { assemblePhasePrompt, roundTasks, type Phase } from "../src/pipeline/pha
 import { probeProviderReadiness } from "../src/runner/auth-probe.js";
 import { defaultModelCatalog } from "../src/runner/catalog.js";
 import type { ExplicitContextFile } from "../src/runner/context-files.js";
-import { resolveModel } from "../src/runner/model-resolver.js";
+import { ModelPolicy } from "../src/runner/model-policy.js";
+import { resolveAgentSpec } from "../src/runner/agent-spec.js";
+import type { CacheKeyScope } from "../src/runner/session-file.js";
+import type { StoryPhase } from "../src/pipeline/phase.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
-const REPLAYABLE = new Set<Phase>(["DESIGN", "CODE", "MERGE", "REGRESSION_FIX"]);
+const REPLAYABLE = new Set<Phase>(["SHAPE", "DESIGN", "SPECIFY", "CODE", "MERGE", "REGRESSION_FIX"]);
 
 function optional(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -78,8 +81,8 @@ async function main(): Promise<void> {
     const piBinary = resolve(optional("--pi") ?? defaultPiBinary());
     const readiness = await probeProviderReadiness(piBinary, provider);
     if (!readiness.ready) throw new Error(`provider is not ready: ${provider} (${readiness.reason ?? "unknown reason"})`);
-    const model = await resolveModel(defaultModelCatalog(piBinary, worktreePath), provider, required("--model"));
     const config = await ConfigStore.load(handle.client, story.repo ? { repository: story.repo } : {});
+    const policy = new ModelPolicy(config, defaultModelCatalog(piBinary, worktreePath));
 
     const stamp = new Date().toISOString().replaceAll(/[:.]/g, "-");
     const replayRoot = resolve(optional("--replay-root") ?? join(homedir(), ".hivemind", "replay", cardId, stamp));
@@ -88,7 +91,14 @@ async function main(): Promise<void> {
     const runId = `${cardId}-replay-${phase.toLowerCase()}-${round}-${stamp}`;
     const port = new PiStoryPhasePort({
       binary: piBinary,
-      model,
+      // A replay resolves its spec the way a real run does, so what it
+      // reproduces is the spawn production would make. No provider capacity is
+      // taken: a replay is not competing with live cards for an account.
+      resolveSpec: async (purpose) => ({
+        spec: await resolveAgentSpec({ config, policy }, purpose, provider),
+        release: async () => undefined,
+      }),
+      cacheKeyScope: config.get("cache.keyScope") as CacheKeyScope,
       worktreePath,
       promptRoot: join(ROOT, "prompts"),
       sessionRoot: join(replayRoot, "sessions"),
@@ -110,7 +120,7 @@ async function main(): Promise<void> {
     const started = Date.now();
     const result = await port.run({
       runId,
-      phase: phase as "DESIGN" | "CODE" | "MERGE" | "REGRESSION_FIX",
+      phase: phase as Exclude<StoryPhase, "VERIFY">,
       round,
       prompt,
       context,
