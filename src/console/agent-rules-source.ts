@@ -12,27 +12,37 @@ import { createConsoleAgentRulesService, type AgentRulesCatalogueSource, type Co
 
 /**
  * What each registered Agent type needs from a model, independent of which
- * provider serves it. Screen readers must be able to take an image; the phases
- * that read a person's words or judge a design need a reasoning model.
+ * provider serves it. `thinking` marks the phases that read a person's words or
+ * judge whether a claim is true, so the coverage rule can strand them when no
+ * enabled provider serves a reasoning model. `images` marks the phases whose
+ * own work is reading rendered or attached evidence, so a provider set that
+ * cannot see is a real gap for them.
+ *
+ * The browser lanes are deliberately split. E2E drives Playwright itself and
+ * compares structured output, so it consumes no image input of its own, while
+ * the optional screen-acceptance lane (UI_REVIEW) resolves its own model and
+ * turns itself off when that model cannot see (scripts/run-story.ts), so image
+ * support there is a dispatch-time preference and not a rule that has to stay
+ * satisfiable before a save is allowed.
  *
  * This is code, not configuration: it is what "this Agent type can run at all"
  * means, and an operator who could edit it could make the coverage rule pass by
  * lowering the bar instead of by enabling a provider.
  */
 export const AGENT_REQUIRED_CAPABILITIES: Record<AgentPhase, { images?: true; thinking?: true }> = {
-  SHAPE: { thinking: true },
+  SHAPE: { images: true, thinking: true },
   DESIGN: { thinking: true },
   SPECIFY: { thinking: true },
   CODE: {},
-  VERIFY: {},
+  VERIFY: { images: true },
   MERGE: {},
   REGRESSION_FIX: {},
   DECOMPOSE: { thinking: true },
   CLARIFY: { thinking: true },
   PRD: { thinking: true },
   REQUIREMENT_DECOMPOSE: { thinking: true },
-  UI_REVIEW: { images: true, thinking: true },
-  E2E: { images: true },
+  UI_REVIEW: { thinking: true },
+  E2E: {},
   DISTILL: {},
   REPORT: {},
 };
