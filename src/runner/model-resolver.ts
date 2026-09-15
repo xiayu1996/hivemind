@@ -68,6 +68,12 @@ export interface PiModelCatalogOptions {
  * whose credentials are already configured: with no key in the environment
  * `--list-models <provider>` prints nothing at all rather than an error, so an
  * empty list means "not authenticated here", not "no such provider".
+ *
+ * pi matches `--list-models <provider>` against the model id as well as the
+ * provider name, so a model whose id carries another provider's name (for
+ * example `deepseek/deepseek-v4.1-flash` served by command-code) is printed by
+ * both queries. Only the rows this provider owns are returned, matching the
+ * recorded snapshots and `staticCatalog`.
  */
 export class PiModelCatalog implements ModelCatalog {
   constructor(private readonly options: PiModelCatalogOptions) {}
@@ -85,7 +91,7 @@ export class PiModelCatalog implements ModelCatalog {
       windowsHide: true,
       maxBuffer: 4 * 1024 * 1024,
     });
-    return parseModelTable(result.stdout);
+    return parseModelTable(result.stdout).filter((model) => model.provider === provider);
   }
 }
 

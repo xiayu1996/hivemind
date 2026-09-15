@@ -1,7 +1,9 @@
 import fastifyStatic from "@fastify/static";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import type { ConsoleAgentRulesService, SaveAgentRulesRequest } from "./agent-rules.js";
+import { createDefaultAgentRulesService } from "./agent-rules-source.js";
 
 export interface ConsoleDataSource {
   nodes(): Promise<unknown[]>;
@@ -28,6 +30,10 @@ export interface ConsoleServerOptions {
   serveUi?: boolean;
   /** The one write surface. Without it the console stays entirely read-only. */
   configWriter?: ConsoleConfigWritePort;
+  /** The complete-rule surface. Without it the console still hosts the page
+   * over the code defaults, because that is the policy the pipeline runs on
+   * until somebody saves a different one. */
+  agentRules?: ConsoleAgentRulesService;
 }
 
 /** Builds the read-only intranet console. */
@@ -36,14 +42,17 @@ export async function createConsoleServer(
   options: ConsoleServerOptions = {},
 ): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
-  const writable = new Set(options.configWriter
-    ? ["/api/config/value", "/api/config/rollback"]
+  const writable = new Set<string>(options.configWriter
+    ? ["POST /api/config/value", "POST /api/config/rollback"]
     : []);
+  // The complete rule is saved as one aggregate, so it is not one of the
+  // generic per-key config routes and does not need a configWriter.
+  for (const method of ["PUT", "POST"]) writable.add(`${method} /api/agent-rules`);
   app.addHook("onRequest", async (request, reply) => {
     if (request.method === "GET" || request.method === "HEAD") return;
     // Config is the only thing an operator may change from here, and only
-    // through the two routes the registry validates.
-    if (request.method === "POST" && writable.has(request.url.split("?")[0] ?? "")) return;
+    // through the routes that validate it.
+    if (writable.has(`${request.method} ${request.url.split("?")[0] ?? ""}`)) return;
     await reply.code(405).send({ error: "console is read-only" });
   });
 
@@ -55,6 +64,29 @@ export async function createConsoleServer(
   app.get("/api/stats", async () => data.stats());
   app.get("/api/providers", async () => data.providers());
   app.get("/api/queue", async () => data.queue());
+
+  const agentRules = options.agentRules ?? createDefaultAgentRulesService();
+  app.get("/api/agent-rules", async () => agentRules.view());
+  const saveAgentRules = async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = request.body as Partial<SaveAgentRulesRequest> | undefined;
+    if (!body || typeof body.revision !== "number" || typeof body.updatedBy !== "string") {
+      return reply.code(400).send({ error: "revision and updatedBy are required" });
+    }
+    const result = await agentRules.save({
+      revision: body.revision,
+      defaultProvider: body.defaultProvider ?? "",
+      defaultModel: body.defaultModel ?? "",
+      providerStates: body.providerStates ?? {},
+      failoverOrder: body.failoverOrder ?? [],
+      updatedBy: body.updatedBy,
+    });
+    // A rejected rule is a 422 and a stale one a 409, but both carry the
+    // effective rule so the page can redraw what is actually in force.
+    if (result.status === "saved") return result;
+    return reply.code(result.status === "rejected" ? 422 : 409).send(result);
+  };
+  app.put("/api/agent-rules", saveAgentRules);
+  app.post("/api/agent-rules", saveAgentRules);
 
   const writer = options.configWriter;
   if (writer) {
@@ -94,7 +126,7 @@ export async function createConsoleServer(
     });
     const index = await readFile(join(uiRoot, "index.html"), "utf8");
     app.get("/", async (_request, reply) => reply.type("text/html").send(index));
-    for (const route of ["/nodes", "/tasks", "/costs", "/config", "/stats", "/providers", "/queue"]) {
+    for (const route of ["/nodes", "/tasks", "/costs", "/config", "/stats", "/providers", "/queue", "/agent-rules"]) {
       app.get(route, async (_request, reply) => reply.type("text/html").send(index));
     }
   }
