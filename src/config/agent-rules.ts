@@ -105,7 +105,63 @@ export function validateAgentRules(
       },
     };
   }
+  const requirementsByAgentType = new Map<AgentPhase, AgentCompatibilityRequirement[]>();
+  for (const requirement of context.agentTypes) {
+    requirementsByAgentType.set(requirement.agentType, [
+      ...(requirementsByAgentType.get(requirement.agentType) ?? []),
+      requirement,
+    ]);
+  }
+  const unavailable = [...requirementsByAgentType.entries()]
+    .filter(([, requirements]) =>
+      requirements.some((requirement) => !availabilityFor(requirement, proposal, context)))
+    .map(([agentType]) => agentType)
+    .toSorted();
+  if (unavailable.length > 0) {
+    return {
+      accepted: false,
+      rejection: {
+        kind: "unavailable_agent_types",
+        affectedAgentTypes: unavailable,
+        message: formatUnavailableAgentTypes(unavailable),
+      },
+    };
+  }
   return { accepted: true, rules: proposal };
+}
+
+/** Whether a model advertises every capability the Agent type requires. */
+function compatible(model: ModelDescriptor, requirement: AgentCompatibilityRequirement): boolean {
+  if (requirement.requiredCapabilities.images === true && model.images !== true) return false;
+  if (requirement.requiredCapabilities.thinking === true && model.thinking !== true) return false;
+  return true;
+}
+
+/**
+ * A save-time answer that never touches transient state: only an enabled
+ * provider in the failover order, with the default pair or its catalogued tier
+ * assignment compatible with the Agent type, counts. The default pair is tried
+ * ahead of the tier assignment because it is the global primary choice.
+ */
+function availabilityFor(
+  requirement: AgentCompatibilityRequirement,
+  proposal: AgentRules,
+  context: AgentRulesValidationContext,
+): boolean {
+  for (const provider of proposal.failoverOrder) {
+    if (proposal.providerStates[provider] !== "enabled") continue;
+    const profile = context.configuredProviders[provider];
+    if (!profile) continue;
+    if (provider === proposal.defaultProvider) {
+      const preferred = profile.catalogue.find((model) => model.id === proposal.defaultModel);
+      if (preferred && compatible(preferred, requirement)) return true;
+    }
+    const assignedId = profile.assignedModels[requirement.tier];
+    if (assignedId === undefined) continue;
+    const assigned = profile.catalogue.find((model) => model.id === assignedId);
+    if (assigned && compatible(assigned, requirement)) return true;
+  }
+  return false;
 }
 
 function sameNames(left: readonly string[], right: readonly string[]): boolean {
@@ -114,9 +170,12 @@ function sameNames(left: readonly string[], right: readonly string[]): boolean {
 
 /** Produces the exact user-facing coverage rejection after sorting and
  * deduplicating Agent names. */
-export declare function formatUnavailableAgentTypes(
+export function formatUnavailableAgentTypes(
   agentTypes: readonly AgentPhase[],
-): UnavailableAgentTypesMessage;
+): UnavailableAgentTypesMessage {
+  const names = [...new Set(agentTypes)].toSorted();
+  return `Cannot save rules. No available provider for: ${names.join(", ")}.` as UnavailableAgentTypesMessage;
+}
 
 export interface ReplaceAgentRulesInput {
   proposal: AgentRules;
