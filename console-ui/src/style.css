@@ -24,3 +24,12 @@ section { border: 1px solid #223043; border-radius: 14px; padding: 22px; backgro
 article { margin-top: 12px; border-radius: 9px; background: #091019; padding: 12px; }
 pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .error { color: #ff8f8f; }
+
+.message { color: #61d6c1; }
+.rule-list { list-style: none; margin: 16px 0; padding: 0; display: grid; gap: 8px; }
+.rule-row { display: flex; align-items: center; gap: 10px; background: #091019; border-radius: 9px; padding: 10px 12px; }
+.rule-row .rule-name { flex: 1; }
+.rule-row label { color: #8091a5; display: flex; align-items: center; gap: 5px; }
+select { border: 1px solid #29384a; border-radius: 8px; padding: 7px 9px; color: #e8edf2; background: #111b27; }
+button.save { margin-top: 8px; color: #05131a; background: #61d6c1; border-color: #61d6c1; }
+button:disabled { opacity: 0.45; cursor: default; }

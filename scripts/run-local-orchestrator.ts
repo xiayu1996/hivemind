@@ -72,6 +72,9 @@ import { CostLedger } from "../src/observability/cost-ledger.js";
 import { CANONICAL_CAPTURE_ENV } from "../src/observability/capture-contract.js";
 import { createConsoleServer, listenConsole } from "../src/console/server.js";
 import { LibsqlConsoleDataSource } from "../src/console/libsql-data-source.js";
+import { createAgentRulesCatalogueSource } from "../src/console/agent-rules-source.js";
+import { createConsoleAgentRulesService } from "../src/console/agent-rules.js";
+import { initialAgentRules, LibsqlAgentRulesRepository } from "../src/config/agent-rules-repository.js";
 import { ProjectionService } from "../src/observability/projections/service.js";
 import { ConsoleConfigWriter } from "../src/console/config-writer.js";
 import { resolveAgentSpec } from "../src/runner/agent-spec.js";
@@ -982,6 +985,13 @@ async function main(): Promise<void> {
         uiRoot,
         serveUi: await exists(join(uiRoot, "index.html")),
         configWriter: new ConsoleConfigWriter(config, handle.client),
+        agentRules: createConsoleAgentRulesService(
+          new LibsqlAgentRulesRepository(
+            handle.client,
+            initialAgentRules(config.get("model.providers"), config.get("model.failoverChain")),
+          ),
+          createAgentRulesCatalogueSource(config, modelCatalog),
+        ),
       },
     );
     const address = await listenConsole(operationsConsole, {
