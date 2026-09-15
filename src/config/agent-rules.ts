@@ -105,6 +105,27 @@ export function validateAgentRules(
       },
     };
   }
+  const defaultProfile = context.configuredProviders[proposal.defaultProvider];
+  if (!defaultProfile || proposal.providerStates[proposal.defaultProvider] !== "enabled") {
+    return {
+      accepted: false,
+      rejection: {
+        kind: "invalid_default",
+        field: "defaultProvider",
+        message: "The default provider must be configured and enabled.",
+      },
+    };
+  }
+  if (!defaultProfile.catalogue.some((model) => model.id === proposal.defaultModel)) {
+    return {
+      accepted: false,
+      rejection: {
+        kind: "invalid_default",
+        field: "defaultModel",
+        message: "The default model must be present in the default provider's catalogue.",
+      },
+    };
+  }
   const requirementsByAgentType = new Map<AgentPhase, AgentCompatibilityRequirement[]>();
   for (const requirement of context.agentTypes) {
     requirementsByAgentType.set(requirement.agentType, [
