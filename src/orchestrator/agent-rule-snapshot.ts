@@ -1,4 +1,4 @@
-import type { AgentPhase, ModelPurpose, ModelTier } from "../pipeline/phase.js";
+import { AGENT_PHASES, type AgentPhase, type ModelPurpose, type ModelTier } from "../pipeline/phase.js";
 import type { AgentRules, VersionedAgentRules } from "../config/agent-rules.js";
 import type { ModelDescriptor } from "../runner/model-resolver.js";
 
@@ -39,10 +39,21 @@ export interface ExecutionAgentRuleSnapshotRepository {
 /** Captures candidates for every registered Agent type before execution state
  * can advance. An empty candidate list is impossible for a successfully saved
  * rule and is treated as corrupt persisted configuration. */
-export declare function startExecutionAgentRules(
+export async function startExecutionAgentRules(
   repository: ExecutionAgentRuleSnapshotRepository,
   input: StartExecutionRuleSnapshotInput,
-): Promise<ExecutionAgentRuleSnapshot>;
+): Promise<ExecutionAgentRuleSnapshot> {
+  const snapshot = await repository.start(input);
+  const unresolved = AGENT_PHASES.filter(
+    (agentType) => (snapshot.candidatesByAgentType[agentType]?.length ?? 0) === 0,
+  );
+  if (unresolved.length > 0) {
+    throw new Error(
+      `execution ${snapshot.executionId} has no resolved model candidate for: ${unresolved.join(", ")}`,
+    );
+  }
+  return snapshot;
+}
 
 /** Execution-scoped model-policy boundary consumed by dispatch. It selects only
  * from the persisted candidate list; runtime breaker and credential checks may
@@ -54,6 +65,30 @@ export interface ExecutionAgentRulePolicy {
   resolve(agentType: AgentPhase, provider: string): SnapshotModelCandidate;
 }
 
-export declare function policyFromExecutionSnapshot(
+export function policyFromExecutionSnapshot(
   snapshot: ExecutionAgentRuleSnapshot,
-): ExecutionAgentRulePolicy;
+): ExecutionAgentRulePolicy {
+  /** Candidates arrive in failover order, but sorting on the recorded order
+   * keeps the contract independent of how the caller assembled the list. */
+  const candidatesFor = (agentType: AgentPhase): readonly SnapshotModelCandidate[] =>
+    [...(snapshot.candidatesByAgentType[agentType] ?? [])].sort((left, right) => left.order - right.order);
+
+  return {
+    snapshot,
+    candidatesFor,
+    providersFor(agentType) {
+      const providers: string[] = [];
+      for (const candidate of candidatesFor(agentType)) {
+        if (!providers.includes(candidate.provider)) providers.push(candidate.provider);
+      }
+      return providers;
+    },
+    resolve(agentType, provider) {
+      const candidate = candidatesFor(agentType).find((entry) => entry.provider === provider);
+      if (!candidate) {
+        throw new Error(`no resolved model candidate for provider ${provider} on ${agentType}`);
+      }
+      return candidate;
+    },
+  };
+}
