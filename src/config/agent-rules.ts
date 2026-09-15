@@ -79,10 +79,38 @@ export type AgentRulesValidation =
  * catalogued assigned model compatible with the Agent type; the default pair is
  * considered first when compatible.
  */
-export declare function validateAgentRules(
+export function validateAgentRules(
   proposal: AgentRules,
   context: AgentRulesValidationContext,
-): AgentRulesValidation;
+): AgentRulesValidation {
+  const configured = Object.keys(context.configuredProviders).toSorted();
+  const order = proposal.failoverOrder;
+  if (order.length !== new Set(order).size || !sameNames([...order].toSorted(), configured)) {
+    return {
+      accepted: false,
+      rejection: {
+        kind: "invalid_provider_set",
+        field: "failoverOrder",
+        message: "The failover order must name every configured provider exactly once.",
+      },
+    };
+  }
+  if (!sameNames(Object.keys(proposal.providerStates).toSorted(), configured)) {
+    return {
+      accepted: false,
+      rejection: {
+        kind: "invalid_provider_set",
+        field: "providerStates",
+        message: "The provider states must name every configured provider exactly once.",
+      },
+    };
+  }
+  return { accepted: true, rules: proposal };
+}
+
+function sameNames(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((name, index) => name === right[index]);
+}
 
 /** Produces the exact user-facing coverage rejection after sorting and
  * deduplicating Agent names. */

@@ -89,7 +89,44 @@ export function presentAgentRules(
 
 /** The service is the only console writer for this aggregate; generic per-key
  * writes must not bypass its complete-rule validation or transaction. */
-export declare function createConsoleAgentRulesService(
+export function createConsoleAgentRulesService(
   repository: AgentRulesRepository,
   catalogues: AgentRulesCatalogueSource,
-): ConsoleAgentRulesService;
+): ConsoleAgentRulesService {
+  return {
+    async view() {
+      const current = await repository.read();
+      return presentAgentRules(current.revision, current.rules, await catalogues.validationContext());
+    },
+
+    async save(request) {
+      const validation = await catalogues.validationContext();
+      const proposal: AgentRules = {
+        defaultProvider: request.defaultProvider,
+        defaultModel: request.defaultModel,
+        providerStates: request.providerStates,
+        failoverOrder: request.failoverOrder,
+      };
+      const result = await repository.replace({
+        proposal,
+        expectedRevision: request.revision,
+        updatedBy: request.updatedBy,
+        validation,
+      });
+      if (result.saved) {
+        return {
+          status: "saved",
+          message: "Rules saved",
+          rules: presentAgentRules(result.current.revision, result.current.rules, validation),
+        };
+      }
+      // The rejection carries the effective rule, never the proposal: a save
+      // that is refused has persisted none of the submitted fields.
+      const rules = presentAgentRules(result.current.revision, result.current.rules, validation);
+      if (result.reason === "validation") {
+        return { status: "rejected", message: result.rejection.message, rejection: result.rejection, rules };
+      }
+      return { status: "conflict", message: "The rules changed while you were editing.", rules };
+    },
+  };
+}
