@@ -151,8 +151,16 @@ export function validateAgentRules(
   return { accepted: true, rules: proposal };
 }
 
-/** Whether a model advertises every capability the Agent type requires. */
-function compatible(model: ModelDescriptor, requirement: AgentCompatibilityRequirement): boolean {
+/** Whether a model advertises every capability the Agent type requires.
+ *
+ * Exported because execution-time candidate resolution must judge compatibility
+ * with the same rule a save does; a second copy of this predicate would let the
+ * two disagree and either accept a rule no execution can resolve or refuse one
+ * it could. */
+export function isModelCompatibleWithAgent(
+  model: ModelDescriptor,
+  requirement: AgentCompatibilityRequirement,
+): boolean {
   if (requirement.requiredCapabilities.images === true && model.images !== true) return false;
   if (requirement.requiredCapabilities.thinking === true && model.thinking !== true) return false;
   return true;
@@ -175,12 +183,12 @@ function availabilityFor(
     if (!profile) continue;
     if (provider === proposal.defaultProvider) {
       const preferred = profile.catalogue.find((model) => model.id === proposal.defaultModel);
-      if (preferred && compatible(preferred, requirement)) return true;
+      if (preferred && isModelCompatibleWithAgent(preferred, requirement)) return true;
     }
     const assignedId = profile.assignedModels[requirement.tier];
     if (assignedId === undefined) continue;
     const assigned = profile.catalogue.find((model) => model.id === assignedId);
-    if (assigned && compatible(assigned, requirement)) return true;
+    if (assigned && isModelCompatibleWithAgent(assigned, requirement)) return true;
   }
   return false;
 }

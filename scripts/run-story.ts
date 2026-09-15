@@ -36,11 +36,11 @@ import { cacheRetentionEnv } from "../src/runner/cache-retention.js";
 import type { ProviderProfile } from "../src/runner/model-policy.js";
 import { type ExplicitContextFile } from "../src/runner/context-files.js";
 import { defaultModelCatalog } from "../src/runner/catalog.js";
-import { ModelPolicy } from "../src/runner/model-policy.js";
+import { openExecutionAgentRules } from "../src/orchestrator/execution-agent-rules.js";
 import { SpawnBroker } from "../src/runner/spawn-broker.js";
 import { ProviderSlotStore } from "../src/queue/provider-slots.js";
 import { LeaseStore, holderKey, type LeaseHolder } from "../src/persistence/lease.js";
-import { resolveAgentSpec } from "../src/runner/agent-spec.js";
+import { resolveAgentSpec, type AgentModelPolicy } from "../src/runner/agent-spec.js";
 import type { CacheKeyScope } from "../src/runner/session-file.js";
 import type { StoryState } from "../src/orchestrator/state-machine.js";
 import { ConfigStore } from "../src/config/store.js";
@@ -77,7 +77,7 @@ const RUNNABLE_STATES: StoryState[] = [
 
 /** The screen reviewer's spec, on the first provider of its tier that can
  * actually see an image. A text-only reviewer judging a layout is theatre. */
-async function resolveUiReviewSpec(config: ConfigStore, policy: ModelPolicy) {
+async function resolveUiReviewSpec(config: ConfigStore, policy: AgentModelPolicy) {
   const providers = await policy.providersFor("ui_review");
   for (const provider of providers) {
     const spec = await resolveAgentSpec({ config, policy }, "ui_review", provider);
@@ -88,7 +88,7 @@ async function resolveUiReviewSpec(config: ConfigStore, policy: ModelPolicy) {
 }
 
 /** Whether any provider this card may reach bills for tokens. */
-async function anyMeteredProvider(policy: ModelPolicy, chain: readonly string[]): Promise<boolean> {
+async function anyMeteredProvider(policy: AgentModelPolicy, chain: readonly string[]): Promise<boolean> {
   for (const provider of chain) {
     if (await policy.isMetered(provider).catch(() => false)) return true;
   }
@@ -238,7 +238,16 @@ async function main(): Promise<void> {
     // re-verification run) are stored under the card's slug; without the scope
     // they would read as their defaults and an unchecked merge would pass.
     const config = await ConfigStore.load(handle.client, story.repo ? { repository: story.repo } : {});
-    const modelPolicy = new ModelPolicy(config, defaultModelCatalog(piBinary, worktreePath));
+    // The global rule is frozen into an insert-once snapshot before anything
+    // spawns, and every phase of this execution dispatches from that snapshot.
+    // A save made while this card runs therefore cannot re-resolve it, while a
+    // card that has not started reads the new rule and skips disabled nodes.
+    const { policy: modelPolicy } = await openExecutionAgentRules({
+      client: handle.client,
+      executionId: cardId,
+      config,
+      catalog: defaultModelCatalog(piBinary, worktreePath),
+    });
     // Credentials for every provider this card may reach, read once. A phase
     // resolves its own provider now, so being handed one provider's key on the
     // command line would leave the first failover spawning pi with nothing.
