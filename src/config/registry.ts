@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { snapshotModelIds } from "../runner/catalog-snapshot.js";
 import { THINKING_LEVELS } from "../runner/model-resolver.js";
+import { MODEL_PURPOSES, MODEL_TIERS } from "../pipeline/phase.js";
+
+/** The surface of a call site that only reads. */
+const READ_ONLY_TOOLS = ["find", "grep", "ls", "read"];
 
 /**
  * How a changed value reaches a running process.
@@ -31,7 +35,17 @@ const repositoryRelativePath = z.string().trim().min(1).refine(
   "must be a non-empty repository-relative path",
 );
 
-const modelTier = z.enum(["brain", "standard", "cheap"]);
+const modelTier = z.enum(MODEL_TIERS);
+
+/**
+ * Purposes are matched partially on purpose. `z.record` over a closed enum
+ * demands every member, so a stored overlay naming one purpose would fail
+ * validation whole and be dropped back to the defaults silently, and adding a
+ * purpose would invalidate every overlay already in the database. Completeness
+ * is carried by the defaults below instead, and a purpose nobody declared is
+ * still rejected because the key set is closed.
+ */
+const modelPurpose = z.enum(MODEL_PURPOSES);
 
 /**
  * A provider hivemind may spawn. Model ids are cross-checked against the
@@ -219,17 +233,17 @@ export const CONFIG_KEYS = {
     description: "Every provider hivemind may spawn: how it authenticates, and which model serves each tier. Adding a provider or changing a model is a data change made here or in the console, never a code change. Ids are checked against the recorded catalogue on write and against the live one at startup, because pi accepts an unknown id with only a warning and then invents pricing for it.",
   }),
   "model.purposeTiers": def({
-    schema: z.record(
-      z.enum([
-        "product_manager", "decompose", "design", "code", "verify", "ui_review",
-        "merge", "capacity_probe", "triage", "distiller",
-      ]),
-      z.enum(["brain", "standard", "cheap"]),
-    ),
+    schema: z.partialRecord(modelPurpose, modelTier),
     default: {
       product_manager: "brain",
       decompose: "brain",
+      // SHAPE and SPECIFY each hold half of the acceptance bar: one reads a
+      // sentence of requirement into scenarios that can be judged true or
+      // false, the other turns a business-language `then` into assertions that
+      // tell "done" from "not done" apart. Both outputs are short.
+      shape: "brain",
       design: "brain",
+      specify: "brain",
       code: "standard",
       verify: "standard",
       // The product manager's acceptance of a screen is a judgment call about
@@ -246,17 +260,13 @@ export const CONFIG_KEYS = {
     description: "What each call site is for, and which tier serves it. Overriding a purpose here is the only way to move it between tiers.",
   }),
   "model.purposeThinking": def({
-    schema: z.record(
-      z.enum([
-        "product_manager", "decompose", "design", "code", "verify", "ui_review",
-        "merge", "capacity_probe", "triage", "distiller",
-      ]),
-      z.enum(THINKING_LEVELS),
-    ),
+    schema: z.partialRecord(modelPurpose, z.enum(THINKING_LEVELS)),
     default: {
       product_manager: "high",
       decompose: "high",
+      shape: "high",
       design: "high",
+      specify: "high",
       code: "medium",
       verify: "medium",
       ui_review: "medium",
@@ -437,7 +447,7 @@ export const CONFIG_KEYS = {
     default: 1,
     scope: "per-host",
     reload: "hot",
-    description: "How many Stories one host runs at once. The scheduler decides which Stories may run together; this decides how many of them fit on this machine. Kept at 1 while several concurrent pi processes still share one credential file: their OAuth refreshes rotate the same token and invalidate each other.",
+    description: "How many Stories one host runs at once, across every provider. The scheduler decides which Stories may run together; this decides how many of them fit on this machine. The binding limit is usually per-provider rather than per-host: one account throttles concurrent streams (roughly two to three before 429s, with no Retry-After to back off on), so schedule.maxConcurrentPerProvider is the bucket that matters and this is only the machine-wide cap. Sharing one credential file is not what constrains it; copying the file is, because an OAuth refresh rotates the token and invalidates every copy.",
   }),
   "schedule.hotspotPaths": def({
     schema: z.array(repositoryRelativePath),
@@ -518,11 +528,41 @@ export const CONFIG_KEYS = {
     schema: z.array(z.object({
       name: z.string().trim().min(1),
       command: z.array(z.string().trim().min(1)).min(1),
+      /** Globs deciding whether this check is relevant to the round's changes;
+       * absent means always run. */
+      when: z.array(z.string().trim().min(1)).optional(),
+      /** Names of checks that must pass first, for generator-then-consumer orders. */
+      requires: z.array(z.string().trim().min(1)).optional(),
+      /** Paths that must be unchanged after the check ran. A suite can stay
+       * green while quietly rewriting the snapshots it is checked against, so
+       * exit code zero is necessary and not sufficient. */
+      assertCleanPaths: z.array(repositoryRelativePath).optional(),
     }).strict()),
     default: [],
     scope: "per-repo",
     reload: "hot",
-    description: "The repository's own gate commands (format, lint, typecheck, tests) as argv, run at the CODE exit. Declared per repository because hivemind does not get to decide how somebody else's repository is checked; empty means the exit rests on the commit, evidence and marker checks alone.",
+    description: "The repository's own gate commands (format, lint, typecheck, tests) as argv, run at the CODE exit. Declared per repository because hivemind does not get to decide how somebody else's repository is checked; empty means the exit rests on the commit, evidence and marker checks alone. A check may name the file globs that make it relevant (when), the checks that must run before it (requires), and the generated paths it must leave untouched (assertCleanPaths).",
+  }),
+  "codeExit.protectedPaths": def({
+    schema: z.array(repositoryRelativePath),
+    default: [],
+    scope: "per-repo",
+    reload: "next-spawn",
+    description: "Generated outputs no phase may edit by hand; they are fenced in the guard and re-checked at the CODE exit. Regenerating them through the repository's own command is how they are meant to change.",
+  }),
+  "codeExit.testPathPatterns": def({
+    schema: z.array(z.string().trim().min(1)).min(1),
+    default: ["**/*.test.*", "**/*.spec.*", "test/**", "tests/**", "__tests__/**"],
+    scope: "per-repo",
+    reload: "hot",
+    description: "What counts as a test path. SPECIFY may write only these, its tree-pin reverts everything else it did not declare as scaffolding, and CODE is fenced out of them from the moment they are frozen.",
+  }),
+  "specifyExit.testCommand": def({
+    schema: z.array(z.string().trim().min(1)),
+    default: [],
+    scope: "per-repo",
+    reload: "hot",
+    description: "The command whose JSON report proves SPECIFY's tests fail, as argv (for example npx vitest run --reporter=json). Declared per repository for the same reason the gate commands are: hivemind does not get to decide how somebody else's tests are run. Empty means SPECIFY cannot prove a red and refuses to freeze, which is the honest outcome -- a frozen contract nothing was measured against is worth less than no contract.",
   }),
   "codeExit.maxRounds": def({
     schema: positiveInt.max(10),
@@ -555,6 +595,138 @@ export const CONFIG_KEYS = {
     reload: "hot",
     description: "Providers manually removed from the failover chain.",
     dangerous: true,
+  }),
+  // --- agent runtime (07 doc section 2.2) ---
+  // Seven keys rather than one, for two reasons: each carries its own reload
+  // semantics, and a schema change to one must not put every stored overlay of
+  // the others back through validation, which silently drops them.
+  "agent.purposeTools": def({
+    schema: z.partialRecord(modelPurpose, z.array(z.string().trim().min(1))),
+    // One tool set for every phase. Per-phase tool surfaces bought nothing:
+    // the forgery they were meant to stop (a file:// screenshot passed off as
+    // e2e evidence) uses only read operations, and what actually stops it is
+    // the navigation allowlist and the evidence check. Meanwhile a differing
+    // tool block is a cache-prefix break at the very front of every request.
+    // The write-capable set is the code default (`DEFAULT_AGENT_TOOLS`), named
+    // in one place only; what is declared here is the exception to it. The
+    // product manager and the decomposer write nothing: their whole output is
+    // text a person approves, and either one editing the tree would be doing
+    // the work it is supposed to be describing.
+    default: { product_manager: READ_ONLY_TOOLS, decompose: READ_ONLY_TOOLS },
+    scope: "global",
+    reload: "next-spawn",
+    description: "Tools each call site may use. The default is one set for every purpose: tool definitions lead the cached prefix, so a per-purpose surface breaks the cache for every request behind it, and phase discipline is carried by the prompt and the deterministic exits instead. Order is stable and must stay that way; one reordering invalidates every downstream cache entry.",
+    dangerous: true,
+  }),
+  "agent.purposePrompts": def({
+    schema: z.partialRecord(modelPurpose, z.object({
+      /** Replaces the phase layer wholesale; absent uses the repository file. */
+      text: z.string().min(1).optional(),
+      /** Appended after the phase layer, for per-provider wording. */
+      append: z.string().min(1).optional(),
+    }).strict()),
+    default: {},
+    scope: "global",
+    reload: "next-spawn",
+    description: "Prompt text overrides per call site. The structure of a prompt is code; its wording is data, and this is where the wording can change without a release. An empty entry leaves the repository's prompt file in charge.",
+  }),
+  "agent.purposeGuard": def({
+    schema: z.partialRecord(modelPurpose, z.object({
+      fencedPatterns: z.array(z.string().min(1)).optional(),
+      e2eHostAllowlist: z.array(z.string().min(1)).optional(),
+    }).strict()),
+    default: {},
+    scope: "global",
+    reload: "next-spawn",
+    description: "The runtime red lines per call site. With one tool set everywhere these are the only physical constraints left: the patterns CODE may not write (the frozen tests) and the hosts a browsing phase may navigate to. Neither touches a tool schema, so neither breaks the cached prefix.",
+    dangerous: true,
+  }),
+  "agent.purposeContext": def({
+    schema: z.partialRecord(modelPurpose, z.array(repositoryRelativePath)),
+    default: {},
+    scope: "per-repo",
+    reload: "next-spawn",
+    description: "Repository files loaded explicitly for a call site, by path. Per-purpose context and a shared cross-phase prefix pull against each other: anything listed for one purpose and not another is a prefix break, so the default is no per-purpose customisation at all.",
+  }),
+  "agent.purposeLimits": def({
+    schema: z.partialRecord(modelPurpose, z.object({
+      promptTimeoutMs: positiveInt.optional(),
+      maxContinueRetries: positiveInt.max(32).optional(),
+      toolOutputMaxBytes: positiveInt.optional(),
+      toolOutputMaxLines: positiveInt.optional(),
+    }).strict()),
+    default: {},
+    scope: "global",
+    reload: "hot",
+    description: "Per call site timeouts, continue budget and tool-output truncation. Absent fields fall back to the retry.* family and the phase's own defaults.",
+  }),
+  "agent.purposeSkills": def({
+    schema: z.partialRecord(modelPurpose, z.array(z.string().trim().min(1))),
+    default: {},
+    scope: "global",
+    reload: "next-spawn",
+    description: "Skill files or directories loaded explicitly for a call site. Discovery is off in every spawn, so this list is the whole of what a phase can see: the host's personal skills were being appended to the system prompt, which both cost tokens and made the prompt differ between machines.",
+    dangerous: true,
+  }),
+  "agent.purposeMcp": def({
+    schema: z.partialRecord(modelPurpose, z.array(z.string().trim().min(1))),
+    default: {},
+    scope: "global",
+    reload: "next-spawn",
+    description: "MCP servers a call site may reach, by extension path. Empty everywhere today; the browser lane deliberately does not go through MCP (02 doc section 4.3).",
+    dangerous: true,
+  }),
+  "schedule.maxConcurrentPerProvider": def({
+    schema: z.record(z.string().min(1), positiveInt.max(16)),
+    default: {},
+    scope: "global",
+    reload: "hot",
+    description: "How many spawns one provider may serve at once. A provider with no entry gets a conservative default from its auth type: two for a subscription, four for a metered key, because one account throttles concurrent streams and returns 429 with no Retry-After to back off on. The bucket is taken per spawn and released when it ends, so a card that fails over to another provider gives its slot back; waiting for one is a scheduling state and costs no failure round.",
+  }),
+  "retry.oscillationLookback": def({
+    schema: positiveInt.max(12),
+    default: 3,
+    scope: "global",
+    reload: "hot",
+    description: "How many past rounds the convergence check looks back over to call a loop oscillating rather than merely slow. There is deliberately no matching threshold for stagnation: the invariant is that each round's failure set is a strict subset of the last, so a single round that fails to shrink it already stops the loop.",
+  }),
+  "cache.keyScope": def({
+    schema: z.enum(["card", "repo"]),
+    default: "card",
+    scope: "global",
+    reload: "next-spawn",
+    description: "What a provider cache key groups. Cards share a repository's context, so a repository-wide key would hit more often, at the cost of routing every concurrent card to one instance and fighting the per-provider buckets. Decided by measurement.",
+  }),
+  "cache.retention": def({
+    schema: z.enum(["short", "long", "none"]),
+    // pi defaults to the short window. Phases of one card are minutes to tens
+    // of minutes apart, so the short window expires a prefix that the key and
+    // the ordering went to some trouble to make reusable.
+    default: "long",
+    scope: "global",
+    reload: "next-spawn",
+    description: "How long a provider should hold a cached prompt prefix. Only the adapters that carry a retention field honour it (OpenAI Responses, Anthropic); on the ChatGPT subscription path it only decides whether caching happens at all, and the window belongs to the backend. `none` turns prefix caching off and is a diagnostic setting, not an operating one.",
+  }),
+  "console.enabled": def({
+    schema: z.boolean(),
+    default: true,
+    scope: "global",
+    reload: "next-spawn",
+    description: "Whether the resident orchestrator also serves the operations console. It runs in the same process because everything it shows is a read of the same central store; a separate service would be a second thing to deploy and keep alive for no added truth.",
+  }),
+  "console.host": def({
+    schema: z.string().min(1),
+    default: "127.0.0.1",
+    scope: "global",
+    reload: "next-spawn",
+    description: "Address the console binds. A public wildcard is refused outright; an intranet address has to be named explicitly.",
+  }),
+  "console.port": def({
+    schema: z.number().int().min(1).max(65_535),
+    default: 3210,
+    scope: "global",
+    reload: "next-spawn",
+    description: "Port the console listens on.",
   }),
   "selfUpdate.pinnedVersion": def({
     schema: z.string().nullable(),

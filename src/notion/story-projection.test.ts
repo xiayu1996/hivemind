@@ -194,8 +194,8 @@ depends_on: []
             VALUES ('c-1', 'page-4', 'Claude Code session on behalf of Ryan', 'Use the latest event.', 1757400000000, 10)`,
     });
     await client.execute({
-      sql: `INSERT INTO human_feedback (comment_id, card_id, spec_id, round, channel, body, applied_at, created_at)
-            VALUES ('c-1', 'S-EPIC1-04', 'S-EPIC1-04-a', 7, 'answer', 'Use the latest event.', 12, 11)`,
+      sql: `INSERT INTO human_feedback (comment_id, card_id, spec_id, round, channel, body, applied_at, applied_round, created_at)
+            VALUES ('c-1', 'S-EPIC1-04', 'S-EPIC1-04-a', 7, 'answer', 'Use the latest event.', 12, 8, 11)`,
     });
     await client.execute({
       sql: `INSERT INTO phase_runs (run_id, card_id, phase, round, prompt_sha256, status, started_at, ended_at)

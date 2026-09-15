@@ -93,7 +93,7 @@ export async function planRepositoryStoryExecution(
 /** States a Story can still be dispatched from. A parked or failed Story is
  * not work the scheduler may plan; a delivered one is a dependency that is
  * already satisfied. */
-const DISPATCHABLE = new Set(["QUEUED", "DESIGN", "CODE", "VERIFY", "MERGE", "REGRESSION_FIX"]);
+const DISPATCHABLE = new Set(["QUEUED", "SHAPE", "DESIGN", "SPECIFY", "CODE", "VERIFY", "MERGE", "REGRESSION_FIX"]);
 
 export interface RepositoryStory extends SchedulableStory {
   state: string;

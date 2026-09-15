@@ -70,7 +70,11 @@ export async function attributeCard(
   // Epic head blocks everything else landing there.
   const [update] = await client.batch([
     {
-      sql: `UPDATE stories SET state = 'REGRESSION_FIX', phase = 'REGRESSION_FIX', priority = 0, updated_at = ?
+      // Reopened into SPECIFY, not straight into the fix: the reproduction
+      // test is written and proved red before anything may change the code it
+      // exists to prove. `phase` stays REGRESSION_FIX so the worker knows this
+      // SPECIFY is the narrow one and where it leads.
+      sql: `UPDATE stories SET state = 'SPECIFY', phase = 'REGRESSION_FIX', priority = 0, updated_at = ?
              WHERE id = ? AND state = 'DELIVERED'`,
       args: [time, attribution.item],
     },

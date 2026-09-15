@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { testAgentSpec } from "../runner/agent-spec.testing.js";
 import { BlindSweepPort } from "./blind-sweep-port.js";
 import type { BlindVerifyResult } from "../verify/executor.js";
 
@@ -40,10 +41,14 @@ function port(result: BlindVerifyResult) {
     git,
     evidenceRoot: "D:/evidence",
     auditPath: "D:/evidence/audit.jsonl",
+    resolveSpec: SWEEP_GRANT,
     allowedHosts: ["localhost"],
   });
   return { sweep, executor, git };
 }
+
+/** The sweep spawns like any other verification. */
+const SWEEP_GRANT = async () => ({ spec: await testAgentSpec({ purpose: "verify" }), release: async () => undefined });
 
 describe("BlindSweepPort", () => {
   it("reports one outcome per scenario against the revision it swept", async () => {
@@ -94,6 +99,7 @@ describe("BlindSweepPort", () => {
       git: { run: vi.fn(async () => "rev-abc\n") },
       evidenceRoot: "D:/evidence",
       auditPath: "D:/evidence/audit.jsonl",
+      resolveSpec: SWEEP_GRANT,
       allowedHosts: ["localhost"],
     });
 

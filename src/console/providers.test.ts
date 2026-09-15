@@ -30,7 +30,8 @@ describe("M2-19 provider health on the console", () => {
       costs: async () => [],
       config: async () => [],
       stats: async () => ({}),
-      providers: async () => [{ provider: "openai-codex", state: "closed" }],
+      queue: async () => ({ waiting: [], running: [], providerSlots: [] }),
+  providers: async () => [{ provider: "openai-codex", state: "closed" }],
     };
     const app = await createConsoleServer(data, { serveUi: false });
 

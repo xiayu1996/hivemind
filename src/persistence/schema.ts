@@ -389,6 +389,7 @@ export const humanFeedback = sqliteTable("human_feedback", {
   channel: text("channel").notNull(),
   body: text("body").notNull(),
   appliedAt: ms("applied_at"),
+  appliedRound: integer("applied_round"),
   createdAt: ms("created_at").notNull(),
 }, (t) => [index("idx_feedback_channel").on(t.channel, t.createdAt)]);
 
@@ -407,6 +408,56 @@ export const verifyRecords = sqliteTable("verify_records", {
   uniqueIndex("verify_records_card_id_round_unique").on(t.cardId, t.round),
   index("idx_verify_card").on(t.cardId, t.round),
 ]);
+
+export const verifyScenarioResults = sqliteTable("verify_scenario_results", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  cardId: text("card_id").notNull().references(() => stories.id, { onDelete: "cascade" }),
+  scenarioId: text("scenario_id").notNull(),
+  round: integer("round").notNull(),
+  dodVersion: text("dod_version").notNull(),
+  scenarioVersion: text("scenario_version").notNull(),
+  verifiedTreeSha: text("verified_tree_sha").notNull(),
+  outcome: text("outcome").notNull(),
+  evidence: text("evidence"),
+  carriedFrom: integer("carried_from"),
+  createdAt: ms("created_at").notNull(),
+}, (t) => [index("idx_verify_scenario_card").on(t.cardId, t.scenarioId, t.id)]);
+
+export const openQuestions = sqliteTable("open_questions", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  cardId: text("card_id").notNull().references(() => stories.id, { onDelete: "cascade" }),
+  questionKey: text("question_key").notNull(),
+  question: text("question").notNull(),
+  suggestion: text("suggestion").notNull(),
+  blocking: integer("blocking").notNull(),
+  answer: text("answer"),
+  answeredAt: ms("answered_at"),
+  createdAt: ms("created_at").notNull(),
+}, (t) => [
+  uniqueIndex("open_questions_card_id_question_key_unique").on(t.cardId, t.questionKey),
+  index("idx_open_questions_card").on(t.cardId, t.blocking),
+]);
+
+export const storyTestContracts = sqliteTable("story_test_contracts", {
+  cardId: text("card_id").notNull().references(() => stories.id, { onDelete: "cascade" }),
+  attempt: integer("attempt").notNull(),
+  mode: text("mode").notNull(),
+  contractYaml: text("contract_yaml").notNull(),
+  specifyBaseCommit: text("specify_base_commit").notNull(),
+  specifyCommit: text("specify_commit"),
+  specifyTreeSha: text("specify_tree_sha"),
+  testPaths: text("test_paths").notNull().default("[]"),
+  createdAt: ms("created_at").notNull(),
+  frozenAt: ms("frozen_at"),
+}, (t) => [primaryKey({ columns: [t.cardId, t.attempt] })]);
+
+export const storyDodVersions = sqliteTable("story_dod_versions", {
+  cardId: text("card_id").notNull().references(() => stories.id, { onDelete: "cascade" }),
+  dodVersion: text("dod_version").notNull(),
+  scenarioId: text("scenario_id").notNull(),
+  scenarioVersion: text("scenario_version").notNull(),
+  createdAt: ms("created_at").notNull(),
+}, (t) => [primaryKey({ columns: [t.cardId, t.scenarioId] })]);
 
 export const notionMediaDelivery = sqliteTable("notion_media_delivery", {
   evidenceId: text("evidence_id").primaryKey(),

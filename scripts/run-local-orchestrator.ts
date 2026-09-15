@@ -19,6 +19,7 @@ import { breakerPolicy, intakeHalted, usableProviders } from "../src/runner/circ
 import { classifyError } from "../src/runner/classify.js";
 import { assertProviderRetriesDisabled } from "../src/runner/failover.js";
 import { probeProviderReadiness, refreshProviderCredentials } from "../src/runner/auth-probe.js";
+import { assertCredentialRefreshCoverage } from "../src/runner/auth-refresh.js";
 import { refreshCredentialsOnce } from "../src/runner/auth-refresh.js";
 import { probeOpenProviders } from "../src/runner/provider-probe.js";
 import { assertErrorFixtureCoverage } from "../src/runner/error-fixtures.js";
@@ -66,6 +67,15 @@ import { registerNotionWebhookRoute } from "../src/notion/webhook-route.js";
 import { IntegrationDispatchStore } from "../src/orchestrator/integration-dispatch.js";
 import { PlanApprovalStore } from "../src/orchestrator/plan-approval.js";
 import { dispatchableStories, planRepositoryStoryExecution } from "../src/orchestrator/scheduler.js";
+import { DispatchQueue } from "../src/queue/dispatch.js";
+import { CostLedger } from "../src/observability/cost-ledger.js";
+import { CANONICAL_CAPTURE_ENV } from "../src/observability/capture-contract.js";
+import { createConsoleServer, listenConsole } from "../src/console/server.js";
+import { LibsqlConsoleDataSource } from "../src/console/libsql-data-source.js";
+import { ProjectionService } from "../src/observability/projections/service.js";
+import { ConsoleConfigWriter } from "../src/console/config-writer.js";
+import { resolveAgentSpec } from "../src/runner/agent-spec.js";
+import { cacheRetentionEnv } from "../src/runner/cache-retention.js";
 import { StoryExecutionStore } from "../src/orchestrator/story-execution-store.js";
 import { openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
@@ -204,16 +214,24 @@ async function main(): Promise<void> {
    */
   const providerEnvFor = async (provider: string): Promise<Record<string, string>> => {
     const profile = await modelPolicy.profileOf(provider);
-    if (!needsApiKeyEnv(profile)) return {};
-    return providerKeyEnv({
+    // The cache window belongs to every spawn, credentialed or not.
+    const cacheEnv = cacheRetentionEnv(config);
+    if (!needsApiKeyEnv(profile)) return cacheEnv;
+    return { ...cacheEnv, ...providerKeyEnv({
       provider,
       ...(profile.envKey ? { envKey: profile.envKey } : {}),
       secrets: stored,
       secretsPath,
-    });
+    }) };
   };
   await assertOutOfBandChannel(alerts, config);
   await assertProviderRetriesDisabled(config);
+  // A refresher that rotates less often than one prompt may run leaves a phase
+  // able to outlive its own credential.
+  assertCredentialRefreshCoverage({
+    credentialRefreshIntervalMs: config.get("provider.credentialRefreshIntervalMs"),
+    promptTimeoutMs: config.get("retry.promptTimeoutMs"),
+  });
   await assertModelPolicy(config, modelCatalog);
   // A provider whose failure wordings were never captured would have its quota
   // message read as UNKNOWN, and the card would take the wrong recovery path.
@@ -390,8 +408,30 @@ async function main(): Promise<void> {
       new PlanApprovalStore(handle.client, Date.now, decompositionLimits, publishEpicBranchFor),
       new PiDecomposePort({
         binary: piBinary,
-        model: await modelPolicy.resolve("decompose", provider),
-        env: await providerEnvFor(provider),
+        spec: await resolveAgentSpec({ config, policy: modelPolicy }, "decompose", provider),
+        // The requirement lane spends on the brain tier; without this its cost
+        // is simply missing, and a card's bill reads as the execution half
+        // only.
+        recordUsage: async ({ usage, spec }) => {
+          await new CostLedger(handle.client).record({
+            runId: `decompose-${epic.id}-${Date.now()}`,
+            cardId: epic.id,
+            purpose: "decompose",
+            tier: spec.tier,
+            provider: spec.model.provider,
+            modelId: spec.model.id,
+            hostId: hostname(),
+            isSubscription: !spec.metered,
+          }, usage);
+        },
+        env: {
+          ...(await providerEnvFor(provider)),
+          // The exact request this lane sent, captured the same way the Story
+          // phases capture theirs: a requirement that produced a bad split is
+          // unanswerable without the prompt that produced it.
+          [CANONICAL_CAPTURE_ENV]: join(workRoot, "evidence", repositoryId, "decompose-requests.jsonl"),
+        },
+        extensions: [join(ROOT, "extensions", "canonical-capture.ts")],
         promptRoot: join(ROOT, "prompts"),
         cwd: repositoryPath,
         contextFiles: await repositoryContextFiles(repositoryPath),
@@ -436,7 +476,12 @@ async function main(): Promise<void> {
 
   const inFlight = new Map<string, Promise<void>>();
 
-  const runStory = async (cardId: string, row: Row, provider: string, model: string): Promise<void> => {
+  // The coordinator hands over a card and its paths, nothing else: which
+  // provider, model, tier and reasoning effort a phase runs on is resolved by
+  // the subprocess, per phase, from the same configuration every other lane
+  // reads. Passing a model on the command line is what silently dropped the
+  // reasoning effort and ran every phase of a card on the CODE tier.
+  const runStory = async (cardId: string, row: Row): Promise<void> => {
       // A Story the approval gate created has no branch yet: the cut is delayed
       // until its dependencies are on the Epic head, which is where the branch
       // has to start from.
@@ -503,8 +548,6 @@ async function main(): Promise<void> {
           "--worktree", location.worktreePath,
           "--evidence-root", location.evidencePath,
           "--session-root", join(workRoot, "sessions", repositoryId, cardId),
-          "--provider", provider,
-          "--model", model,
           "--target-branch", targetBranch,
           ...(integrationWorktree ? ["--integration-worktree", integrationWorktree] : []),
           ...(await repositoryContextFiles(location.worktreePath))
@@ -515,7 +558,7 @@ async function main(): Promise<void> {
           // Windows refuses to spawn .cmd shims without a shell (EINVAL).
           shell: process.platform === "win32",
           maxBuffer: 10 * 1024 * 1024,
-          env: { ...process.env, HIVEMIND_DB_URL: dbUrl, ...(await providerEnvFor(provider)) },
+          env: { ...process.env, HIVEMIND_DB_URL: dbUrl },
         });
       } catch (error) {
         // The provider's own health is separate from the card's: this records
@@ -526,7 +569,9 @@ async function main(): Promise<void> {
         const failureMessage = error instanceof Error ? error.message : String(error);
         const providerFault = classifyError(failureMessage).class !== "UNKNOWN";
         if (providerFault) {
-          await providerHealth.recordFailure(provider, failureMessage, await breakerPolicy(config));
+          // The worker records the fault against the provider it was actually
+          // running on; this side only knows a provider was at fault, because
+          // the card may have failed over more than once inside that process.
           // A quota window, a rate limit or an outage says nothing about the
           // card: the breaker holds dispatch until the provider is back, and
           // the card simply runs again then. Spending its reentry budget or
@@ -560,7 +605,6 @@ async function main(): Promise<void> {
         }
         throw error;
       }
-      await providerHealth.recordSuccess(provider);
       if (result.stdout.trim()) console.log(result.stdout.trim());
       await reconcileProjections();
       const completed = await store.getStory(cardId);
@@ -836,7 +880,6 @@ async function main(): Promise<void> {
         await breakerPolicy(config),
       );
       const healths = await providerHealth.snapshot();
-      const available = usableProviders(chain, healths, Date.now());
       if (intakeHalted(chain, healths, Date.now())) {
         const detail = chain.map((name) => `${name}=${healths.get(name)?.lastErrorClass ?? "open"}`).join(", ");
         console.warn(`intake halted: every provider in the chain is open (${detail})`);
@@ -847,22 +890,29 @@ async function main(): Promise<void> {
         }).catch((cause: unknown) => console.error("P0 alert failed:", (cause as Error).message));
         return;
       }
-      const provider = available[0]!;
-      const model = modelOverride ?? (await modelPolicy.resolve("code", provider)).id;
-
       await config.reload();
+      // The machine-level total gate. Per-provider throttling is a separate
+      // layer the subprocesses take for themselves, one slot per spawn, so
+      // this number only bounds how many cards this host works on at once.
       const limit = config.get("schedule.maxConcurrentStories");
-      for (const cardId of batch) {
+      // A card a live lease already holds is not dispatchable, whoever holds
+      // it. Asking the lease table rather than this process's own map is what
+      // keeps a restart from forking a second subprocess onto a running card.
+      const free = await new DispatchQueue(handle.client).dispatchable(batch);
+      for (const cardId of free) {
         if (inFlight.size >= limit) break;
         const row = byId.get(cardId);
         if (!row) continue;
-        const attempt = runStory(cardId, row, provider, model)
+        const attempt = runStory(cardId, row)
           .catch((error: unknown) => reportP0(`Story ${cardId} failed`, error))
           .finally(() => inFlight.delete(cardId));
         inFlight.set(cardId, attempt);
       }
     } finally {
       running = false;
+      // Push, with the service's own timer as the fallback: a missed nudge
+      // costs a reader some latency, never correctness.
+      projections.nudge();
     }
   };
 
@@ -904,6 +954,43 @@ async function main(): Promise<void> {
   }), intervalMs);
   console.log(`Local orchestrator ${hostname()} listening on http://${host}:${port}`);
 
+  // The console is a read of the same central store, so it lives in this
+  // process: nothing it shows comes from anywhere else, and a second service
+  // would be one more thing to keep alive for no more truth. It refuses a
+  // public wildcard bind itself.
+  // Ring 2. Nothing on the delivery path reads it, so stopping it costs the
+  // console its numbers and costs no card a thing.
+  const projections = new ProjectionService(handle.client, {
+    onError: (error) => console.warn(`projection refresh failed: ${(error as Error).message}`),
+  });
+  projections.start();
+  let operationsConsole: Awaited<ReturnType<typeof createConsoleServer>> | undefined;
+  if (config.get("console.enabled")) {
+    const uiRoot = join(ROOT, "console-ui", "dist");
+    operationsConsole = await createConsoleServer(
+      new LibsqlConsoleDataSource(handle.client, async () => [{
+        hostId: hostname(),
+        status: "healthy",
+        node: process.version,
+        repository: repositoryId,
+      }], () => ({
+        ...projections.fleet(),
+        invariantFindings: projections.findings(),
+        rejections: projections.rejections(),
+      })),
+      {
+        uiRoot,
+        serveUi: await exists(join(uiRoot, "index.html")),
+        configWriter: new ConsoleConfigWriter(config, handle.client),
+      },
+    );
+    const address = await listenConsole(operationsConsole, {
+      host: config.get("console.host"),
+      port: config.get("console.port"),
+    });
+    console.log(`Console at ${address}`);
+  }
+
   const stop = async (): Promise<void> => {
     clearInterval(timer);
     // A Story worker keeps running after its parent dies, and a restarted
@@ -916,6 +1003,8 @@ async function main(): Promise<void> {
     await coordinator.waitForIdle();
     await media.waitForIdle();
     await app.close();
+    await operationsConsole?.close();
+    await projections.stop();
     handle.close();
   };
   process.once("SIGINT", () => void stop().then(() => process.exit(0)));

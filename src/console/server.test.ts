@@ -8,6 +8,7 @@ const data: ConsoleDataSource = {
   config: async () => [{ key: "pipeline.maxRounds", value: 6 }],
   stats: async () => ({ footprintDeviation: { stories: 0, deviationRate: 0, unpredictedStoryRate: 0, perStory: [] } }),
   providers: async () => [{ provider: "openai-codex", state: "closed" }],
+  queue: async () => ({ waiting: [{ id: "story-2" }], running: [], providerSlots: [] }),
 };
 
 describe("read-only console", () => {
@@ -22,7 +23,7 @@ describe("read-only console", () => {
     await app.close();
   });
 
-  it("rejects every write method including Bull Board mutations", async () => {
+  it("rejects every write method", async () => {
     const app = await createConsoleServer(data, { serveUi: false });
     const response = await app.inject({ method: "POST", url: "/api/config", payload: { value: 1 } });
     expect(response.statusCode).toBe(405);
@@ -35,11 +36,11 @@ describe("read-only console", () => {
     await app.close();
   });
 
-  it("mounts Bull Board under the queue path", async () => {
+  it("serves the queue from the central store rather than a broker dashboard", async () => {
     const app = await createConsoleServer(data, { serveUi: false });
-    const response = await app.inject({ method: "GET", url: "/queues" });
+    const response = await app.inject({ method: "GET", url: "/api/queue" });
     expect(response.statusCode).toBe(200);
-    expect(response.body).toContain("Bull Dashboard");
+    expect(response.json()).toMatchObject({ waiting: [{ id: "story-2" }] });
     await app.close();
   });
 });

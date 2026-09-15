@@ -1,4 +1,8 @@
-export type Phase = "DESIGN" | "CODE" | "VERIFY" | "MERGE" | "DECOMPOSE" | "REGRESSION_FIX";
+import type { PipelinePhase } from "./phase.js";
+
+/** Declared once in `phase.ts`; kept as an alias so call sites reading a
+ * pipeline phase do not have to know which machine declared it. */
+export type Phase = PipelinePhase;
 
 export interface SpecRow {
   id: string;
@@ -17,6 +21,13 @@ export interface FeedbackItem {
   id: string;
   author: string;
   specId?: string;
+  body: string;
+}
+
+/** Material a person added without asking for anything to be undone. */
+export interface SupplementaryContext {
+  id: string;
+  author: string;
   body: string;
 }
 
@@ -52,6 +63,10 @@ export interface PhaseInput {
   specs: SpecRow[];
   artifacts: PhaseArtifact[];
   feedback: FeedbackItem[];
+  /** Notes, preferences and references a person left while the card ran. They
+   * are not round tasks: a tag would oblige the round to answer each one, and
+   * material somebody added in passing must not create that obligation. */
+  supplementaryContext?: SupplementaryContext[];
   previousRejections: PhaseRejection[];
   evidence: EvidenceRef[];
   failedScenarios: string[];
@@ -113,6 +128,18 @@ export function assemblePhasePrompt(input: PhaseInput): string {
       "In your final artifact write one line per tag — `addressed <tag>: <what you changed>` — " +
       "naming the change; the exit checks refuse the phase while a tag is unaccounted for.\n\n" +
       todo.map((task) => `- ${task.tag} ${task.text}`).join("\n"));
+  }
+
+  const supplementary = input.supplementaryContext ?? [];
+  if (supplementary.length > 0) {
+    // After the round's tasks and before the history: near enough to be read,
+    // and outside the tagged list so it carries no obligation to answer.
+    const notes = sortBy(supplementary, (item) => item.id)
+      .map((item) => `- ${item.author}: ${item.body.trim()}`);
+    parts.push("## Additional context from a person\n\n" +
+      "Material somebody added while this card was running. Use it where it helps. " +
+      "Nothing here asks you to undo work or to reply item by item.\n\n" +
+      notes.join("\n"));
   }
 
   if (input.evidence.length > 0) {

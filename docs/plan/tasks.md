@@ -22,6 +22,8 @@
 | M4 | 反馈闭环与成本完整版 | 12 | M4-17 断供演练 + 完整反馈自迭代一轮 |
 | M5 | 收口：Windows worker + self-update + GA | 8 | M5-08 连续两周 7×24 无人干预 |
 | MP | （2026-09-01 增补，**排期在 M2 之后、M3 之前**）产品经理层 + 单机全能力：模糊需求→澄清→PRD→拆解→场景验收 + Linux browser-e2e | 10 | MP-10 单机需求级端到端验收 |
+| MQ+IT | （2026-09-09 增补，排期在 MP 之后）主流程收敛：内环只保留一个 LLM 判定 + 轮次烧掉的归因修复 | 10+22 | MQ-10 两张卡无人干预走完全程 |
+| MR | （2026-09-14 增补，**排期在 MQ/IT 收尾之前**）TDD 脊柱与 Agent 运行时解耦：SHAPE/SPECIFY 两阶段 + 阶段契约注册表 + Agent 规格分表 + 缓存三件套 + 三通道人在环 + 观测三环 | 39 | MR-38 十条判据端到端 |
 
 ---
 
@@ -260,7 +262,7 @@
 | IT-10 | 每轮 prompt 全文落盘到 session 目录；prompt 文件版本 sha 记入 `phase_runs` | `src/orchestrator/pi-phase-port.ts` | 单测 | — |
 | IT-11 | ✅ Notion 验证记录可读：accepted 轮写「N 个场景都验证通过（…）」，rejected 轮逐场景写两条道原因与所依据的 DoD 句子，列出 DoD 修订建议 | `src/notion/story-projection.ts` | projection 单测 | IT-03 |
 | IT-12 | ✅ 轮次账本展示：`Budget x/6` 按 `last_human_action_at` 之后被拒轮数计；round 流水号不重置 | `src/notion/story-projection.ts` | projection 单测 | — |
-| IT-13 | **IT 验收**：S-E3OVERVIEW-01 重置到 DESIGN 重跑；对照旧 8 轮：DoD 一次通过 schema、CODE ≤ 2 轮、环境失败不计轮次、Notion 上能看到回答与可读记录 | `docs/poc/mp-acceptance.md` 追记 | inspect-round 逐轮对照 | IT-01..12 |
+| IT-13 | ~~**IT 验收**：S-E3OVERVIEW-01 重置到 DESIGN 重跑；对照旧 8 轮~~ **判据在 2026-09-14 重写并并入 MR-38**。原判据在新拓扑下不成立：卡不再从 DESIGN 起跑（前面多了 SHAPE），DoD 的产出方也换了阶段，「对照旧 8 轮」没有同基准。IT-01..12 的**单项判据仍然有效**，只是端到端那一条由 MR-38 承担 | 见 MR-38 | 见 MR-38 | IT-01..12 |
 | IT-14 | ✅ Epic 分支在拆解批准时推送；派发前重试；合入后推头 | `src/vcs/epic-branch.ts`, `plan-approval.ts`, `merge-flow.ts` | 单测 + 实跑 origin/epic/E3OVERVIEW 存在 | — |
 | IT-15 | ✅ Story draft MR 在 ff-merge 之前开（rebase → 推分支 → 开 MR → 复验 → 合入）；复用已开 MR；目标已包含则不开 | `merge-flow.ts`, `epic-integration.ts`, `story-worker.ts`, `story-delivery.ts`, `mr/adapters.ts` | 单测顺序断言 + S-E3OVERVIEW-01 resume 实跑 | IT-14 |
 | IT-16 | Epic MR：缺红绿提交对不抛错；目标分支来自 `--target-branch`；等回归池干净；关闭未合并退回 EXECUTING | `src/vcs/epic-delivery.ts`, `epic-completion.ts`, `regression/epic-gate.ts` | 单测 | — |
@@ -273,19 +275,116 @@
 
 ---
 
+## MR TDD 脊柱与 Agent 运行时（2026-09-14 增补，排期在 MQ/IT 收尾之前）
+
+目标：把 TDD 从「CODE 内部的 micro-cycle」提升为跨阶段脊柱，把「用什么 Agent 跑」与「阶段产出什么」拆开，并让跨阶段前缀缓存第一次真正生效。设计见 `07-agent-runtime.md`、03 §12、04 §5。
+
+**排期说明**：IT-09 / IT-10 触碰 `story-worker` 与 `pi-phase-port`，并进 MR-A 一次改完，不做两遍；IT-13 的端到端判据重写后并入 MR-38（见 IT-13 行）。其余未完成 IT 条目（IT-05/16/17/18/20/21/22、MQ-10）在新拓扑上继续，不受 MR 阻塞。
+
+**MR-A 内部有硬顺序**：MR-08（key）→ MR-10（TTL）→ MR-12（前缀顺序）→ MR-13（度量）。key 没钉住之前做顺序优化，收益是零。
+
+> **执行状态（2026-09-14，macOS 本机，确定性 mock provider 走通单机全流程）**：MR-01..MR-37 的生产代码与本机可执行判据完成，MR-38 / MR-39 仍开放（⏸），它们要的是真实卡 + 真实 provider，本机 mock 换不来。
+>
+> 实际跑过的命令与结果：`npx tsc --noEmit` 干净；`npx oxlint src scripts poc` 2 条既有告警（`story-execution-store.ts:609` prefer-set-has、`code-exit-gate.test.ts:186` consistent-function-scoping），无新增；`npx vitest run` **162 文件 1323 测试全绿**；`npx tsx scripts/smoke-story-pipeline.ts` 六条 PASS 全过；`npx tsx scripts/smoke-blind-verify.ts`、`npx tsx scripts/smoke-browser-e2e.ts` 通过。
+>
+> `smoke-story-pipeline` 这一轮被改成**单机端到端的真凭证**，不再只是状态机走位：真 bare remote + `git worktree` 的 Epic 分支、真 `EpicIntegrator` / `EpicMergeFlow`（rebase → 推分支 → 子集复验 → ff-merge → push）、种一个带 `@scenario` 标记的真测试文件，一张卡走完 `SHAPE→DESIGN→SPECIFY→CODE⇄VERIFY→MERGE→DELIVERED`，随后人为报一个缺陷走完 `DELIVERED→SPECIFY(narrow)→REGRESSION_FIX→VERIFY→DELIVERED`，最后断言 origin 上 `epic/E-MOCK-1` 的头就是修复后的 Story 头。断言含：6 次 run / 9 份产物 / 1 次 accepted / 6 条费用记录、`SPECIFY:2` + `REGRESSION_FIX:1`、最新 `story_test_contracts.mode = narrow`、回归卡 resolved。
+>
+> 这一轮端到端把三个**生产缺陷**逼了出来，都已修在生产代码里而不是绕在脚本里：① 浏览器道的配置写进 worktree，等于每一轮浏览器验证都在 VERIFY 钉住的树上制造改动并被隔离作废——改为环境变量下发（`src/verify/browser-config.ts`，理由另见 02 §3.3）；② SPECIFY 的 tree-pin 清理用 `git rm --ignore-unmatch`，它对**从未入库**的越界源码是空操作，于是最该撤掉的那类改动恰好被冻结 commit 收了进去（`src/pipeline/specify-gate.ts`，03 §12.2）；③ 人报缺陷把已交付的卡送回 SPECIFY 时没有标记它是窄版，`transition()` 按目标状态推导 `phase`，结果走的是全量 SPECIFY（`markNarrowSpecify`，03 §12.4）。另补一处设计缺口：窄版 SPECIFY 此前拿不到它要复现的失败签名，现按卡上的 `phase` 标记注入回归卡，走向 CODE 的那次 SPECIFY 一条都不注入，prompt 字节确定性因此仍成立。
+>
+> ⚠️ 的六条都是同一个形状——机制已落地、单测已锁住，**缺的那半条判据本机换不来**：MR-08 / MR-10 / MR-11 / MR-13 要真实 provider 的 payload 采集与第二台机器，MR-32 的结论已写进 02 §5.5（pi 0.85.1 的 `--no-refresh` 只挂在 `pi auth check` 上，agent 运行时无条件 `AuthStorage.create()`，所以子进程自刷新关不掉，只能靠 pi 自己的 `auth.json.lock` 串行化），MR-37 的公网绑定与内网可达要在真实 Linux 主机上验。这六条连同 MR-38 / MR-39 一起收在真实卡那一轮。
+
+### MR-A 骨架：阶段契约、Agent 规格、prompt 成本
+
+| ID | 任务 | 输出物 | 验证方式 | 前置 |
+|---|---|---|---|---|
+| MR-01 | ✅ 统一阶段枚举：`Phase` / `GuardPhase` / `StoryPhase` / `PmPhase` 收敛为一套，`ModelPurpose` 与之建立显式映射 | `src/pipeline/phase.ts`（新）、各处引用收口 | 类型层面无第二套枚举；改一处不会漏另一处的单测 | — |
+| MR-02 | ✅ `PhaseContract` 注册表（含 `lane` 与干预点声明）+ `story-worker` 改为解释器 | `src/pipeline/phase-contract.ts`、`src/orchestrator/story-worker.ts` | 现有全部阶段走注册表；`story-worker.test.ts` 全绿；漏填 `lane` 编译失败 | MR-01 |
+| MR-03 | ✅ `resolveAgentSpec` + Symbol brand + `assertAgentSpecs`；`RunnerSpawnOptions` 收紧为只接受 `ResolvedAgentSpec` | `src/runner/agent-spec.ts`、`src/runner/types.ts` | 单测覆盖全 purpose 映射；直传 model 字符串**通不过编译** | MR-01 |
+| MR-04 | ✅ agent 族 registry 键落地：tools / prompts / guard / context / limits / skills / mcp（07 §2.2）。**并先修穷举 schema**（07 §2.2a）：`registry.ts:221` / `:248` 两处 `z.record(z.enum(...))` 是"少一个键就整键失效"的语义，与同文件 `z.partialRecord` 写法不一致；新增的七个键一律用 `partialRecord`，完整性由代码默认值承担 | `src/config/registry.ts`、`model-policy.ts` | 每键独立 schema 与 reload 语义；改一键不波及其他键的 overlay；**只含一个 purpose 的 overlay 能生效，而不是整键回落**；含未知 purpose 的 overlay 仍被拒；`MODEL_PURPOSES` 每个成员都能解析出 tier 的启动断言 | MR-03 |
+| MR-05 | ✅ **工具集全阶段统一**（07 §6）：四处字面量删除，`blind-verify-port` 的 `[read,bash,grep,find,ls]` 并入统一来源；阶段约束改由 prompt 尾部 + 出口判据承担 | `pi-phase-port.ts`、`pi-pm-port.ts`、`pi-decompose-port.ts`、`blind-verify-port.ts`、`scripts/run-story.ts` | grep 仓内无第二处工具集字面量；单测断言各阶段拿到**逐字节相同**的工具块 | MR-04 |
+| MR-06 | ✅ 修 `store.ts` 静默回落：dangerous 键校验失败启动即拒，其余产生告警事件 | `src/config/store.ts` | 注入坏 overlay 的单测：dangerous 键启动即拒；其余出告警事件且不静默换掉策略；**回归用例：部分键的 overlay（控制台只改一个 purpose 的形态）不得触发回落**——这是 `store.ts:70` 注释预言的失效模式里最容易撞上的一种 | — |
+| MR-07 | ✅ 并入 IT-09（`replay-phase.ts`）与 IT-10（prompt 全文落盘 + 文件 sha 入 `phase_runs`） | `scripts/replay-phase.ts`、`src/orchestrator/pi-phase-port.ts` | 对一轮真实输入重放；prompt sha 变化可归因到具体文件 | MR-02 |
+| MR-08 | ⚠️ **把 `prompt_cache_key` 钉成 per-card-per-lane**（07 §4.2-①）：spawn 前自建只含 SessionHeader 的空 JSONL，`id` 从 `cardId + lane` 确定性派生，`--session` 指向它；**缓存 key / session 文件路径 / run 身份三者分开**（07 §4.4）；scope 做成 `cache.keyScope` 配置 | `src/runner/session-file.ts`（新）、`rpc-runner.ts` | ① `get_state` 零成本实测：pi 接受只含 header 的空 session、重复 id 不报错；② 采集 payload 验证同道各阶段 key 相同、跨道不同；③ `verify_records` 的 CHECK 与 `executor.ts:343` 全程不触发；④ `assemblePhasePrompt` 字节确定性单测不变 | MR-02 |
+| MR-09 | ✅ **补回被拆掉的误共享探针 + 收紧盲审身份**（07 §4.5）：session 文件路径含 `card/phase/round/attempt`（attempt 取 `phase_runs.run_id`，**只含 phase+round 不够**——同一轮会因 failover / 崩溃恢复跑多次）；首次 spawn 前断言文件零消息；`sessionId(state)` 的 `sessionFile ?? sessionId` 收紧为锚定 run 身份；三条断言进 04 §4.2 invariant 注册表 | `src/runner/session-file.ts`、`src/verify/executor.ts`、`src/verify/ui-review.ts`、`src/observability/invariants.ts` | 单测：同卡任意两次**执行**解析不到同一路径；同 (phase, round) 的两次 attempt 路径不同（`startPhase` 删旧行重插，`run_id` 每次都新）；**零消息断言的"首次"定义在 `run_id` 之内**——同 run_id 的重连续跑带消息不被拒，跨 attempt 不允许续跑；人为指向同一路径时首次 spawn 被拒；**pi 不返回 `sessionFile` 时盲审隔离仍成立**；checkpoint 快照键与 session 路径同键 | MR-08 |
+| MR-10 | ⚠️ **`PI_CACHE_RETENTION=long`**（07 §4.2-②）：经 `providerEnvFor` 注入。**判据按 provider 分开**——0.85.1 的 codex 适配器请求体里根本没有长 TTL 字段，`cacheRetention` 只判 `=== "none"`，所以这条在 day1 主力 provider 上**不是杠杆**；codex 的 TTL 由 ChatGPT 后端决定，不可控 | `scripts/run-local-orchestrator.ts`、结论写进 07 §4.2 | ① openai-responses / anthropic：采集 payload 里出现 `prompt_cache_retention` / `prompt_cache_options.ttl` / `cache_control.ttl`；② **codex：不验字段**，只验跨阶段间隔数十分钟后 `cacheRead` 仍非零，且把实测到的有效窗口记进 07 §4.2 的矩阵 | MR-08 |
+| MR-11 | ⚠️ **堵住宿主机 skill 注入**（07 §4.6） | `src/runner/rpc-runner.ts`（spawn 参数）、部署文档 | 采集的 payload 里无 `~/.agents/skills` 内容；两台机器上同输入产出**逐字节相同**的 system prompt | — |
+| MR-12 | ✅ **修 prompt 前缀顺序**（07 §4.2-③）：`baseline + repo context + per-phase`。工具集统一（MR-05）后工具块不再是断点 | `src/orchestrator/pi-phase-port.ts`、`src/pipeline/prompt-loader.ts` | 单测断言组装顺序与字节确定性；公共前缀 712B → 11,497B | MR-05, MR-10 |
+| MR-13 | ⚠️ **跨阶段缓存度量**：`cache-analysis.ts` 从单 session 扩到按 `(card, lane)` 聚合历次 spawn，两道分开统计 | `src/observability/cache-analysis.ts` | 单测；一张真卡跑完能给出各道的 cacheRead 占比与结构上限 | MR-12 |
+
+### MR-B TDD 脊柱
+
+| ID | 任务 | 输出物 | 验证方式 | 前置 |
+|---|---|---|---|---|
+| MR-14 | ✅ 新增 SHAPE 与 SPECIFY 状态及转移边；`0001_init.sql` 四处 CHECK 改写（`:132` / `:151` / `:267` / `:287`，预发布立场：直接改写不累积迁移）。**枚举要同步的是四处以上**：`MODEL_PURPOSES`、`model.purposeTiers` 与 `model.purposeThinking` 各自的 zod 枚举与 default，共四处；穷举 schema 不先改成 `partialRecord`（MR-04），加成员会让 DB 里每条已存 overlay 当场静默回落（07 §2.2a） | `0001_init.sql`、`schema.ts`、转移表、`model-policy.ts`、`registry.ts` | 全迁移表单测；非法迁移抛错；漂移检测通过；`SHAPE → DESIGN → SPECIFY` 顺序被转移表强制；**加成员后已存 overlay 仍生效的回归用例** | MR-02, MR-04 |
+| MR-15 | ✅ `test-contract` schema（含 `mode: full/narrow`）+ `prompts/phases/specify.md`（含尾部「只写测试」约束） | `src/pipeline/test-contract.ts`、`prompts/phases/specify.md` | schema 单测：缺 `expected_failure`、缺 boundary/negative、写了 e2e 层均被拒并点名原因 | MR-14 |
+| MR-16 | ✅ SPECIFY 出口七项检查（03 §12.2），**顺序本身是判据**：第 1 项 tree-pin 清理必须跑在第 4 项证红之前，**基准是本次入场冻结的 `specify_base_commit` 而不是写死的 DESIGN commit**（一次执行落两个 sha：进场 `specify_base_commit`、出场 `specify_commit`），只放行 `scaffolding[]`；第 4 项红只认 `assertion` / `not_implemented` 两种形态；第 5 项按 `kind`/`file`/`actual`/`assertion` 逐字段比对；第 6 项把红证据绑定到最终 `specify_commit` 的**树 sha**并落库 | `src/pipeline/spec-exit-gate.ts` | 各项失败的清单文案单测；**编译错 / 模块找不到 / 非目标符号异常冒充红均被拒**；未声明的非测试改动被 revert；**核心用例：越界改源码造成的红，在 tree-pin 恢复后变绿，出口必须拒绝冻结**；**CODE 已实现一部分后人工解冻重入 SPECIFY，已有合法实现不得被 revert**；**交付后的窄版 SPECIFY 同样不得 revert 已交付实现**；证红后树再动一次则证据作废并要求重跑；**贯通用例：DESIGN 留下不可加载的接口草稿，SPECIFY 用 `scaffolding` 补到可加载并拿到合法的红**；`specify_commit` 可被 CODE 读到 | MR-15 |
+| MR-17 | ✅ CODE 冻结测试：SPECIFY 产出的测试文件进 `fencedPatterns`，出口用 `git diff <specify_commit>..HEAD` 复验。**两个基准不能混用**：现有四项走 `merge-base(baseRef, HEAD)`（分支基准），这一项走 `specify_commit`（阶段基准） | `src/guard/policy.ts`、`src/pipeline/code-exit-gate.ts` | CODE 会话改测试被 block 且留痕；绕过 guard 的 bash 写法被出口抓住；单测断言两个基准各自取值正确且互不替代；红绿证据仍从分支基准的 commit 范围里取（SPECIFY 的 `test(S-xx): red` 在范围内） | MR-16 |
+| MR-18 | ✅ `codeExit.projectChecks` 新形态：`when` / `requires` / `assertCleanPaths` + 顶层 `protectedPaths` | `src/config/registry.ts`、`src/pipeline/code-exit-gate.ts` | 改文档类文件不触发全量测试；已有快照被意外改动时报出；无快照目录的仓库跳过而不是报错 | MR-17 |
+| MR-19 | ✅ 豁免路径：`downgraded_to` 同步更新 DoD `layers`（03 §12.2 第 7 项） | `src/pipeline/dod.ts`、`spec-exit-gate.ts` | 降级后该 scenario 由 VERIFY 证明；单测证明无「没人证」的路径 | MR-16 |
+| MR-20 | ✅ **REGRESSION_FIX 前置窄版 SPECIFY**（03 §12.4）。**复用已有红测试时跳过的只是"写测试"，不跳过 SPECIFY** | `src/pipeline/phase-contract.ts`、`src/regression/` | 回归卡先产 `mode: narrow` 的 test-contract；复用路径仍须**在当前树上证红**、比对 `expected_failure`、冻结 `specify_commit`，并用 `reuse.covered_by` 点名复用哪条；**跳过整个 SPECIFY 的旧路径被判为不合法**（CODE 出口第 5 项的基准会因此不存在） | MR-16 |
+| MR-21 | ✅ 停点原因带收敛分类上浮（03 §1.5）。**`stagnantRoundsBeforeStop` 不做**——取 1 等于现状、取 >1 违反 `failed(N) ⊊ failed(N-1)` 不变量；只保留 `retry.oscillationLookback`（震荡停是不变量之外的额外停点，可配） | `src/pipeline/convergence.ts`、`story-worker.ts`、`registry.ts` | 单测：`stalled` / `oscillating` / `expanded` / `budget_exhausted` 在停点详情里各自可区分；改 `oscillationLookback` 只影响震荡分类、**不允许任何持平轮续跑**；**四类真停点数量不变**，DB CHECK 不放宽 | MR-02 |
+
+### MR-C SHAPE 与人在环
+
+| ID | 任务 | 输出物 | 验证方式 | 前置 |
+|---|---|---|---|---|
+| MR-22 | ✅ **SHAPE 阶段落地**（03 §12.5、§5）：`dod` 从 DESIGN 迁到 SHAPE 并冻结，`design_summary` 移出 DoD 成为 DESIGN 自己的产物；新增 `dod_version` 内容 hash，覆盖 **scenarios 的 id/given/when/then/layers/`source`/`seed`/examples + `acceptance_criteria` 的文本与场景归宿 + `baseline` + `out_of_scope` + `relies_on`**（03 §5 末；`source`/`seed`/criteria 映射是初稿漏掉的漏失效面）；**并派生 per-scenario 的 `scenario_version`**（该条字段 + 对它生效的全局字段：`baseline` / `out_of_scope` / `relies_on` / 引用它的 criteria），它才是逐条失效判据；归一化**只做结构规范化**：NFC→集合类数组稳定排序→键序规范 JSON→SHA-256，**不折叠任何空白**（`examples[].text` 是字面显示内容、`seed` 是逐字造数输入，折了就漏失效；首尾空白由 `dod.ts` 的 `z.string().trim()` 在 schema 层已削）；**新增逐场景结论明细表 `verify_scenario_results`**（`card_id`/`scenario_id`/`round`/`dod_version`/`scenario_version`/`verified_tree_sha`/`outcome`/`evidence`/`carried_from`，追加式、原行不可改）——`verify_records` 是 `UNIQUE (card_id, round)` 的整轮一行、无 `scenario_id`，加两列不够用；`prompts/phases/shape.md`；DESIGN 出口加「DoD 未被改动」检查 | `prompts/phases/shape.md`、`src/pipeline/phase-contract.ts`、`dod.ts`、`0001_init.sql` | 单测：DoD 产出方是 SHAPE；DESIGN 改 DoD 被出口拒；**只改 `source`（模拟数据→真实事件表）或只改 `seed` 时 hash 必变**；只改 criteria 的场景归宿时 hash 必变；**只改 `examples[].text` 或 `seed` 里的换行 / 缩进 / 连续空格，hash 必变**；只有集合元素书写顺序与 JSON 键序的差异不改变 hash。改一条 scenario 时：整卡 `dod_version` 变、该条 `scenario_version` 变、**其余 scenario 的 `scenario_version` 不变**；改 `out_of_scope` 时全部 `scenario_version` 一起变。`verify_scenario_results` 的漂移检测与 drizzle 类型同步通过。**不验"改措辞 hash 不变"**——普通 hash 做不到语义等价，该判据已撤回（03 §5）；已有 `dod.test.ts` / `story-worker.test.ts` 全绿 | MR-14 |
+| MR-23 | ✅ DESIGN 降为纯设计阶段：产**接口声明草稿**（写 worktree，不约束编译），prompt 尾部明令禁止提问 | `prompts/phases/design.md`、`phase-contract.ts` | 声明落盘可被 SPECIFY 读到；DESIGN 产 open_questions 被拒；DESIGN 越界实现时 SPECIFY 出口红不起来而被拒的单测 | MR-22 |
+| MR-24 | ✅ SHAPE 产 **`open_questions`**（建议解答 + blocking + closed 状态存中央库），三级漏斗写进 prompt；**只有 SHAPE 能产**；人回答后 `rejectReturnsTo: SHAPE`，并按 `dod_version` 决定下游产物是否失效（03 §12.5） | `src/pipeline/open-questions.ts`、`0001_init.sql`、`prompts/phases/shape.md`、`story-execution-store.ts` | 单测：其他阶段产 open_questions 被拒；非 blocking 不阻塞开工；目标仓库无偏好文件时 SHAPE 必须写明假设；**人回答一条后重入的是 SHAPE 而非 DESIGN**；**整卡 hash 不变时下游产物与冻结测试全部复用；变了则按 `scenario_version` 逐条判**——变的那条作废其冻结测试、未验证 CODE 轮、以及它已 passed 的 VERIFY 与走查结论，没变的保留并由系统追加 carry-forward 行（新 `dod_version` + 原 `scenario_version` + 原 `verified_tree_sha` + 指向原始明细行，标明是顺延不是重验，**原记录不可变**）。**顺延的条件是两个都不变**：`scenario_version` 不变 **且** `verified_tree_sha` 等于待合流的树——契约没变不证明结论还能用，改动 A、B 共用的代码可能已经把 B 弄坏；树一变就作废全部顺延行、重验全量，**本轮不做依赖分析**（退化成今天的行为，代价可接受）；`recordVerification` 入参增加**本轮实际验证的 scenario 集合**，只更新集合内的行，`story_specs.status` 降为投影、不再当判据；**关键用例三条**：① 两条 scenario 的卡 VERIFY 已全绿，MERGE 之前人回答只改了 A，重验后 A 不需改代码 → A 重验通过、B 顺延复用、正常进入 MERGE；② **只验了 A 的那一轮，未被验证且无有效旧证据的 B 不得被置为 `passed`**（今天 `story-execution-store.ts:534` 的 `ELSE 'passed'` 在全量验证下正确，逐条重验一引入就会伪造结论）；③ **A 的修复改动了 A/B 共用代码 → 树变，B 的旧通过结论不得沿用，转移边不放行**；转移边判据落在 `scenario_version` 上（落在整卡 `dod_version` 上会把 B 一起判失效，等于整卡推倒）；已 DELIVERED 的卡改走 `defect` 通道 | MR-22 |
+| MR-25 | ✅ `rework` 通道：写 `phase.invalidated`（来源 `human`），按契约 `rejectReturnsTo` 回退重入 | `src/notion/story-input-sync.ts`、`story-execution-store.ts` | 单测：人工解冻与系统解冻走**同一条转移路径**且都留痕 | MR-02 |
+| MR-26 | ✅ `defect` 通道：开 regression 卡，接 MR-20 的回归路径 | `src/notion/story-input-sync.ts`、`src/regression/store.ts` | 单测：评论到回归卡的完整链路 | MR-20, MR-25 |
+| MR-27 | ✅ **补充 context 通道**：`preference`/`unclassified` 进 prompt 独立小节 `## Additional context from a person`，不改状态、不消耗轮次、不产生逐条回应义务 | `src/pipeline/phase-input.ts`、`story-input-sync.ts` | 单测：注入后 `inner_loop_rounds` 不变、无 `[answer:]` tag、prompt 仍**字节确定** | MR-25 |
+| MR-28 | ✅ `applied_at` 语义修正：只有真触发转移或真进了某一轮 prompt 才写 | `src/notion/story-input-sync.ts`、`story-projection.ts` | 单测：未触发任何动作的 feedback 不被标记；Notion 上不再显示「已用于第 N 轮」的假话 | MR-27 |
+
+### MR-D 派单与并发
+
+| ID | 任务 | 输出物 | 验证方式 | 前置 |
+|---|---|---|---|---|
+| MR-29a | ✅ **先补租约的三个洞**（07 §5.1a），它至今零生产调用者，MR-29 是第一次承重：① fence 跨 `release`/`revoke` 单调（删行即重置为 1，而 revoke 恰好用在旧持有者最可能回来的场景）；② holder 改为**执行实例身份**而非 hostId（现在同 holder 重复 `acquire` 必定成功，同机两个子进程都会拿到卡）；③ 状态与产物写入带 fence 校验（全仓除 lease.ts 外无一处出现 fence） | `src/persistence/lease.ts`、`story-execution-store.ts`、`0001_init.sql` | 单测：① 同一 holder 的两个执行实例并发 acquire，第二个被拒；② revoke 后重领，旧实例拿旧 fence 做 renew / release / 写状态**三者全被拒**；③ fence 跨 revoke 严格单调递增 | — |
+| MR-29 | ✅ **`story:run` 改为从 DB 领单**：只接 `--card-id`，自己落租约、自己 `resolveAgentSpec`。**并把启动时一次性定死的计费口径改成逐次解析**（07 §5.2a）：`:151` 的 `metered`、`:157` recorder 的 `provider`/`isSubscription`、`:335` 的 `metered ? { spend } : {}` 现在都由命令行那个 provider 决定；provider 改成逐阶段解析 + failover 之后，从订阅起步的卡切到计费 API 后**费用上限自始至终没挂、账还按订阅记** | `scripts/run-story.ts`、`src/persistence/lease.ts` 的首个生产调用者、`phase-recorder.ts` | 两个领取者抢同一张卡，第二个被 CAS 拒（并入 M3-02 的判据）；**同机两个子进程抢同一张卡，第二个被拒**；单测断言 SHAPE 用 brain+high、CODE 用 standard+medium——**thinking/tier 不再丢**；**端到端用例：同一张卡走「订阅 → 计费 API → 订阅」，计费段支出全部入账且不重复计，`spend` 端口在计费段挂上、订阅段不挂，单卡累计不因切回订阅而清零，越线后在 phase 边界停在 `cost_ceiling_exceeded`** | MR-03, MR-29a |
+| MR-30 | ✅ `src/queue/dispatch.ts`：协调器只写「可派发集」，不再决定谁跑哪张卡；capability 过滤承载从队列改为 `stories.capabilities` | `src/queue/dispatch.ts`、`scripts/run-local-orchestrator.ts` | orchestrator 重启后不重复派；能力真空告警仍然触发（M3-01 判据） | MR-29 |
+| MR-31 | ✅ per-provider 分桶 + 桶容量按 authType 保守默认（oauth 2 / api_key 4）+ 429 自动收桶。**桶按"每次真实 spawn"原子申请、结束释放、failover 换家重新申请**（07 §5.2）：provider 是逐阶段解析的，整卡领单时占一次位保证不了后续阶段；等容量**不消耗失败轮次、不产生停点**；占位带过期与心跳，持有者死亡后可回收（不用进程内计数——`story:run` 已是独立子进程，`run-local-orchestrator.ts:437` 的 `inFlight: Map` 管不住跨进程） | `src/config/registry.ts`、`src/queue/dispatch.ts`、`src/runner/circuit-breaker.ts`、`src/persistence/` | **两张卡同时切向容量为 1 的 provider，只允许一个启动，另一个等待且不计失败轮次**；**持有者进程被杀后容量可回收**；单测：同 provider 超桶不派、跨 provider 并行、RATE_LIMIT 后桶容量下调并冷却渐增 | MR-30 |
+| MR-32 | ⚠️ 刷新单点化补齐：预刷新窗口覆盖单个 phase 的最长时长；调研 pi 是否支持禁用子进程自刷新。**调研结论：关不掉**——0.85.1 的 `--no-refresh` 只挂在 `pi auth check` 上，agent 运行时无条件 `AuthStorage.create()`，只能靠 pi 自己的 `auth.json.lock` 串行化（02 §5.5） | `src/runner/auth-refresh.ts`、`src/runner/auth-lock.ts`、结论写进 02 §5.5 | 调研结论已写进 `docs/design/02` §5.5；**仍开放**：并发跑两张真卡不出 401（要真实 provider，随 MR-38 收） | MR-31 |
+| MR-33 | ✅ 拆 Bull Board，队列页改读中央 DB 的可派发集与租约状态 | `src/console/server.ts` | console 无 Redis 依赖；页面显示的可派发集与 DB 一致 | MR-30 |
+
+### MR-E 可观测三环与控制台
+
+| ID | 任务 | 输出物 | 验证方式 | 前置 |
+|---|---|---|---|---|
+| MR-34 | ✅ **环 0 / 环 1**（04 §5.0–5.1）：先把写分成 **decision（可靠）** 与 **telemetry（可丢）** 两类并在代码里标注准入规则——`cost_entries` 与被执行路径回读的 `event_log` 类型（`epic.transition` / `epic.blocker_answered` / 打回理由 / 状态转移 / 停点）属 decision，**不进可丢 drain**；telemetry 的 `emit()` 改同步入队零 I/O，drain 循环独立 | `src/observability/emit.ts`、`phase-recorder.ts`、`pi-phase-port.ts`、`cost-ledger.ts` | **删除判据（仅 telemetry）**：telemetry emit 换空函数后 typecheck 通过、主流程行为不变，**且费用停点与 Epic 状态推导仍然正确**；**延迟判据** p99 < 1ms；buffer 满丢最老并计数；单测：丢弃全部 telemetry 后 `cost_ceiling_exceeded` 与 Epic BLOCKED 推导不受影响 | — |
+| MR-35 | ✅ **环 2**：投影三尺度级联（run→card→fleet）+ nudge 推送 + `schemaVersion` 逃生口；`cost_entries` 的 purpose/tier/provider/billing 取自**本次执行**的 spec 而非启动快照（**它本身是 decision 类写入，不能随投影一起被杀**，04 §5.0；口径逐次切换见 07 §5.2a）；PM 与 DECOMPOSE 挂 canonical-capture | `src/observability/projection/`、`phase-recorder.ts`、`cost-ledger.ts` | **杀进程判据**（杀投影所有卡照常推进，**且费用停点仍按真实花费触发**）；fleet 读 card 成品值不读原始事件；老投影读新事件按 ignorable 计数而不崩 | MR-34, MR-03 |
+| MR-36 | ✅ **环 3**：流程 invariant 扩展（04 §5.5 四条）+ 打回理由归一化跨卡排行 + 整卡可读档案 | `src/observability/invariants.ts`、`reject-signature.ts`、`card-dossier.ts` | 同因不同文案归一到同签名；排行按计数降序；**同一张卡重跑两次档案一致**；档案生成失败不挡卡 | MR-35 |
+| MR-37 | ⚠️ console 接进常驻进程；写面开 prompt 与模型两族键，工具/skill/mcp 只读（05 §4.3 增补）。**不给它单独的 systemd unit**：控制台的写面改的就是 orchestrator 正在读的那份配置，同进程意味着热更不需要跨进程通知，多一个 unit 只会多一份要对齐的环境和一条会跟主进程各说各话的路径；开关是 `console.enabled`（runbook §4） | `src/console/server.ts`、`scripts/run-local-orchestrator.ts`、`docs/runbooks/linux-single-node.md` | 单测：公网通配绑定被拒；`CONSOLE_READ_ONLY_KEYS` 挡住 `agent.purposeTools/Skills/Mcp` 的写；改 prompt 不发版即生效且 `config.changed` 可回滚。**仍开放**：真实 Linux 主机上部署后内网可达（随 MR-38 收） | MR-33, MR-04 |
+
+### MR-F 验收
+
+| ID | 任务 | 输出物 | 验证方式 | 前置 |
+|---|---|---|---|---|
+| MR-38 | ⏸ **MR 验收**（并入重写后的 IT-13）：一张真实 Story 走完 `SHAPE→DESIGN→SPECIFY→CODE⇄VERIFY→MERGE`，再人为制造一次回归走完 `SPECIFY(narrow)→REGRESSION_FIX` | `docs/poc/mr-acceptance.md` | ① SPECIFY 的红是**断言失败**且三字段匹配 `expected_failure`；② CODE 改测试被 block 并留痕；③ `assertCleanPaths` 真实拦住一次快照漂移；④ SHAPE 的 open_questions 非 blocking 的不挡开工、人回一条后**只重跑 SHAPE** 且 closed 入库；⑤ 人用 Notion 评论走通 rework 与补充 context 两条通道；⑥ 停点详情能区分 `stalled` 与 `budget_exhausted`；⑦ 控制台按 purpose 看到各阶段模型、effort、费用、缓存命中；⑧ 单机并发 ≥2 张卡且无双执行、无 401；⑨ 观测三个解耦判据全过；⑩ 采集的 payload 里同道各阶段 `prompt_cache_key` 相同、跨道不同、无宿主机 skill，跨阶段 `cacheRead` 非零（**长 TTL 字段只在非 codex provider 上验，见 MR-10**），盲审隔离的两处判据全程未触发；⑪ 同机两个子进程抢同一张卡第二个被拒，revoke 后旧实例写状态被拒；⑫ 关掉全部 telemetry 后费用停点与 Epic 状态推导仍正确 | MR-01..37 |
+| MR-39 | ⏸ **前缀成本复盘**：用 MR-13 的跨阶段数据回答「六阶段拓扑下每张卡的真实缓存命中率是多少」 | `docs/poc/mr-acceptance.md` 追记 | 产出一份数字，据此决定三件事：`agent.purposeContext` 的 per-purpose 定制是否保留（它与跨阶段共享前缀直接冲突）、`cache.keyScope` 取 `card` 还是 `repo`、是否需要合并某两个相邻阶段 | MR-38 |
+
+### 后续里程碑（MR 不做，理由写在设计里）
+
+- **learning 语料层**（03 §12.3）：计数器去重 + 降序排序 + 注入 SPECIFY prompt。这是唯一能挡弱断言的可移植层，但它需要先有语料。
+- **运行中打断**（03 §12.6）：pi RPC `clear_queue`→`abort`，另需定下被中断轮次的账划归属、checkpoint 保留策略、abort 后 worktree 状态。
+- **独立观测者服务 / agent**（04 §5.5）：挂在环 3，读事件流抽样发现异常模式。
+- **Prompt 工作台完整版**（05 §6）：灰度 + 行为回归对比，仍在 M4。
+
+---
+
 ## M3 多机化
 
 目标：capability 队列 + 派单信封 + 心跳失联两段式 + Mac mini 浏览器 e2e worker 接入。
 
 | ID | 任务 | 输出物 | 验证方式 | 前置 |
 |---|---|---|---|---|
-| M3-01 | capability 队列 + 路由：cap.web / cap.browser-e2e / cap.windows；路由键 = 卡能力集合中最稀缺能力；目标队列无存活 worker → 能力真空告警 | `src/queue/routing.ts` | 路由纯函数单测；停掉对应 worker 触发真空告警而非 job 沉底 | M2-14 |
-| M3-02 | 派单信封模式：cap.* job 只是信封，worker 领单 → 中央 DB 落卡级租约 → ack 完成 job；执行进度靠中央 phase checkpoint | `src/queue/envelope.ts` | 故障注入：worker 领单后断开 BullMQ 连接，信封被 stalled 重派，第二 worker 落租约被 CAS 拒绝——**不产生双执行** | M1-04, M3-01 |
-| M3-03 | jobId 幂等规则：`task-<cardId>[-r<N>][-c<M>]` + removeOnComplete:true（busybee 教训原样保留） | 队列封装 | busybee 教训用例迁移为单测（重投/requeue 场景） | M3-02 |
-| M3-04 | 心跳服务两段式：Redis SETEX 5s 刷 15s 过期；断 45s → offline 告警不打断；断 >30min → 撤销主机租约、卡带 freshWorktree 重投 capability 队列、当前 phase 从头重入 | `src/worker/heartbeat.ts` + orchestrator 侧监视 | 拔线演练：45s 收到告警且执行未中断；30min 后卡在另一机凭全量注入重建并续跑成功 | M3-02, M1-08 |
+| M3-01 | capability 路由：cap.web / cap.browser-e2e / cap.windows；路由键 = 卡能力集合中最稀缺能力；无存活 worker 具备该能力 → 能力真空告警。**2026-09-14：承载从 BullMQ 队列改为 `stories.capabilities` 上的可派发集过滤**（MR-30），路由纯函数本身不变 | `src/queue/routing.ts` | 路由纯函数单测；停掉对应 worker 触发真空告警而非卡沉底 | M2-14 |
+| M3-02 | ~~派单信封模式：cap.* job 只是信封，worker 领单 → 中央 DB 落卡级租约 → ack 完成 job~~ **被 MR-30 取代**（2026-09-14）：BullMQ 撤销后没有信封这一层，worker 直接从 DB 领单并落租约。条目保留是因为它的**验证判据仍然有效且必须在 MR-30 复现**——防双执行的始终是租约 CAS，不是队列语义 | ~~`src/queue/envelope.ts`~~ → `src/queue/dispatch.ts` | 判据迁移到 MR-30：两个领取者抢同一张卡，第二个被 CAS 拒绝，**不产生双执行** | M1-04, M3-01 |
+| M3-03 | ~~jobId 幂等规则：`task-<cardId>[-r<N>][-c<M>]` + removeOnComplete:true~~ **随 BullMQ 一并撤销**（2026-09-14）：这三个坑（jobId 幂等 / requeue / removeOnComplete）是 BullMQ 特有的，不引入就不存在。保留条目是为了记住**撤销的是坑不是教训**——「重投必须幂等」在 DB 队列里由租约 CAS 的条件 UPDATE 承担 | — | 不适用 | M3-02 |
+| M3-04 | 心跳服务两段式，**承载从 Redis 改为中央 libsql**（2026-09-14 改写）：worker 5s 写心跳行、15s 视为过期；断 45s → offline 告警不打断；断 >30min → 撤销主机租约（`lease.ts` 的 revoke + 单调 fence）、卡带 freshWorktree 重回可派发集、当前 phase 从头重入 | `src/worker/heartbeat.ts` + orchestrator 侧监视 | 拔线演练：45s 收到告警且执行未中断；30min 后卡在另一机凭全量注入重建并续跑成功；**被撤销的持有者拿旧 fence 回来续租必须被拒** | M3-01, M1-08 |
 | M3-05 | 心跳 payload 扩展：intranetIp / os / machine 指标 / capabilities / versions 三元组 / currentCards / credentialProbe / configVersion piggyback | payload schema + 节点健康页对接 | 节点健康页显示全部字段；每次心跳重申期望态——绕过 diff 直接改 DB config，下一次心跳仍收敛 | M3-04, M1-36 |
 | M3-06 | worker daemon：能力声明、启动回扫自己粘性队列与本地 worktree 孤儿、孤儿 quarantine | `src/worker/daemon.ts` | 重启 worker 后进行中卡续跑；无主 worktree 进 quarantine 不被误删 | M3-04, M1-29 |
-| M3-07 | 组网：三机 Tailscale + Redis requirepass；中央 libsql API 仅内网 | 组网手册 + 配置 | 三机互通；无密码连 Redis 被拒；外网端口扫描无暴露 | — |
+| M3-07 | 组网：三机 Tailscale；中央 libsql API 仅内网（2026-09-14：Redis 随 BullMQ 撤销，`requirepass` 一项删除） | 组网手册 + 配置 | 三机互通；libsql 端口仅内网可达；外网端口扫描无暴露 | — |
 | M3-08 | Mac mini worker 接入：LaunchAgent 用户会话 + 自动登录 + caffeinate + Codex 账号 B device code 登录（一机一账号） | LaunchAgent plist + 部署手册 | 重启 Mac mini 后 worker 自动回归且 `pi auth check` ok（复用 PoC-C5 判据）；GUI 依赖（浏览器）可启动 | M0-15, M3-06, M3-07 |
 | M3-09 | 浏览器自动化：vendor `pi-mcp-adapter`（懒连接）+ Playwright MCP server；MCP 工具调用纳入 tool_call hook 守卫 | `extensions/mcp-adapter/`（vendor 进仓） | 浏览器 e2e 场景真实跑通；guard 拦截 file:// 导航与非白名单 host 用例 | M1-10, M3-08 |
 | M3-10 | 探针 job 模型：对已 push 分支只读 clone + e2e + 证据回传中央，不打破主机粘性；结果契约带 usage | `src/worker/probe-job.ts` | Linux 粘性卡的浏览器验证由 Mac mini 探针完成并回传截图/verdict；主机粘性未被破坏（worktree 仍在原机） | M3-09 |

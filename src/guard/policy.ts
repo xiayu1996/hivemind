@@ -6,6 +6,7 @@
  * first tool call and cannot be reached by the model.
  */
 
+import type { AgentPhase } from "../pipeline/phase.js";
 import { toolOutputLimitsFor, type ToolOutputLimits } from "./tool-output.js";
 
 export const POLICY_ENV_VAR = "PI_GUARD_POLICY";
@@ -36,16 +37,9 @@ export interface GuardPolicy {
   toolOutputLimits: ToolOutputLimits;
 }
 
-export type GuardPhase =
-  | "DESIGN"
-  | "DECOMPOSE"
-  | "CODE"
-  | "REGRESSION_FIX"
-  | "VERIFY"
-  | "E2E"
-  | "MERGE"
-  | "DISTILL"
-  | "REPORT";
+/** The guard covers every context an agent is spawned in, so its phase list is
+ * the whole set rather than a second enumeration of part of it. */
+export type GuardPhase = AgentPhase;
 
 export interface GuardPolicyInput {
   phase: GuardPhase;
@@ -59,14 +53,23 @@ export interface GuardPolicyInput {
   e2eHostAllowlist?: string[];
 }
 
+/**
+ * Phases with no legitimate reason to write source. SHAPE only produces
+ * documents; DESIGN writes interface declarations into the worktree and so is
+ * deliberately absent. SPECIFY writes tests and is absent for the same reason.
+ */
 const READ_ONLY_PHASES = new Set<GuardPhase>([
-  "DESIGN",
+  "SHAPE",
   "DECOMPOSE",
   "VERIFY",
   "E2E",
   "MERGE",
   "DISTILL",
   "REPORT",
+  "CLARIFY",
+  "PRD",
+  "REQUIREMENT_DECOMPOSE",
+  "UI_REVIEW",
 ]);
 
 /**
@@ -74,7 +77,7 @@ const READ_ONLY_PHASES = new Set<GuardPhase>([
  * be shown, and E2E exists for nothing else. Any other phase navigating a
  * browser is doing something nobody asked it to do.
  */
-const BROWSING_PHASES = new Set<GuardPhase>(["VERIFY", "E2E"]);
+const BROWSING_PHASES = new Set<GuardPhase>(["VERIFY", "E2E", "UI_REVIEW"]);
 
 /** Built-in write-capable tools that must not exist in a read-only phase. */
 export const WRITE_TOOLS = ["apply_patch", "edit", "notebook_edit", "powershell", "write"] as const;

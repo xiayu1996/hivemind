@@ -1,9 +1,5 @@
-import { createBullBoard } from "@bull-board/api";
-import { BullMQAdapter } from "@bull-board/api/bullMQAdapter";
-import { FastifyAdapter } from "@bull-board/fastify";
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
-import type { Queue } from "bullmq";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
@@ -14,6 +10,10 @@ export interface ConsoleDataSource {
   config(): Promise<unknown[]>;
   stats(): Promise<unknown>;
   providers(): Promise<unknown[]>;
+  /** What is waiting, what is running and who holds it. Read from the central
+   * store: the queue is a set of rows there, and a board over a separate broker
+   * would be a second account of the same thing, free to disagree with it. */
+  queue(): Promise<unknown>;
 }
 
 export interface ConsoleConfigWritePort {
@@ -26,12 +26,11 @@ export interface ConsoleConfigWritePort {
 export interface ConsoleServerOptions {
   uiRoot?: string;
   serveUi?: boolean;
-  queues?: Queue[];
   /** The one write surface. Without it the console stays entirely read-only. */
   configWriter?: ConsoleConfigWritePort;
 }
 
-/** Builds the read-only intranet console and a read-only Bull Board mount. */
+/** Builds the read-only intranet console. */
 export async function createConsoleServer(
   data: ConsoleDataSource,
   options: ConsoleServerOptions = {},
@@ -55,6 +54,7 @@ export async function createConsoleServer(
   app.get("/api/config", async () => data.config());
   app.get("/api/stats", async () => data.stats());
   app.get("/api/providers", async () => data.providers());
+  app.get("/api/queue", async () => data.queue());
 
   const writer = options.configWriter;
   if (writer) {
@@ -86,17 +86,6 @@ export async function createConsoleServer(
     });
   }
 
-  const board = new FastifyAdapter();
-  board.setBasePath("/queues");
-  createBullBoard({
-    queues: (options.queues ?? []).map((queue) => new BullMQAdapter(queue, {
-      readOnlyMode: true,
-      allowRetries: false,
-    })),
-    serverAdapter: board,
-  });
-  await app.register(board.registerPlugin(), { prefix: "/queues" });
-
   if (options.serveUi !== false) {
     const uiRoot = resolve(options.uiRoot ?? "console-ui/dist");
     await app.register(fastifyStatic, {
@@ -105,7 +94,7 @@ export async function createConsoleServer(
     });
     const index = await readFile(join(uiRoot, "index.html"), "utf8");
     app.get("/", async (_request, reply) => reply.type("text/html").send(index));
-    for (const route of ["/nodes", "/tasks", "/costs", "/config", "/stats", "/providers"]) {
+    for (const route of ["/nodes", "/tasks", "/costs", "/config", "/stats", "/providers", "/queue"]) {
       app.get(route, async (_request, reply) => reply.type("text/html").send(index));
     }
   }

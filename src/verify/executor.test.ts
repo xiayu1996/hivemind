@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { testAgentSpec } from "../runner/agent-spec.testing.js";
 import type { GuardPolicy } from "../guard/policy.js";
 import type { PiRunner, PromptResult, RpcEvent } from "../runner/types.js";
 import { BlindVerifyExecutor, type TreePinPort, type VerifyRecord } from "./executor.js";
@@ -44,8 +45,12 @@ function runner(options: { session?: string; content?: string; events?: RpcEvent
   };
 }
 
+/** The verifier's spawn spec, the same for every case here. */
+const VERIFY_SPEC = await testAgentSpec({ purpose: "verify" });
+
 function input() {
   return {
+    spec: VERIFY_SPEC,
     cardId: "story-1",
     round: 1,
     codeSessionId: "code.jsonl",

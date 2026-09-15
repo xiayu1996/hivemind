@@ -20,7 +20,9 @@ export type PropertyIntent =
   | { type: "unsupported_property_change"; observedAiStatus: string; humanWinsUntil: number };
 
 export type CommentIntent =
-  | { type: "answer_blocker"; body: string }
+  | { type: "answer_blocker"; body: string; questionKey?: string }
+  | { type: "rework"; body: string }
+  | { type: "defect"; body: string }
   | { type: "feedback"; body: string };
 
 export type EpicPropertyIntent =
@@ -142,12 +144,44 @@ export function interpretRequirementComment(state: RequirementState, body: strin
   return { type: "feedback", body: text };
 }
 
+/** Markers a person writes to ask for something other than a note. */
+const REWORK_MARKERS = ["rework:", "重做:", "重做：", "打回:", "打回："];
+const DEFECT_MARKERS = ["defect:", "bug:", "缺陷:", "缺陷:", "缺陷：", "回归:", "回归："];
+
+function afterMarker(text: string, markers: readonly string[]): string | null {
+  const lowered = text.toLocaleLowerCase();
+  for (const marker of markers) {
+    if (lowered.startsWith(marker)) return text.slice(marker.length).trim();
+  }
+  return null;
+}
+
+/**
+ * What a person's comment asks the pipeline to do.
+ *
+ * Undoing work has to be asked for explicitly. A card that is running gets
+ * comments for all sorts of reasons -- a link, a preference, a note for later
+ * -- and reading every one of them as "go back and do it again" would let a
+ * passing remark cost a card its phase. So an unmarked comment on a running
+ * card is material for the next round and nothing more; `rework:` and
+ * `defect:` are the two things a person has to say out loud.
+ *
+ * On a stopped card the default is the opposite: the card is waiting for an
+ * answer, so that is what an unmarked comment is. `<key>: ...` answers one
+ * named question when several are open.
+ */
 export function interpretComment(state: StoryState, body: string): CommentIntent {
   const text = body.trim();
   if (text === "") throw new Error("a Notion comment cannot be interpreted without text");
-  return state === "NEEDS_INPUT"
-    ? { type: "answer_blocker", body: text }
-    : { type: "feedback", body: text };
+  const rework = afterMarker(text, REWORK_MARKERS);
+  if (rework !== null && rework !== "") return { type: "rework", body: rework };
+  const defect = afterMarker(text, DEFECT_MARKERS);
+  if (defect !== null && defect !== "") return { type: "defect", body: defect };
+  if (state !== "NEEDS_INPUT") return { type: "feedback", body: text };
+  const keyed = /^([A-Za-z][\w-]{0,63})\s*[:：]\s*(\S[\s\S]*)$/.exec(text);
+  return keyed
+    ? { type: "answer_blocker", body: keyed[2]!.trim(), questionKey: keyed[1]! }
+    : { type: "answer_blocker", body: text };
 }
 
 export function shouldSuppressSystemProjection(lastHumanActionAt: number, now: number): boolean {

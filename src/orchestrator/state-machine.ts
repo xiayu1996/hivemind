@@ -10,7 +10,9 @@ export type EpicState =
 
 export type StoryState =
   | "QUEUED"
+  | "SHAPE"
   | "DESIGN"
+  | "SPECIFY"
   | "CODE"
   | "VERIFY"
   | "MERGE"
@@ -51,18 +53,26 @@ export const EPIC_TRANSITIONS: Record<EpicState, readonly EpicState[]> = {
 };
 
 export const STORY_TRANSITIONS: Record<StoryState, readonly StoryState[]> = {
-  QUEUED: ["DESIGN", "NEEDS_INPUT", "FAILED"],
-  DESIGN: ["CODE", "NEEDS_INPUT", "FAILED"],
-  // DESIGN from CODE and MERGE: a frozen DoD the current contract rejects
-  // sends the Story back to be designed again instead of parking it.
-  CODE: ["VERIFY", "DESIGN", "NEEDS_INPUT", "FAILED"],
-  VERIFY: ["CODE", "MERGE", "NEEDS_INPUT", "FAILED"],
-  MERGE: ["DELIVERED", "CODE", "DESIGN", "NEEDS_INPUT", "FAILED"],
-  DELIVERED: ["REGRESSION_FIX"],
-  REGRESSION_FIX: ["DELIVERED", "NEEDS_INPUT", "FAILED"],
+  QUEUED: ["SHAPE", "NEEDS_INPUT", "FAILED"],
+  // SHAPE is the only phase allowed to ask a question, so it is also the only
+  // one a person's answer can send a card back to. Every later phase reads a
+  // frozen contract and is forbidden to ask.
+  SHAPE: ["DESIGN", "NEEDS_INPUT", "FAILED"],
+  DESIGN: ["SPECIFY", "SHAPE", "NEEDS_INPUT", "FAILED"],
+  // SPECIFY reached from DELIVERED is the narrow rerun a regression opens; it
+  // writes the reproduction test and freezes it before any fix is attempted.
+  SPECIFY: ["CODE", "REGRESSION_FIX", "SHAPE", "NEEDS_INPUT", "FAILED"],
+  // SHAPE from CODE and MERGE: a frozen DoD the current contract rejects sends
+  // the Story back to be shaped again instead of parking it. SPECIFY from CODE
+  // is the thaw that lets the frozen tests be rewritten.
+  CODE: ["VERIFY", "SPECIFY", "SHAPE", "NEEDS_INPUT", "FAILED"],
+  VERIFY: ["CODE", "MERGE", "SPECIFY", "NEEDS_INPUT", "FAILED"],
+  MERGE: ["DELIVERED", "CODE", "SPECIFY", "SHAPE", "NEEDS_INPUT", "FAILED"],
+  DELIVERED: ["SPECIFY"],
+  REGRESSION_FIX: ["VERIFY", "DELIVERED", "NEEDS_INPUT", "FAILED"],
   // A Story can stop before its pipeline starts (the worker died in QUEUED);
-  // resuming it means queueing it again, not skipping into DESIGN.
-  NEEDS_INPUT: ["QUEUED", "DESIGN", "CODE", "VERIFY", "MERGE", "REGRESSION_FIX", "FAILED"],
+  // resuming it means queueing it again, not skipping into SHAPE.
+  NEEDS_INPUT: ["QUEUED", "SHAPE", "DESIGN", "SPECIFY", "CODE", "VERIFY", "MERGE", "REGRESSION_FIX", "FAILED"],
   HUMAN_PARKED: [],
   FAILED: [],
 };

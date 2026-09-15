@@ -14,6 +14,10 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
   constructor(
     private readonly client: Client,
     private readonly nodeSnapshot: () => Promise<unknown[]>,
+    /** The fleet-scale projection, when one is running. It is read as a value,
+     * never recomputed here: the whole point of the cascade is that the widest
+     * view costs one read rather than a walk over every event. */
+    private readonly fleet?: () => unknown,
   ) {}
 
   nodes(): Promise<unknown[]> {
@@ -75,6 +79,7 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
         predictedFootprint: JSON.parse(String(row.predicted_footprint)),
         actualFootprint: JSON.parse(String(row.actual_footprint)),
       }))),
+      ...(this.fleet ? { fleet: this.fleet() } : {}),
     };
   }
 
@@ -85,6 +90,45 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
               last_error_class, last_error, last_probe_at, updated_at
          FROM provider_health ORDER BY provider`,
     )).rows.map(plain);
+  }
+
+  /**
+   * The queue as the central store holds it: cards that may be dispatched,
+   * cards a worker is running right now, and the provider capacity in use.
+   *
+   * There is no broker to look at. Ownership is the card lease, throttling is
+   * the provider slot, and both are rows here -- a dashboard over a queue
+   * server would be a second account of the same facts, free to disagree.
+   */
+  async queue(): Promise<unknown> {
+    const now = Date.now();
+    const [waiting, running, slots] = await Promise.all([
+      this.client.execute({
+        sql: `SELECT s.id, s.title, s.state, s.phase, s.priority, s.repo, s.updated_at
+                FROM stories s
+                LEFT JOIN leases l ON l.card_id = s.id AND l.expires_at > ?
+               WHERE s.state IN ('QUEUED','SHAPE','DESIGN','SPECIFY','CODE','VERIFY','MERGE','REGRESSION_FIX')
+                 AND l.card_id IS NULL
+               ORDER BY s.priority ASC, s.created_at ASC`,
+        args: [now],
+      }),
+      this.client.execute({
+        sql: `SELECT l.card_id, l.holder, l.fence, l.acquired_at, l.expires_at, s.state, s.phase, s.title
+                FROM leases l LEFT JOIN stories s ON s.id = l.card_id
+               WHERE l.expires_at > ? ORDER BY l.acquired_at`,
+        args: [now],
+      }),
+      this.client.execute({
+        sql: `SELECT provider, COUNT(*) AS held, MIN(expires_at) AS next_expiry
+                FROM provider_slots WHERE expires_at > ? GROUP BY provider ORDER BY provider`,
+        args: [now],
+      }),
+    ]);
+    return {
+      waiting: waiting.rows.map(plain),
+      running: running.rows.map(plain),
+      providerSlots: slots.rows.map(plain),
+    };
   }
 
   async config(): Promise<unknown[]> {

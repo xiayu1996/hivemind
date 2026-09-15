@@ -24,11 +24,11 @@ src/
   persistence/    中央 libsql：手写 SQL 迁移(权威) + drizzle 类型化查询 + 漂移检测 + 租约 CAS
   config/         配置注册表(zod schema + 作用域 + 热更语义) + 默认值/DB overlay 双层 store
   runner/         PiRunner port + RPC adapter + JSONL 分帧 + 错误提取/分类 + checkpoint + 断线重试
-  pipeline/       无状态全量注入(phase prompt 组装) + DoD/收敛判据 + verdict 校验 + completion-verifier
-  orchestrator/   两层状态机(Epic/Story) + intake + 调度纯函数(拓扑/footprint/hotspot)
+  pipeline/       无状态全量注入(phase prompt 组装) + DoD/收敛判据 + verdict 校验 + 各 phase 确定性出口检查
+  orchestrator/   三层状态机(需求/Epic/Story) + intake + 调度纯函数(拓扑/footprint/hotspot)
   notion/         gateway(令牌桶+优先级+outbox) / sync(评论水位) / blocks(页面 builder) / 意图解释
-  guard/          danger-rules + per-phase 策略组装（pi 侧钩子在 extensions/）
-  queue/ worker/  BullMQ 派单信封 + worker daemon(心跳/能力声明/粘性恢复)
+  guard/          danger-rules + 运行时红线（CODE 冻结测试的 fencedPatterns / VERIFY 的导航白名单）；工具面全阶段统一，pi 侧钩子在 extensions/
+  queue/ worker/  DB 可派发集 + 租约 CAS 领单 + worker daemon(心跳/能力声明/粘性恢复)
   regression/     RegressionScheduler + 场景注册表 + 归因二分 + 失败签名
   vcs/ verify/ report/ memory/ observability/ alert/ console/ util/
 prompts/          基线层 + per-phase prompt，各自独立文件
@@ -36,10 +36,10 @@ extensions/       pi extension：hive-guard / model-policy 兜底（浏览器不
 poc/              M0 PoC 脚本（可丢弃）；scripts/ 为长期保留脚本
 fixtures/         真实采集的契约 fixture（rpc-errors/ 来自 M0-05 实测；model-catalogs/ 由 scripts/catalog-snapshot.ts 采，非手写）
 deploy/pi/        hivemind 追加给 pi 的模型声明（models.json），install.sh 幂等装到 ~/.pi/agent/
-docs/design/      冻结设计 00–06；docs/poc/ 为 M0 执行记录与逐项 go/no-go
+docs/design/      冻结设计 00–07；docs/poc/ 为 M0 执行记录与逐项 go/no-go
 ```
 
-只有 `persistence` / `config` / `runner` / `pipeline` 已落地，其余目录为骨架。
+除 `memory/`（交付后蒸馏，排在 MR 之后）与 `worker/`（多机 daemon，排在 M3）之外全部已落地；单机全流程可跑，入口见下节的 smoke 与常驻脚本。
 
 ## 命令
 
@@ -63,6 +63,8 @@ npx tsx scripts/smoke-runner.ts            # 真实 pi 子进程冒烟
 npx tsx scripts/smoke-context-isolation.ts # 验证 context 文件不泄漏
 npx tsx scripts/smoke-crash-recovery.ts    # SIGKILL 后从 checkpoint 续跑
 npx tsx scripts/smoke-browser-e2e.ts       # 真实 headless 浏览器 + 三层红线
+npx tsx scripts/smoke-blind-verify.ts      # 盲审拿不到 CODE 的会话，只拿得到树
+npx tsx scripts/smoke-story-pipeline.ts    # 单机全流程：SHAPE→…→DELIVERED + Epic 合流 + 回归道（确定性 mock provider）
 
 npx tsx scripts/inspect-round.ts --card-id <id> [--round N] [--prompt] [--tools]   # 一轮一屏：prompt 分段、工具、自述、commit、两条道的逐场景结论
 npx tsx scripts/replay-phase.ts --card-id <id> --phase CODE --print-prompt        # 用中央状态重组一个 phase 的 prompt；给 --worktree 则真跑，不写库不动状态机

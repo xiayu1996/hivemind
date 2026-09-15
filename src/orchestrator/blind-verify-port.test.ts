@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { parseDoD } from "../pipeline/dod.js";
+import { testAgentSpec } from "../runner/agent-spec.testing.js";
 import { BlindVerifyStoryPort } from "./blind-verify-port.js";
 
 const dod = parseDoD(`story_id: S-EPIC1-01
@@ -53,6 +54,7 @@ describe("BlindVerifyStoryPort", () => {
       evidenceRoot: temporary,
       auditPath: join(temporary, "tool-audit.jsonl"),
       allowedHosts: ["localhost"],
+      resolveSpec: async () => ({ spec: await testAgentSpec({ purpose: "verify" }), release: async () => undefined }),
       commitMessages: async () => ["test(S-EPIC1-01-a): red", "feat(S-EPIC1-01-a): green"],
     });
 

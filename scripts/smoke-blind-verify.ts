@@ -7,9 +7,20 @@ import { POLICY_ENV_VAR, serializeGuardPolicy, type GuardPolicy } from "../src/g
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
 import { BlindVerifyExecutor, type VerifyRecord } from "../src/verify/executor.js";
 import { resolveModel, staticCatalog } from "../src/runner/model-resolver.js";
+import { resolveAgentSpec } from "../src/runner/agent-spec.js";
+import { ConfigStore } from "../src/config/store.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
 
 const MODEL = await resolveModel(staticCatalog([{ provider: "mock", id: "mock-1" }]), "mock", "mock-1");
+const SPEC = await resolveAgentSpec({
+  config: ConfigStore.defaults(),
+  policy: {
+    resolve: async () => MODEL,
+    providersFor: async () => ["mock"],
+    tierOf: async () => "standard",
+    isMetered: async () => false,
+  },
+}, "verify", "mock");
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const PI_BIN = defaultPiBinary();
@@ -63,7 +74,8 @@ async function main(): Promise<void> {
       { insert: async (record) => { records.push(record); } },
     );
     const result = await executor.run({
-      cardId: "blind-smoke",
+      spec: SPEC,
+    cardId: "blind-smoke",
       round: 1,
       codeSessionId: "code-session-must-not-be-reused",
       worktreePath: REPO,

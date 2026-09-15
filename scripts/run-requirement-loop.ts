@@ -1,4 +1,6 @@
-import { resolve } from "node:path";
+import { mkdir } from "node:fs/promises";
+import { hostname } from "node:os";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defaultSecretsPath, loadSecretsFile } from "../src/config/secrets-file.js";
 import { ConfigStore } from "../src/config/store.js";
@@ -26,6 +28,10 @@ import { openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
 import { assertSchemaCurrent } from "../src/persistence/schema-fingerprint.js";
 import { ModelPolicy } from "../src/runner/model-policy.js";
+import { resolveAgentSpec } from "../src/runner/agent-spec.js";
+import { cacheRetentionEnv } from "../src/runner/cache-retention.js";
+import { CostLedger } from "../src/observability/cost-ledger.js";
+import { CANONICAL_CAPTURE_ENV } from "../src/observability/capture-contract.js";
 import { needsApiKeyEnv, providerKeyEnv } from "../src/runner/provider-env.js";
 import { defaultModelCatalog } from "../src/runner/catalog.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
@@ -89,24 +95,51 @@ async function main(): Promise<void> {
   const policy = new ModelPolicy(config, catalog);
   const provider = optional("--provider") ?? (await policy.providersFor("product_manager"))[0];
   if (!provider) throw new Error("no provider in the failover chain serves the product manager tier");
-  const model = await policy.resolve("product_manager", provider);
+  const spec = await resolveAgentSpec({ config, policy }, "product_manager", provider);
   // systemd hands the daemon the secrets file; a run by hand inherits nothing,
   // and pi then reports an API-key provider as unconfigured.
   const profile = await policy.profileOf(provider);
-  const providerEnv = needsApiKeyEnv(profile)
-    ? providerKeyEnv({
-      provider,
-      ...(profile.envKey ? { envKey: profile.envKey } : {}),
-      secrets: stored,
-      secretsPath: defaultSecretsPath(),
-    })
-    : undefined;
+  const providerEnv = {
+    ...cacheRetentionEnv(config),
+    ...(needsApiKeyEnv(profile)
+      ? providerKeyEnv({
+        provider,
+        ...(profile.envKey ? { envKey: profile.envKey } : {}),
+        secrets: stored,
+        secretsPath: defaultSecretsPath(),
+      })
+      : {}),
+  };
+  // Beside the execution lane's evidence, under the same work root, so one
+  // requirement's whole paper trail is in one place.
+  const evidenceRoot = resolve(optional("--evidence-root")
+    ?? join(ROOT, "data", "work", "evidence", "requirements"));
+  await mkdir(evidenceRoot, { recursive: true });
+  const ledger = new CostLedger(handle.client);
   const pm = new PiPmPort({
     binary: piBinary,
-    model,
-    ...(providerEnv ? { env: providerEnv } : {}),
+    spec,
+    env: {
+      ...providerEnv,
+      [CANONICAL_CAPTURE_ENV]: join(evidenceRoot, "requirement-requests.jsonl"),
+    },
+    extensions: [resolve(ROOT, "extensions", "canonical-capture.ts")],
     promptRoot: resolve(ROOT, "prompts"),
     cwd: resolve(optional("--repository-path") ?? ROOT),
+    // Clarification, the PRD and the requirement split all spend on the brain
+    // tier. None of it used to be recorded, so the only visible cost of a
+    // requirement was the part that happened after it was already agreed.
+    recordUsage: async ({ phase, usage, spec: used }) => {
+      await ledger.record({
+        runId: `pm-${phase.toLowerCase()}-${Date.now()}`,
+        purpose: "product_manager",
+        tier: used.tier,
+        provider: used.model.provider,
+        modelId: used.model.id,
+        hostId: hostname(),
+        isSubscription: !used.metered,
+      }, usage);
+    },
   });
 
   const clarify = new ClarifyLoop(store, channels, pm, projector, {

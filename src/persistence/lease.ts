@@ -9,6 +9,34 @@ export interface Lease {
   expiresAt: number;
 }
 
+/**
+ * Who holds a lease. The host alone is not an identity: two `story:run`
+ * subprocesses on one machine would both match the "already ours" branch of
+ * the acquisition and both start the card. The instance is what distinguishes
+ * them, and it must be new for every execution.
+ */
+export interface LeaseHolder {
+  hostId: string;
+  instanceId: string;
+}
+
+export function holderKey(holder: LeaseHolder): string {
+  return `${holder.hostId}#${holder.instanceId}`;
+}
+
+/** A lease identity a write can be checked against. */
+export interface LeaseFence {
+  holder: string;
+  fence: number;
+}
+
+export class LeaseFenceError extends Error {
+  constructor(readonly cardId: string, message: string) {
+    super(`lease fence check failed for ${cardId}: ${message}`);
+    this.name = "LeaseFenceError";
+  }
+}
+
 export interface LeaseOptions {
   ttlMs: number;
   now?: () => number;
@@ -23,9 +51,12 @@ export interface LeaseOptions {
  * racing writers cannot both believe they won: SQLite serialises the writes and
  * the loser's WHERE no longer matches.
  *
- * `fence` increases on every successful acquisition. A holder that was revoked
- * while partitioned still carries the old fence, so its later renewals and
- * releases are rejected instead of clobbering the new holder.
+ * `fence` increases on every successful acquisition and never goes backwards,
+ * including across a release or a revocation. That is why a released lease
+ * keeps its row and is marked expired rather than deleted: deleting it reset
+ * the counter to 1, and revocation is used in exactly the situation where the
+ * old holder is most likely to come back -- it would return with fence 1 and
+ * match the new holder's fence 1.
  */
 export class LeaseStore {
   private readonly now: () => number;
@@ -38,12 +69,14 @@ export class LeaseStore {
    * Takes the lease if it is free, expired, or already held by this holder.
    * Returns null when another live holder has it.
    */
-  async acquire(cardId: string, holder: string): Promise<Lease | null> {
+  async acquire(cardId: string, holder: LeaseHolder): Promise<Lease | null> {
     const now = this.now();
     const expiresAt = now + this.options.ttlMs;
+    const key = holderKey(holder);
 
-    // Insert when absent; otherwise take over only from an expired lease or from
-    // ourselves. The WHERE clause is the compare-and-swap.
+    // Insert when absent; otherwise take over only from an expired lease or
+    // from this same execution instance. The WHERE clause is the
+    // compare-and-swap, and the fence always moves forward.
     await this.client.execute({
       sql: `INSERT INTO leases (card_id, holder, fence, acquired_at, renewed_at, expires_at)
             VALUES (?, ?, 1, ?, ?, ?)
@@ -54,34 +87,35 @@ export class LeaseStore {
               renewed_at  = excluded.renewed_at,
               expires_at  = excluded.expires_at
             WHERE leases.expires_at <= ? OR leases.holder = ?`,
-      args: [cardId, holder, now, now, expiresAt, now, holder],
+      args: [cardId, key, now, now, expiresAt, now, key],
     });
 
     const lease = await this.get(cardId);
-    return lease && lease.holder === holder ? lease : null;
+    return lease && lease.holder === key ? lease : null;
   }
 
   /**
    * Extends the lease. Fails if the caller is no longer the holder or its fence
    * is stale, which is exactly the partitioned-worker case.
    */
-  async renew(cardId: string, holder: string, fence: number): Promise<Lease | null> {
+  async renew(cardId: string, holder: LeaseHolder, fence: number): Promise<Lease | null> {
     const now = this.now();
     const result = await this.client.execute({
       sql: `UPDATE leases
                SET renewed_at = ?, expires_at = ?
-             WHERE card_id = ? AND holder = ? AND fence = ?`,
-      args: [now, now + this.options.ttlMs, cardId, holder, fence],
+             WHERE card_id = ? AND holder = ? AND fence = ? AND expires_at > 0`,
+      args: [now, now + this.options.ttlMs, cardId, holderKey(holder), fence],
     });
     if (result.rowsAffected === 0) return null;
     return this.get(cardId);
   }
 
-  /** Releases the lease only if this holder still owns it at this fence. */
-  async release(cardId: string, holder: string, fence: number): Promise<boolean> {
+  /** Releases the lease only if this holder still owns it at this fence. The
+   * row stays so the fence keeps counting; expiry zero means free. */
+  async release(cardId: string, holder: LeaseHolder, fence: number): Promise<boolean> {
     const result = await this.client.execute({
-      sql: "DELETE FROM leases WHERE card_id = ? AND holder = ? AND fence = ?",
-      args: [cardId, holder, fence],
+      sql: "UPDATE leases SET expires_at = 0 WHERE card_id = ? AND holder = ? AND fence = ? AND expires_at > 0",
+      args: [cardId, holderKey(holder), fence],
     });
     return result.rowsAffected > 0;
   }
@@ -93,10 +127,25 @@ export class LeaseStore {
    */
   async revoke(cardId: string): Promise<boolean> {
     const result = await this.client.execute({
-      sql: "DELETE FROM leases WHERE card_id = ?",
+      sql: "UPDATE leases SET expires_at = 0 WHERE card_id = ? AND expires_at > 0",
       args: [cardId],
     });
     return result.rowsAffected > 0;
+  }
+
+  /**
+   * Whether this identity may still write on the card's behalf. Every state and
+   * artifact write goes through it: the lease is what stops double execution,
+   * and until now nothing outside this file had ever looked at a fence, so a
+   * revoked holder coming back could still write.
+   */
+  async assertHolds(cardId: string, holder: LeaseHolder, fence: number): Promise<void> {
+    const lease = await this.get(cardId);
+    if (!lease) throw new LeaseFenceError(cardId, "the card holds no lease");
+    if (lease.expiresAt === 0) throw new LeaseFenceError(cardId, "the lease was released or revoked");
+    const key = holderKey(holder);
+    if (lease.holder !== key) throw new LeaseFenceError(cardId, `held by ${lease.holder}, not ${key}`);
+    if (lease.fence !== fence) throw new LeaseFenceError(cardId, `fence is ${lease.fence}, not ${fence}`);
   }
 
   async get(cardId: string): Promise<Lease | null> {
@@ -118,7 +167,7 @@ export class LeaseStore {
   /** Leases past their expiry: candidates for requeue by the orchestrator. */
   async expired(): Promise<Lease[]> {
     const rows = (await this.client.execute({
-      sql: "SELECT card_id, holder, fence, acquired_at, renewed_at, expires_at FROM leases WHERE expires_at <= ?",
+      sql: "SELECT card_id, holder, fence, acquired_at, renewed_at, expires_at FROM leases WHERE expires_at > 0 AND expires_at <= ?",
       args: [this.now()],
     })).rows;
     return rows.map((row) => ({

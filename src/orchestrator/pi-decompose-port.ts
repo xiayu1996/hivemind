@@ -3,9 +3,9 @@ import { POLICY_ENV_VAR, assembleGuardPolicy, serializeGuardPolicy } from "../gu
 import { loadPromptLayers } from "../pipeline/prompt-loader.js";
 import { lastAssistantText } from "../runner/assistant-text.js";
 import { loadExplicitContextBundle, type ExplicitContextFile } from "../runner/context-files.js";
-import type { ResolvedModel } from "../runner/model-resolver.js";
+import type { ResolvedAgentSpec } from "../runner/agent-spec.js";
 import { RpcPiRunner, type RpcRunnerConfig } from "../runner/rpc-runner.js";
-import type { PiRunner } from "../runner/types.js";
+import type { PiRunner, PromptResult } from "../runner/types.js";
 import { jsonPayloadCandidates } from "../util/json-payload.js";
 import type { DecomposePort, DecomposeRequest } from "./decompose-runner.js";
 import type { DecompositionCandidate } from "./decompose.js";
@@ -39,7 +39,8 @@ const candidateSchema = z.object({
 
 export interface PiDecomposePortOptions {
   binary: string;
-  model: ResolvedModel;
+  /** Model, tools, skills and limits for this call site, from the one resolver. */
+  spec: ResolvedAgentSpec;
   promptRoot: string;
   cwd: string;
   /**
@@ -57,6 +58,9 @@ export interface PiDecomposePortOptions {
   /** Extra variables for the pi spawn; an API-key provider needs its key here. */
   env?: Record<string, string>;
   createRunner?: (config: RpcRunnerConfig) => PiRunner;
+  /** What this session cost. Decomposition spends real money on the brain tier
+   * and used to record none of it. */
+  recordUsage?: (input: { usage: PromptResult["usage"]; spec: ResolvedAgentSpec }) => Promise<void>;
 }
 
 /**
@@ -85,10 +89,12 @@ export class PiDecomposePort implements DecomposePort {
     const extensions = [...(this.options.extensions ?? []), ...(guard ? [guard.extension] : [])];
     const runner = (this.options.createRunner ?? ((config) => new RpcPiRunner(config)))({
       binary: this.options.binary,
-      provider: this.options.model.provider,
-      model: this.options.model,
+      provider: this.options.spec.model.provider,
+      model: this.options.spec.model,
       cwd: this.options.cwd,
-      tools: ["read", "grep", "find", "ls"],
+      tools: [...this.options.spec.tools],
+      skillDiscovery: "explicit",
+      skills: [...this.options.spec.skills],
       contextFiles: "explicit",
       ...(extensions.length > 0 ? { extensions } : {}),
       env: {
@@ -103,6 +109,7 @@ export class PiDecomposePort implements DecomposePort {
       await runner.setAutoRetry(false);
       const result = await runner.prompt(promptFor(input));
       if (result.failure) throw new Error(result.failure.errorMessage);
+      await this.options.recordUsage?.({ usage: result.usage, spec: this.options.spec });
       const raw = lastAssistantText(await runner.getMessages());
       for (const payload of jsonPayloadCandidates(raw)) {
         const parsed = candidateSchema.safeParse(payload);

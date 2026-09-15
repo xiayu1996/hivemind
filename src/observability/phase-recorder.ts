@@ -7,27 +7,38 @@ import {
   diagnosticsFromMessages,
   turnUsageFromMessages,
 } from "./cache-analysis.js";
-import { CostLedger } from "./cost-ledger.js";
+import { CostLedger, type CostRecordedEvent } from "./cost-ledger.js";
 import {
   CanonicalLogWriter,
   readCanonicalLog,
   rebuildProviderPayload,
 } from "./canonical-log.js";
 
+/** A phase's telemetry plus the cost row the delivery path already wrote, so
+ * the canonical log can carry it without writing it a second time. */
+export interface PhaseEvidenceInput extends PhaseTelemetryInput {
+  cost?: unknown;
+}
+
 export interface PhaseRecorderOptions {
   evidenceRoot: string;
-  provider: string;
-  modelId: string;
   hostId?: string;
   promptVersion?: string;
-  isSubscription?: boolean;
 }
 
 function sameJson(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-/** Persists exact model requests, raw RPC events and pi-reported cost for a phase. */
+/**
+ * Persists exact model requests, raw RPC events and pi-reported cost for a phase.
+ *
+ * Two entry points, deliberately, because they answer to different rules. The
+ * cost row is execution state: a stop point is derived from it, so it is
+ * written on the delivery path and a failure to write it is a failure. Every
+ * other byte here is observation, written from the drain loop, where a slow or
+ * broken disk costs a reader their evidence and costs the card nothing.
+ */
 export class LibsqlPhaseRecorder {
   private readonly ledger: CostLedger;
 
@@ -39,7 +50,31 @@ export class LibsqlPhaseRecorder {
     this.ledger = new CostLedger(client, undefined, now);
   }
 
-  async record(input: PhaseTelemetryInput): Promise<void> {
+  /**
+   * The one write on the delivery path. Attributed to what this execution
+   * actually ran on: the purpose and tier used to be the literals "phase" and
+   * "standard", which made cost unattributable per call site, and the provider
+   * used to come from process startup, which charged a failed-over card to the
+   * provider it was no longer running on.
+   */
+  async recordCost(input: PhaseTelemetryInput): Promise<CostRecordedEvent> {
+    return this.ledger.record({
+      runId: input.runId,
+      cardId: input.cardId,
+      phase: input.phase,
+      purpose: input.spec.purpose,
+      tier: input.spec.tier,
+      provider: input.spec.model.provider,
+      modelId: input.spec.model.id,
+      ...(this.options.hostId ? { hostId: this.options.hostId } : {}),
+      ...(this.options.promptVersion ? { promptVersion: this.options.promptVersion } : {}),
+      isSubscription: !input.spec.metered,
+    }, input.result.usage);
+  }
+
+  /** Everything a person or a projection reads afterwards. Never called from
+   * the delivery path. */
+  async writeEvidence(input: PhaseEvidenceInput): Promise<void> {
     if (input.providerPayloads.length === 0) throw new Error("cannot record a phase without a provider payload");
     const runDirectory = join(this.options.evidenceRoot, input.runId);
     await mkdir(runDirectory, { recursive: true });
@@ -64,19 +99,7 @@ export class LibsqlPhaseRecorder {
       await writer.append("provider/diagnostics", diagnostic);
     }
     await writer.append("turn_end", { turn: 1, reason: "completed" });
-    const cost = await this.ledger.record({
-      runId: input.runId,
-      cardId: input.cardId,
-      phase: input.phase,
-      purpose: "phase",
-      tier: "standard",
-      provider: this.options.provider,
-      modelId: this.options.modelId,
-      ...(this.options.hostId ? { hostId: this.options.hostId } : {}),
-      ...(this.options.promptVersion ? { promptVersion: this.options.promptVersion } : {}),
-      ...(this.options.isSubscription === undefined ? {} : { isSubscription: this.options.isSubscription }),
-    }, input.result.usage);
-    await writer.append("cost.recorded", cost.data);
+    if (input.cost) await writer.append("cost.recorded", input.cost);
     await writer.flush();
 
     const rebuilt = rebuildProviderPayload(await readCanonicalLog(logPath));
@@ -95,8 +118,8 @@ export class LibsqlPhaseRecorder {
         turn.turn,
         input.cardId,
         input.phase,
-        this.options.provider,
-        this.options.modelId,
+        input.spec.model.provider,
+        input.spec.model.id,
         turn.input,
         turn.cacheRead,
         turn.cacheWrite,

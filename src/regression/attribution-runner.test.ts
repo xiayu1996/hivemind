@@ -72,8 +72,10 @@ describe("attribution over a real integration sequence", () => {
 
     expect(attribution).toMatchObject({ kind: "introduced", item: "S-M2-02" });
     await expect(store.openCards()).resolves.toMatchObject([{ attributedStory: "S-M2-02" }]);
-    const story = (await client.execute("SELECT state, priority FROM stories WHERE id = 'S-M2-02'")).rows[0];
-    expect(story).toMatchObject({ state: "REGRESSION_FIX", priority: 0 });
+    // Reopened at the narrow SPECIFY, with the phase naming where it leads: the
+    // reproduction test is written before the fix is allowed to start.
+    const story = (await client.execute("SELECT state, phase, priority FROM stories WHERE id = 'S-M2-02'")).rows[0];
+    expect(story).toMatchObject({ state: "SPECIFY", phase: "REGRESSION_FIX", priority: 0 });
     expect((await client.execute("SELECT type FROM event_log WHERE card_id = 'S-M2-02'")).rows)
       .toMatchObject([{ type: "regression.attributed" }]);
   });

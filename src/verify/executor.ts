@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ResolvedAgentSpec } from "../runner/agent-spec.js";
 import { EVIDENCE_DIR_ENV, assembleGuardPolicy, type GuardPolicy } from "../guard/policy.js";
 import { captureTreePin, evaluateTreePin, type TreePin } from "../guard/tree-pin.js";
 import { splitScenarioFailures } from "../pipeline/failure-classification.js";
@@ -6,7 +7,7 @@ import { validateVerdict, type TrajectoryEvidence, type VerdictDocument } from "
 import type { PiRunner, RpcEvent, TokenUsage } from "../runner/types.js";
 import { promptWithContinueRetry } from "../runner/continue-retry.js";
 import { jsonPayloadCandidates } from "../util/json-payload.js";
-import { writePlaywrightCliConfig } from "./browser-config.js";
+import { browserLaneEnv } from "./browser-config.js";
 
 export { EVIDENCE_DIR_ENV } from "../guard/policy.js";
 
@@ -25,6 +26,8 @@ const verifierReplySchema = z.object({
 export interface BlindVerifyInput {
   cardId: string;
   round: number;
+  /** What this verification runs on, resolved for the verify purpose. */
+  spec: ResolvedAgentSpec;
   codeSessionId: string;
   worktreePath: string;
   evidencePath: string;
@@ -68,7 +71,10 @@ export interface VerifyRecordStore {
 }
 
 export interface VerifyRunnerFactory {
-  create(policy: GuardPolicy): PiRunner;
+  /** `env` carries the browser lane's own copy of the host allowlist; it is
+   * empty when the round has no browser lane. It reaches the session through
+   * the environment rather than a file so the verified tree stays untouched. */
+  create(policy: GuardPolicy, spec: ResolvedAgentSpec, env: Record<string, string>): PiRunner;
 }
 
 export interface TreePinPort {
@@ -111,12 +117,25 @@ function assistantText(events: readonly RpcEvent[]): string | null {
   return null;
 }
 
-function sessionId(state: Record<string, unknown>): string {
-  const value = state.sessionFile ?? state.sessionId;
-  if (typeof value !== "string" || value.length === 0) {
+/**
+ * The verifier's session identity, as written into `verify_records` and checked
+ * against CODE's both here and by the DB.
+ *
+ * The header id is no longer an identity on its own: it is pinned per card and
+ * lane so the provider routes a card's phases to one instance, so two runs can
+ * legitimately carry the same one. The file path is the identity, and the run
+ * id is mixed in when pi does not expose a path -- previously the expression
+ * was `sessionFile ?? sessionId`, which left an architectural invariant hanging
+ * on whether an optional field happened to be present.
+ */
+function sessionId(state: Record<string, unknown>, runId: string): string {
+  const file = state.sessionFile;
+  if (typeof file === "string" && file.length > 0) return file;
+  const id = state.sessionId;
+  if (typeof id !== "string" || id.length === 0) {
     throw new Error("VERIFY runner did not expose a session identifier");
   }
-  return value;
+  return `${id}#${runId}`;
 }
 
 // ANSI color codes glue word characters to the ids they decorate
@@ -216,7 +235,7 @@ export function browserLaneInstructions(session: string, allowedHosts: readonly 
   const hosts = [...allowedHosts].toSorted().join(", ");
   return [
     "Browser lane: a headless Chromium is available through the `playwright-cli` command; always pass the session flag",
-    `\`-s=${session}\`. Its configuration is already written into this worktree: the browser loads only these hosts: ${hosts};`,
+    `\`-s=${session}\`. It is already configured for this run: the browser loads only these hosts: ${hosts};`,
     "every other request is refused by the browser itself, and pages loaded from local files are not allowed.",
     "Snapshots and screenshots are saved into this round's evidence directory automatically; refer to them by file name.",
     "Only screenshots taken by playwright-cli in this session count: a file a script produced elsewhere does not exist here",
@@ -299,10 +318,11 @@ export class BlindVerifyExecutor {
   async run(input: BlindVerifyInput): Promise<BlindVerifyResult> {
     const before = this.pins.capture(input.worktreePath);
     const startedAt = this.now();
+    const runId = `${input.cardId}-verify-${input.round}`;
     const policy = assembleGuardPolicy({
       phase: "VERIFY",
       cardId: input.cardId,
-      runId: `${input.cardId}-verify-${input.round}`,
+      runId,
       worktreePath: input.worktreePath,
       evidencePath: input.evidencePath,
       auditPath: input.auditPath,
@@ -313,14 +333,14 @@ export class BlindVerifyExecutor {
     });
     // The browser's own copy of the same list, so a request off the allowlist
     // is refused inside the page rather than only judged afterwards.
-    if (input.allowedHosts.length > 0) {
-      await writePlaywrightCliConfig(input.worktreePath, {
+    const browserEnv = input.allowedHosts.length > 0
+      ? browserLaneEnv({
         allowedHosts: input.allowedHosts,
         outputDir: input.evidencePath,
         ...(input.chromiumSandbox === undefined ? {} : { chromiumSandbox: input.chromiumSandbox }),
-      });
-    }
-    const runner = this.runners.create(policy);
+      })
+      : {};
+    const runner = this.runners.create(policy, input.spec, browserEnv);
     let events: RpcEvent[] = [];
     let verifySessionId = "";
     let document: VerdictDocument | null = null;
@@ -339,7 +359,7 @@ export class BlindVerifyExecutor {
     try {
       await runner.start();
       await runner.setAutoRetry(false);
-      verifySessionId = sessionId(await runner.getState());
+      verifySessionId = sessionId(await runner.getState(), runId);
       if (verifySessionId === input.codeSessionId) {
         throw new Error("VERIFY runner reused the CODE session");
       }

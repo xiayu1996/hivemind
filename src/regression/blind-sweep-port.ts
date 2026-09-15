@@ -2,6 +2,7 @@ import type { BlindVerifyInput, BlindVerifyResult } from "../verify/executor.js"
 import type { GitCommandPort } from "../vcs/story-delivery.js";
 import type { ScenarioPool } from "./scenario-registry.js";
 import type { SweepOutcome, SweepPort } from "./sweeper.js";
+import type { AgentSpawnGrant } from "../runner/spawn-broker.js";
 
 export interface BlindSweepPortOptions {
   /** A worktree per pool: the Epic pool sweeps the Epic head, the main pool main. */
@@ -10,6 +11,9 @@ export interface BlindSweepPortOptions {
    * asks the verifier to guess what they meant, and it judges its guess. */
   specificationFor: (scenarioIds: readonly string[]) => Promise<ReadonlyMap<string, string>>;
   executor: { run(input: BlindVerifyInput): Promise<BlindVerifyResult> };
+  /** The sweep's own spawn, granted per sweep so its provider capacity is held
+   * only while it runs and its cost lands on the verify purpose. */
+  resolveSpec: () => Promise<AgentSpawnGrant>;
   git: GitCommandPort;
   evidenceRoot: string;
   auditPath: string;
@@ -42,7 +46,24 @@ export class BlindSweepPort implements SweepPort {
       `Re-verify these scenarios on ${input.branch}. Each is the frozen text its Story was accepted against; judge it as written.`,
       ...declaredScenarioIds.map((scenarioId) => `${scenarioId}: ${specifications.get(scenarioId)!}`),
     ].join("\n");
+    const grant = await this.options.resolveSpec();
+    try {
+      return await this.sweep(input, worktreePath, revision, declaredScenarioIds, specification, grant);
+    } finally {
+      await grant.release().catch(() => undefined);
+    }
+  }
+
+  private async sweep(
+    input: { pool: ScenarioPool; branch: string; scenarioIds: readonly string[] },
+    worktreePath: string,
+    revision: string,
+    declaredScenarioIds: string[],
+    specification: string,
+    grant: AgentSpawnGrant,
+  ): Promise<{ revision: string; outcomes: readonly SweepOutcome[]; inconclusive?: readonly string[] }> {
     const result = await this.options.executor.run({
+      spec: grant.spec,
       cardId: `regression:${input.pool}`,
       round: 1,
       // The sweep has no coding session of its own; the DB check only forbids

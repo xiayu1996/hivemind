@@ -8,6 +8,12 @@ export interface RetryLimits {
   /** Not a ceiling on attempts but on one prompt's wall clock; a turn that hits
    * it is resumed through the continue budget above. */
   promptTimeoutMs: number;
+  /** How many earlier rounds an identical failure set is looked for in before
+   * the loop is called oscillating. There is deliberately no companion setting
+   * for stagnation: a round that failed on exactly the same set as the one
+   * before it breaks the convergence invariant, so continuing is not an option
+   * an operator may configure. */
+  oscillationLookback: number;
 }
 
 /**
@@ -23,6 +29,7 @@ export async function retryLimits(config: ConfigStore): Promise<RetryLimits> {
     maxContinueRetries: config.get("retry.maxContinueRetries"),
     maxRegressionReopens: config.get("retry.maxRegressionReopens"),
     promptTimeoutMs: config.get("retry.promptTimeoutMs"),
+    oscillationLookback: config.get("retry.oscillationLookback"),
   };
 }
 

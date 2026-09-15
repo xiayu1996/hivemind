@@ -11,12 +11,12 @@
 | **Notion** | 业务面 | 需求卡、拆解批准、验证报告、needs_input 问答、验收——一切"关于需求"的交互 |
 | **Web 控制台** | 运维面（内网） | 节点健康、动态配置、prompt 工作台、成本/用量、运行统计、供应商健康、trace 浏览——一切"关于系统自身"的观测与调参 |
 
-此前设计中散落的读面（状态 API、trace HTML、Bull Board、HTML 报表）全部收拢进控制台，**day1（M1）就提供基础版**。
+此前设计中散落的读面（状态 API、trace HTML、队列视图、HTML 报表）全部收拢进控制台，**day1（M1）就提供基础版**。
 
 ## 2. 承载与技术形态
 
-- **部署**：orchestrator（Linux）同进程挂载——Fastify 静态托管 SPA + 同一套 REST API；仅内网可达（Tailscale 网段），不暴露公网；可选简单 token 鉴权（单用户场景不引入账号体系）。
-- **前端**：Vue 3 + Vite 轻 SPA（与既有项目技术栈一致，维护心智统一）；图表用 ECharts；不引重型 admin 框架。Bull Board 以 iframe/路由挂载复用（队列深度与 job 明细不重造）。
+- **部署**：orchestrator（Linux）同进程挂载——Fastify 静态托管 SPA + 同一套 REST API；仅内网可达（Tailscale 网段），不暴露公网；可选简单 token 鉴权（单用户场景不引入账号体系）。**不给它单独的 systemd unit**（2026-09-14 落地时确认）：控制台的写面改的就是 orchestrator 正在读的那份配置，同进程意味着热更语义不需要跨进程通知；拆成第二个 unit 只会多一份要对齐的环境、一条会与主进程各说各话的配置视图。开关与地址走 `console.enabled` / `console.host` / `console.port`，关掉它不影响任何一张卡。
+- **前端**：Vue 3 + Vite 轻 SPA（与既有项目技术栈一致，维护心智统一）；图表用 ECharts；不引重型 admin 框架。队列页直读中央 DB 的可派发集与租约状态（2026-09-14：原为 Bull Board iframe，随 BullMQ 撤销，见 02 §1.2）。
 - **数据源**：全部来自中央 libsql 的既有表与投影（cost_entries / EventLog / 投影缓存 / worker 注册表 / config_entries），控制台**只是读面 + 配置写面，不新增执行语义**。
 
 ## 3. 页面模块
@@ -30,7 +30,8 @@
 | **供应商健康** | per-provider 熔断三态、探针历史、错误分类分布（AUTH/QUOTA/RATE_LIMIT/…）、failover 事件流 | CredentialHealth + EventLog |
 | **动态配置** | config_entries 的 schema 化编辑（见 §4） | config 子系统 |
 | **Prompt 工作台** | prompt 版本管理与灰度（见 §6） | prompt overlay 表 |
-| **队列** | Bull Board 复用 | Redis |
+| **Agent 规格** | per-purpose 的模型 / effort / prompt / 工具 / 守卫 / context / limits / skill / mcp 全览；**prompt 与模型两族可写，其余只读**（见 §4.2 增补） | `agent.*` 与 `model.*` 配置族 |
+| **队列** | ~~Bull Board 复用~~ **2026-09-14 改为直读中央 DB 的可派发集与租约状态**（BullMQ 已撤销，见 02 §1.2） | 中央 libsql |
 
 ## 4. 动态配置子系统
 
@@ -54,6 +55,10 @@ config_history(scope_id, key, version, value_json, diff, updated_by, ts)     -- 
 | 护栏 | 日/月成本阈值（全局 + per-provider）、单卡成本 p95 倍数告警 | hot |
 | 并行调度 | hotspot 文件清单（高冲突路径，随项目演化持续增补；非空仓库相对路径） | hot |
 | 守卫 | extraWriteRoots 追加项、e2e host 白名单 | hot（下一次 spawn 生效） |
+| **Agent 规格族**（2026-09-14 增补，见 07 §2.2） | `agent.purposeTools` / `purposePrompts` / `purposeGuard` / `purposeContext` / `purposeLimits` / `purposeSkills` / `purposeMcp` | next-spawn（`purposeLimits` 为 hot） |
+| **震荡回看窗口**（2026-09-14 增补） | `retry.oscillationLookback`（见 03 §1.5）。**没有停滞阈值这一项**——持平即停是架构不变量，不可配 | hot |
+| **并发分桶**（2026-09-14 增补） | `schedule.maxConcurrentPerProvider`（桶容量在 `model.providers` 里逐家声明，429 自动收桶，见 07 §5.2） | hot |
+| **缓存**（2026-09-14 增补） | `cache.keyScope`（`card` 默认 / `repo`，见 07 §4.4） | next-spawn |
 | 暂停开关 | intake 急停、per-provider 手动摘除、self-update 开关/钉版本 | hot |
 
 ### 4.3 分发机制（复用心跳通道，不新增连接）
@@ -62,6 +67,10 @@ config_history(scope_id, key, version, value_json, diff, updated_by, ts)     -- 
 - worker 发现版本变化 → 拉全量 config → 按 reload 元信息应用：`hot` 立即生效；`drain-restart` 标记 pending，空闲 drain 后重启生效；
 - **每次心跳都重申期望态而不只在 diff 时**（busybee RemoteControl 教训：漏事件能自愈）；
 - 所有 UI 写操作落 EventLog `config.changed` 事件（含 diff 与操作人），审计与告警共用。
+
+**写面边界（2026-09-14）**：控制台只开 **prompt 与模型两族**的写权限；工具 / skill / mcp 族只读展示。理由是后者改错的后果是 spawn 失败或守卫失效（一个立刻炸、一个静默失效），不是产出质量下降，不适合在线编辑；它们仍然是"沙子"，只是改动走发版。
+
+**校验失败不得静默回落（2026-09-14）**：`src/config/store.ts:70-75` 现在只 `console.warn` 然后回落到默认值，注释自己承认这会悄悄换掉整套 provider 策略而页面仍显示旧值——控制台上看到的是一份没在生效的配置，这比配错更危险。改为 dangerous 键校验失败**启动即拒**，其余产生告警事件。
 
 ## 5. 心跳 payload 扩展（支撑节点健康页）
 

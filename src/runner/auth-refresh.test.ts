@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { credentialRefreshHolder, refreshCredentialsOnce } from "./auth-refresh.js";
+import { assertCredentialRefreshCoverage, credentialRefreshHolder, refreshCredentialsOnce } from "./auth-refresh.js";
 
 let root: string;
 let lockPath: string;
@@ -91,5 +91,17 @@ describe("credential refresh", () => {
       refresh: async () => {},
     });
     expect(outcome).toBe("refreshed");
+  });
+});
+
+describe("refresh coverage", () => {
+  it("accepts a schedule that rotates at least once per prompt", () => {
+    expect(() => assertCredentialRefreshCoverage({ credentialRefreshIntervalMs: 600_000, promptTimeoutMs: 900_000 }))
+      .not.toThrow();
+  });
+
+  it("refuses a schedule under which a phase can outlive its credential", () => {
+    expect(() => assertCredentialRefreshCoverage({ credentialRefreshIntervalMs: 3_600_000, promptTimeoutMs: 900_000 }))
+      .toThrow(/expires inside it/);
   });
 });

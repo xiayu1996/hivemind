@@ -6,11 +6,13 @@ import {
   type StoryStopReason,
   type TransitionActor,
 } from "./state-machine.js";
-import type { Phase, PhaseInput, ScenarioFailure } from "../pipeline/phase-input.js";
+import type { PhaseInput, ScenarioFailure } from "../pipeline/phase-input.js";
 import { parseDoD, type DefinitionOfDone } from "../pipeline/dod.js";
+import { dodVersion, scenarioVersions } from "../pipeline/dod-version.js";
 import { isProviderFault } from "../pipeline/failure-classification.js";
 
-export type StoryPhase = Exclude<Phase, "DECOMPOSE">;
+export type { StoryPhase } from "../pipeline/phase.js";
+import type { StoryPhase } from "../pipeline/phase.js";
 
 export interface StoryIntake {
   id: string;
@@ -63,9 +65,31 @@ export interface CompletePhaseInput {
   artifacts: Array<{ kind: string; body: string }>;
 }
 
+export interface ScenarioConclusion {
+  scenarioId: string;
+  /** The round the conclusion belongs to. */
+  round: number;
+  outcome: "passed" | "failed" | "inconclusive";
+  scenarioVersion: string;
+  verifiedTreeSha: string;
+  /** Present when the row was carried forward rather than verified again. */
+  carriedFrom?: number;
+}
+
 export interface VerificationRecordInput {
   cardId: string;
   round: number;
+  /**
+   * The scenarios this round actually verified.
+   *
+   * It has to be passed in, because "everything not named as failed passed" is
+   * only true while every round verifies the whole card. Once a single reworded
+   * scenario can be re-verified on its own, that rule silently marks every
+   * other scenario as passed on evidence nobody produced.
+   */
+  verifiedScenarios?: readonly string[];
+  /** The tree the conclusions are about. */
+  verifiedTreeSha?: string;
   codeSessionId: string;
   verifySessionId: string;
   verdict: "accepted" | "rejected" | "inconclusive";
@@ -110,11 +134,31 @@ function eventStatement(
 }
 
 /** Central execution truth used to reconstruct a Story without local session state. */
+/**
+ * Proof that the caller still owns the card. Every write a worker makes on a
+ * card's behalf passes through it, because the lease is what stops two
+ * executions from both advancing the same card and, until it was wired here,
+ * nothing outside `lease.ts` had ever looked at a fence -- a revoked worker
+ * that came back could still write state.
+ *
+ * Absent for the orchestrator and for a person's own commands: neither holds a
+ * card lease, and neither is a second executor.
+ */
+export interface CardWriteGuard {
+  assert(cardId: string): Promise<void>;
+}
+
 export class StoryExecutionStore {
   constructor(
     private readonly client: Client,
     private readonly now: () => number = Date.now,
+    private readonly writeGuard?: CardWriteGuard,
   ) {}
+
+  /** Checked before every system-actor write on a card. */
+  private async guard(cardId: string): Promise<void> {
+    await this.writeGuard?.assert(cardId);
+  }
 
   async createStory(input: StoryIntake): Promise<boolean> {
     if (input.requirement.trim() === "") throw new Error("Story requirement must not be empty");
@@ -205,9 +249,10 @@ export class StoryExecutionStore {
     parkedResumeState?: StoryState,
   ): Promise<void> {
     assertStoryTransition(expectedFrom, to, actor, parkedResumeState);
-    // A person sending the Story back to DESIGN wants it designed again, not
-    // the frozen result handed back.
-    if (actor === "human" && to === "DESIGN") await this.resetForRedesign(cardId, `${actor} moved the Story to DESIGN`);
+    if (actor === "system") await this.guard(cardId);
+    // A person sending the Story back to SHAPE wants the acceptance contract
+    // written again, not the frozen result handed back.
+    if (actor === "human" && to === "SHAPE") await this.resetForRedesign(cardId, `${actor} moved the Story to SHAPE`);
     const time = this.now();
     const [update] = await this.client.batch([
       {
@@ -264,7 +309,7 @@ export class StoryExecutionStore {
     // A person resuming a Story that stopped on its retry budget grants a new
     // budget; otherwise the very next failure would stop it again.
     const resetReentries = input.expectedFrom === "NEEDS_INPUT" && input.to !== "HUMAN_PARKED";
-    if (input.to === "DESIGN") await this.resetForRedesign(input.cardId, "a person moved the Story to DESIGN");
+    if (input.to === "SHAPE") await this.resetForRedesign(input.cardId, "a person moved the Story to SHAPE");
     const [update] = await this.client.batch([
       {
         sql: `UPDATE stories
@@ -314,7 +359,8 @@ export class StoryExecutionStore {
     }
   }
 
-  async beginPhase(input: BeginPhaseInput): Promise<void> {
+  async beginPhase(input: BeginPhaseInput): Promise<{ attempt: number }> {
+    await this.guard(input.cardId);
     if (input.round < 1 || !Number.isInteger(input.round)) throw new Error("phase round must be a positive integer");
     const story = await this.getStory(input.cardId);
     // The regression loop verifies without leaving REGRESSION_FIX: the Story
@@ -354,11 +400,32 @@ export class StoryExecutionStore {
         round: input.round,
         promptSha256,
       }, time),
+      // The prompt for this run has just been written, so everything a person
+      // added that the prompt carries has now been used -- which is the moment
+      // the card page may say so.
+      {
+        sql: `UPDATE human_feedback SET applied_at = ?, applied_round = ?
+               WHERE card_id = ? AND applied_at IS NULL AND channel IN ('preference', 'unclassified')`,
+        args: [time, input.round, input.cardId],
+      },
     ], "write");
     const inserted = Number(results[1]?.rowsAffected ?? 0);
     if (inserted !== 1) {
       throw new Error(`cannot start ${input.phase} while Story is not in that phase`);
     }
+    // How many times this exact slot has been entered, counted from the event
+    // log because `phase_runs` keeps only the live attempt. Callers use it to
+    // give each attempt its own session file: failover, crash recovery and a
+    // contract that had to be asked for twice all run the same (phase, round)
+    // more than once, and a second attempt writing into the first one's session
+    // would be the session fork the whole design forbids.
+    const attempts = (await this.client.execute({
+      sql: `SELECT COUNT(*) AS attempts FROM event_log
+             WHERE card_id = ? AND phase = ? AND type = 'phase.enter'
+               AND json_extract(data, '$.round') = ?`,
+      args: [input.cardId, input.phase, input.round],
+    })).rows[0];
+    return { attempt: Math.max(1, Number(attempts?.attempts ?? 1)) };
   }
 
   async completePhase(input: CompletePhaseInput): Promise<void> {
@@ -503,7 +570,7 @@ export class StoryExecutionStore {
   async getDefinitionOfDone(cardId: string): Promise<DefinitionOfDone> {
     const row = (await this.client.execute({
       sql: `SELECT body FROM phase_artifacts
-            WHERE card_id = ? AND phase = 'DESIGN' AND kind = 'dod'
+            WHERE card_id = ? AND phase = 'SHAPE' AND kind = 'dod'
             ORDER BY round DESC, id DESC LIMIT 1`,
       args: [cardId],
     })).rows[0];
@@ -511,7 +578,7 @@ export class StoryExecutionStore {
     return parseDoD(stringValue(row.body, "Definition of Done"));
   }
 
-  /** The frozen setpoint, or null when DESIGN has not produced one yet. */
+  /** The frozen setpoint, or null when SHAPE has not produced one yet. */
   async findFrozenDefinitionOfDone(cardId: string): Promise<DefinitionOfDone | null> {
     const frozen = await this.client.execute({
       sql: "SELECT COUNT(*) AS count FROM story_specs WHERE story_id = ?",
@@ -531,18 +598,41 @@ export class StoryExecutionStore {
       if (!declared.has(failed)) throw new Error(`verification references undeclared scenario: ${failed}`);
     }
     const failed = [...new Set(input.failedScenarios)].toSorted();
-    const specStatus = failed.length === 0
-      ? {
-          sql: "UPDATE story_specs SET status = 'passed' WHERE story_id = ?",
-          args: [input.cardId],
-        }
-      : {
-          sql: `UPDATE story_specs
-                SET status = CASE WHEN spec_id IN (${failed.map(() => "?").join(",")})
-                                  THEN 'failed' ELSE 'passed' END
-                WHERE story_id = ?`,
-          args: [...failed, input.cardId],
-        };
+    // Only the scenarios this round looked at change status. Defaulting to the
+    // whole card keeps the behaviour of a full verification round, which is
+    // what every round is until a partial re-verification asks for one.
+    const verified = [...new Set(input.verifiedScenarios ?? [...declared])].toSorted();
+    for (const id of verified) {
+      if (!declared.has(id)) throw new Error(`verification references undeclared scenario: ${id}`);
+    }
+    const failedSet = new Set(failed);
+    const passed = verified.filter((id) => !failedSet.has(id));
+    const specStatus = {
+      sql: `UPDATE story_specs
+            SET status = CASE WHEN spec_id IN (${failed.length > 0 ? failed.map(() => "?").join(",") : "NULL"})
+                              THEN 'failed' ELSE 'passed' END
+            WHERE story_id = ? AND spec_id IN (${verified.length > 0 ? verified.map(() => "?").join(",") : "NULL"})`,
+      args: [...failed, input.cardId, ...verified],
+    };
+    const frozenVersions = await this.definitionVersions(input.cardId);
+    const versions = frozenVersions.scenarios;
+    const treeSha = input.verifiedTreeSha ?? "";
+    const scenarioRows = treeSha === "" ? [] : verified.map((scenarioId) => ({
+      sql: `INSERT INTO verify_scenario_results
+              (card_id, scenario_id, round, dod_version, scenario_version, verified_tree_sha, outcome, evidence, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
+        input.cardId,
+        scenarioId,
+        input.round,
+        frozenVersions.dodVersion ?? "",
+        versions.get(scenarioId) ?? "",
+        treeSha,
+        failed.includes(scenarioId) ? "failed" : passed.includes(scenarioId) ? "passed" : "inconclusive",
+        input.evidenceDir ?? null,
+        time,
+      ],
+    }));
     await this.client.batch([
       {
         sql: `INSERT INTO verify_records
@@ -567,6 +657,7 @@ export class StoryExecutionStore {
         args: [input.round, time, input.cardId],
       },
       specStatus,
+      ...scenarioRows,
       eventStatement(runId, input.cardId, "VERIFY", "verify.verdict", {
         round: input.round,
         verdict: input.verdict,
@@ -575,11 +666,21 @@ export class StoryExecutionStore {
     ], "write");
   }
 
+  /**
+   * Stops the card for a person.
+   *
+   * `detail` is not a fifth stop reason: the four are closed and the DB
+   * enforces them. It is what the one reason cannot say on its own -- which
+   * convergence classification ended the loop, which question is unanswered --
+   * so a person reading the card can tell "went in circles from round two"
+   * from "spent its whole budget".
+   */
   async stopForInput(
     cardId: string,
     expectedFrom: StoryState,
     reason: StoryStopReason,
     runId: string,
+    detail?: Record<string, unknown>,
   ): Promise<void> {
     assertStoryTransition(expectedFrom, "NEEDS_INPUT", "system");
     const time = this.now();
@@ -598,7 +699,7 @@ export class StoryExecutionStore {
                 SELECT 1 FROM stories
                 WHERE id = ? AND state = 'NEEDS_INPUT' AND stop_reason = ? AND updated_at = ?
               )`,
-        args: [runId, runId, cardId, time, JSON.stringify({ from: expectedFrom, reason }),
+        args: [runId, runId, cardId, time, JSON.stringify({ from: expectedFrom, reason, ...detail }),
           cardId, reason, time],
       },
     ], "write");
@@ -610,6 +711,7 @@ export class StoryExecutionStore {
   /** Counts a failed worker attempt so the dispatcher can bound automatic
    * phase reentries before parking the card for a human. */
   async recordPhaseReentry(cardId: string): Promise<void> {
+    await this.guard(cardId);
     await this.client.execute({
       sql: "UPDATE stories SET phase_reentries = phase_reentries + 1, updated_at = ? WHERE id = ?",
       args: [this.now(), cardId],
@@ -640,6 +742,64 @@ export class StoryExecutionStore {
     ], "write");
   }
 
+  /**
+   * Invalidates the newest completed run of a phase, whatever round it was.
+   *
+   * A person refusing a result does not know the round it was produced in, and
+   * making them name one would be asking them to read the execution's
+   * bookkeeping to say "not this".
+   */
+  async invalidateLatestPhase(cardId: string, phase: StoryPhase, reason: string): Promise<void> {
+    const row = (await this.client.execute({
+      sql: `SELECT round FROM phase_runs
+            WHERE card_id = ? AND phase = ? AND status = 'completed'
+            ORDER BY round DESC LIMIT 1`,
+      args: [cardId, phase],
+    })).rows[0];
+    if (!row) return;
+    await this.invalidateCompletedPhase(cardId, phase, Number(row.round), reason);
+  }
+
+  /**
+   * The scenario a reported defect is about: the one the comment was anchored
+   * to, or one the text names. A defect that names no scenario opens no card --
+   * the regression loop is keyed by scenario, and guessing which one somebody
+   * meant would send the fix at the wrong acceptance criterion.
+   */
+  async defectScenario(cardId: string, specId: string | null, body: string): Promise<string | null> {
+    const declared = (await this.client.execute({
+      sql: "SELECT spec_id FROM story_specs WHERE story_id = ?",
+      args: [cardId],
+    })).rows.map((row) => stringValue(row.spec_id, "spec id"));
+    if (specId && declared.includes(specId)) return specId;
+    return declared.find((id) => body.includes(id)) ?? null;
+  }
+
+  /** Opens a regression card by hand, the same object the sweep raises. */
+  async openRegressionCard(input: { cardId: string; scenarioId: string; signature: string }): Promise<void> {
+    await this.client.execute({
+      sql: `INSERT INTO regression_cards (scenario_id, failure_signature, attributed_story, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(scenario_id, failure_signature) DO NOTHING`,
+      args: [input.scenarioId, input.signature, input.cardId, this.now()],
+    });
+  }
+
+  /**
+   * Marks the SPECIFY a regression card enters as the narrow one.
+   *
+   * `transition` derives the phase from the state, so a card reopened into
+   * SPECIFY would otherwise look like any card on its way to CODE and would
+   * write a full test contract instead of one reproduction. The sweep sets the
+   * same marker in its own reopen statement.
+   */
+  async markNarrowSpecify(cardId: string): Promise<void> {
+    await this.client.execute({
+      sql: "UPDATE stories SET phase = 'REGRESSION_FIX', updated_at = ? WHERE id = ? AND state = 'SPECIFY'",
+      args: [this.now(), cardId],
+    });
+  }
+
   /** One more entry into the regression loop; the ceiling is on entries, the
    * inner rounds inside one entry are bounded separately. */
   async countRegressionReopen(cardId: string): Promise<void> {
@@ -668,11 +828,12 @@ export class StoryExecutionStore {
   }
 
   /**
-   * Prepares a Story to be designed again. The frozen DoD is the setpoint every
-   * later phase reuses, so sending a Story back to DESIGN has to unfreeze it and
-   * discard the round-1 DESIGN and MERGE results that idempotent re-entry would
-   * otherwise hand back unchanged. CODE rounds that never reached a verdict are
-   * discarded too: they were written against the old setpoint.
+   * Prepares a Story to be shaped again. The frozen DoD is the setpoint every
+   * later phase reuses, so sending a Story back to SHAPE has to unfreeze it and
+   * discard the round-1 results of every phase that read that setpoint, which
+   * idempotent re-entry would otherwise hand back unchanged. CODE rounds that
+   * never reached a verdict are discarded too: they were written against the
+   * old setpoint.
    */
   async resetForRedesign(cardId: string, reason: string): Promise<void> {
     const time = this.now();
@@ -680,7 +841,7 @@ export class StoryExecutionStore {
       sql: `SELECT run_id, phase, round FROM phase_runs r
              WHERE card_id = ? AND status = 'completed'
                AND (
-                 (phase IN ('DESIGN', 'MERGE') AND round = 1)
+                 (phase IN ('SHAPE', 'DESIGN', 'SPECIFY', 'MERGE') AND round = 1)
                  OR (phase = 'CODE' AND NOT EXISTS (
                    SELECT 1 FROM verify_records v WHERE v.card_id = r.card_id AND v.round = r.round))
                )`,
@@ -703,7 +864,7 @@ export class StoryExecutionStore {
         ),
       ]),
       { sql: "DELETE FROM story_specs WHERE story_id = ?", args: [cardId] },
-      eventStatement(`${cardId}-redesign-${time}`, cardId, "DESIGN", "story.redesign", { reason }, time),
+      eventStatement(`${cardId}-redesign-${time}`, cardId, "SHAPE", "story.redesign", { reason }, time),
     ], "write");
   }
 
@@ -842,8 +1003,20 @@ export class StoryExecutionStore {
         `Given ${scenario.given}; when ${scenario.when}; then ${scenario.then}`,
       ],
     }));
+    const time = this.now();
+    const cardVersion = dodVersion(definition);
+    const perScenario = scenarioVersions(definition);
     await this.client.batch([
       ...statements,
+      ...Object.entries(perScenario).map(([scenarioId, version]) => ({
+        sql: `INSERT INTO story_dod_versions (card_id, dod_version, scenario_id, scenario_version, created_at)
+              VALUES (?, ?, ?, ?, ?)
+              ON CONFLICT(card_id, scenario_id) DO UPDATE SET
+                dod_version = excluded.dod_version,
+                scenario_version = excluded.scenario_version,
+                created_at = excluded.created_at`,
+        args: [cardId, cardVersion, scenarioId, version, time],
+      })),
       {
         sql: `UPDATE stories SET predicted_footprint = ?, depends_on = ?, updated_at = ?
               WHERE id = ?`,
@@ -855,6 +1028,246 @@ export class StoryExecutionStore {
         ],
       },
     ], "write");
+  }
+
+  // --- per-scenario conclusions ---
+
+  /** The latest conclusion recorded for each scenario. */
+  async scenarioConclusions(cardId: string): Promise<Map<string, ScenarioConclusion & { id: number }>> {
+    const rows = (await this.client.execute({
+      sql: `SELECT id, scenario_id, round, outcome, scenario_version, verified_tree_sha, carried_from
+            FROM verify_scenario_results WHERE card_id = ? ORDER BY id`,
+      args: [cardId],
+    })).rows;
+    const latest = new Map<string, ScenarioConclusion & { id: number }>();
+    for (const row of rows) {
+      latest.set(String(row.scenario_id), {
+        id: Number(row.id),
+        scenarioId: String(row.scenario_id),
+        round: Number(row.round),
+        outcome: String(row.outcome) as ScenarioConclusion["outcome"],
+        scenarioVersion: String(row.scenario_version),
+        verifiedTreeSha: String(row.verified_tree_sha),
+        ...(row.carried_from === null ? {} : { carriedFrom: Number(row.carried_from) }),
+      });
+    }
+    return latest;
+  }
+
+  /**
+   * Carries an untouched scenario's conclusion onto the current contract and
+   * tree, as a new row pointing at the original.
+   *
+   * Both conditions must hold. An unchanged contract does not prove the
+   * conclusion still stands: the fix that another scenario needed may have
+   * changed code the two of them share. When the tree has moved, nothing is
+   * carried and the card re-verifies in full -- no dependency analysis, which
+   * is simply today's behaviour and an acceptable price.
+   */
+  async carryForwardScenarios(input: {
+    cardId: string;
+    round: number;
+    treeSha: string;
+  }): Promise<{ carried: string[]; stale: string[] }> {
+    const time = this.now();
+    const { dodVersion: cardVersion, scenarios: versions } = await this.definitionVersions(input.cardId);
+    const latest = await this.scenarioConclusions(input.cardId);
+    const carried: string[] = [];
+    const stale: string[] = [];
+    const statements = [];
+    for (const [scenarioId, version] of versions) {
+      const previous = latest.get(scenarioId);
+      if (!previous || previous.outcome !== "passed") continue;
+      // This round judged it itself; carrying it forward as well would write a
+      // second conclusion for the same scenario in the same round.
+      if (previous.round === input.round) continue;
+      if (previous.scenarioVersion !== version || previous.verifiedTreeSha !== input.treeSha) {
+        stale.push(scenarioId);
+        continue;
+      }
+      carried.push(scenarioId);
+      statements.push({
+        sql: `INSERT INTO verify_scenario_results
+                (card_id, scenario_id, round, dod_version, scenario_version, verified_tree_sha,
+                 outcome, evidence, carried_from, created_at)
+              VALUES (?, ?, ?, ?, ?, ?, 'passed', NULL, ?, ?)`,
+        args: [input.cardId, scenarioId, input.round, cardVersion ?? "", version, input.treeSha, previous.id, time],
+      });
+    }
+    if (statements.length > 0) await this.client.batch(statements, "write");
+    return { carried: carried.toSorted(), stale: stale.toSorted() };
+  }
+
+  /**
+   * Whether every declared scenario has a passing conclusion at its current
+   * contract version and on the tree about to be merged. This is the system
+   * precondition on the VERIFY -> MERGE edge.
+   */
+  async scenariosSettled(cardId: string, treeSha: string): Promise<{ ready: boolean; outstanding: string[] }> {
+    const { scenarios: versions } = await this.definitionVersions(cardId);
+    const latest = await this.scenarioConclusions(cardId);
+    const outstanding: string[] = [];
+    for (const [scenarioId, version] of versions) {
+      const conclusion = latest.get(scenarioId);
+      if (!conclusion || conclusion.outcome !== "passed"
+        || conclusion.scenarioVersion !== version
+        || conclusion.verifiedTreeSha !== treeSha) {
+        outstanding.push(scenarioId);
+      }
+    }
+    return { ready: outstanding.length === 0, outstanding: outstanding.toSorted() };
+  }
+
+  // --- the frozen acceptance contract's versions ---
+
+  /** The card's contract hash and each scenario's own, as frozen. */
+  async definitionVersions(cardId: string): Promise<{ dodVersion: string | null; scenarios: Map<string, string> }> {
+    const rows = (await this.client.execute({
+      sql: "SELECT dod_version, scenario_id, scenario_version FROM story_dod_versions WHERE card_id = ?",
+      args: [cardId],
+    })).rows;
+    return {
+      dodVersion: rows[0] ? String(rows[0].dod_version) : null,
+      scenarios: new Map(rows.map((row) => [String(row.scenario_id), String(row.scenario_version)])),
+    };
+  }
+
+  /**
+   * Replaces the frozen contract after a person answered a question.
+   *
+   * Scenarios whose own hash did not move keep their conclusions; the ones that
+   * moved lose theirs. Judging this on the card-level hash instead would void
+   * every scenario whenever any one of them was reworded, which is the same as
+   * tearing the card down and rebuilding it.
+   */
+  async refreezeDefinitionOfDone(cardId: string, definition: DefinitionOfDone): Promise<{ changed: string[] }> {
+    const before = await this.definitionVersions(cardId);
+    const after = scenarioVersions(definition);
+    const changed = Object.keys(after)
+      .filter((id) => before.scenarios.get(id) !== after[id])
+      .toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    await this.client.execute({ sql: "DELETE FROM story_specs WHERE story_id = ?", args: [cardId] });
+    await this.client.execute({ sql: "DELETE FROM story_dod_versions WHERE card_id = ?", args: [cardId] });
+    await this.freezeDefinitionOfDone(cardId, definition);
+    return { changed };
+  }
+
+  // --- questions SHAPE raised ---
+
+  async recordOpenQuestions(
+    cardId: string,
+    questions: ReadonlyArray<{ id: string; question: string; suggestion: string; blocking: boolean }>,
+  ): Promise<void> {
+    if (questions.length === 0) return;
+    const time = this.now();
+    await this.client.batch(questions.map((item) => ({
+      // A question already on the card keeps its answer: a rerun of SHAPE asks
+      // the same things again, and re-asking what somebody answered is how a
+      // card ends up waiting forever.
+      sql: `INSERT INTO open_questions (card_id, question_key, question, suggestion, blocking, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(card_id, question_key) DO UPDATE SET
+              question = excluded.question,
+              suggestion = excluded.suggestion,
+              blocking = excluded.blocking`,
+      args: [cardId, item.id, item.question, item.suggestion, item.blocking ? 1 : 0, time],
+    })), "write");
+  }
+
+  async openQuestions(cardId: string): Promise<Array<{
+    key: string; question: string; suggestion: string; blocking: boolean; answer: string | null;
+  }>> {
+    const rows = (await this.client.execute({
+      sql: `SELECT question_key, question, suggestion, blocking, answer
+            FROM open_questions WHERE card_id = ? ORDER BY id`,
+      args: [cardId],
+    })).rows;
+    return rows.map((row) => ({
+      key: String(row.question_key),
+      question: String(row.question),
+      suggestion: String(row.suggestion),
+      blocking: Number(row.blocking) === 1,
+      answer: row.answer === null ? null : String(row.answer),
+    }));
+  }
+
+  /** Questions that hold the card up: blocking and still unanswered. */
+  async unansweredBlockingQuestions(cardId: string): Promise<string[]> {
+    return (await this.openQuestions(cardId))
+      .filter((item) => item.blocking && item.answer === null)
+      .map((item) => item.question);
+  }
+
+  async answerOpenQuestion(cardId: string, key: string, answer: string): Promise<boolean> {
+    const result = await this.client.execute({
+      sql: "UPDATE open_questions SET answer = ?, answered_at = ? WHERE card_id = ? AND question_key = ?",
+      args: [answer, this.now(), cardId, key],
+    });
+    return result.rowsAffected > 0;
+  }
+
+  // --- what SPECIFY froze ---
+
+  /** Opens an attempt and pins the baseline its tree-pin will clean against. */
+  async beginTestContract(input: {
+    cardId: string; attempt: number; mode: "full" | "narrow"; contractYaml: string;
+    specifyBaseCommit: string; testPaths: readonly string[];
+  }): Promise<void> {
+    await this.guard(input.cardId);
+    await this.client.execute({
+      sql: `INSERT INTO story_test_contracts
+              (card_id, attempt, mode, contract_yaml, specify_base_commit, test_paths, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(card_id, attempt) DO UPDATE SET
+              mode = excluded.mode,
+              contract_yaml = excluded.contract_yaml,
+              specify_base_commit = excluded.specify_base_commit,
+              test_paths = excluded.test_paths`,
+      args: [input.cardId, input.attempt, input.mode, input.contractYaml, input.specifyBaseCommit,
+             JSON.stringify([...input.testPaths].toSorted()), this.now()],
+    });
+  }
+
+  async freezeTestContract(cardId: string, attempt: number, commit: string, treeSha: string): Promise<void> {
+    await this.guard(cardId);
+    await this.client.execute({
+      sql: `UPDATE story_test_contracts SET specify_commit = ?, specify_tree_sha = ?, frozen_at = ?
+            WHERE card_id = ? AND attempt = ?`,
+      args: [commit, treeSha, this.now(), cardId, attempt],
+    });
+  }
+
+  /** The most recent frozen contract, which is the baseline CODE is fenced and
+   * measured against. */
+  async frozenTestContract(cardId: string): Promise<{
+    attempt: number; mode: "full" | "narrow"; contractYaml: string;
+    specifyBaseCommit: string; specifyCommit: string; testPaths: string[];
+  } | null> {
+    const row = (await this.client.execute({
+      sql: `SELECT attempt, mode, contract_yaml, specify_base_commit, specify_commit, test_paths
+            FROM story_test_contracts
+            WHERE card_id = ? AND specify_commit IS NOT NULL
+            ORDER BY attempt DESC LIMIT 1`,
+      args: [cardId],
+    })).rows[0];
+    if (!row) return null;
+    return {
+      attempt: Number(row.attempt),
+      mode: String(row.mode) as "full" | "narrow",
+      contractYaml: String(row.contract_yaml),
+      specifyBaseCommit: String(row.specify_base_commit),
+      specifyCommit: String(row.specify_commit),
+      testPaths: JSON.parse(String(row.test_paths)) as string[],
+    };
+  }
+
+  /** How many attempts the card has opened, so the next one gets a new number. */
+  async testContractAttempts(cardId: string): Promise<number> {
+    const row = (await this.client.execute({
+      sql: "SELECT COALESCE(MAX(attempt), 0) AS attempts FROM story_test_contracts WHERE card_id = ?",
+      args: [cardId],
+    })).rows[0];
+    return Number(row?.attempts ?? 0);
   }
 
   async buildPhaseInput(cardId: string, phase: StoryPhase, round: number): Promise<PhaseInput> {
@@ -884,10 +1297,15 @@ export class StoryExecutionStore {
         args: [cardId],
       }),
       this.client.execute({
-        sql: `SELECT hf.comment_id, COALESCE(ic.author, 'unknown') AS author, hf.spec_id, hf.body
+        // Answers and added material both reach the round, and they reach it
+        // differently: an answer is a decision the round owes a reply to, and
+        // material somebody added is not. Rework and defect never arrive here
+        // at all -- they moved the card instead.
+        sql: `SELECT hf.comment_id, COALESCE(ic.author, 'unknown') AS author, hf.spec_id, hf.body, hf.channel
               FROM human_feedback hf
               LEFT JOIN ingested_comments ic ON ic.comment_id = hf.comment_id
-              WHERE hf.card_id = ? ORDER BY hf.comment_id`,
+              WHERE hf.card_id = ? AND hf.channel IN ('answer', 'preference', 'unclassified')
+              ORDER BY hf.comment_id`,
         args: [cardId],
       }),
       this.client.execute({
@@ -929,9 +1347,14 @@ export class StoryExecutionStore {
 
     // A REGRESSION_FIX round exists for the open regression cards, not for the
     // last verdict (which accepted everything, or the Story was never
-    // delivered). Other phases never read this table, so their prompts stay
-    // byte-identical whether or not cards exist.
-    const regressions = phase === "REGRESSION_FIX"
+    // delivered). The narrow SPECIFY in front of it reads the same cards: it is
+    // asked for one reproduction per open signature, and without them its
+    // prompt would be indistinguishable from a full pass while its exit still
+    // required `mode: narrow`. Every other phase leaves this table alone, so
+    // their prompts stay byte-identical whether or not cards exist.
+    const readsRegressionCards = phase === "REGRESSION_FIX"
+      || (phase === "SPECIFY" && story.phase === "REGRESSION_FIX");
+    const regressions = readsRegressionCards
       ? (await this.client.execute({
           sql: `SELECT scenario_id, failure_signature, attributed_story FROM regression_cards
                  WHERE attributed_story = ? AND resolved_at IS NULL ORDER BY created_at, scenario_id`,
@@ -970,16 +1393,25 @@ export class StoryExecutionStore {
         kind: stringValue(row.kind, "artifact kind"),
         body: stringValue(row.body, "artifact body"),
       })),
-      feedback: feedbackResult.rows.map((row) => {
-        const item: PhaseInput["feedback"][number] = {
+      feedback: feedbackResult.rows
+        .filter((row) => stringValue(row.channel, "feedback channel") === "answer")
+        .map((row) => {
+          const item: PhaseInput["feedback"][number] = {
+            id: stringValue(row.comment_id, "feedback id"),
+            author: stringValue(row.author, "feedback author"),
+            body: stringValue(row.body, "feedback body"),
+          };
+          const specId = optionalString(row.spec_id);
+          if (specId) item.specId = specId;
+          return item;
+        }),
+      supplementaryContext: feedbackResult.rows
+        .filter((row) => stringValue(row.channel, "feedback channel") !== "answer")
+        .map((row) => ({
           id: stringValue(row.comment_id, "feedback id"),
           author: stringValue(row.author, "feedback author"),
           body: stringValue(row.body, "feedback body"),
-        };
-        const specId = optionalString(row.spec_id);
-        if (specId) item.specId = specId;
-        return item;
-      }),
+        })),
       evidence: evidenceDir
         ? failedScenarios.map((scenarioId) => ({ scenarioId, path: evidenceDir }))
         : [],
@@ -1042,7 +1474,9 @@ function scenarioFailuresOf(body: string): ScenarioFailure[] {
 
 function phaseForState(state: StoryState): StoryPhase | null {
   switch (state) {
+    case "SHAPE":
     case "DESIGN":
+    case "SPECIFY":
     case "CODE":
     case "VERIFY":
     case "MERGE":

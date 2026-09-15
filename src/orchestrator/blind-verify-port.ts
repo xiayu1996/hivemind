@@ -3,7 +3,10 @@ import { join } from "node:path";
 import { screenScenarios } from "../pipeline/dod.js";
 import { splitScenarioFailures } from "../pipeline/failure-classification.js";
 import type { BlindVerifyExecutor, BlindVerifyResult } from "../verify/executor.js";
-import type { PhaseTelemetryInput } from "./pi-phase-port.js";
+import type { PhaseCostRow, PhaseTelemetryInput } from "./pi-phase-port.js";
+import type { ResolvedAgentSpec } from "../runner/agent-spec.js";
+import type { AgentSpawnGrant } from "../runner/spawn-broker.js";
+import { emitSafely } from "../observability/emit-safely.js";
 import type {
   ManagedVerifyInput,
   ManagedVerifyResult,
@@ -12,13 +15,23 @@ import type {
 
 export interface BlindVerifyStoryPortOptions {
   executor: Pick<BlindVerifyExecutor, "run">;
+  /**
+   * The verifier's own spawn, granted per round. Its cost is attributed to the
+   * verify purpose rather than to whatever the builder happened to run on, and
+   * the provider capacity it holds is released when the round ends -- the
+   * verify lane spawns as often as the inner loop turns.
+   */
+  resolveSpec: () => Promise<AgentSpawnGrant>;
   worktreePath: string;
   evidenceRoot: string;
   auditPath: string;
   allowedHosts: string[];
   chromiumSandbox?: boolean;
   commitMessages: () => Promise<string[]>;
-  recordTelemetry?: (input: PhaseTelemetryInput) => Promise<void>;
+  /** Execution state; see the phase port. */
+  recordCost?: (input: PhaseTelemetryInput) => Promise<PhaseCostRow | void>;
+  /** Ring 0: synchronous, no I/O, never throws. */
+  emit?: (type: string, data: unknown) => void;
   readProviderPayloads?: (path: string) => Promise<unknown[]>;
 }
 
@@ -41,7 +54,21 @@ export class BlindVerifyStoryPort implements StoryVerifyPort {
   async run(input: ManagedVerifyInput): Promise<ManagedVerifyResult> {
     const evidencePath = join(this.options.evidenceRoot, input.runId);
     await mkdir(evidencePath, { recursive: true });
+    const grant = await this.options.resolveSpec();
+    try {
+      return await this.verify(input, evidencePath, grant.spec);
+    } finally {
+      await grant.release().catch(() => undefined);
+    }
+  }
+
+  private async verify(
+    input: ManagedVerifyInput,
+    evidencePath: string,
+    spec: ResolvedAgentSpec,
+  ): Promise<ManagedVerifyResult> {
     const result = await this.options.executor.run({
+      spec,
       cardId: input.context.cardId,
       round: input.round,
       codeSessionId: input.codeSessionId,
@@ -55,11 +82,11 @@ export class BlindVerifyStoryPort implements StoryVerifyPort {
       ...(this.options.chromiumSandbox === undefined ? {} : { chromiumSandbox: this.options.chromiumSandbox }),
       commitMessages: await this.options.commitMessages(),
     });
-    if (this.options.recordTelemetry) {
+    if (this.options.recordCost ?? this.options.emit) {
       const capturePath = join(evidencePath, "provider-requests.jsonl");
       const providerPayloads = await (this.options.readProviderPayloads ?? readProviderPayloads)(capturePath);
       if (providerPayloads.length === 0) throw new Error("VERIFY provider request was not captured");
-      await this.options.recordTelemetry({
+      const telemetry: PhaseTelemetryInput = {
         runId: input.runId,
         cardId: input.context.cardId,
         phase: "VERIFY",
@@ -73,7 +100,10 @@ export class BlindVerifyStoryPort implements StoryVerifyPort {
           usage: result.usage,
         },
         providerPayloads,
-      });
+        spec,
+      };
+      const cost = await this.options.recordCost?.(telemetry);
+      emitSafely(this.options.emit, { ...telemetry, ...(cost ? { cost: cost.data } : {}) });
     }
     // The convergence criterion runs on the code-level failures alone; a
     // scenario the environment lost is reported but not compared (03 8.6).

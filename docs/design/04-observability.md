@@ -88,3 +88,88 @@ memory 每轮蒸馏产出量、candidate→active 流速、场景距上次验证
 ### 4.5 文档纪律（dsh 静态成本审计）
 
 每个注入模型上下文的模块（prompt 片段/工具/skill/extension）在 README 声明 **Token effect** 与 **KV cache effect**——设计期回答"谁在烧钱、谁破坏前缀缓存"，与运行时计量互补。
+
+## 5. 增补（2026-09-14）：观测全部旁路，三环重画
+
+§2 已经把三层模型与 `emit()` 边界公理写对了。**实现违反了它**：`src/orchestrator/pi-phase-port.ts:335` 是 `await this.options.recordTelemetry?.(...)`，而 recorder 里是 `mkdir` + 逐条 append + DB 写。观测慢一点、盘满一次，卡就跟着挂。
+
+还有两条设计裂缝：
+
+- **两套事件流但本文档只承认一套**。`run-events.jsonl` 是 **agent 行为流**（§2.1 描述的就是它），`event_log` 是**编排决策流**（派单、状态转移、停点、熔断开合），前文通篇没提后者——于是有人会去错的层里找答案。两者的准入规则必须写进代码而不是靠人记：agent 在一次 run 内做了什么进前者，编排器对一张卡做了什么决定进后者。
+- **投影没有推送路径**。§2.2 是纯 fold + 冷读缓存，所以"实时更新"只能靠轮询。
+
+### 5.0 先分清：哪些写是执行真相，哪些才是观测副本
+
+**"观测全部旁路"不等于"所有写都可丢"。** 今天有两处写既是记录、也是执行依据，把它们一并异步化会静默破坏执行正确性（2026-09-14 复审补齐）：
+
+| 写 | 谁在**执行路径上回读**它 | 结论 |
+|---|---|---|
+| `cost_entries` | `cost-ledger.ts:61` 的 `cardSpend` → `run-story.ts:161` 的 `spendPort` → 每个 phase 边界的费用停点判据 | **必须可靠落库**。丢一条或读到滞后值，`cost_ceiling_exceeded` 这个真停点就静默失灵 |
+| `event_log` 的部分类型 | `epic-escalation.ts:67`、`epic-blocker.ts:44/101`、`epic-page-projection.ts:53`、`requirement-store.ts` 多处读 `epic.transition` / `epic.blocker_answered` 等推导 Epic 与需求状态 | **这些类型必须可靠落库**。它们是编排决策流，不是观测流 |
+| 打回理由、状态转移、停点 | 下一轮 prompt 组装与转移判定 | **必须可靠落库** |
+| `run-events.jsonl` 行为流、trace、stats、缓存分析、档案/排行投影 | 无 | **可丢、旁路**，三个解耦判据只约束这一类 |
+
+所以边界是：
+
+> **执行状态、执行所需事件与费用结算走可靠写（同步或事务性，失败即失败）；观测副本与投影走旁路（可丢、可杀、可延迟）。**
+
+`event_log` 因此要显式分成两类并在代码里标注准入规则：**decision 类**（可靠，执行回读）与 **telemetry 类**（旁路，仅供投影）。写入侧按类型选择通道，而不是整张表一个通道。§5.2 的"删除判据"只对 telemetry 类成立——把 `emit` 换成空函数之后，费用停点与 Epic 状态推导必须**依然工作**。
+
+### 5.1 三环，环之间只能单向依赖
+
+```
+环 0  发射   主流程内唯一侵入点：emit(event) 同步入队，零 I/O，永不抛
+  ↓（单向，不回压；buffer 满则丢最老并计数）
+环 1  落盘   独立 drain 循环 → 两个 sink，各自的准入规则写进代码
+  ↓（单向，可杀）
+环 2  投影   三尺度级联：run 级 → card 级 → fleet 级；fleet 读 card 的成品值，不读原始事件
+  ↓（单向，完全外部）
+环 3  消费   控制台 / 观测者 agent / invariants 检查器
+```
+
+**丢事件是设计的一部分**：buffer 满则丢最老并计数。否则 `emit` 就有了背压，环 0 到环 1 的单向性立刻破掉。
+
+### 5.2 三个可执行的解耦判据
+
+不是口号，进验收：
+
+1. **删除判据**（最硬，**仅限观测副本**）：把 telemetry 通道的 `emit` 换成空函数，`npm run typecheck` 通过、主流程行为不变，且**费用停点与 Epic 状态推导仍然正确**（§5.0）。这一条直接禁掉主流程里出现 `await recorder.<telemetry>()` 或 `if (observability.enabled)`；它**不**要求把 `cost_entries` 与 decision 类事件也变成可丢。
+2. **杀进程判据**：杀掉投影进程，所有卡照常推进。
+3. **延迟判据**：`emit` 的 p99 < 1ms。
+
+### 5.3 另外三条纪律
+
+- **采样只能在消费者侧**。采集侧丢了就永久没了；存储成本用保留期解决，不用降采样。
+- **推拉并存**：`event_log` 自增 id + 投影 cursor + nudge，推送失败靠定时 drain 兜底——与派单（07 §5.3）、配置分发（05 §4.3）同一个模式。
+- **`required-on-read` 要有逃生口**：envelope 加 `schemaVersion`，投影声明可处理区间，超区间按 `ignorable` 计数而非拒绝重建。否则老投影读到新事件直接死，而"老投影"在滚动升级期间必然存在。
+
+### 5.4 主流程只做一件事：追加自描述事件
+
+其余全部是投影。
+
+| 观测项 | 主流程里（可靠写） | 旁路里（可丢） |
+|---|---|---|
+| 费用 / 缓存命中 | **可靠**写 `cost_entries`，purpose/tier 取自 `ResolvedAgentSpec`（07 §2.3）——费用停点要回读它 | 按 purpose / tier / provider / lane 聚合 |
+| 停点原因 | **可靠**写带收敛分类的停点事件（03 §1.5） | 停点分布统计 |
+| **跨卡打回理由聚合** | 打回时写事件（理由原文） | 复用 `src/regression/` 的失败签名归一化对准"打回理由"，出跨卡重复排行 |
+| **整卡可读档案** | 无 | 从 `event_log` 重放生成，随时可跑、可重跑；控制台可看 |
+| prompt 版本归因 | `phase_runs` 记 prompt 文件 sha | 行为变化按 prompt 版本对比 |
+
+后两项是 GacUI 的 `[COUNTER]` 去重 learning 与 `Copilot_Investigate.md` 的对等物。**档案不在交付路径上生成**——交付时生成就是侵入，且一旦生成失败会挡住卡。
+
+`src/observability/cache-analysis.ts` 的跨阶段扩展见 07 §4.7：按 `(card, lane)` 聚合，两道分开统计。
+
+### 5.5 流程缺陷检测不是新系统
+
+§4.2 的 invariants 注册表已经是"对权威事件流断言关系"，把流程缺陷写成 invariant 即可：
+
+- SPECIFY 之后第一个 CODE 轮开始时，冻结测试的 `git diff` 必须为空；
+- `rework` 触发后必须有 `phase.invalidated`；
+- 一次执行（`card / phase / round / attempt`）的 session 文件在首次 spawn 前必须零消息（07 §4.5）；
+- 同一张卡的实现道各 phase 的 `prompt_cache_key` 必须相同，且与盲审道不同；
+- `verify_records` 的两列必须是两个不同的 **run 身份**，而不是"恰好两个不同的文件路径"（07 §4.4）；
+- 租约的 fence 在一张卡上跨 revoke 严格单调，且被撤销的持有者写不进任何状态（07 §5.1a）。
+
+违反**不阻断**，产生 finding 事件 → fleet 投影 → 排行。这是"快速迭代停止条件"的正确形态：判据写在数据上而不是写死在主流程的 if 里，改一条判据不发版。
+
+未来的独立观测者服务 / agent 挂在环 3，读事件流抽样发现异常模式，对环 0–2 零影响。

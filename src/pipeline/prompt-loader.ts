@@ -1,19 +1,20 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Phase } from "./phase-input.js";
+import type { PmPhase } from "./phase.js";
+
+export type { PmPhase };
 
 const PHASE_FILES: Record<Phase, string> = {
   DECOMPOSE: "decompose.md",
+  SHAPE: "shape.md",
   DESIGN: "design.md",
+  SPECIFY: "specify.md",
   CODE: "code.md",
   VERIFY: "verify.md",
   MERGE: "merge.md",
   REGRESSION_FIX: "regression-fix.md",
 };
-
-/** The product manager's phases run above the Epic pipeline and share none of
- * its phase prompts, so they carry their own layer pair. */
-export type PmPhase = "CLARIFY" | "PRD" | "REQUIREMENT_DECOMPOSE" | "UI_REVIEW";
 
 const PM_FILES: Record<PmPhase, string> = {
   CLARIFY: "clarify.md",

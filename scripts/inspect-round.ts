@@ -9,11 +9,15 @@
 //   npx tsx scripts/inspect-round.ts --card-id S-E3OVERVIEW-01
 //   npx tsx scripts/inspect-round.ts --card-id S-E3OVERVIEW-01 --round 8 --prompt
 //   npx tsx scripts/inspect-round.ts --card-id S-E3OVERVIEW-01 --round 8 --phase CODE --tools
+//   npx tsx scripts/inspect-round.ts --card-id S-E3OVERVIEW-01 --cache
+//   npx tsx scripts/inspect-round.ts --card-id S-E3OVERVIEW-01 --dossier
 import { execFile } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { openDb } from "../src/persistence/client.js";
+import { loadCardTurns, summarizeCrossPhaseCache } from "../src/observability/cross-phase-cache.js";
+import { loadCardDossier, renderCardDossier } from "../src/observability/card-dossier.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -299,6 +303,25 @@ async function main(): Promise<void> {
           console.log(`  finding [${finding.severity}/${finding.area}]: ${finding.note}`);
         }
       }
+    }
+    if (flag("--dossier")) {
+      // The whole card in one read, joined from the central store rather than
+      // from a file somebody had to remember to write at delivery time.
+      const dossier = await loadCardDossier(handle.client, cardId);
+      console.log(dossier ? `\n${renderCardDossier(dossier)}` : `\nno card ${cardId}`);
+    }
+    if (flag("--cache")) {
+      // Cross-phase, not within-session: the money a card loses to the cache is
+      // the baseline and the repository context re-billed on every phase entry.
+      const summary = summarizeCrossPhaseCache(cardId, await loadCardTurns(handle.client, cardId));
+      console.log(`\n=== prompt cache across phases`);
+      for (const lane of summary.lanes) {
+        console.log(`  ${lane.lane}: ${lane.spawns} spawn(s), ${lane.reusableSpawns} with a prefix to reuse`
+          + ` · entry hit ${(lane.entryHitRate * 100).toFixed(1)}%`
+          + ` · overall ${(lane.overallHitRate * 100).toFixed(1)}%`
+          + (lane.coldEntries.length > 0 ? ` · cold: ${lane.coldEntries.join(", ")}` : ""));
+      }
+      if (summary.lanes.length === 0) console.log("  no turn usage recorded for this card");
     }
   } finally {
     handle.close();

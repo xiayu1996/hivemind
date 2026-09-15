@@ -2,13 +2,13 @@
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { POLICY_ENV_VAR, parseGuardPolicy } from "../guard/policy.js";
-import { resolveModel, staticCatalog } from "../runner/model-resolver.js";
+import { testAgentSpec } from "../runner/agent-spec.testing.js";
 import type { RpcRunnerConfig } from "../runner/rpc-runner.js";
 import type { PiRunner, PromptResult } from "../runner/types.js";
 import { PiDecomposePort } from "./pi-decompose-port.js";
 
 const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, reasoning: 0, costUsd: 0 };
-const MODEL = await resolveModel(staticCatalog([{ provider: "mock", id: "mock-1" }]), "mock", "mock-1");
+const SPEC = await testAgentSpec({ purpose: "decompose" });
 
 const CANDIDATE = {
   epicId: "M2",
@@ -48,7 +48,7 @@ function runner(reply: string): PiRunner & { prompts: string[] } {
 function port(instance: PiRunner) {
   return new PiDecomposePort({
     binary: "pi",
-    model: MODEL,
+    spec: SPEC,
     promptRoot: resolve("prompts"),
     cwd: resolve("."),
     createRunner: () => instance,
@@ -61,7 +61,7 @@ describe("PiDecomposePort", () => {
     const configs: RpcRunnerConfig[] = [];
     const guarded = new PiDecomposePort({
       binary: "pi",
-      model: MODEL,
+      spec: SPEC,
       promptRoot: resolve("prompts"),
       cwd: resolve("."),
       contextFiles: [{ label: "repository", path: resolve("AGENTS.md") }],
