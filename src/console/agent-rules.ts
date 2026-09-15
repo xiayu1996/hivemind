@@ -64,11 +64,28 @@ export interface ConsoleAgentRulesService {
 }
 
 /** Builds the UI view from effective rules and static provider catalogues. */
-export declare function presentAgentRules(
+export function presentAgentRules(
   revision: number,
   rules: AgentRules,
   validation: AgentRulesValidationContext,
-): AgentRulesView;
+): AgentRulesView {
+  const providers = rules.failoverOrder.map((name): AgentRulesProviderView => {
+    const state = rules.providerStates[name] ?? "disabled";
+    return {
+      name,
+      state,
+      stateLabel: state === "enabled" ? "Enabled" : "Disabled",
+      modelChoices: (validation.configuredProviders[name]?.catalogue ?? []).map((model) => model.id),
+    };
+  });
+  return {
+    revision,
+    defaultProvider: rules.defaultProvider,
+    defaultModel: rules.defaultModel,
+    providers,
+    failoverOrder: [...rules.failoverOrder],
+  };
+}
 
 /** The service is the only console writer for this aggregate; generic per-key
  * writes must not bypass its complete-rule validation or transaction. */
