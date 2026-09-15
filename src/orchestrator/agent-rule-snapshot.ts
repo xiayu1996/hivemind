@@ -71,7 +71,7 @@ export function policyFromExecutionSnapshot(
   /** Candidates arrive in failover order, but sorting on the recorded order
    * keeps the contract independent of how the caller assembled the list. */
   const candidatesFor = (agentType: AgentPhase): readonly SnapshotModelCandidate[] =>
-    [...(snapshot.candidatesByAgentType[agentType] ?? [])].sort((left, right) => left.order - right.order);
+    (snapshot.candidatesByAgentType[agentType] ?? []).toSorted((left, right) => left.order - right.order);
 
   return {
     snapshot,
