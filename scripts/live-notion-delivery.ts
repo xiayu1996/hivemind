@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { loadSecretsFile } from "../src/config/secrets-file.js";
 import { NotionGateway } from "../src/notion/gateway.js";
 import { NotionMediaPipeline } from "../src/notion/media.js";
+// oxlint-disable unicorn/no-thenable -- Given/When/Then is the external DoD contract.
 import { NotionOutbox } from "../src/notion/outbox.js";
 import { NotionStoryPageDelivery } from "../src/notion/story-page-delivery.js";
 import {
@@ -91,16 +92,50 @@ async function main(): Promise<void> {
 
   const desiredFor = (round: number) => {
     const specs = [
-      { id: "S-LIVE-01", seq: 1, status: round >= 2 ? "passed" : "pending", text: "Probe spec one stays stable across rounds" },
-      ...(round >= 3 ? [{ id: "S-LIVE-02", seq: 2, status: round >= 4 ? "passed" : "pending", text: "Probe spec two arrives after round two" }] : []),
+      {
+        id: "S-LIVE-01-a",
+        seq: 1,
+        status: round >= 2 ? "passed" : "pending",
+        title: "\u63a2\u9488\u573a\u666f\u4e00\u8de8\u8f6e\u4e0d\u6362\u5757",
+        given: "\u63a2\u9488\u9875\u5df2\u5efa\u597d",
+        when: "\u53c8\u6295\u4e00\u8f6e",
+        then: "\u8fd9\u4e00\u884c\u8fd8\u662f\u540c\u4e00\u4e2a\u5757",
+        layers: ["integration"],
+      },
+      ...(round >= 3
+        ? [{
+            id: "S-LIVE-01-b",
+            seq: 2,
+            status: round >= 4 ? "passed" : "pending",
+            title: "\u63a2\u9488\u573a\u666f\u4e8c\u7b2c\u4e09\u8f6e\u624d\u51fa\u73b0",
+            given: "\u524d\u4e24\u8f6e\u6ca1\u6709\u5b83",
+            when: "\u7b2c\u4e09\u8f6e\u6295\u5f71",
+            then: "\u5b83\u63d2\u5728\u7b2c\u4e00\u6761\u540e\u9762",
+            layers: ["e2e"],
+          }]
+        : []),
     ];
     const verificationRound = round >= 2
-      ? { round: round - 1, summary: `probe verify round ${round - 1}` }
+      ? {
+          round: round - 1,
+          at: Date.now(),
+          verdict: round % 2 === 0 ? "rejected" : "accepted",
+          passed: round % 2 === 0 ? 0 : specs.length,
+          total: specs.length,
+          rows: specs.map((spec) => ({
+            scenario: `\u573a\u666f ${spec.seq} \u00b7 ${spec.title}`,
+            test: round % 2 === 0 ? "\u672a\u901a\u8fc7" : "\u901a\u8fc7",
+            screen: "\u2014",
+            note: "\u63a2\u9488\u5199\u7684\u4e00\u53e5\u8bdd",
+          })),
+          findings: ["\u63a2\u9488\u754c\u9762\u5efa\u8bae\uff0c\u4e0d\u5f71\u54cd\u9a8c\u6536"],
+        }
       : undefined;
     return {
-      metadata: `probe card ${cardId} round ${round}`,
-      design: `Probe design produced during round ${round}.`,
+      metadata: `\u63a2\u9488\u5361 ${cardId} \u7b2c ${round} \u8f6e\uff1a\u56de\u590d\u672c\u9875\u8bc4\u8bba\u5373\u53ef`,
+      design: `\u7b2c ${round} \u8f6e\u5199\u51fa\u6765\u7684\u8bbe\u8ba1\u6458\u8981\u3002`,
       specs,
+      technical: [`\u63a2\u9488\u7b2c ${round} \u8f6e\u7684\u6280\u672f\u7ec6\u8282`],
       ...(verificationRound ? { verificationRound } : {}),
     };
   };
@@ -123,14 +158,14 @@ async function main(): Promise<void> {
     console.log(`round ${round} delivered`);
 
     const blocks = await listChildren(gateway, pageId);
-    const specBlocks = blocks.filter((block) => block.type === "paragraph" && /^S-LIVE-\d+ \[/.test(block.text ?? ""));
+    const specBlocks = blocks.filter((block) => block.type === "paragraph" && /S-LIVE-01-[ab]/.test(block.text ?? ""));
     for (const spec of specBlocks) {
-      const id = (spec.text ?? "").slice(0, (spec.text ?? "").indexOf(" "));
+      const id = /S-LIVE-01-[ab]/.exec(spec.text ?? "")![0];
       const previous = specBlockIds.get(id);
       if (previous && previous !== spec.id) throw new Error(`Spec ${id} block id changed: ${previous} -> ${spec.id}`);
       specBlockIds.set(id, spec.id);
     }
-    const toggles = blocks.filter((block) => block.type === "toggle");
+    const toggles = blocks.filter((block) => block.type === "toggle" && /^\u7b2c \d+ \u8f6e/.test(block.text ?? ""));
     if (toggles.length !== roundToggles.length + (round >= 2 ? 1 : 0)) {
       throw new Error(`round ${round}: verification rounds are not append-only (toggles=${toggles.length})`);
     }

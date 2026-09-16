@@ -309,6 +309,7 @@ CREATE TABLE IF NOT EXISTS story_specs (
   when_             TEXT,
   then_             TEXT,
   layers            TEXT,
+  notion_detail_hash TEXT,
   status            TEXT NOT NULL CHECK (status IN ('pending','passed','failed','withdrawn')),
   notion_block_id   TEXT UNIQUE,
   UNIQUE (story_id, seq)
@@ -318,9 +319,12 @@ CREATE INDEX IF NOT EXISTS idx_story_specs_story ON story_specs(story_id, seq);
 CREATE TABLE IF NOT EXISTS notion_sections (
   story_id          TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
   section            TEXT NOT NULL CHECK (section IN (
-                     'metadata','requirement','specification','design','verification','questions')),
+                     'metadata','requirement','specification','design','verification','questions','technical')),
   anchor_block_id    TEXT NOT NULL UNIQUE,
   content_block_id   TEXT,
+  -- What the blocks under this heading were last built from. They are rebuilt
+  -- rather than diffed, so the hash is what stops a rebuild on every cycle.
+  content_hash       TEXT,
   PRIMARY KEY (story_id, section)
 );
 

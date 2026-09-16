@@ -8,6 +8,7 @@ import { SYNC_EPIC_PAGE, renderEpicProgress, type EpicPagePayload } from "../orc
 import pageText from "../orchestrator/epic-page-text.json" with { type: "json" };
 import schema from "./notion-schema.json" with { type: "json" };
 import { bullet as richBullet, code, runs, t } from "./rich-text.js";
+import { quietText, sectionTitle } from "./display-text.js";
 
 const planSchema = z.object({
   epicId: z.string().min(1),
@@ -72,6 +73,14 @@ function paragraph(content: string): unknown {
 
 function heading(content: string): unknown {
   return { object: "block", type: "heading_2", heading_2: { rich_text: [text(content)] } };
+}
+
+function calloutBlock(quiet: { icon: string; color: string; action: string }): unknown {
+  return {
+    object: "block",
+    type: "callout",
+    callout: { rich_text: [text(quiet.action)], icon: { type: "emoji", emoji: quiet.icon }, color: quiet.color },
+  };
 }
 
 function bullet(content: string): unknown {
@@ -395,7 +404,14 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
       body: {
         parent: { type: "data_source_id", data_source_id: this.storiesDataSourceId },
         properties,
-        children: [heading("需求描述"), paragraph(String(story.requirement))],
+        // The callout is created with the page: a block can only be appended
+        // after another one, so the only way it sits at the top is to be there
+        // from the start.
+        children: [
+          calloutBlock(quietText()),
+          heading(sectionTitle("requirement")),
+          paragraph(String(story.requirement)),
+        ],
       },
     });
     const pageId = z.object({ id: z.string().min(1) }).parse(created.data).id;

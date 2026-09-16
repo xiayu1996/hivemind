@@ -1,4 +1,13 @@
-export type StorySection = "requirement" | "specification" | "design" | "verification" | "questions";
+import { quietText, sectionTitle } from "../display-text.js";
+import { isWithdrawn, specLine, withdrawnLine, type DesiredRound, type DesiredSpec } from "./story-render.js";
+
+export type StorySection =
+  | "requirement"
+  | "specification"
+  | "design"
+  | "verification"
+  | "questions"
+  | "technical";
 
 const SECTION_ORDER: readonly StorySection[] = [
   "requirement",
@@ -6,10 +15,14 @@ const SECTION_ORDER: readonly StorySection[] = [
   "design",
   "verification",
   "questions",
+  "technical",
 ];
 
 export interface SectionSnapshot {
   anchorBlockId: string;
+  /** The heading text the page currently carries, which an older page wrote
+   * under a name this version has since changed. */
+  title?: string;
   contentBlockId?: string;
   content?: string;
 }
@@ -17,8 +30,8 @@ export interface SectionSnapshot {
 export interface SpecSnapshot {
   id: string;
   seq: number;
-  status: string;
-  text: string;
+  /** The line as the page currently reads, whichever version wrote it. */
+  line: string;
   blockId: string;
 }
 
@@ -35,34 +48,33 @@ export interface StoryPageSnapshot {
   verificationRounds: VerificationRoundSnapshot[];
 }
 
-export interface DesiredSpec {
-  id: string;
-  seq: number;
-  status: string;
-  text: string;
-}
+export type { DesiredSpec } from "./story-render.js";
 
 export interface DesiredStoryPage {
-  metadata: string;
+  /** What the callout at the top says, when it is a person's turn. Absent
+   * otherwise: the board columns already carry state, waiting and cost, and a
+   * page that repeats them spends attention without adding anything. */
+  metadata?: string;
   design: string;
   questions?: string;
+  /** The fixed words of the fold; what it holds is compared by hash, not here. */
+  technical?: string;
   specs: DesiredSpec[];
-  verificationRound?: { round: number; summary: string };
+  verificationRound?: DesiredRound;
 }
 
 export type StoryPageOperation =
   | { type: "create_section"; section: StorySection }
+  | { type: "rename_section"; section: StorySection; blockId: string }
   | { type: "insert_metadata"; content: string }
   | { type: "insert_content"; section: StorySection; afterBlockId: string; content: string }
   | { type: "update_block"; blockId: string; content: string }
   | { type: "insert_spec"; afterBlockId: string; specId: string; seq: number; content: string }
-  | { type: "insert_verification_round"; afterBlockId: string; round: number; summary: string }
+  | { type: "insert_verification_round"; afterBlockId: string; round: DesiredRound }
   | { type: "archive_verification_rounds"; rounds: Array<{ round: number; toggleBlockId: string }> }
   | { type: "archive_block"; blockId: string };
 
-function specContent(spec: Pick<DesiredSpec, "id" | "status" | "text">): string {
-  return `${spec.id} [${spec.status}] ${spec.text}`;
-}
+
 
 function planSectionContent(
   operations: StoryPageOperation[],
@@ -94,24 +106,39 @@ export function planStoryPageUpdate(
     if (!snapshot.sections[section]) operations.push({ type: "create_section", section });
   }
 
-  if (snapshot.metadata) {
-    if (snapshot.metadata.content !== desired.metadata) {
-      operations.push({ type: "update_block", blockId: snapshot.metadata.blockId, content: desired.metadata });
+  // A heading keeps its block: the section anchors, the Spec paragraphs under
+  // it and every comment a person left on them hang off that id, so a rename
+  // is an edit to the words and never a new block.
+  for (const section of SECTION_ORDER) {
+    const current = snapshot.sections[section];
+    if (current && current.title !== undefined && current.title !== sectionTitle(section)) {
+      operations.push({ type: "rename_section", section, blockId: current.anchorBlockId });
     }
-  } else {
+  }
+
+  // The callout is the one block that must sit at the top, and Notion can only
+  // append after a block, so it is written rather than archived: a quiet day
+  // says so in one line instead of losing the anchor.
+  const callout = desired.metadata ?? quietText().action;
+  if (snapshot.metadata) {
+    if (snapshot.metadata.content !== callout) {
+      operations.push({ type: "update_block", blockId: snapshot.metadata.blockId, content: callout });
+    }
+  } else if (desired.metadata !== undefined) {
     operations.push({ type: "insert_metadata", content: desired.metadata });
   }
   planSectionContent(operations, "design", snapshot.sections.design, desired.design);
   planSectionContent(operations, "questions", snapshot.sections.questions, desired.questions);
+  planSectionContent(operations, "technical", snapshot.sections.technical, desired.technical);
 
   const existingSpecs = new Map(snapshot.specs.map((spec) => [spec.id, spec]));
   const desiredIds = new Set(desired.specs.map((spec) => spec.id));
   const specificationAnchor = snapshot.sections.specification?.anchorBlockId;
   for (const spec of desired.specs.toSorted((a, b) => a.seq - b.seq || a.id.localeCompare(b.id, "en"))) {
     const current = existingSpecs.get(spec.id);
-    const content = specContent(spec);
+    const content = specLine(spec);
     if (current) {
-      if (specContent(current) !== content) {
+      if (current.line !== content) {
         operations.push({ type: "update_block", blockId: current.blockId, content });
       }
     } else if (specificationAnchor) {
@@ -125,12 +152,10 @@ export function planStoryPageUpdate(
     }
   }
   for (const current of snapshot.specs.toSorted((a, b) => a.seq - b.seq)) {
-    if (!desiredIds.has(current.id) && current.status !== "withdrawn") {
-      operations.push({
-        type: "update_block",
-        blockId: current.blockId,
-        content: specContent({ ...current, status: "withdrawn" }),
-      });
+    if (!desiredIds.has(current.id) && !isWithdrawn(current.line)) {
+      // The words stay as the page has them: nothing here knows what the
+      // scenario was called, and inventing a name for it is worse than a tick.
+      operations.push({ type: "update_block", blockId: current.blockId, content: withdrawnLine(current.line) });
     }
   }
 
@@ -141,8 +166,7 @@ export function planStoryPageUpdate(
     operations.push({
       type: "insert_verification_round",
       afterBlockId: verificationAnchor,
-      round: newRound.round,
-      summary: newRound.summary,
+      round: newRound,
     });
   }
 

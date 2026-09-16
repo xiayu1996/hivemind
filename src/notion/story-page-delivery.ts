@@ -2,6 +2,16 @@ import type { Client, InStatement } from "@libsql/client";
 import { z } from "zod";
 import { archiveBlock, NotionGatewayError, type NotionGateway } from "./gateway.js";
 import type { NotionOutboxDelivery, NotionOutboxRecord } from "./outbox.js";
+import { quietText, sectionForTitle, sectionTitle } from "./display-text.js";
+import {
+  foldedBlocks,
+  roundBlocks,
+  roundTitle,
+  specDetailBlocks,
+  specRuns,
+} from "./blocks/story-render.js";
+import { callout, heading2, mermaid, paragraph, t, toggle, type Block, type RichTextRun } from "./rich-text.js";
+import { payloadHash } from "./outbox.js";
 import {
   planStoryPageUpdate,
   type DesiredStoryPage,
@@ -10,15 +20,11 @@ import {
   type StorySection,
 } from "./blocks/story-page.js";
 
-const SECTION_TITLES: Record<StorySection, string> = {
-  requirement: "\u9700\u6c42\u63cf\u8ff0",
-  specification: "\u9700\u6c42\u89c4\u683c",
-  design: "\u6838\u5fc3\u8bbe\u8ba1",
-  verification: "\u9a8c\u8bc1\u8bb0\u5f55",
-  questions: "\u5f85\u4eba\u56de\u7b54",
-};
-const TITLE_SECTIONS = new Map(Object.entries(SECTION_TITLES).map(([section, title]) => [title, section as StorySection]));
 const HISTORY_TITLE = "\u5386\u53f2\u9a8c\u8bc1\u8bb0\u5f55";
+/** The toggle a section folds its own content behind. Its words never change,
+ * so the planner never rewrites the line; what it holds is compared by hash. */
+const TECHNICAL_TITLE = "\u5c55\u5f00\u6280\u672f\u7ec6\u8282";
+const ANSWERS_TITLE = "\u56de\u7b54\u8bb0\u5f55";
 const richTextItemSchema = z.object({ plain_text: z.string() }).passthrough();
 const blockSchema = z.object({
   id: z.string().min(1),
@@ -34,17 +40,41 @@ const desiredSpecSchema = z.object({
   id: z.string().min(1),
   seq: z.number().int().positive(),
   status: z.string().min(1),
-  text: z.string(),
+  title: z.string().min(1),
+  given: z.string().optional(),
+  when: z.string().optional(),
+  // oxlint-disable-next-line unicorn/no-thenable -- Given/When/Then is the external DoD contract.
+  then: z.string().optional(),
+  layers: z.array(z.string()).optional(),
+});
+const desiredRoundSchema = z.object({
+  round: z.number().int().positive(),
+  at: z.number().int().nonnegative(),
+  verdict: z.string().min(1),
+  passed: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+  rows: z.array(z.object({
+    scenario: z.string(),
+    test: z.string(),
+    screen: z.string(),
+    note: z.string(),
+  })),
+  findings: z.array(z.string()).optional(),
 });
 const payloadSchema = z.object({
   cardId: z.string().min(1),
   pageId: z.string().min(1),
   desired: z.object({
-    metadata: z.string(),
+    metadata: z.string().optional(),
+    metadataIcon: z.string().optional(),
+    metadataColor: z.string().optional(),
     design: z.string(),
+    diagram: z.string().optional(),
     questions: z.string().optional(),
+    answers: z.array(z.string()).optional(),
+    technical: z.array(z.string()).optional(),
     specs: z.array(desiredSpecSchema),
-    verificationRound: z.object({ round: z.number().int().positive(), summary: z.string() }).optional(),
+    verificationRound: desiredRoundSchema.optional(),
   }),
 });
 
@@ -71,30 +101,22 @@ function childPageTitle(item: NotionBlock): string {
   return parsed.success ? parsed.data.title : "";
 }
 
-function richText(content: string): Array<{ type: "text"; text: { content: string } }> {
-  if (content.length > 2_000) throw new Error("Notion block content exceeds the 2000 character limit");
-  return [{ type: "text", text: { content } }];
+/** The scenario a line belongs to, whichever version of the page wrote it:
+ * the id is the one thing every version has carried. */
+function parseSpec(content: string): { id: string } | undefined {
+  const match = /S-[A-Za-z0-9]+-\d{2}-[a-z0-9]+/.exec(content);
+  return match ? { id: match[0] } : undefined;
 }
 
-function notionBlock(type: "paragraph" | "callout" | "heading_2" | "toggle", content: string): Record<string, unknown> {
-  return {
-    object: "block",
-    type,
-    [type]: {
-      rich_text: richText(content),
-      ...(type === "callout" ? { icon: { type: "emoji", emoji: "\u2139\ufe0f" } } : {}),
-    },
-  };
-}
-
-function parseSpec(content: string): { id: string; status: string; text: string } | undefined {
-  const match = /^(\S+) \[([^\]]+)](?: (.*))?$/.exec(content);
-  return match ? { id: match[1]!, status: match[2]!, text: match[3] ?? "" } : undefined;
-}
-
+/** A round toggle, read back from either the line this version writes
+ * ("\u7b2c 3 \u8f6e \u00b7 ...") or the one an older page left behind ("Round 3: ..."). */
 function parseRound(content: string): { round: number; summary: string } | undefined {
-  const match = /^Round (\d+):(?: ([\s\S]*))?$/.exec(content);
-  return match ? { round: Number(match[1]), summary: match[2] ?? "" } : undefined;
+  // No word boundary after the character: it is not an ASCII word character,
+  // so \b would never match there.
+  const current = /^\u7b2c (\d+) \u8f6e/.exec(content);
+  if (current) return { round: Number(current[1]), summary: content };
+  const legacy = /^Round (\d+):(?: ([\s\S]*))?$/.exec(content);
+  return legacy ? { round: Number(legacy[1]), summary: content } : undefined;
 }
 
 /** Identifies an insert so a repeated plan for the same content is recognised;
@@ -102,7 +124,7 @@ function parseRound(content: string): { round: number; summary: string } | undef
 function insertKey(operation: StoryPageOperation): string {
   switch (operation.type) {
     case "insert_content": return `content:${operation.section}`;
-    case "insert_verification_round": return `round:${operation.round}`;
+    case "insert_verification_round": return `round:${operation.round.round}`;
     case "insert_spec": return `spec:${operation.specId}`;
     case "insert_metadata": return "metadata";
     case "create_section": return `section:${operation.section}`;
@@ -156,9 +178,15 @@ export class NotionStoryPageDelivery implements NotionOutboxDelivery {
       const remote = await this.readPage(payload.cardId, payload.pageId);
       const operations = planStoryPageUpdate(remote.snapshot, desired)
         .filter((operation) => !inserted.has(insertKey(operation)));
-      if (operations.length === 0) return;
-      await this.applyOperations(payload.cardId, payload.pageId, desired, remote, operations);
-      for (const operation of operations) inserted.add(insertKey(operation));
+      // Children hang off blocks that may have been created in the pass
+      // before, so they are written from a fresh read rather than from the
+      // append that made them.
+      const wroteChildren = await this.syncChildren(payload, remote);
+      if (operations.length === 0 && !wroteChildren) return;
+      if (operations.length > 0) {
+        await this.applyOperations(payload, desired, remote, operations);
+        for (const operation of operations) inserted.add(insertKey(operation));
+      }
     }
     throw new Error(`Notion Story page did not converge: ${payload.pageId}`);
   }
@@ -172,10 +200,11 @@ export class NotionStoryPageDelivery implements NotionOutboxDelivery {
 
   private desired(input: z.infer<typeof payloadSchema>["desired"]): DesiredStoryPage {
     return {
-      metadata: input.metadata,
       design: input.design,
       specs: input.specs,
+      ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
       ...(input.questions === undefined ? {} : { questions: input.questions }),
+      ...(input.technical && input.technical.length > 0 ? { technical: TECHNICAL_TITLE } : {}),
       ...(input.verificationRound === undefined ? {} : { verificationRound: input.verificationRound }),
     };
   }
@@ -212,12 +241,17 @@ export class NotionStoryPageDelivery implements NotionOutboxDelivery {
         continue;
       }
       if (item.type === "heading_2") {
-        active = TITLE_SECTIONS.get(content);
-        if (active) snapshot.sections[active] = { anchorBlockId: item.id };
+        // Both the name this version writes and the one an older page wrote:
+        // a heading nobody recognises is a section anchor lost, and with it
+        // every comment hanging off the blocks beneath it.
+        active = sectionForTitle(content);
+        if (active) snapshot.sections[active] = { anchorBlockId: item.id, title: content };
         continue;
       }
       if (!active) continue;
-      if ((active === "design" || active === "questions") && item.type === "paragraph") {
+      const holds = (active === "design" || active === "questions") && item.type === "paragraph"
+        || active === "technical" && item.type === "toggle";
+      if (holds) {
         const section = snapshot.sections[active];
         if (section && !section.contentBlockId) {
           section.contentBlockId = item.id;
@@ -225,7 +259,9 @@ export class NotionStoryPageDelivery implements NotionOutboxDelivery {
         }
       } else if (active === "specification" && item.type === "paragraph") {
         const parsed = parseSpec(content);
-        if (parsed) snapshot.specs.push({ ...parsed, seq: snapshot.specs.length + 1, blockId: item.id });
+        if (parsed) {
+          snapshot.specs.push({ id: parsed.id, line: content, seq: snapshot.specs.length + 1, blockId: item.id });
+        }
       } else if (active === "verification" && item.type === "toggle") {
         const parsed = parseRound(content);
         if (parsed) snapshot.verificationRounds.push({ ...parsed, toggleBlockId: item.id });
@@ -286,7 +322,12 @@ export class NotionStoryPageDelivery implements NotionOutboxDelivery {
     return listSchema.parse(response.data).results;
   }
 
-  private async update(blockId: string, type: string, content: string): Promise<void> {
+  private async update(
+    blockId: string,
+    type: string,
+    content: RichTextRun[],
+    extra: Record<string, unknown> = {},
+  ): Promise<void> {
     if (type !== "callout" && type !== "paragraph" && type !== "toggle") {
       throw new Error(`cannot update unsupported Notion block type: ${type}`);
     }
@@ -294,28 +335,58 @@ export class NotionStoryPageDelivery implements NotionOutboxDelivery {
       method: "PATCH",
       path: `/v1/blocks/${encoded(blockId)}`,
       priority: "projection",
-      body: { [type]: { rich_text: richText(content) } },
+      body: { [type]: { rich_text: content, ...extra } },
     });
   }
 
+  /** The callout is the only block that says it is a person's turn, so it
+   * carries the icon and colour that say which kind of turn it is. */
+  private metadataBlock(input: z.infer<typeof payloadSchema>["desired"], content: string): Block {
+    const quiet = quietText();
+    return callout(t(content), input.metadataIcon ?? quiet.icon, input.metadataColor ?? quiet.color);
+  }
+
   private async applyOperations(
-    cardId: string,
-    pageId: string,
+    payload: z.infer<typeof payloadSchema>,
     desired: DesiredStoryPage,
     remote: RemoteStoryPage,
     operations: StoryPageOperation[],
   ): Promise<void> {
+    const { cardId, pageId } = payload;
     for (const operation of operations) {
       if (operation.type === "create_section") {
-        await this.append(pageId, [notionBlock("heading_2", SECTION_TITLES[operation.section])]);
+        await this.append(pageId, [heading2(t(sectionTitle(operation.section)))]);
+      } else if (operation.type === "rename_section") {
+        // The heading keeps its block: every scenario paragraph under it, and
+        // every comment a person left on those, hangs off this anchor.
+        await this.gateway.request({
+          method: "PATCH",
+          path: `/v1/blocks/${encoded(operation.blockId)}`,
+          priority: "projection",
+          body: { heading_2: { rich_text: t(sectionTitle(operation.section)) } },
+        });
       } else if (operation.type === "insert_metadata") {
-        await this.append(pageId, [notionBlock("callout", operation.content)]);
+        await this.append(pageId, [this.metadataBlock(payload.desired, operation.content)]);
       } else if (operation.type === "insert_content") {
-        await this.append(pageId, [notionBlock("paragraph", operation.content)], operation.afterBlockId);
+        await this.append(pageId, [
+          operation.section === "technical"
+            ? toggle(t(operation.content))
+            : paragraph(t(operation.content)),
+        ], operation.afterBlockId);
       } else if (operation.type === "update_block") {
         const type = remote.blockTypes.get(operation.blockId);
         if (!type) throw new Error(`Notion block disappeared before update: ${operation.blockId}`);
-        await this.update(operation.blockId, type, operation.content);
+        const spec = desired.specs.find((candidate) => remote.snapshot.specs
+          .some((current) => current.id === candidate.id && current.blockId === operation.blockId));
+        const content = spec ? specRuns(spec) : t(operation.content);
+        const quiet = quietText();
+        const extra = type === "callout"
+          ? {
+              icon: { type: "emoji", emoji: payload.desired.metadataIcon ?? quiet.icon },
+              color: payload.desired.metadataColor ?? quiet.color,
+            }
+          : {};
+        await this.update(operation.blockId, type, content, extra);
       } else if (operation.type === "insert_spec") {
         await this.insertSpec(cardId, pageId, desired, remote.snapshot, operation);
       } else if (operation.type === "insert_verification_round") {
@@ -326,20 +397,22 @@ export class NotionStoryPageDelivery implements NotionOutboxDelivery {
         const known = (await this.client.execute({
           sql: `SELECT toggle_block_id FROM notion_verification_rounds
                 WHERE story_id = ? AND round = ? AND archived_page_id IS NULL`,
-          args: [cardId, operation.round],
+          args: [cardId, operation.round.round],
         })).rows[0];
         if (known && await this.blockExists(String(known.toggle_block_id))) continue;
-        const [created] = await this.append(pageId, [
-          notionBlock("toggle", `Round ${operation.round}: ${operation.summary}`),
-        ], operation.afterBlockId);
+        const title = roundTitle(operation.round);
+        const [created] = await this.append(pageId, [toggle(t(title))], operation.afterBlockId);
         if (!created) throw new Error("Notion did not return the inserted verification block");
+        // The table goes in as a second call: one append nests two levels, and
+        // a table inside a toggle is three.
+        await this.append(created.id, roundBlocks(operation.round));
         await this.client.execute({
           sql: `INSERT INTO notion_verification_rounds
                   (story_id, round, toggle_block_id, summary, created_at)
                 VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(story_id, round) DO UPDATE SET
                   toggle_block_id = excluded.toggle_block_id, summary = excluded.summary`,
-          args: [cardId, operation.round, created.id, operation.summary, this.now()],
+          args: [cardId, operation.round.round, created.id, title, this.now()],
         });
       } else if (operation.type === "archive_verification_rounds") {
         await this.archiveRounds(cardId, pageId, remote, operation.rounds);
@@ -347,6 +420,72 @@ export class NotionStoryPageDelivery implements NotionOutboxDelivery {
         await archiveBlock((input) => this.gateway.request(input), operation.blockId);
       }
     }
+  }
+
+  /**
+   * The blocks that hang under a block a person already sees: the four lines
+   * of a scenario, the diagram under the design, the answers a person gave,
+   * the technical notes. They are rewritten only when the hash of what they
+   * should say moved, because rebuilding them costs a request per block and
+   * loses nothing a person wrote (nobody comments on a folded bullet).
+   */
+  private async syncChildren(
+    payload: z.infer<typeof payloadSchema>,
+    remote: RemoteStoryPage,
+  ): Promise<boolean> {
+    const { cardId } = payload;
+    const input = payload.desired;
+    let wrote = false;
+
+    for (const spec of input.specs) {
+      const current = remote.snapshot.specs.find((candidate) => candidate.id === spec.id);
+      if (!current) continue;
+      const blocks = specDetailBlocks(spec);
+      const changed = await this.rebuildChildren(current.blockId, blocks, {
+        sql: "SELECT notion_detail_hash AS hash FROM story_specs WHERE story_id = ? AND spec_id = ?",
+        args: [cardId, spec.id],
+      }, (hash) => ({
+        sql: "UPDATE story_specs SET notion_detail_hash = ? WHERE story_id = ? AND spec_id = ?",
+        args: [hash, cardId, spec.id],
+      }));
+      wrote ||= changed;
+    }
+
+    const sections: Array<[StorySection, Block[]]> = [
+      ["design", input.diagram ? [mermaid(input.diagram)] : []],
+      ["questions", input.answers && input.answers.length > 0 ? foldedBlocks(ANSWERS_TITLE, input.answers) : []],
+      ["technical", (input.technical ?? []).map((line) => paragraph(t(line)))],
+    ];
+    for (const [section, blocks] of sections) {
+      const holder = remote.snapshot.sections[section]?.contentBlockId;
+      if (!holder) continue;
+      const changed = await this.rebuildChildren(holder, blocks, {
+        sql: "SELECT content_hash AS hash FROM notion_sections WHERE story_id = ? AND section = ?",
+        args: [cardId, section],
+      }, (hash) => ({
+        sql: "UPDATE notion_sections SET content_hash = ? WHERE story_id = ? AND section = ?",
+        args: [hash, cardId, section],
+      }));
+      wrote ||= changed;
+    }
+    return wrote;
+  }
+
+  private async rebuildChildren(
+    parentId: string,
+    blocks: Block[],
+    read: InStatement,
+    write: (hash: string) => InStatement,
+  ): Promise<boolean> {
+    const hash = payloadHash({ parentId, blocks }).hash;
+    const current = (await this.client.execute(read)).rows[0]?.hash;
+    if (current !== null && current !== undefined && String(current) === hash) return false;
+    for (const child of await this.listChildren(parentId)) {
+      await archiveBlock((request) => this.gateway.request(request), child.id);
+    }
+    if (blocks.length > 0) await this.append(parentId, blocks);
+    await this.client.execute(write(hash));
+    return true;
   }
 
   private async insertSpec(
@@ -363,7 +502,12 @@ export class NotionStoryPageDelivery implements NotionOutboxDelivery {
     const afterBlockId = preceding
       ? snapshot.specs.find((current) => current.id === preceding.id)!.blockId
       : operation.afterBlockId;
-    const [created] = await this.append(pageId, [notionBlock("paragraph", operation.content)], afterBlockId);
+    const spec = desired.specs.find((candidate) => candidate.id === operation.specId);
+    const [created] = await this.append(
+      pageId,
+      [paragraph(spec ? specRuns(spec) : t(operation.content))],
+      afterBlockId,
+    );
     if (!created) throw new Error("Notion did not return the inserted Spec block");
     await this.client.execute({
       sql: "UPDATE story_specs SET notion_block_id = ? WHERE story_id = ? AND spec_id = ?",
@@ -399,7 +543,7 @@ export class NotionStoryPageDelivery implements NotionOutboxDelivery {
     for (const item of rounds) {
       const summary = remote.snapshot.verificationRounds.find((round) => round.round === item.round)?.summary ?? "";
       const content = `Round ${item.round}: ${summary}`;
-      if (!existing.has(content)) await this.append(historyPageId, [notionBlock("paragraph", content)]);
+      if (!existing.has(content)) await this.append(historyPageId, [paragraph(t(content))]);
       await archiveBlock((input) => this.gateway.request(input), item.toggleBlockId);
       await this.client.execute({
         sql: `UPDATE notion_verification_rounds SET archived_page_id = ?

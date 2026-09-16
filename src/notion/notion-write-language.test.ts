@@ -129,8 +129,13 @@ describe("what Notion is written with", () => {
     const rows = (await client.execute("SELECT payload FROM notion_outbox WHERE operation = 'sync_story_page'")).rows;
     expect(rows.length).toBeGreaterThan(1);
     for (const row of rows) {
-      const payload = JSON.parse(String(row.payload)) as { desired: unknown };
-      assertReadable("story page", strings(payload.desired));
+      // Everything but the fold: the technical section is where an engineering
+      // word is allowed to land, and it is closed until someone opens it.
+      const { technical, ...desired } = (JSON.parse(String(row.payload)) as {
+        desired: Record<string, unknown>;
+      }).desired;
+      expect(technical === undefined || Array.isArray(technical)).toBe(true);
+      assertReadable("story page", strings(desired));
     }
     client.close();
   });

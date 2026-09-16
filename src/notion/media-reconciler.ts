@@ -4,6 +4,7 @@ import type { Client } from "@libsql/client";
 import { z } from "zod";
 import { isWithinRoot } from "../guard/danger-rules.js";
 import { NotionMediaPipeline, type MediaResult } from "./media.js";
+import { scenarioTitle } from "../pipeline/dod.js";
 
 const screenshotsSchema = z.array(z.object({
   scenarioId: z.string().min(1),
@@ -51,6 +52,20 @@ export class NotionMediaReconciler {
             ORDER BY vr.card_id, vr.round`,
       args: cardId ? [cardId] : [],
     })).rows;
+    // A screenshot is filed under the words the scenario is known by, not
+    // under its id: the person looking at it is checking a screen against what
+    // they asked for.
+    const names = new Map((await this.client.execute({
+      sql: `SELECT spec_id, seq, title FROM story_specs
+            ${cardId ? "WHERE story_id = ?" : ""}`,
+      args: cardId ? [cardId] : [],
+    })).rows.map((row) => [
+      String(row.spec_id),
+      `\u573a\u666f ${Number(row.seq)} \u00b7 ${scenarioTitle(
+        { title: typeof row.title === "string" && row.title ? row.title : undefined },
+        Number(row.seq),
+      )}`,
+    ]));
     let queued = 0;
     let skipped = 0;
 
@@ -87,7 +102,7 @@ export class NotionMediaReconciler {
           evidenceId: id,
           path: localPath,
           targetBlockId,
-          caption: `${screenshot.scenarioId} evidence, round ${round}`,
+          caption: `${names.get(screenshot.scenarioId) ?? screenshot.scenarioId} \u00b7 \u7b2c ${round} \u8f6e`,
         });
         queued++;
       }

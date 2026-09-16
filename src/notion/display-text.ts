@@ -88,6 +88,15 @@ export interface WaitingText {
  * state, waiting and cost are board columns already, and a page that repeats
  * them costs attention without adding anything (design 01 section 2.3).
  */
+/**
+ * What the callout says when nothing is waiting. The block itself stays: a
+ * Notion block can only be appended after another one, so a callout archived
+ * on a quiet day comes back at the bottom of the page rather than at the top.
+ */
+export function quietText(): WaitingText {
+  return text.quiet;
+}
+
 export function waitingText(level: "story" | "epic" | "requirement", situation: string): WaitingText | undefined {
   const table = text.waiting[level] as Record<string, WaitingText | undefined>;
   return table[situation];

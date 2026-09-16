@@ -124,5 +124,6 @@
         "action": "看下面的 PRD；认可就把卡拖到「拆解执行中」，要改就写条评论说改哪里。"
       }
     }
-  }
+  },
+  "quiet": { "icon": "🧭", "color": "gray_background", "action": "现在没有等你处理的事。" }
 }

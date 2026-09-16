@@ -232,8 +232,10 @@ export const storySpecs = sqliteTable("story_specs", {
   title: text("title"),
   given: text("given"),
   when: text("when_"),
+  // oxlint-disable-next-line unicorn/no-thenable -- Given/When/Then is the external DoD contract.
   then: text("then_"),
   layers: text("layers"),
+  notionDetailHash: text("notion_detail_hash"),
   status: text("status").notNull(),
   notionBlockId: text("notion_block_id").unique(),
 }, (t) => [
@@ -246,6 +248,7 @@ export const notionSections = sqliteTable("notion_sections", {
   section: text("section").notNull(),
   anchorBlockId: text("anchor_block_id").notNull().unique(),
   contentBlockId: text("content_block_id"),
+  contentHash: text("content_hash"),
 }, (t) => [uniqueIndex("notion_sections_story_section_unique").on(t.storyId, t.section)]);
 
 export const notionVerificationRounds = sqliteTable("notion_verification_rounds", {
