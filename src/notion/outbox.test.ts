@@ -1,7 +1,7 @@
 import { createClient, type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { migrate } from "../persistence/migrate.js";
-import { NotionOutbox, OUTBOX_MAX_ATTEMPTS, deadLetters, type NotionOutboxDelivery } from "./outbox.js";
+import { NotionOutbox, OUTBOX_CLAIM_MS, OUTBOX_MAX_ATTEMPTS, deadLetters, type NotionOutboxDelivery } from "./outbox.js";
 
 let client: Client;
 
@@ -41,6 +41,42 @@ describe("replay", () => {
     const row = (await db.execute("SELECT state, attempts, sent_at FROM notion_outbox")).rows[0];
     expect(row).toMatchObject({ state: "pending", attempts: 0, sent_at: null });
     db.close();
+  });
+
+  it("sends a row once when two replays overlap, because an append cannot be undone", async () => {
+    const outbox = new NotionOutbox(client);
+    await outbox.enqueue({ target: "story-1", operation: "sync_story_page", payload: { round: 5 }, priority: 3 });
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => { release = resolve; });
+    const sends: number[] = [];
+    const delivery: NotionOutboxDelivery = {
+      isApplied: async () => false,
+      send: async (record) => { sends.push(record.id); release(); await new Promise((r) => setTimeout(r, 20)); },
+    };
+
+    const first = outbox.replay(delivery);
+    await started;
+    const second = await outbox.replay(delivery);
+    const firstResult = await first;
+
+    expect(sends).toHaveLength(1);
+    expect(firstResult.sent).toBe(1);
+    expect(second.sent).toBe(0);
+  });
+
+  it("hands a row abandoned mid-send to the next replay once its claim runs out", async () => {
+    let now = 1_000;
+    const outbox = new NotionOutbox(client, () => now);
+    await outbox.enqueue({ target: "story-1", operation: "sync_story_page", payload: { round: 5 }, priority: 3 });
+    await client.execute({
+      sql: "UPDATE notion_outbox SET claimed_until = ?",
+      args: [now + OUTBOX_CLAIM_MS],
+    });
+    const delivery: NotionOutboxDelivery = { isApplied: async () => false, send: async () => {} };
+
+    expect((await outbox.replay(delivery)).sent).toBe(0);
+    now += OUTBOX_CLAIM_MS + 1;
+    expect((await outbox.replay(delivery)).sent).toBe(1);
   });
 
   it("leaves rows for other deliveries alone when told which operations it owns", async () => {

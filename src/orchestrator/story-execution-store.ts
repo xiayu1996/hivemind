@@ -160,6 +160,28 @@ export class StoryExecutionStore {
     await this.writeGuard?.assert(cardId);
   }
 
+  /** The Epic id behind an Epic page, for a card a person filed by relation. */
+  async epicIdForPage(notionPageId: string): Promise<string | undefined> {
+    const row = (await this.client.execute({
+      sql: "SELECT id FROM epics WHERE notion_page_id = ?",
+      args: [notionPageId],
+    })).rows[0];
+    return row ? String(row.id) : undefined;
+  }
+
+  /**
+   * Files an already-known Story under its Epic. Intake creates a card once
+   * and never rewrites it, so a relation set after the card was ingested --
+   * or before this was read at all -- would otherwise never arrive. Only an
+   * unset epic_id is filled: a Story the decomposer placed keeps its Epic.
+   */
+  async attachEpic(cardId: string, epicId: string): Promise<void> {
+    await this.client.execute({
+      sql: "UPDATE stories SET epic_id = ?, updated_at = ? WHERE id = ? AND epic_id IS NULL",
+      args: [epicId, this.now(), cardId],
+    });
+  }
+
   async createStory(input: StoryIntake): Promise<boolean> {
     if (input.requirement.trim() === "") throw new Error("Story requirement must not be empty");
     const time = this.now();

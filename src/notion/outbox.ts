@@ -46,6 +46,13 @@ export interface NotionOutboxDelivery {
  */
 export const OUTBOX_MAX_ATTEMPTS = 8;
 
+/**
+ * How long a replay holds a row it is sending. Long enough to cover a send
+ * queued behind the gateway's rate limit, short enough that a replay killed
+ * mid-send does not strand the row for the rest of the day.
+ */
+export const OUTBOX_CLAIM_MS = 2 * 60 * 1_000;
+
 export interface DeadLetter {
   id: number;
   cardId: string | null;
@@ -172,13 +179,14 @@ export class NotionOutbox {
       throw new Error("an outbox replay must name at least one operation or none");
     }
     const filter = operations.length > 0 ? ` AND operation IN (${operations.map(() => "?").join(", ")})` : "";
+    const now = this.now();
     const rows = (await this.client.execute({
       sql: `SELECT id, card_id, priority, operation, target, payload, payload_hash, attempts
             FROM notion_outbox
-            WHERE state = 'pending'${filter}
+            WHERE state = 'pending' AND (claimed_until IS NULL OR claimed_until <= ?)${filter}
             ORDER BY priority ASC, id ASC
             LIMIT ?`,
-      args: [...operations, limit],
+      args: [now, ...operations, limit],
     })).rows;
     let sent = 0;
     let failed = 0;
@@ -196,15 +204,22 @@ export class NotionOutbox {
         payloadHash: String(row.payload_hash),
         attempts: Number(row.attempts) + 1,
       };
-      await this.client.execute({
-        sql: "UPDATE notion_outbox SET attempts = attempts + 1, last_error = NULL WHERE id = ?",
-        args: [record.id],
+      // Claiming is what keeps two overlapping replays from both sending this
+      // row. An operation that appends to a page cannot tell its own append
+      // from somebody else's, so a lost race here shows up as a duplicated
+      // block on a page a person reads, not as a retry.
+      const claimed = await this.client.execute({
+        sql: `UPDATE notion_outbox
+              SET attempts = attempts + 1, last_error = NULL, claimed_until = ?
+              WHERE id = ? AND state = 'pending' AND (claimed_until IS NULL OR claimed_until <= ?)`,
+        args: [this.now() + OUTBOX_CLAIM_MS, record.id, this.now()],
       });
+      if (claimed.rowsAffected === 0) continue;
 
       try {
         if (!(await delivery.isApplied(record))) await delivery.send(record);
         await this.client.execute({
-          sql: "UPDATE notion_outbox SET state = 'sent', sent_at = ?, last_error = NULL WHERE id = ?",
+          sql: "UPDATE notion_outbox SET state = 'sent', sent_at = ?, last_error = NULL, claimed_until = NULL WHERE id = ?",
           args: [this.now(), record.id],
         });
         sent++;
@@ -212,7 +227,7 @@ export class NotionOutbox {
         const lastError = String((cause as Error).message).slice(0, 2_000);
         const exhausted = record.attempts >= OUTBOX_MAX_ATTEMPTS;
         await this.client.execute({
-          sql: "UPDATE notion_outbox SET last_error = ?, state = ? WHERE id = ?",
+          sql: "UPDATE notion_outbox SET last_error = ?, state = ?, claimed_until = NULL WHERE id = ?",
           args: [lastError, exhausted ? "dead" : "pending", record.id],
         });
         failed++;

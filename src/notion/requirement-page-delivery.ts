@@ -302,6 +302,7 @@ export class NotionRequirementPageDelivery implements NotionOutboxDelivery {
     const properties: Record<string, unknown> = {
       [names.title]: { title: [text(payload.title)] },
       [names.epicStatus]: { select: { name: schema.options.epicStatus[0] } },
+      [names.taskId]: { rich_text: [text(payload.epicId)] },
       [names.requirementRelation]: { relation: [{ id: String(requirement.notion_page_id) }] },
     };
     const created = await this.gateway.request({
@@ -324,7 +325,14 @@ export class NotionRequirementPageDelivery implements NotionOutboxDelivery {
       path: `/v1/data_sources/${encoded(this.epicsDataSourceId)}/query`,
       priority: "projection",
       body: {
-        filter: { property: schema.propertyNames.title, title: { starts_with: `${epicId} ` } },
+        // The id lives in its own property; the title prefix is only how pages
+        // created before that property carried it, so it stays as a fallback.
+        filter: {
+          or: [
+            { property: schema.propertyNames.taskId, rich_text: { equals: epicId } },
+            { property: schema.propertyNames.title, title: { starts_with: `${epicId} ` } },
+          ],
+        },
         page_size: 1,
       },
     });

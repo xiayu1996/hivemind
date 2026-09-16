@@ -294,6 +294,7 @@ export const notionOutbox = sqliteTable("notion_outbox", {
   state: text("state").notNull().default("pending"),
   attempts: integer("attempts").notNull().default(0),
   lastError: text("last_error"),
+  claimedUntil: ms("claimed_until"),
   createdAt: ms("created_at").notNull(),
   sentAt: ms("sent_at"),
 }, (t) => [

@@ -1,5 +1,5 @@
 import { Client } from "@notionhq/client";
-import { bootstrapNotion, bootstrapRequirements, upgradeEpicBoard } from "../src/notion/bootstrap.js";
+import { bootstrapNotion, bootstrapRequirements, upgradeEpicBoard, upgradeStoryBoard } from "../src/notion/bootstrap.js";
 import { loadSecretsFile, upsertSecretFile } from "../src/config/secrets-file.js";
 
 function argument(name: string): string | undefined {
@@ -38,6 +38,18 @@ async function main(): Promise<void> {
     if (!epicsDataSourceId) throw new Error("pass --epics-data-source or set HIVEMIND_NOTION_EPICS_DATA_SOURCE_ID");
     await upgradeEpicBoard(client, epicsDataSourceId);
     console.log("Epics database upgraded: status options, review request column and waiting formula are current.");
+    return;
+  }
+
+  // The execution-phase column is rewritten to the words the orchestrator
+  // writes today, and the repository column loses the bare name a first board
+  // was seeded with. Pass --repository-slug to fold that one in.
+  if (process.argv.includes("--upgrade-stories")) {
+    const storiesDataSourceId = argument("--stories-data-source") ??
+      process.env.HIVEMIND_NOTION_STORIES_DATA_SOURCE_ID ?? stored.get("HIVEMIND_NOTION_STORIES_DATA_SOURCE_ID");
+    if (!storiesDataSourceId) throw new Error("pass --stories-data-source or set HIVEMIND_NOTION_STORIES_DATA_SOURCE_ID");
+    await upgradeStoryBoard(client, storiesDataSourceId, argument("--repository-slug"));
+    console.log("Stories database upgraded: execution phase words are current and the repository column is deduplicated.");
     return;
   }
 

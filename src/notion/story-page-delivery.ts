@@ -1,6 +1,6 @@
 import type { Client, InStatement } from "@libsql/client";
 import { z } from "zod";
-import { archiveBlock, type NotionGateway } from "./gateway.js";
+import { archiveBlock, NotionGatewayError, type NotionGateway } from "./gateway.js";
 import type { NotionOutboxDelivery, NotionOutboxRecord } from "./outbox.js";
 import {
   planStoryPageUpdate,
@@ -92,10 +92,6 @@ function parseSpec(content: string): { id: string; status: string; text: string 
   return match ? { id: match[1]!, status: match[2]!, text: match[3] ?? "" } : undefined;
 }
 
-/** How long a round toggle recorded in the database is trusted to exist on the
- * page even when a listing does not show it yet. */
-const RECENT_INSERT_MS = 10 * 60_000;
-
 function parseRound(content: string): { round: number; summary: string } | undefined {
   const match = /^Round (\d+):(?: ([\s\S]*))?$/.exec(content);
   return match ? { round: Number(match[1]), summary: match[2] ?? "" } : undefined;
@@ -121,6 +117,27 @@ export class NotionStoryPageDelivery implements NotionOutboxDelivery {
     private readonly gateway: NotionGateway,
     private readonly now: () => number = Date.now,
   ) {}
+
+  /**
+   * Whether a block we recorded is still on its page. A block a person deleted
+   * answers 404, and one Notion archived reads back archived; both mean the
+   * page no longer holds it and the round must be written again.
+   */
+  private async blockExists(blockId: string): Promise<boolean> {
+    try {
+      const response = await this.gateway.request({
+        method: "GET",
+        path: `/v1/blocks/${encodeURIComponent(blockId)}`,
+        priority: "projection",
+      });
+      const block = response.data as { archived?: boolean; in_trash?: boolean };
+      return block.archived !== true && block.in_trash !== true;
+    } catch (error) {
+      if (error instanceof NotionGatewayError && error.status === 404) return false;
+      if (/could not be found/i.test((error as Error).message)) return false;
+      throw error;
+    }
+  }
 
   async isApplied(record: NotionOutboxRecord): Promise<boolean> {
     const payload = this.payload(record);
@@ -302,14 +319,16 @@ export class NotionStoryPageDelivery implements NotionOutboxDelivery {
       } else if (operation.type === "insert_spec") {
         await this.insertSpec(cardId, pageId, desired, remote.snapshot, operation);
       } else if (operation.type === "insert_verification_round") {
-        // A round this process inserted moments ago may not be listed yet;
-        // the page, not the outbox row, is what must hold exactly one toggle.
+        // A round this process inserted moments ago may not be listed on the
+        // page yet, and appending is not idempotent, so the recorded toggle is
+        // asked about directly. The page, not the outbox row, is what must
+        // hold exactly one toggle per round.
         const known = (await this.client.execute({
-          sql: `SELECT toggle_block_id, created_at FROM notion_verification_rounds
+          sql: `SELECT toggle_block_id FROM notion_verification_rounds
                 WHERE story_id = ? AND round = ? AND archived_page_id IS NULL`,
           args: [cardId, operation.round],
         })).rows[0];
-        if (known && this.now() - Number(known.created_at) < RECENT_INSERT_MS) continue;
+        if (known && await this.blockExists(String(known.toggle_block_id))) continue;
         const [created] = await this.append(pageId, [
           notionBlock("toggle", `Round ${operation.round}: ${operation.summary}`),
         ], operation.afterBlockId);

@@ -305,7 +305,7 @@ async function main(): Promise<void> {
     await ingestReadyStories(storyApi, dataSourceId, store);
     await registerActiveStories();
   };
-  const reconcileProjections = async (): Promise<void> => {
+  const reconcileProjection = async (): Promise<void> => {
     // A parked Story is the Epic's problem too: the board shows the Epic as
     // blocked while any of its Stories waits for a person, and executing again
     // once none does.
@@ -332,6 +332,16 @@ async function main(): Promise<void> {
     }
     await media.reconcile();
     await registerActiveStories();
+  };
+  // Two callers reconcile: a Story subprocess finishing, and the timed cycle.
+  // They are allowed to coincide, and the second one wants the first one's
+  // result rather than a second pass over the same rows, so it joins the run
+  // already in flight. Without this the two passes claim rows from each other
+  // and every projection does its own extra round trip to Notion.
+  let reconciling: Promise<void> | null = null;
+  const reconcileProjections = async (): Promise<void> => {
+    reconciling ??= reconcileProjection().finally(() => { reconciling = null; });
+    await reconciling;
   };
   // Archived or deleted pages must not spin the fallback poller forever: a
   // 404 drops the page from the active set instead of surfacing as an error.

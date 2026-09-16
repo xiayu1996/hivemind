@@ -137,6 +137,9 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
     const pageId = String(epic.notion_page_id);
     const properties: Record<string, unknown> = {
       [schema.propertyNames.mergeRequest]: { url: payload.mrUrl },
+      // Fills the id column on pages created before it existed, so the board
+      // and the intake lookup stop depending on the title prefix.
+      [schema.propertyNames.taskId]: { rich_text: [text(payload.epicId)] },
     };
     // A column a person just dragged keeps their word until the human-wins
     // window closes, exactly as the status-only projection does.
