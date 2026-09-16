@@ -1031,13 +1031,18 @@ export class StoryExecutionStore {
     });
     if (Number(existing.rows[0]?.count) > 0) throw new Error(`Story DoD is already frozen: ${cardId}`);
     const statements = definition.scenarios.map((scenario, index) => ({
-      sql: `INSERT INTO story_specs (spec_id, story_id, seq, text, status)
-            VALUES (?, ?, ?, ?, 'pending')`,
+      sql: `INSERT INTO story_specs (spec_id, story_id, seq, text, title, given, when_, then_, layers, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
       args: [
         scenario.id,
         cardId,
         index + 1,
         `Given ${scenario.given}; when ${scenario.when}; then ${scenario.then}`,
+        scenario.title ?? null,
+        scenario.given,
+        scenario.when,
+        scenario.then,
+        JSON.stringify(scenario.layers),
       ],
     }));
     const time = this.now();

@@ -8,7 +8,13 @@ import {
 import { evaluateSpecExit, applyDowngrades, renderSpecExitFindings, type SpecExitPorts } from "../pipeline/spec-exit-gate.js";
 import { parseTestContract } from "../pipeline/test-contract.js";
 import { costCeilingVerdict, renderCostCeilingReport, type CardSpend } from "../pipeline/cost-ceiling.js";
-import { DoDValidationError, parseDoD, type DefinitionOfDone } from "../pipeline/dod.js";
+import {
+  DoDValidationError,
+  lintDoDLanguage,
+  parseDoD,
+  renderDoDLanguageFindings,
+  type DefinitionOfDone,
+} from "../pipeline/dod.js";
 import { assemblePhasePrompt, type PhaseInput } from "../pipeline/phase-input.js";
 import {
   StoryExecutionStore,
@@ -673,6 +679,11 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
       await this.store.recordOpenQuestions(cardId, questions);
       try {
         const definitionOfDone = parseDoD(artifact(shaped, "dod"));
+        // The contract a person judges the card by is written for them. A DoD
+        // in English or in implementation words is sent back to the same
+        // session, which costs a retry rather than a person's attention.
+        const language = lintDoDLanguage(definitionOfDone);
+        if (language.length > 0) throw new DoDValidationError(renderDoDLanguageFindings(language));
         const frozen = await this.store.findFrozenDefinitionOfDone(cardId);
         if (frozen) {
           await this.store.refreezeDefinitionOfDone(cardId, definitionOfDone);

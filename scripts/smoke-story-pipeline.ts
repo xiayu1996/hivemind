@@ -263,14 +263,15 @@ async function main(): Promise<void> {
         (SELECT COUNT(*) FROM cost_entries) AS costs
     `);
     const row = counts.rows[0];
-    // Six phase runs: SHAPE, DESIGN, SPECIFY, CODE, VERIFY, MERGE. Nine
-    // artifacts: three from SHAPE, two from DESIGN, and one each from the rest.
-    if (Number(row?.runs) !== 6 || Number(row?.artifacts) !== 9 ||
+    // Six phase runs: SHAPE, DESIGN, SPECIFY, CODE, VERIFY, MERGE. Ten
+    // artifacts: three from SHAPE, three from DESIGN (the summary a person
+    // reads, the notes whoever codes reads, the declarations), one each after.
+    if (Number(row?.runs) !== 6 || Number(row?.artifacts) !== 10 ||
         Number(row?.verdicts) !== 1 || Number(row?.costs) !== 6) {
       throw new Error(`central execution ledger is incomplete: ${JSON.stringify(row)}`);
     }
     console.log("PASS: real pi completed SHAPE, DESIGN, SPECIFY, CODE, blind VERIFY and MERGE in fresh sessions");
-    console.log("PASS: central libsql recorded 6 runs, 9 artifacts, 1 accepted verdict and 6 phase costs");
+    console.log("PASS: central libsql recorded 6 runs, 10 artifacts, 1 accepted verdict and 6 phase costs");
     console.log("PASS: exact provider payloads round-tripped through each canonical run log");
     console.log("PASS: the clean Story branch was published before the MR adapter returned");
 

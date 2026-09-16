@@ -167,17 +167,18 @@ function scriptedReply(messages) {
     return JSON.stringify({
       dod_yaml: [
         `story_id: ${storyId}`,
-        "design_summary: Persist phase artifacts and verify them independently.",
+        "design_summary: 每个阶段留下的东西都存得住，交付前由另一边独立验一遍。",
         "scenarios:",
         `  - id: ${storyId}-unit`,
-        "    given: A completed implementation",
-        "    when: blind verification runs",
-        "    then: the scenario passes from observed evidence",
+        "    title: 验过之后才算做完",
+        "    given: 实现已经写完",
+        "    when: 另一边独立验一遍",
+        "    then: 有看得见的证据时这条场景才算通过",
         "    layers: [integration]",
         "baseline:",
         "  type: acceptance_test",
         "acceptance_criteria:",
-        "  - text: The Story reaches delivered after an accepted verdict.",
+        "  - text: 验证通过之后这张卡才算交付。",
         `    scenarios: [${storyId}-unit]`,
         "out_of_scope: []",
         "relies_on: []",
@@ -190,7 +191,8 @@ function scriptedReply(messages) {
   }
   if (phaseInput.includes("Phase: DESIGN")) {
     return JSON.stringify({
-      design_summary: "Use the central phase ledger and an independent verifier.",
+      design_summary: "每个阶段的产出都记在中央账上，交付前由另一边照着验收标准再看一遍。",
+      technical_notes: "The phase ledger is the single source; the verifier runs in its own session.",
       declarations: [{ file: "src/orchestrator/story-worker.ts", note: "the phase the verdict is judged against" }],
     });
   }

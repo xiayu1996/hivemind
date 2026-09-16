@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { DoDValidationError, LAYER_OWNER, hasScreen, parseDoD, refusableStatements, scanScenarioCoverage, seedOf } from "./dod.js";
+import {
+  DoDValidationError,
+  LAYER_OWNER,
+  hasScreen,
+  lintDoDLanguage,
+  parseDoD,
+  refusableStatements,
+  renderDoDLanguageFindings,
+  scanScenarioCoverage,
+  scenarioTitle,
+  seedOf,
+} from "./dod.js";
 
 const yaml = `
 story_id: S-EPIC12-03
@@ -96,5 +107,51 @@ describe("scanScenarioCoverage", () => {
       { path: "cart.test.ts", content: "// @scenario S-EPIC12-03-a\n// @scenario S-EPIC12-99-z" },
     ]);
     expect(result).toEqual({ pass: false, missing: [], unexpected: ["S-EPIC12-99-z"] });
+  });
+});
+
+describe("the language a DoD is written in", () => {
+  const chinese = `
+story_id: S-EPIC12-03
+design_summary: 结账时先减掉优惠券再算税，用户看到的总价比原来低。
+scenarios:
+  - id: S-EPIC12-03-a
+    title: 用券后按折后价算税
+    given: 购物车里有要算税的商品
+    when: 用掉一张满减券
+    then: 税按折后金额算，页面上的总价随之变小
+    layers: [unit, integration]
+baseline:
+  type: acceptance_test
+acceptance_criteria:
+  - text: 税按折后金额算
+    scenarios: [S-EPIC12-03-a]
+out_of_scope: []
+relies_on: []
+predicted_footprint: [src/cart]
+depends_on: []
+`;
+
+  it("accepts a DoD written for the person who ordered the card", () => {
+    expect(lintDoDLanguage(parseDoD(chinese))).toEqual([]);
+    expect(parseDoD(chinese).scenarios[0]?.title).toBe("用券后按折后价算税");
+  });
+
+  it("names the sentence to rewrite when the DoD came back in English", () => {
+    const findings = lintDoDLanguage(parseDoD(yaml));
+    expect(findings.map((finding) => finding.where)).toContain("design_summary");
+    expect(findings.some((finding) => finding.where.endsWith(".title") && finding.what === "is missing")).toBe(true);
+    expect(renderDoDLanguageFindings(findings)).toContain("scenarios.S-EPIC12-03-a.given");
+  });
+
+  it("numbers a scenario a DoD frozen before titles existed, rather than inventing a name for it", () => {
+    const scenario = parseDoD(yaml).scenarios[0]!;
+    expect(scenarioTitle(scenario, 1)).toBe("场景 1");
+    expect(scenarioTitle({ title: "用券后按折后价算税" }, 1)).toBe("用券后按折后价算税");
+  });
+
+  it("refuses a title longer than a line a person skims", () => {
+    const long = chinese.replace("title: 用券后按折后价算税", `title: ${"很长".repeat(11)}`);
+    expect(() => parseDoD(long)).toThrow(DoDValidationError);
   });
 });

@@ -29,6 +29,8 @@ DoD 是后面每个阶段的判据：SPECIFY 按它写测试，盲审按它核�
 每个 `scenario_id` 必须形如 `S-<EPIC>-NN-<scene>`（scene 为小写字母或数字），且以 story_id 为前缀。
 
 每条 scenario：
+- `title`：这条场景叫什么，**中文、不超过 20 字**。它是人在卡片上和每一轮验证记录里唯一会读到的那行字，
+  写成「用户做完什么之后看到什么」，不要写成「验证 XX 功能」。
 - `given` / `when` / `then` 业务语言；`then` 点名可观察物（哪段文字、哪个字段、哪个状态）与边界（什么被排除）。
 - `layers`：unit / integration / snapshot 由 SPECIFY 写测试、CODE 实现并证明；e2e / ui 由 VERIFY 在真实浏览器里证明。
   只声明真的会被证明的层；用户可见的行为流要有 e2e 或 ui。
@@ -45,7 +47,11 @@ DoD 是后面每个阶段的判据：SPECIFY 按它写测试，盲审按它核�
 
 YAML 书写：值里含「: 」（冒号加空格）、以引号或特殊字符开头时，整段值用双引号包起来；`dod_yaml` 是真正的多行 YAML 文本，不要把换行写成 `\n`。
 
-**不要写 `design_summary`**：设计是 DESIGN 的产物，这里只定「做成什么样算做成了」。
+**语言：整份 DoD 用中文业务语言写。** `title` / `given` / `when` / `then` / `acceptance_criteria` / `design_summary`
+都是给提需求的人读的，出口会逐条检查：英文句子、实现词汇（函数、组件、数据库、模块）、文件路径一律被打回重写，
+不通过就白花一轮。标识符、场景 id、字段名照写不误——它们是句柄不是词。
+
+`design_summary` 在这里只写一句话：做完之后用户能做什么。真正的技术方案是 DESIGN 的产物，不要在这里写。
 
 ## 输出
 

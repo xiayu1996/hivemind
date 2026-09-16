@@ -10,22 +10,24 @@ import {
 } from "./story-worker.js";
 
 const DOD = `story_id: S-EPIC1-01
-design_summary: Persist every phase output centrally.
+design_summary: 每个阶段的产出都存在中央库里，下一个阶段开始时能读到上一个阶段留下的东西。
 scenarios:
   - id: S-EPIC1-01-a
-    given: A completed phase
-    when: the next phase starts
-    then: its prompt contains the earlier artifact
+    title: 上一阶段的产出还在
+    given: 一个阶段已经做完
+    when: 下一个阶段开始
+    then: 它能读到上一阶段留下的产出
     layers: [integration]
   - id: S-EPIC1-01-b
-    given: Verification rejects the implementation
-    when: another round runs
-    then: the failure set strictly shrinks
+    title: 打回后问题变少
+    given: 验证打回了这次实现
+    when: 再跑一轮
+    then: 没通过的场景比上一轮更少
     layers: [unit]
 baseline:
   type: acceptance_test
 acceptance_criteria:
-  - text: The Story reaches delivered only after an accepted blind verdict.
+  - text: 只有验证通过之后，这张卡才算交付。
     scenarios: [S-EPIC1-01-a, S-EPIC1-01-b]
 out_of_scope: []
 relies_on: []
@@ -623,6 +625,37 @@ describe("SingleStoryWorker SHAPE re-entry after a crash", () => {
     expect(artifacts.rows).toMatchObject([{ kind: "dod" }, { kind: "open-questions" }]);
   });
 
+  it("sends an English DoD back to the same SHAPE session, because a person has to read it", async () => {
+    await store.transition("S-EPIC1-01", "QUEUED", "SHAPE", "system", "run-shape");
+    const english = DOD
+      .replace("design_summary: 每个阶段的产出都存在中央库里，下一个阶段开始时能读到上一个阶段留下的东西。", "design_summary: Persist every phase output centrally.")
+      .replace("    title: 上一阶段的产出还在\n", "")
+      .replace("    given: 一个阶段已经做完", "    given: A completed phase");
+    let shaped = 0;
+    const phases = vi.fn(async (input: ManagedPhaseInput) => {
+      if (input.phase === "SHAPE") {
+        shaped++;
+        return frontPhase(input, shaped === 1 ? english : DOD)!;
+      }
+      const front = frontPhase(input);
+      if (front) return front;
+      if (input.phase === "CODE") return { sessionId: `session-code-${input.round}`, artifacts: [{ kind: "implementation", body: "done" }] };
+      return { sessionId: "session-merge", artifacts: [{ kind: "delivery-report", body: "两个场景都通过了。" }] };
+    });
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => ({ sessionId: `session-verify-${input.round}`, verdict: "accepted" as const, failedScenarios: [], artifact: "{}" })),
+    };
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier,
+      { deliver: vi.fn(async () => ({ mrUrl: null })) }, { enqueue: vi.fn(async () => undefined) });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
+    expect(shaped).toBe(2);
+    const frozen = await store.getDefinitionOfDone("S-EPIC1-01");
+    expect(frozen.scenarios[0]?.title).toBe("上一阶段的产出还在");
+    const titles = await client.execute("SELECT title FROM story_specs WHERE story_id = 'S-EPIC1-01' ORDER BY seq");
+    expect(titles.rows.map((row) => row.title)).toEqual(["上一阶段的产出还在", "打回后问题变少"]);
+  });
+
   it("shapes a CODE Story again when its frozen DoD no longer satisfies the contract", async () => {
     await store.transition("S-EPIC1-01", "QUEUED", "SHAPE", "system", "run-shape");
     await store.beginPhase({ runId: "run-shape", cardId: "S-EPIC1-01", phase: "SHAPE", round: 1, prompt: "shape" });
@@ -943,8 +976,8 @@ describe("SingleStoryWorker scenario carry-forward", () => {
 
     // A person reworded scenario a. Its own conclusion is void; b's is not.
     const reworded = parseDoD(DOD.replace(
-      "then: its prompt contains the earlier artifact",
-      "then: its prompt contains the earlier artifact verbatim",
+      "then: 它能读到上一阶段留下的产出",
+      "then: 它能一字不差地读到上一阶段留下的产出",
     ));
     await store.refreezeDefinitionOfDone("S-EPIC1-01", reworded);
     const versions = await store.definitionVersions("S-EPIC1-01");
@@ -1002,8 +1035,8 @@ describe("SingleStoryWorker scenario carry-forward", () => {
           if (reworded || verified.length === 0) return;
           reworded = true;
           await store.refreezeDefinitionOfDone("S-EPIC1-01", parseDoD(DOD.replace(
-            "then: the failure set strictly shrinks",
-            "then: the failure set strictly shrinks every round",
+            "then: 没通过的场景比上一轮更少",
+            "then: 没通过的场景每一轮都比上一轮更少",
           )));
         },
       },

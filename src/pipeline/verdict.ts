@@ -6,9 +6,15 @@ import { SCREEN_EVIDENCE_MISSING } from "./failure-classification.js";
 export interface ScenarioVerdict {
   id: string;
   status: "passed" | "failed" | "inconclusive";
-  /** The verifier's one-sentence account of what it observed; the only thing a
-   * person reading the board gets to decide from when a round is rejected. */
+  /**
+   * One sentence in Chinese, in the words of whoever ordered the card: what
+   * was seen on which screen. It is the only thing a person reading the board
+   * decides from when a round is rejected, so the technical evidence behind it
+   * belongs in `detail`, which the page keeps folded.
+   */
   reason?: string;
+  /** The failing test, the command, the line: written for whoever debugs it. */
+  detail?: string;
   url?: string;
   screenshots?: string[];
 }

@@ -1,5 +1,6 @@
 import { parse } from "yaml";
 import { z } from "zod";
+import { lintHumanSentence } from "../report/business-language.js";
 
 const storyId = z.string().regex(/^S-[A-Z0-9]+-\d{2}$/);
 const scenarioId = z.string().regex(/^S-[A-Z0-9]+-\d{2}-[a-z0-9]+$/);
@@ -29,6 +30,14 @@ const example = z.object({
 
 const scenario = z.object({
   id: scenarioId,
+  /**
+   * What the scenario is, in at most twenty Chinese characters: it is the line
+   * a person reads on the card and in every verification round, where the
+   * given/when/then is detail they open only when they care. Optional in the
+   * schema because a DoD frozen before this existed still has to parse; the
+   * SHAPE exit gate requires it of anything written from now on.
+   */
+  title: z.string().trim().min(1).max(20).optional(),
   given: z.string().trim().min(1),
   when: z.string().trim().min(1),
   // oxlint-disable-next-line unicorn/no-thenable -- Given/When/Then is the external DoD contract.
@@ -151,6 +160,58 @@ export function seedOf(entry: Pick<DoDScenario, "seed">): string | undefined {
 /** The sentences a reviewer may refuse this scenario for, verbatim. */
 export function refusableStatements(entry: DoDScenario): string[] {
   return [entry.then, ...(entry.examples ?? []).map((item) => item.text)];
+}
+
+/** The line a person reads for this scenario, and its place in the list. */
+export function scenarioTitle(entry: Pick<DoDScenario, "title">, seq: number): string {
+  // A DoD written before titles existed is never machine-translated into one:
+  // a made-up name reads like the author's and is nobody's.
+  return entry.title ?? `场景 ${seq}`;
+}
+
+export interface DoDLanguageFinding {
+  /** Which sentence, named the way the author will look for it. */
+  where: string;
+  what: string;
+  excerpt: string;
+}
+
+/**
+ * The DoD is the card's contract, and a person judges the delivery by reading
+ * it. Every sentence in it that reaches a page is held to Chinese business
+ * language here: the prompt asks, this refuses, and the two together are why
+ * the page does not need a translation step (design 01 section 2.3).
+ */
+export function lintDoDLanguage(dod: DefinitionOfDone): DoDLanguageFinding[] {
+  const findings: DoDLanguageFinding[] = [];
+  const check = (where: string, text: string): void => {
+    for (const finding of lintHumanSentence(where, text)) {
+      findings.push({ where, what: finding.what, excerpt: finding.excerpt });
+    }
+  };
+  check("design_summary", dod.design_summary);
+  for (const entry of dod.scenarios) {
+    if (!entry.title) {
+      findings.push({ where: `scenarios.${entry.id}.title`, what: "is missing", excerpt: "" });
+    } else {
+      check(`scenarios.${entry.id}.title`, entry.title);
+    }
+    check(`scenarios.${entry.id}.given`, entry.given);
+    check(`scenarios.${entry.id}.when`, entry.when);
+    check(`scenarios.${entry.id}.then`, entry.then);
+  }
+  for (const [index, item] of dod.acceptance_criteria.entries()) {
+    check(`acceptance_criteria[${index}]`, item.text);
+  }
+  return findings;
+}
+
+/** What SHAPE is told to fix, in the language the prompt is written in. */
+export function renderDoDLanguageFindings(findings: readonly DoDLanguageFinding[]): string {
+  return [
+    "The DoD is read by the person who ordered this card, so every sentence in it must be Chinese business language: what a user does and what they then see, with no implementation words, file paths or English prose. Rewrite these and return the whole DoD again:",
+    ...findings.map((finding) => `- ${finding.where} ${finding.what}${finding.excerpt ? `: ${finding.excerpt}` : ""}`),
+  ].join("\n");
 }
 
 export class DoDValidationError extends Error {

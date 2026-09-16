@@ -229,6 +229,11 @@ export const storySpecs = sqliteTable("story_specs", {
   storyId: text("story_id").notNull(),
   seq: integer("seq").notNull(),
   text: text("text").notNull(),
+  title: text("title"),
+  given: text("given"),
+  when: text("when_"),
+  then: text("then_"),
+  layers: text("layers"),
   status: text("status").notNull(),
   notionBlockId: text("notion_block_id").unique(),
 }, (t) => [

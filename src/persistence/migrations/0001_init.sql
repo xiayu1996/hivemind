@@ -301,6 +301,14 @@ CREATE TABLE IF NOT EXISTS story_specs (
   story_id         TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
   seq              INTEGER NOT NULL,
   text              TEXT NOT NULL,
+  -- What the page shows: the scenario's own name and its three parts, in the
+  -- words SHAPE wrote them. Null on a Story frozen before SHAPE was asked for
+  -- them; the page falls back to numbering rather than inventing a name.
+  title             TEXT,
+  given             TEXT,
+  when_             TEXT,
+  then_             TEXT,
+  layers            TEXT,
   status            TEXT NOT NULL CHECK (status IN ('pending','passed','failed','withdrawn')),
   notion_block_id   TEXT UNIQUE,
   UNIQUE (story_id, seq)

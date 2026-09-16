@@ -34,7 +34,10 @@ import { browserLaneEnv } from "./browser-config.js";
 const acceptanceSchema = z.object({
   id: z.string().min(1),
   status: z.enum(["passed", "failed", "inconclusive"]),
+  /** One sentence in Chinese: what was seen, on which screen. */
   reason: z.string().optional(),
+  /** The technical evidence behind the reason; the page keeps it folded. */
+  detail: z.string().optional(),
   /** The DoD sentence (then or an example) the refusal rests on, verbatim. */
   cites: z.string().optional(),
   url: z.string().optional(),
@@ -228,8 +231,8 @@ export function promptFor(input: UiReviewInput, attached: LoadedScreenshots): st
       ? [`The application is running at ${input.appUrl}. Open it there to check anything a screenshot cannot show; the sample data each scenario declares below has already been put into it, so a scenario that says what data it expects is judged on that data, not on an empty page.`]
       : []),
     ...(input.allowedHosts.length > 0 ? [browserLaneInstructions(session, input.allowedHosts)] : []),
-    "Return only JSON: {\"acceptance\":[{\"id\":string,\"status\":\"passed\"|\"failed\"|\"inconclusive\",\"reason\"?:string,\"cites\"?:string,\"url\"?:string,\"screenshots\"?:string[]}],\"findings\":[{\"area\":\"consistency\"|\"layout\"|\"content\"|\"interaction\",\"severity\":\"major\"|\"minor\",\"note\":string,\"scenarioId\"?:string,\"screenshot\"?:string}]}",
-    "Every declared scenario needs exactly one acceptance entry. For anything not passed, `reason` is mandatory: one sentence naming what you saw on which screen, so a person can act on that sentence alone.",
+    "Return only JSON: {\"acceptance\":[{\"id\":string,\"status\":\"passed\"|\"failed\"|\"inconclusive\",\"reason\"?:string,\"detail\"?:string,\"cites\"?:string,\"url\"?:string,\"screenshots\"?:string[]}],\"findings\":[{\"area\":\"consistency\"|\"layout\"|\"content\"|\"interaction\",\"severity\":\"major\"|\"minor\",\"note\":string,\"scenarioId\"?:string,\"screenshot\"?:string}]}",
+    "Every declared scenario needs exactly one acceptance entry. For anything not passed, `reason` is mandatory and is written in Chinese, in the words of the person who ordered the card: one sentence naming what you saw on which screen, which they act on without opening anything else. Anything technical -- a URL that failed, a console error, a selector -- goes in `detail`, never in `reason`; `note` in a finding is Chinese too.",
     `Story: ${input.storyTitle}`,
     `Business goal: ${input.businessGoal}`,
     "Declared scenarios, each followed by the sentences a refusal may cite:",
