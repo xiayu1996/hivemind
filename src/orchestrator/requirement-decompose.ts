@@ -128,9 +128,9 @@ export class RequirementDecomposer {
     const intakes: EpicIntake[] = [];
     const statements = [];
     for (const epic of epics) {
-      // The board reads the Epic id from the first token of the title, so the
-      // title carries it; nothing downstream has to be told the id separately.
-      const title = `${epic.id} ${epic.title}`;
+      // The id travels in its own column. A title that repeats it costs a
+      // reader the same words on the board, the page and every mention of it.
+      const title = epic.title;
       const requirementBody = `${epic.businessGoal}\n\n${epic.body}`;
       const pageId = epicPageId(requirementId, epic.id);
       const payload = JSON.stringify({

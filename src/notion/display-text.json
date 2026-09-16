@@ -1,0 +1,128 @@
+{
+  "timeZone": "Asia/Shanghai",
+  "states": {
+    "story": {
+      "QUEUED": "排队中",
+      "SHAPE": "需求整理",
+      "DESIGN": "设计",
+      "SPECIFY": "写测试",
+      "CODE": "开发",
+      "VERIFY": "验证",
+      "MERGE": "合入",
+      "DELIVERED": "已交付",
+      "REGRESSION_FIX": "修回归",
+      "NEEDS_INPUT": "等你回答",
+      "HUMAN_PARKED": "人工停靠",
+      "FAILED": "失败"
+    },
+    "epic": {
+      "INTAKE": "待拆解",
+      "DECOMPOSE": "拆解中",
+      "PLAN_APPROVAL": "拆解待确认",
+      "EXECUTING": "进行中",
+      "EPIC_ACCEPT": "验收中",
+      "DONE": "已完成",
+      "BLOCKED": "受阻",
+      "FAILED": "失败"
+    },
+    "requirement": {
+      "CLARIFY": "澄清中",
+      "PRD_CONFIRM": "PRD 待确认",
+      "DECOMPOSING": "拆解中",
+      "EXECUTING": "拆解执行中",
+      "ACCEPTANCE": "待验收",
+      "DONE": "已验收",
+      "HUMAN_PARKED": "人工停靠",
+      "FAILED": "失败"
+    }
+  },
+  "stopReasons": {
+    "blocking_question": "有问题等你回答",
+    "verify_loop_exceeded": "验证轮次用完",
+    "retry_limit_exceeded": "重试次数用完",
+    "cost_ceiling_exceeded": "费用超过单卡上限"
+  },
+  "verdicts": {
+    "accepted": "通过",
+    "rejected": "未通过",
+    "inconclusive": "无结论"
+  },
+  "specStatuses": {
+    "pending": "待验证",
+    "passed": "通过",
+    "failed": "未通过",
+    "withdrawn": "已撤销"
+  },
+  "layers": {
+    "unit": "单元测试",
+    "integration": "集成测试",
+    "snapshot": "快照",
+    "e2e": "浏览器端到端",
+    "ui": "界面走查"
+  },
+  "icons": {
+    "waiting": "🙋",
+    "running": "🔧",
+    "done": "✅",
+    "failed": "⛔",
+    "parked": "⏸"
+  },
+  "sections": {
+    "story": {
+      "requirement": { "title": "需求描述", "aliases": [] },
+      "specification": { "title": "验收场景", "aliases": ["需求规格"] },
+      "design": { "title": "设计摘要", "aliases": ["核心设计"] },
+      "verification": { "title": "验证记录", "aliases": [] },
+      "questions": { "title": "需要你处理", "aliases": ["待人回答"] },
+      "technical": { "title": "技术细节", "aliases": [] }
+    }
+  },
+  "waiting": {
+    "story": {
+      "blocking_question": {
+        "icon": "🙋",
+        "color": "blue_background",
+        "action": "回复本页评论回答上面的问题；答完这张卡会自己继续，不用拖动看板。"
+      },
+      "verify_loop_exceeded": {
+        "icon": "🙋",
+        "color": "orange_background",
+        "action": "验证轮次用完了。看下面最近一轮的结论，回复本页评论说怎么改；要放弃就把卡拖到「人工停靠」。"
+      },
+      "failed": {
+        "icon": "⛔",
+        "color": "red_background",
+        "action": "这张卡执行失败了。看下面的原因，回复本页评论说怎么办；要放着就把卡拖到「人工停靠」。"
+      }
+    },
+    "epic": {
+      "EPIC_ACCEPT": {
+        "icon": "🙋",
+        "color": "yellow_background",
+        "action": "在「验收」区逐条打勾；不通过的不要勾，写条评论说差在哪，我会在本 Epic 下补一张卡。"
+      },
+      "PLAN_APPROVAL": {
+        "icon": "🙋",
+        "color": "orange_background",
+        "action": "看「拆解方案」，认可就把卡拖到「进行中」；要改就写条评论说怎么拆。"
+      },
+      "BLOCKED": {
+        "icon": "🙋",
+        "color": "red_background",
+        "action": "有 Story 停下等人。去看板的「等我处理」，在那张卡上回答。"
+      }
+    },
+    "requirement": {
+      "CLARIFY": {
+        "icon": "🙋",
+        "color": "blue_background",
+        "action": "回复本页最新一条评论，选字母即可。"
+      },
+      "PRD_CONFIRM": {
+        "icon": "🙋",
+        "color": "orange_background",
+        "action": "看下面的 PRD；认可就把卡拖到「拆解执行中」，要改就写条评论说改哪里。"
+      }
+    }
+  }
+}

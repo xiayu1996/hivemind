@@ -70,6 +70,8 @@ describe("NotionEpicPlanDelivery", () => {
       expect(append?.path).toContain("epic-page");
       expect(text).toContain("Customers see one review request per initiative.");
       expect(text).toContain("S-M2-01");
+      // The name comes first and the id follows it as a handle.
+      expect(text).toContain('"content":"Split the initiative"');
       expect(text).toContain("S-M2-02");
       // The replay key is kept off the page a person reads.
       expect(text).not.toContain("hivemind-plan:");
@@ -269,7 +271,8 @@ describe("NotionEpicPlanDelivery", () => {
       const body = JSON.stringify(appended?.body);
       expect(body).toContain("进展");
       expect(body).toContain("S-M2-01 Split — 已交付，MR https://example.test/pull/20");
-      expect(body).toContain("S-M2-02 Approve — 开发中");
+      // The board and the page call the phase by the same word.
+      expect(body).toContain("S-M2-02 Approve — 开发");
       expect(body).not.toContain("hivemind-progress:");
       const applied = await client.execute("SELECT payload_hash FROM epic_notion_sections WHERE epic_id = 'M2' AND section = 'progress'");
       expect(applied.rows[0]?.payload_hash).toBe("new");

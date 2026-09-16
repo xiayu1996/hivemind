@@ -87,7 +87,6 @@ function requirementProperties(epicsDataSourceId: string): Properties {
     [names.cost]: { number: { format: "dollar" } },
     [names.creator]: { created_by: {} },
     [names.taskId]: { rich_text: {} },
-    [names.syncFingerprint]: { rich_text: {} },
     [names.lastEdited]: { last_edited_time: {} },
     [names.waitingOnHuman]: {
       formula: {
@@ -119,7 +118,6 @@ function storyProperties(epicsDataSourceId: string): Properties {
     [names.rounds]: { number: { format: "number" } },
     [names.creator]: { created_by: {} },
     [names.taskId]: { rich_text: {} },
-    [names.syncFingerprint]: { rich_text: {} },
     [names.completionValue]: {
       formula: { expression: `if(prop("${names.aiStatus}") == "${schema.options.aiStatus[5]}", 1, 0)` },
     },
@@ -329,6 +327,12 @@ export async function upgradeStoryBoard(
     "phase",
     schema.retiredOptions.phase as Record<string, string | undefined>,
   );
+  // The fingerprint is central truth now. Left on the board it is a column of
+  // hashes a person has to look past, and one they can edit.
+  await client.dataSources.update({
+    data_source_id: storiesDataSourceId,
+    properties: { [names.syncFingerprint]: null } as never,
+  });
 
   if (!repositorySlug) return;
   const bare = repositorySlug.split("/").at(-1);

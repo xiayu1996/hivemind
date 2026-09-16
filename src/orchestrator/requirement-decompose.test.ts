@@ -102,7 +102,8 @@ describe("RequirementDecomposer", () => {
     expect(outcome).toMatchObject({ kind: "decomposed" });
     const epics = outcome.kind === "decomposed" ? outcome.epics : [];
     expect(epics.map((epic) => epic.id)).toEqual(["CONSOLE1", "CONSOLE2"]);
-    expect(epics[0]?.title.startsWith("CONSOLE1 ")).toBe(true);
+    // The id has its own column, so the title is only the name.
+    expect(epics[0]?.title.startsWith("CONSOLE1 ")).toBe(false);
     expect(epics[0]?.requirement).toContain("值班的人打开首屏");
 
     const stored = (await client.execute("SELECT id, state, requirement_id, repo FROM epics ORDER BY id")).rows;

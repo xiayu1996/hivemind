@@ -94,7 +94,7 @@ describe("bootstrapNotion", () => {
     expect(statusOptions).toEqual(schema.options.aiStatus);
     for (const key of [
       "title", "epic", "aiStatus", "phase", "priority", "repository", "capabilities",
-      "targetBranch", "mergeRequest", "cost", "tokens", "rounds", "creator", "taskId", "syncFingerprint",
+      "targetBranch", "mergeRequest", "cost", "tokens", "rounds", "creator", "taskId",
     ] as const) {
       expect(properties[schema.propertyNames[key]], key).toBeDefined();
     }
@@ -145,7 +145,9 @@ describe("bootstrapNotion", () => {
         }),
         update: async (input: any) => {
           updates.push(input);
-          const sent = input.properties[schema.propertyNames.phase].select.options as Array<{ id?: string; name?: string; color?: string }>;
+          const phase = input.properties[schema.propertyNames.phase];
+          if (!phase) return { id: "ds-1" };
+          const sent = phase.select.options as Array<{ id?: string; name?: string; color?: string }>;
           live = sent.map((option, index) => {
             const known = live.find((existing) => existing.id === option.id);
             return known ?? { id: `new-${index}`, name: option.name!, color: option.color ?? "default" };
@@ -165,8 +167,11 @@ describe("bootstrapNotion", () => {
 
     // The word a page moves onto has to be on the board before the page moves,
     // and the word it leaves can only go afterwards.
-    expect(updates).toHaveLength(2);
-    const added = (updates[0]!.properties as any)[schema.propertyNames.phase].select.options
+    const phaseUpdates = updates.filter((update: any) => update.properties[schema.propertyNames.phase]);
+    expect(phaseUpdates).toHaveLength(2);
+    // The hash column goes with the same upgrade; it was never for a person.
+    expect(updates.at(-1)!.properties).toEqual({ [schema.propertyNames.syncFingerprint]: null });
+    const added = (phaseUpdates[0]!.properties as any)[schema.propertyNames.phase].select.options
       .map((option: any) => option.name).filter(Boolean);
     expect(added).toContain("验证");
     expect(moved).toEqual([{ page: "page-1", to: "验证" }]);

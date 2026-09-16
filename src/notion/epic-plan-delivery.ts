@@ -7,6 +7,7 @@ import { SYNC_EPIC_STATUS } from "../orchestrator/epic-status-projection.js";
 import { SYNC_EPIC_PAGE, renderEpicProgress, type EpicPagePayload } from "../orchestrator/epic-page-projection.js";
 import pageText from "../orchestrator/epic-page-text.json" with { type: "json" };
 import schema from "./notion-schema.json" with { type: "json" };
+import { bullet as richBullet, code, runs, t } from "./rich-text.js";
 
 const planSchema = z.object({
   epicId: z.string().min(1),
@@ -350,7 +351,9 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
     const children = [
       heading("拆解方案"),
       paragraph(plan.businessGoal),
-      ...plan.stories.map((story) => bullet(`${story.id} ${story.title}`)),
+      // The name reads as the name; the id follows it as a handle, in code
+      // style, which is also how a person quotes it back in a comment.
+      ...plan.stories.map((story) => richBullet(runs(t(story.title), t(" "), code(story.id)))),
       ...(plan.recommendation ? [paragraph(plan.recommendation)] : []),
     ];
     await this.gateway.request({
@@ -376,7 +379,7 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
 
     const names = schema.propertyNames;
     const properties: Record<string, unknown> = {
-      [names.title]: { title: [text(`${payload.storyId} ${String(story.title)}`)] },
+      [names.title]: { title: [text(String(story.title))] },
       [names.taskId]: { rich_text: [text(payload.storyId)] },
     };
     if (story.repo) properties[names.repository] = { select: { name: String(story.repo) } };

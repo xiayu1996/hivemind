@@ -3,16 +3,13 @@ import type { StoryProjectionPort } from "../orchestrator/story-worker.js";
 import { NotionOutbox, payloadHash } from "./outbox.js";
 import type { DesiredStoryPage } from "./blocks/story-page.js";
 import schema from "./notion-schema.json" with { type: "json" };
+import { storyIcon, stopReasonWord, storyStateWord } from "./display-text.js";
 
 /** Notion caps a rich text run at 2000 characters. */
 const SUMMARY_LIMIT = 1900;
 
 function value(input: unknown): string {
   return typeof input === "string" ? input : "";
-}
-
-function richText(content: string): Record<string, unknown> {
-  return { rich_text: [{ type: "text", text: { content } }] };
 }
 
 export function notionAiStatusForState(state: string): string {
@@ -163,7 +160,7 @@ export class NotionStoryProjection implements StoryProjectionPort {
             WHERE card_id = ? AND verdict = 'rejected' AND created_at > ?`,
       args: [cardId, since],
     })).rows[0]?.n ?? 0);
-    return `Budget ${Math.min(spent, this.innerLoopRounds)}/${this.innerLoopRounds}`;
+    return `本段预算 ${Math.min(spent, this.innerLoopRounds)}/${this.innerLoopRounds}`;
   }
 
   /**
@@ -227,9 +224,9 @@ export class NotionStoryProjection implements StoryProjectionPort {
     const latest = verification.rows[0];
     const roundSummary = latest ? await this.roundSummary(cardId, latest) : undefined;
     const stopText = story.stop_reason
-      ? `Execution stopped: ${String(story.stop_reason)}` +
+      ? `这张卡停下了：${stopReasonWord(String(story.stop_reason))}。` +
         (roundSummary && String(story.stop_reason) === "verify_loop_exceeded"
-          ? `. Last verification round ${Number(latest!.round)}: ${roundSummary}`
+          ? `\n最近一轮（第 ${Number(latest!.round)} 轮）：${roundSummary}`
           : "")
       : undefined;
     const answers = await this.appliedAnswers(cardId);
@@ -239,14 +236,13 @@ export class NotionStoryProjection implements StoryProjectionPort {
     ].join("\n\n");
     const desired: DesiredStoryPage = {
       metadata: [
-        `Task ${cardId}`,
-        `State ${String(story.state)}`,
-        `Round ${Number(story.inner_loop_rounds)}`,
+        storyStateWord(String(story.state)),
+        `第 ${Number(story.inner_loop_rounds)} 轮`,
         await this.budgetLine(cardId, Number(story.last_human_action_at ?? 0)),
-        `Cost $${Number(cost.rows[0]?.total ?? 0).toFixed(4)}`,
+        `费用 $${Number(cost.rows[0]?.total ?? 0).toFixed(4)}`,
         ...(story.mr_url ? [`MR ${String(story.mr_url)}`] : []),
       ].join(" · "),
-      design: value(design.rows[0]?.body) || "Design is pending.",
+      design: value(design.rows[0]?.body) || "设计还没写出来。",
       ...(questions ? { questions } : {}),
       specs: specs.rows.map((row) => ({
         id: String(row.spec_id),
@@ -278,8 +274,12 @@ export class NotionStoryProjection implements StoryProjectionPort {
       [names.rounds]: { number: Number(story.inner_loop_rounds) },
       [names.mergeRequest]: { url: story.mr_url ? String(story.mr_url) : null },
     };
-    const fingerprint = payloadHash(properties).hash;
-    properties[names.syncFingerprint] = richText(fingerprint);
+    const icon = storyIcon(String(story.state));
+    // The fingerprint stays in central truth: on the page it was a column a
+    // person could read and edit, and neither is any use to them. The icon is
+    // hashed with the properties so a card that only changed its face is still
+    // written.
+    const fingerprint = payloadHash({ ...properties, icon }).hash;
     if (Number(story.human_wins_until ?? 0) <= this.now()) {
       // The board shows the last status we wrote (the shadow). When it differs
       // from what the state now calls for, the page must be written even if
@@ -294,6 +294,7 @@ export class NotionStoryProjection implements StoryProjectionPort {
           cardId,
           pageId,
           fingerprint,
+          icon,
           properties,
         },
         ...(boardDisagrees ? { resend: true } : {}),

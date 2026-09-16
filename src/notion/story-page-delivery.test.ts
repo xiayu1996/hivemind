@@ -219,7 +219,11 @@ describe("NotionStoryPageDelivery", () => {
     expect(rounds.rows.slice(1).every((row) => row.archived_page_id === null)).toBe(true);
     const sent = await client.execute("SELECT COUNT(*) AS count FROM notion_outbox WHERE state = 'sent'");
     expect(Number(sent.rows[0]?.count)).toBe(18);
-    expect(Object.keys(fake.properties)).toContain("\u540c\u6b65\u6307\u7eb9");
+    // The fingerprint is central truth; the board shows a person nothing but
+    // the words they can act on.
+    expect(Object.keys(fake.properties)).not.toContain("\u540c\u6b65\u6307\u7eb9");
+    const stored = await client.execute("SELECT notion_property_fingerprint FROM stories WHERE id = 'S-EPIC1-01'");
+    expect(String(stored.rows[0]?.notion_property_fingerprint)).toMatch(/^[a-f0-9]{64}$/);
     client.close();
   });
 
@@ -255,7 +259,7 @@ describe("NotionStoryPageDelivery", () => {
       const payload = item[item.type] as { rich_text?: Array<{ plain_text?: string }> } | undefined;
       return payload?.rich_text?.map((run) => run.plain_text ?? "").join("") ?? "";
     });
-    expect(texts.filter((text) => text.startsWith("Execution stopped"))).toHaveLength(1);
+    expect(texts.filter((text) => text.startsWith("这张卡停下了："))).toHaveLength(1);
     client.close();
   });
 

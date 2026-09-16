@@ -31,6 +31,10 @@ export interface NotionGatewayOptions {
 export interface PagePropertyUpdate {
   pageId: string;
   properties: Record<string, unknown>;
+  /** The emoji on the page's tab and in every list that shows it, which says
+   * at a glance whether the card wants a person. It rides with the properties
+   * so the same human-wins window covers both. */
+  icon?: string;
   fingerprint: string;
   /** Fingerprint currently observed on the Notion page. */
   currentFingerprint?: string;
@@ -79,6 +83,7 @@ interface PendingRequest {
 
 interface PropertyBatch {
   properties: Record<string, unknown>;
+  icon?: string;
   fingerprint: string;
   callers: Array<{
     resolve: (result: PropertyUpdateResult) => void;
@@ -133,6 +138,7 @@ export class NotionGateway {
       const existing = this.#propertyBatches.get(update.pageId);
       if (existing) {
         Object.assign(existing.properties, update.properties);
+        if (update.icon) existing.icon = update.icon;
         existing.fingerprint = update.fingerprint;
         existing.callers.push({ resolve, reject });
         return;
@@ -141,6 +147,7 @@ export class NotionGateway {
       const timer = setTimeout(() => void this.#flushPropertyBatch(update.pageId), this.#mergeWindowMs);
       this.#propertyBatches.set(update.pageId, {
         properties: { ...update.properties },
+        ...(update.icon ? { icon: update.icon } : {}),
         fingerprint: update.fingerprint,
         callers: [{ resolve, reject }],
         timer,
@@ -228,7 +235,10 @@ export class NotionGateway {
         method: "PATCH",
         path: `/v1/pages/${encodeURIComponent(pageId)}`,
         priority: "status",
-        body: { properties: batch.properties },
+        body: {
+          properties: batch.properties,
+          ...(batch.icon ? { icon: { type: "emoji", emoji: batch.icon } } : {}),
+        },
       });
       this.#successfulFingerprints.set(pageId, batch.fingerprint);
       for (const caller of batch.callers) caller.resolve({ skipped: false, response });

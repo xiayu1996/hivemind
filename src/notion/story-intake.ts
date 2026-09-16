@@ -143,11 +143,15 @@ function plainText(items: z.infer<typeof richTextItem>[]): string {
   return items.map((item) => item.plain_text).join("").trim();
 }
 
-function title(properties: Record<string, unknown>, pageId: string): string {
+/** The id has its own column. A page written before that, or by a person
+ * copying the convention, repeats it in front of the title; it is dropped so
+ * the card reads as its name everywhere. */
+function title(properties: Record<string, unknown>, pageId: string, taskId: string): string {
   const parsed = titleProperty.safeParse(properties[schema.propertyNames.title]);
   const value = parsed.success ? plainText(parsed.data.title) : "";
   if (!value) throw new IncompleteNotionStoryError(pageId, "title is empty");
-  return value;
+  const stripped = value.startsWith(`${taskId} `) ? value.slice(taskId.length + 1).trim() : value;
+  return stripped || value;
 }
 
 function richText(properties: Record<string, unknown>, name: string): string {
@@ -240,7 +244,7 @@ export async function listReadyStories(api: NotionStoryApi, dataSourceId: string
       stories.push({
         id: taskId,
         notionPageId: page.data.id,
-        title: title(page.data.properties, page.data.id),
+        title: title(page.data.properties, page.data.id, taskId),
         requirement: content.requirement,
         repo: repository,
         branch: `story/${taskId.toLowerCase()}`,
