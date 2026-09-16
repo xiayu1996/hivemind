@@ -71,6 +71,16 @@ async function main(): Promise<void> {
     args: [cardId, now, now],
   });
 
+  // The scenario detail hangs off the central rows, so the probe seeds them.
+  for (const [seq, specId] of [[1, "S-LIVE-01-a"], [2, "S-LIVE-01-b"]] as Array<[number, string]>) {
+    await db.client.execute({
+      sql: `INSERT INTO story_specs (spec_id, story_id, seq, text, status)
+            VALUES (?, ?, ?, 'probe', 'pending')
+            ON CONFLICT(spec_id) DO NOTHING`,
+      args: [specId, cardId, seq],
+    });
+  }
+
   const created = await gateway.request({
     method: "POST",
     path: "/v1/pages",

@@ -484,8 +484,9 @@ export class NotionStoryPageDelivery implements NotionOutboxDelivery {
       await archiveBlock((request) => this.gateway.request(request), child.id);
     }
     if (blocks.length > 0) await this.append(parentId, blocks);
-    await this.client.execute(write(hash));
-    return true;
+    // Nowhere to remember it means nowhere to compare it next time, and a send
+    // that keeps reporting work would never finish its passes.
+    return (await this.client.execute(write(hash))).rowsAffected > 0;
   }
 
   private async insertSpec(
