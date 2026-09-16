@@ -179,8 +179,8 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
     }
     if (stale.size > 0) blocks = blocks.filter((block) => !stale.has(String(block.id)));
 
-    await this.writeCallout(pageId, blocks, rendered.callout);
-    await this.writeSections(pageId, blocks, rendered.sections);
+    const calloutId = await this.writeCallout(pageId, blocks, rendered.callout);
+    await this.writeSections(pageId, blocks, rendered.sections, calloutId);
     await this.mentionStoryPages(blocks, payload);
     await this.rememberSection(payload.epicId, "page", payloadHash);
   }
@@ -191,7 +191,7 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
     pageId: string,
     blocks: Array<Record<string, unknown>>,
     callout: { content: string; icon: string; color: string },
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     const existing = blocks.find((block) => String(block.type) === "callout");
     const body = {
       rich_text: t(callout.content),
@@ -199,24 +199,22 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
       color: callout.color,
     };
     if (existing) {
-      if (plainText(existing.callout) === callout.content) return;
-      await this.gateway.request({
-        method: "PATCH",
-        path: `/v1/blocks/${encoded(String(existing.id))}`,
-        priority: "projection",
-        body: { callout: body },
-      });
-      return;
+      if (plainText(existing.callout) !== callout.content) {
+        await this.gateway.request({
+          method: "PATCH",
+          path: `/v1/blocks/${encoded(String(existing.id))}`,
+          priority: "projection",
+          body: { callout: body },
+        });
+      }
+      return String(existing.id);
     }
-    await this.gateway.request({
-      method: "PATCH",
-      path: `/v1/blocks/${encoded(pageId)}/children`,
-      priority: "projection",
-      body: {
-        children: [{ object: "block", type: "callout", callout: body }],
-        ...(blocks[0] ? { after: String(blocks[0].id) } : {}),
-      },
-    });
+    const [created] = await this.append(
+      pageId,
+      [{ object: "block", type: "callout", callout: body }],
+      blocks[0] ? String(blocks[0].id) : undefined,
+    );
+    return created;
   }
 
   /**
@@ -228,9 +226,11 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
     pageId: string,
     blocks: Array<Record<string, unknown>>,
     sections: ReturnType<typeof renderEpicPage>["sections"],
+    calloutId: string | undefined,
   ): Promise<void> {
     const planBlocks = this.sectionBlocks(blocks, epicSectionTitle("plan"));
-    const first = blocks[0] ? String(blocks[0].id) : undefined;
+    // The goal follows the callout, which is the block a reader meets first.
+    const first = calloutId ?? (blocks[0] ? String(blocks[0].id) : undefined);
     let afterGoal = planBlocks.at(-1) ?? first;
     let anchor: string | undefined = first;
     for (const { section, blocks: children } of sections) {

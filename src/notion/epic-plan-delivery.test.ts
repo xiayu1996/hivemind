@@ -290,8 +290,11 @@ describe("NotionEpicPlanDelivery", () => {
       // Nothing about where a Story is: that is the board's job.
       expect(written).not.toContain("\u5f00\u53d1\u4e2d");
       expect(written).not.toContain("hivemind-progress:");
-      // The goal goes above the plan a person approved, the rest below it.
-      expect(appended[1]).toContain('"after":"b-body"');
+      // The callout goes first and the goal right after it, above the plan a
+      // person approved; the rest goes below the plan.
+      expect(appended[0]).toContain('"after":"b-body"');
+      expect(appended[0]).toContain('"type":"callout"');
+      expect(appended[1]).toContain('"after":"new-0"');
       // A planned Story that now has a page reads as a link to it.
       const mention = requests.find((request) => request.path === "/v1/blocks/b-plan-1");
       expect(JSON.stringify(mention?.body)).toContain("3dd20688-7a32-815a-a78b-d1e934a4d958");
