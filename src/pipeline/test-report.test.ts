@@ -37,6 +37,18 @@ describe("parseTestReport", () => {
     expect(parseTestReport(`> vitest run\n\n${REPORT}`, "/repo").failures).toHaveLength(1);
   });
 
+  it("ignores whatever the runner printed after the JSON", () => {
+    // The gate hands over both streams as one string, and vitest writes its
+    // summary to stderr, so a report is followed by text on every real run.
+    const trailing = `${REPORT}\n\nTest Files  1 failed (1)\nfatal: path 'src/a.ts' exists on disk, but not in HEAD\n`;
+    expect(parseTestReport(trailing, "/repo").failures).toHaveLength(1);
+  });
+
+  it("finds the report when the noise around it is JSON of its own", () => {
+    const wrapped = `{"level":"warn","msg":"deprecated {flag}"}\n${REPORT}\n{"done":true}`;
+    expect(parseTestReport(wrapped, "/repo").failures).toHaveLength(1);
+  });
+
   it("reads a test that never ran as a different answer from one that disagreed", () => {
     const skipped = JSON.stringify({
       testResults: [{

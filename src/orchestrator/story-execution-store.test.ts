@@ -343,6 +343,52 @@ describe("StoryExecutionStore reshape", () => {
   });
 });
 
+describe("StoryExecutionStore resume after a stop", () => {
+  it("gives back the reentry budget when a person answers a Story that spent it", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    let time = 1_000;
+    const store = new StoryExecutionStore(client, () => time++);
+    await store.createStory({
+      id: "S-EPIC1-01",
+      notionPageId: "page-1",
+      title: "Resumed by a comment",
+      requirement: "A person answering in Notion resumes the card.",
+      branch: "story/epic1-01",
+    });
+    await store.transition("S-EPIC1-01", "QUEUED", "SHAPE", "system", "run-shape");
+    await store.transition("S-EPIC1-01", "SHAPE", "DESIGN", "system", "run-design");
+    await store.transition("S-EPIC1-01", "DESIGN", "SPECIFY", "system", "run-specify");
+    for (let attempt = 0; attempt < 3; attempt++) await store.recordPhaseReentry("S-EPIC1-01");
+    await store.stopForInput("S-EPIC1-01", "SPECIFY", "retry_limit_exceeded", "run-stop");
+
+    await store.transition("S-EPIC1-01", "NEEDS_INPUT", "SPECIFY", "human", "notion-comment");
+
+    // Without this the card is dispatched once, and the first failure parks it
+    // again on a budget it has no way to earn back by answering.
+    expect((await store.getStory("S-EPIC1-01")).phaseReentries).toBe(0);
+  });
+
+  it("leaves the reentry count alone on a transition the system made", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    let time = 1_000;
+    const store = new StoryExecutionStore(client, () => time++);
+    await store.createStory({
+      id: "S-EPIC1-01",
+      notionPageId: "page-1",
+      title: "Still counting",
+      requirement: "Attempts spent inside one phase stay spent.",
+      branch: "story/epic1-01",
+    });
+    await store.transition("S-EPIC1-01", "QUEUED", "SHAPE", "system", "run-shape");
+    await store.recordPhaseReentry("S-EPIC1-01");
+    await store.transition("S-EPIC1-01", "SHAPE", "DESIGN", "system", "run-design");
+
+    expect((await store.getStory("S-EPIC1-01")).phaseReentries).toBe(1);
+  });
+});
+
 describe("StoryExecutionStore regression input", () => {
   it("tells a REGRESSION_FIX round which cards it exists for, and leaves every other phase's prompt untouched", async () => {
     const client = createClient({ url: ":memory:" });

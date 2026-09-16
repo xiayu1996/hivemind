@@ -1,4 +1,4 @@
-import type { Client } from "@libsql/client";
+import type { Client, Row } from "@libsql/client";
 import type { StoryProjectionPort } from "../orchestrator/story-worker.js";
 import { NotionOutbox, payloadHash } from "./outbox.js";
 import type { DesiredStoryPage } from "./blocks/story-page.js";
@@ -24,13 +24,34 @@ export function notionAiStatusForState(state: string): string {
   return state === "QUEUED" ? options[0]! : options[1]!;
 }
 
-function phase(state: string): string {
-  const options = schema.options.phase;
-  if (state === "DESIGN") return options[1]!;
-  if (state === "CODE" || state === "REGRESSION_FIX") return options[2]!;
-  if (state === "VERIFY") return options[3]!;
-  if (state === "MERGE" || state === "DELIVERED") return options[5]!;
-  return options[0]!;
+/** One board word per state the pipeline actually has, so the column reads as
+ * the card's position rather than as a rough bucket. */
+const PHASE_WORDS: Record<string, string> = {
+  QUEUED: schema.options.phase[0]!,
+  SHAPE: schema.options.phase[1]!,
+  DESIGN: schema.options.phase[2]!,
+  SPECIFY: schema.options.phase[3]!,
+  CODE: schema.options.phase[4]!,
+  VERIFY: schema.options.phase[5]!,
+  REGRESSION_FIX: schema.options.phase[6]!,
+  MERGE: schema.options.phase[7]!,
+  DELIVERED: schema.options.phase[8]!,
+};
+
+/**
+ * Where the card stands. A card waiting for a person, parked or failed is
+ * still somewhere, and the state alone does not say where: `phase` holds what
+ * was running and `resume_state` where it will pick up, so a stopped card
+ * keeps showing the work it stopped in rather than falling back to the queue.
+ */
+function phase(story: Row): string {
+  const direct = PHASE_WORDS[String(story.state)];
+  if (direct) return direct;
+  for (const candidate of [story.phase, story.resume_state]) {
+    const word = candidate === null || candidate === undefined ? undefined : PHASE_WORDS[String(candidate)];
+    if (word) return word;
+  }
+  return schema.options.phase[0]!;
 }
 
 /** Builds a complete desired page from central truth and durably queues the projection. */
@@ -170,7 +191,7 @@ export class NotionStoryProjection implements StoryProjectionPort {
 
   async enqueue(cardId: string): Promise<void> {
     const storyResult = await this.client.execute({
-      sql: `SELECT notion_page_id, state, phase, inner_loop_rounds, stop_reason, mr_url,
+      sql: `SELECT notion_page_id, state, phase, resume_state, inner_loop_rounds, stop_reason, mr_url,
                    human_wins_until, notion_ai_status_shadow, last_human_action_at
             FROM stories WHERE id = ?`,
       args: [cardId],
@@ -252,7 +273,7 @@ export class NotionStoryProjection implements StoryProjectionPort {
     const aiStatus = notionAiStatusForState(String(story.state));
     const properties: Record<string, unknown> = {
       [names.aiStatus]: { select: { name: aiStatus } },
-      [names.phase]: { select: { name: phase(String(story.state)) } },
+      [names.phase]: { select: { name: phase(story) } },
       [names.cost]: { number: Number(cost.rows[0]?.total ?? 0) },
       [names.rounds]: { number: Number(story.inner_loop_rounds) },
       [names.mergeRequest]: { url: story.mr_url ? String(story.mr_url) : null },

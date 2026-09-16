@@ -52,6 +52,19 @@ npm run preflight -- --repository-path <repo>
 
 逐项 PASS/WARN/FAIL：Node、pi 版本、secrets 权限与键、Notion 可达与三库已共享、库迁移与配置断言、failover 链各 provider 凭据与一次真实往返、四个 purpose 档位都有 provider、`gh`/`glab` 已登录、git 身份、仓库 origin、systemd 为 PID 1、内核允许 Chromium 沙箱、headless Chromium 已装。任何 FAIL 都不要启动服务；探针不打印凭据值。
 
+**探针查不出的两件事，在第一张卡进 SPECIFY 之前必须自己配上**（都是 per-repo 作用域，探针不查是因为它们没有对错、只有"这个仓库怎么跑"）：
+
+| 键 | 不配的后果 |
+|---|---|
+| `specifyExit.testCommand` | 默认空。SPECIFY **拒绝冻结**——它证不了红，而一份没被测量过的冻结契约比没有契约更糟。本仓库是 `["npx","vitest","run","--reporter=json"]`；出口按 vitest/jest 共用的 JSON reporter 逐字段比对失败，所以必须是 JSON reporter，人读的输出不行 |
+| `codeExit.projectChecks` | 默认空。CODE 出口只剩 commit、证据与标记三项，仓库自己的 lint/typecheck/测试**一条都不跑**，合流复验也拒绝把未检查的合流算通过 |
+
+**这两个键的作用域 id 是仓库 slug（`owner/name`），不是 `--repository-id`。** 编排器按 slug 读（`ConfigStore.load(client, { repository: repositorySlug })`），Story 子进程按卡上的 `stories.repo` 读，也是 slug。写成 `--repository-id` 的值不会报任何错：`ConfigStore` 只查 `global` 与 slug 两个作用域，别的作用域 id 连读都不读——于是配置明明在库里，SPECIFY 出口照旧说"本仓库没声明 testCommand"，而这句话是对的。
+
+`codeExit.protectedPaths`（生成物目录）与 `codeExit.testPathPatterns`（什么算测试路径）按仓库实际情况酌情补；后者有一套通用默认值，多数仓库不用改。
+
+**换库之后这些配置不会跟着走。** `config_entries` 存在中央库里，按预发布立场重建库（`0001` 改写后旧库自称已迁移却在执行旧约束，探针会 FAIL 并要求重建）会把它们一起清掉——重建后照着上表重新配一遍，否则第一张卡会停在 SPECIFY 出口。
+
 ## 4. 运行中
 
 ```sh
@@ -60,7 +73,7 @@ journalctl --user -fu hivemind-requirements
 systemctl --user restart hivemind-orchestrator hivemind-requirements
 ```
 
-两单元 `Restart=always`；常驻模式下单轮失败只记日志并触发 P0 告警（同一错误十分钟内只报一次）。改配置走 `data/hivemind.db` 的 `config_overrides`，热更语义见 registry；改 `secrets.env` 后重跑安装脚本或手动 restart。
+两单元 `Restart=always`；常驻模式下单轮失败只记日志并触发 P0 告警（同一错误十分钟内只报一次）。改配置走 `data/hivemind.db` 的 `config_entries`，热更语义见 registry；改 `secrets.env` 后重跑安装脚本或手动 restart。
 
 **控制台没有自己的 unit，它跟着 orchestrator 起。** `console.enabled` 打开后由 `run-local-orchestrator.ts` 在同一进程内 listen，地址取 `console.host` / `console.port`（默认只绑回环，公网通配绑定会被拒）。这样安排的理由是控制台的写面改的就是这个进程正在读的那份配置：同进程意味着热更语义不需要跨进程通知，而多一个 unit 只会多一份要对齐的环境与一条会和主进程各说各话的路径。要临时关掉控制台就把 `console.enabled` 置 false 再 restart，卡照跑。
 

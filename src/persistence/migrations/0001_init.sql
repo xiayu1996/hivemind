@@ -402,6 +402,11 @@ CREATE TABLE IF NOT EXISTS notion_outbox (
   state         TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending','sent','failed','dead')),
   attempts      INTEGER NOT NULL DEFAULT 0,
   last_error    TEXT,
+  -- Held by the replay that is sending this row, until this instant. Two
+  -- replays overlap by design (a Story subprocess finishing and the timed
+  -- cycle both reconcile), and a send that appends to a page is not idempotent
+  -- by itself, so a row is claimed before it is sent and released after.
+  claimed_until INTEGER,
   created_at    INTEGER NOT NULL,
   sent_at       INTEGER,
   UNIQUE (target, payload_hash)

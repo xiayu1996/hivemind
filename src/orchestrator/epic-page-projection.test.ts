@@ -55,4 +55,30 @@ describe("Epic page projection", () => {
       { operation: "sync_epic_page", target: "epic-page:E1" },
     ]);
   });
+
+  it("sends the page again when the board still shows a status the Epic has left", async () => {
+    // Blocked, delivered, then unblocked: the page is byte for byte the one
+    // that went out before it blocked, so the hash drops it and the board is
+    // left reading the state in between.
+    await client.execute("UPDATE epics SET notion_status_shadow = '验收中' WHERE id = 'E1'");
+    expect(await enqueueEpicPages(client, "main", () => 10)).toBe(1);
+    await client.execute("UPDATE notion_outbox SET state = 'sent', sent_at = 10");
+    await client.batch([
+      "UPDATE epics SET state = 'BLOCKED', notion_status_shadow = '受阻' WHERE id = 'E1'",
+      "UPDATE epics SET state = 'EPIC_ACCEPT' WHERE id = 'E1'",
+    ], "write");
+
+    expect(await enqueueEpicPages(client, "main", () => 11)).toBe(1);
+    const rows = (await client.execute("SELECT state FROM notion_outbox")).rows;
+    expect(rows).toEqual([{ state: "pending" }]);
+  });
+
+  it("leaves a sent page alone once the board agrees with it", async () => {
+    await client.execute("UPDATE epics SET notion_status_shadow = '验收中' WHERE id = 'E1'");
+    expect(await enqueueEpicPages(client, "main", () => 10)).toBe(1);
+    await client.execute("UPDATE notion_outbox SET state = 'sent', sent_at = 10");
+    expect(await enqueueEpicPages(client, "main", () => 11)).toBe(0);
+    const rows = (await client.execute("SELECT state FROM notion_outbox")).rows;
+    expect(rows).toEqual([{ state: "sent" }]);
+  });
 });

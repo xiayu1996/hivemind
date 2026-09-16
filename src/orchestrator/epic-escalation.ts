@@ -43,20 +43,35 @@ export function escalationQuestion(parked: readonly ParkedStory[]): HumanQuestio
   return { question: lines.join("\n"), options: [] };
 }
 
+/**
+ * Every way a Story stops needing the machine and starts needing a person. A
+ * card a person parked and a card that failed are as stuck as one that asked a
+ * question: the Epic they belong to is not progressing, and a board that shows
+ * it as executing is telling the person nothing is expected of them.
+ */
+const STALLED_STORY_STATES = ["NEEDS_INPUT", "HUMAN_PARKED", "FAILED"] as const;
+
+/** What the person is told when the state itself is the reason. */
+const STATE_REASON: Record<string, string> = { HUMAN_PARKED: "human_parked", FAILED: "failed" };
+
 async function parkedStoriesByEpic(client: Client, epicState: string): Promise<Map<string, ParkedStory[]>> {
+  const placeholders = STALLED_STORY_STATES.map(() => "?").join(", ");
   const rows = (await client.execute({
-    sql: `SELECT e.id AS epic_id, s.id AS story_id, s.stop_reason
+    sql: `SELECT e.id AS epic_id, s.id AS story_id, s.state AS story_state, s.stop_reason
           FROM epics e JOIN stories s ON s.epic_id = e.id
-          WHERE e.state = ? AND s.state = 'NEEDS_INPUT'
+          WHERE e.state = ? AND s.state IN (${placeholders})
           ORDER BY e.id, s.id`,
-    args: [epicState],
+    args: [epicState, ...STALLED_STORY_STATES],
   })).rows;
   const grouped = new Map<string, ParkedStory[]>();
   for (const row of rows) {
     const epicId = String(row.epic_id);
+    const stopReason = row.stop_reason === null
+      ? STATE_REASON[String(row.story_state)] ?? null
+      : String(row.stop_reason);
     grouped.set(epicId, [...(grouped.get(epicId) ?? []), {
       id: String(row.story_id),
-      stopReason: row.stop_reason === null ? null : (String(row.stop_reason) as StoryStopReason),
+      stopReason: stopReason as StoryStopReason | null,
     }]);
   }
   return grouped;

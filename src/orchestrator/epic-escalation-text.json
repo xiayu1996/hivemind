@@ -6,6 +6,8 @@
     "blocking_question": "需要你回答一个问题",
     "verify_loop_exceeded": "验证轮次用尽",
     "retry_limit_exceeded": "重试次数用尽",
-    "cost_ceiling_exceeded": "单任务费用超过上限"
+    "cost_ceiling_exceeded": "单任务费用超过上限",
+    "human_parked": "你把这张卡停靠了",
+    "failed": "执行失败"
   }
 }

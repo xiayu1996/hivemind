@@ -1,7 +1,7 @@
 import type { Client, CreateDatabaseParameters, UpdateDataSourceParameters } from "@notionhq/client";
 import schema from "./notion-schema.json" with { type: "json" };
 
-type BootstrapClient = Pick<Client, "databases" | "dataSources">;
+type BootstrapClient = Pick<Client, "databases" | "dataSources" | "pages">;
 type InitialDataSource = NonNullable<CreateDatabaseParameters["initial_data_source"]>;
 type Properties = NonNullable<InitialDataSource["properties"]>;
 type UpdateProperties = NonNullable<UpdateDataSourceParameters["properties"]>;
@@ -58,6 +58,7 @@ function epicProperties(): Properties {
     [names.title]: { title: {} },
     [names.epicStatus]: { select: { options: selectOptions("epicStatus") } },
     [names.mergeRequest]: { url: {} },
+    [names.taskId]: { rich_text: {} },
     [names.targetDate]: { date: {} },
     [names.creator]: { created_by: {} },
     [names.lastEdited]: { last_edited_time: {} },
@@ -219,7 +220,145 @@ export async function upgradeEpicBoard(client: BootstrapClient, epicsDataSourceI
     properties: {
       [names.epicStatus]: { select: { options } },
       [names.mergeRequest]: { url: {} },
+      [names.taskId]: { rich_text: {} },
       [names.waitingOnHuman]: { formula: { expression: waitingFormula(names.epicStatus, "epicStatus") } },
+    },
+  });
+}
+
+interface LiveOption {
+  id: string;
+  name: string;
+}
+
+function liveOptions(property: unknown): LiveOption[] {
+  if (!property || typeof property !== "object" || !("select" in property)) return [];
+  const select = (property as { select: { options?: Array<{ id?: string; name?: string }> } }).select;
+  return (select.options ?? [])
+    .filter((option): option is LiveOption => typeof option.id === "string" && typeof option.name === "string");
+}
+
+/** Moves every page holding one select value to another, which has to happen
+ * before the value is deleted: Notion blanks the property on pages that still
+ * hold an option it removes. */
+async function moveOption(
+  client: BootstrapClient,
+  sourceId: string,
+  property: string,
+  from: string,
+  to: string,
+): Promise<void> {
+  let cursor: string | undefined;
+  do {
+    const response = await client.dataSources.query({
+      data_source_id: sourceId,
+      filter: { property, select: { equals: from } },
+      page_size: 100,
+      ...(cursor ? { start_cursor: cursor } : {}),
+    });
+    for (const page of response.results) {
+      await client.pages.update({ page_id: page.id, properties: { [property]: { select: { name: to } } } });
+    }
+    cursor = response.has_more && response.next_cursor ? response.next_cursor : undefined;
+  } while (cursor);
+}
+
+/**
+ * Rewrites one select column to the current vocabulary in three passes, which
+ * is what the API leaves available: Notion ignores a new name sent with an
+ * option id (renaming is a UI-only move) and silently drops every option the
+ * update omits, blanking the pages that hold it. So the new words are added
+ * first, the pages move onto them, and only then do the old words go.
+ */
+async function retireOptions(
+  client: BootstrapClient,
+  sourceId: string,
+  property: string,
+  group: OptionGroup,
+  renames: Record<string, string | undefined>,
+): Promise<void> {
+  const read = async (): Promise<LiveOption[]> => {
+    const current = await client.dataSources.retrieve({ data_source_id: sourceId });
+    return liveOptions(current.properties[property]);
+  };
+  const order = schema.options[group] as readonly string[];
+  const rank = (name: string) => (order.indexOf(name) < 0 ? order.length : order.indexOf(name));
+
+  const before = await read();
+  const missing = selectOptions(group).filter((option) => !before.some((live) => live.name === option.name));
+  if (missing.length > 0) {
+    await client.dataSources.update({
+      data_source_id: sourceId,
+      properties: {
+        [property]: { select: { options: [...before.map((option) => ({ id: option.id })), ...missing] as never } },
+      },
+    });
+  }
+
+  const retired = before.filter((option) => renames[option.name]);
+  for (const option of retired) {
+    await moveOption(client, sourceId, property, option.name, renames[option.name]!);
+  }
+  if (retired.length === 0 && missing.length === 0) return;
+
+  const after = await read();
+  const kept = after
+    .filter((option) => !renames[option.name])
+    .toSorted((left, right) => rank(left.name) - rank(right.name));
+  await client.dataSources.update({
+    data_source_id: sourceId,
+    properties: { [property]: { select: { options: kept.map((option) => ({ id: option.id })) as never } } },
+  });
+}
+
+/**
+ * Brings a live Stories database up to the current schema: the execution-phase
+ * words the orchestrator now writes, and one option per repository slug instead
+ * of the bare name an early board was seeded with.
+ */
+export async function upgradeStoryBoard(
+  client: BootstrapClient,
+  storiesDataSourceId: string,
+  repositorySlug?: string,
+): Promise<void> {
+  const names = schema.propertyNames;
+  await retireOptions(
+    client,
+    storiesDataSourceId,
+    names.phase,
+    "phase",
+    schema.retiredOptions.phase as Record<string, string | undefined>,
+  );
+
+  if (!repositorySlug) return;
+  const bare = repositorySlug.split("/").at(-1);
+  if (!bare || bare === repositorySlug) return;
+  const live = liveOptions(
+    (await client.dataSources.retrieve({ data_source_id: storiesDataSourceId })).properties[names.repository],
+  );
+  if (!live.some((option) => option.name === bare)) return;
+  // The slug has to exist before the pages can move onto it, and the bare name
+  // can only go once nothing holds it.
+  if (!live.some((option) => option.name === repositorySlug)) {
+    await client.dataSources.update({
+      data_source_id: storiesDataSourceId,
+      properties: {
+        [names.repository]: {
+          select: { options: [...live.map((option) => ({ id: option.id })), { name: repositorySlug }] as never },
+        },
+      },
+    });
+  }
+  await moveOption(client, storiesDataSourceId, names.repository, bare, repositorySlug);
+  const after = liveOptions(
+    (await client.dataSources.retrieve({ data_source_id: storiesDataSourceId })).properties[names.repository],
+  );
+  await client.dataSources.update({
+    data_source_id: storiesDataSourceId,
+    properties: {
+      [names.repository]: {
+        select: { options: after.filter((option) => option.name !== bare).map((option) => ({ id: option.id })) as never },
+      },
     },
   });
 }

@@ -3,6 +3,7 @@ import type { Client } from "@libsql/client";
 import { z } from "zod";
 import type { AcceptanceChecklist } from "../orchestrator/acceptance-checklist.js";
 import type { RequirementStore } from "../orchestrator/requirement-store.js";
+import { floorToNotionMinute } from "./comment-ingest.js";
 import type { CommentIngestor } from "./comment-ingest.js";
 import type { NotionGateway } from "./gateway.js";
 import { interpretRequirementComment, interpretRequirementPropertyChange } from "./intent-interpreter.js";
@@ -247,6 +248,15 @@ export class NotionRequirementInputSync {
     return this.store.clearStop(requirementId, runId(requirementId));
   }
 
+  /**
+   * Comments this requirement has not acted on yet, written no earlier than
+   * `after`. Two conditions because two clocks of different resolution meet
+   * here: Notion's minute-granular created_time answers "was this written
+   * before the draft", and our own ingested_at answers "had we already seen it"
+   * — the first alone would sweep in page chatter that predates the draft by
+   * more than a minute, the second alone would sweep in everything a first poll
+   * discovers at once.
+   */
   private async unclaimedComments(
     pageId: string,
     after: number,
@@ -254,9 +264,10 @@ export class NotionRequirementInputSync {
     const rows = (await this.client.execute({
       sql: `SELECT ic.comment_id, ic.block_id, ic.author, ic.body FROM ingested_comments ic
             LEFT JOIN requirement_approval_events a ON a.event_id = ic.comment_id
-            WHERE ic.page_id = ? AND ic.created_time > ? AND a.event_id IS NULL
+            WHERE ic.page_id = ? AND ic.created_time >= ? AND ic.ingested_at > ?
+              AND a.event_id IS NULL
             ORDER BY ic.created_time, ic.comment_id`,
-      args: [pageId, after],
+      args: [pageId, floorToNotionMinute(after), after],
     })).rows;
     return rows.map((row) => ({
       id: String(row.comment_id),

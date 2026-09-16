@@ -67,7 +67,13 @@ export async function epicPagePayload(client: Client, epicId: string, targetBran
   };
 }
 
-export function epicPageStatement(payload: EpicPagePayload, time: number): InStatement {
+/** The target every Epic page row is queued under. */
+export function epicPageTarget(epicId: string): string {
+  return `epic-page:${epicId}`;
+}
+
+/** What the outbox dedupes an Epic page by: the facts, plus how they read. */
+export function epicPageHash(payload: EpicPagePayload): { json: string; hash: string } {
   const encoded = payloadHash(payload);
   // What the page shows is the rendering, not the payload: a change in wording
   // has to reproject the page even when every fact behind it is unchanged.
@@ -75,23 +81,51 @@ export function epicPageStatement(payload: EpicPagePayload, time: number): InSta
   const hash = createHash("sha256")
     .update([encoded.hash, ...rendered.lead, ...rendered.stories].join("\n"), "utf8")
     .digest("hex");
+  return { json: encoded.json, hash };
+}
+
+export function epicPageStatement(payload: EpicPagePayload, time: number): InStatement {
+  const encoded = epicPageHash(payload);
+  const hash = encoded.hash;
   return {
     sql: `INSERT INTO notion_outbox (card_id, priority, operation, target, payload, payload_hash, created_at)
           VALUES (?, 2, ?, ?, ?, ?, ?)
           ON CONFLICT(target, payload_hash) DO NOTHING`,
-    args: [payload.epicId, SYNC_EPIC_PAGE, `epic-page:${payload.epicId}`, encoded.json, hash, time],
+    args: [payload.epicId, SYNC_EPIC_PAGE, epicPageTarget(payload.epicId), encoded.json, hash, time],
   };
 }
 
 /** Queues every live Epic's page; an unchanged page hashes to a row that already exists. */
 export async function enqueueEpicPages(client: Client, targetBranch = "main", now: () => number = Date.now): Promise<number> {
-  const epics = (await client.execute("SELECT id FROM epics WHERE state <> 'FAILED' ORDER BY id")).rows;
+  const epics = (await client.execute(
+    "SELECT id, notion_status_shadow FROM epics WHERE state <> 'FAILED' ORDER BY id",
+  )).rows;
   let queued = 0;
   for (const row of epics) {
     const payload = await epicPagePayload(client, String(row.id), targetBranch);
     if (!payload) continue;
     const result = await client.execute(epicPageStatement(payload, now()));
-    queued += result.rowsAffected;
+    if (result.rowsAffected === 1) {
+      queued++;
+      continue;
+    }
+    // The board shows the last status we wrote, and the hash above collapses a
+    // page identical to one already sent. Those two together silently drop a
+    // page that returns to an earlier state: an Epic that blocked and then
+    // unblocked produces exactly the payload it had before it blocked, so the
+    // board keeps reading blocked while the Epic runs. That is not only a lie
+    // on the board -- decomposition ingests Epics by that same column, so one
+    // such Epic starves every other one behind it. When the shadow disagrees
+    // with the status the state now calls for, the sent row goes out again.
+    const shadow = row.notion_status_shadow === null ? null : String(row.notion_status_shadow);
+    if (shadow === null || shadow === payload.status) continue;
+    const resent = await client.execute({
+      sql: `UPDATE notion_outbox
+            SET state = 'pending', attempts = 0, last_error = NULL, sent_at = NULL, created_at = ?
+            WHERE target = ? AND payload_hash = ? AND state = 'sent'`,
+      args: [now(), epicPageTarget(payload.epicId), epicPageHash(payload).hash],
+    });
+    queued += resent.rowsAffected;
   }
   return queued;
 }

@@ -10,7 +10,7 @@ import { alertChannelsFromConfig } from "../src/alert/config.js";
 import { AlertRouter } from "../src/alert/index.js";
 import { alertNeedsInput } from "../src/alert/story-alerts.js";
 import { assertOutOfBandChannel } from "../src/alert/required-channel.js";
-import { diagnoseRetryLimit, renderRetryReport } from "../src/pipeline/retry-limits.js";
+import { diagnoseRetryLimit, mayReenterPhase, renderRetryReport } from "../src/pipeline/retry-limits.js";
 import { ScenarioRegistry } from "../src/regression/scenario-registry.js";
 import { planRegressionSweep } from "../src/regression/scheduler.js";
 import { defaultSecretsPath, loadSecretsFile, upsertSecretFile } from "../src/config/secrets-file.js";
@@ -305,7 +305,7 @@ async function main(): Promise<void> {
     await ingestReadyStories(storyApi, dataSourceId, store);
     await registerActiveStories();
   };
-  const reconcileProjections = async (): Promise<void> => {
+  const reconcileProjection = async (): Promise<void> => {
     // A parked Story is the Epic's problem too: the board shows the Epic as
     // blocked while any of its Stories waits for a person, and executing again
     // once none does.
@@ -332,6 +332,16 @@ async function main(): Promise<void> {
     }
     await media.reconcile();
     await registerActiveStories();
+  };
+  // Two callers reconcile: a Story subprocess finishing, and the timed cycle.
+  // They are allowed to coincide, and the second one wants the first one's
+  // result rather than a second pass over the same rows, so it joins the run
+  // already in flight. Without this the two passes claim rows from each other
+  // and every projection does its own extra round trip to Notion.
+  let reconciling: Promise<void> | null = null;
+  const reconcileProjections = async (): Promise<void> => {
+    reconciling ??= reconcileProjection().finally(() => { reconciling = null; });
+    await reconciling;
   };
   // Archived or deleted pages must not spin the fallback poller forever: a
   // 404 drops the page from the active set instead of surfacing as an error.
@@ -388,10 +398,16 @@ async function main(): Promise<void> {
     if (!epicsDataSourceId) return;
     const waiting = await ingestEpicsForDecomposition(handle.client, gateway, epicsDataSourceId, repositorySlug);
     const pending = (await handle.client.execute(
-      "SELECT id FROM epics WHERE state IN ('INTAKE', 'DECOMPOSE') ORDER BY updated_at LIMIT 1",
-    )).rows[0];
-    if (!pending) return;
-    const epic = waiting.find((candidate) => candidate.id === String(pending.id));
+      "SELECT id FROM epics WHERE state IN ('INTAKE', 'DECOMPOSE') ORDER BY updated_at",
+    )).rows;
+    // Oldest first, but an Epic the board did not hand back must not hold up
+    // the ones behind it. Intake skips an Epic whose page has no body, and any
+    // Epic whose status column has moved on is not in the query it answers;
+    // taking only the first row from the database would then pick that same
+    // Epic every cycle and decompose nothing, with nothing logged.
+    const epic = pending
+      .map((row) => waiting.find((candidate) => candidate.id === String(row.id)))
+      .find((candidate) => candidate !== undefined);
     if (!epic) return;
 
     const chain = providerOverride ? [providerOverride] : await modelPolicy.providersFor("decompose");
@@ -475,6 +491,11 @@ async function main(): Promise<void> {
   };
 
   const inFlight = new Map<string, Promise<void>>();
+  // Set the moment shutdown starts. The signal reaches the whole process group,
+  // so a Story's pi dies of it too, and the error that surfaces here is
+  // whatever pi was in the middle of -- no signal of our own to read. Without
+  // this every restart charges every in-flight card one of its three attempts.
+  let stopping = false;
 
   // The coordinator hands over a card and its paths, nothing else: which
   // provider, model, tier and reasoning effort a phase runs on is resolved by
@@ -566,6 +587,16 @@ async function main(): Promise<void> {
         // A worker that died for reasons the error catalogue does not know
         // (a defect of ours, a missing binary) says nothing about the provider
         // and must not open its breaker.
+        // A run this process ended is a cancellation, not an attempt. The card
+        // did nothing wrong and the next start dispatches it again; counting it
+        // would park whatever happened to be in flight every time the service
+        // restarts, which is the reasoning the provider-fault branch below
+        // already applies to an event that is not the card's doing.
+        const signal = (error as { signal?: string | null }).signal;
+        if (stopping || signal === "SIGTERM" || signal === "SIGINT") {
+          console.warn(`Story ${cardId} run was cancelled by this shutdown; it keeps its reentry budget`);
+          return;
+        }
         const failureMessage = error instanceof Error ? error.message : String(error);
         const providerFault = classifyError(failureMessage).class !== "UNKNOWN";
         if (providerFault) {
@@ -583,19 +614,14 @@ async function main(): Promise<void> {
           return;
         }
         // The worker already recorded the phase failure. Bound automatic
-        // reentries: DESIGN, CODE and MERGE re-dispatch until the budget is
-        // spent. MERGE fails on the hosting platform as often as on the code
-        // (a CLI timeout, a push refused once), so one strike is not a stop.
-        // A card that never left QUEUED failed before the pipeline started, so
-        // nothing recorded the attempt: without counting it here the dispatch
-        // query selects the same card on every cycle, forever.
+        // reentries; which states re-dispatch and why is `mayReenterPhase`.
         const card = await store.getStory(cardId).catch(() => undefined);
         if (card && card.state !== "DELIVERED") {
           await config.reload();
           const budget = config.get("retry.maxPhaseReentries");
           await store.recordPhaseReentry(cardId);
           const reentries = card.phaseReentries + 1;
-          const reenterable = ["QUEUED", "DESIGN", "CODE", "MERGE"].includes(card.state) && reentries < budget;
+          const reenterable = mayReenterPhase(card.state, reentries, budget);
           if (!reenterable) {
             await store.stopForInput(cardId, card.state, "retry_limit_exceeded", `reentry-${cardId}`);
             console.warn(`Story ${cardId} parked after ${reentries} failed attempt(s) in ${card.state}`);
@@ -925,6 +951,17 @@ async function main(): Promise<void> {
     }
   };
 
+  // Ring 2, before the first cycle rather than after it. The cycle nudges the
+  // projections when it ends, so a service declared further down is in its
+  // temporal dead zone on that first pass: every start reported a P0 and lost
+  // its opening cycle, and --once never ran one at all. Nothing on the
+  // delivery path reads it, so stopping it costs the console its numbers and
+  // costs no card a thing.
+  const projections = new ProjectionService(handle.client, {
+    onError: (error) => console.warn(`projection refresh failed: ${(error as Error).message}`),
+  });
+  projections.start();
+
   if (once) {
     await runCycle();
     await media.waitForIdle();
@@ -958,12 +995,6 @@ async function main(): Promise<void> {
   // process: nothing it shows comes from anywhere else, and a second service
   // would be one more thing to keep alive for no more truth. It refuses a
   // public wildcard bind itself.
-  // Ring 2. Nothing on the delivery path reads it, so stopping it costs the
-  // console its numbers and costs no card a thing.
-  const projections = new ProjectionService(handle.client, {
-    onError: (error) => console.warn(`projection refresh failed: ${(error as Error).message}`),
-  });
-  projections.start();
   let operationsConsole: Awaited<ReturnType<typeof createConsoleServer>> | undefined;
   if (config.get("console.enabled")) {
     const uiRoot = join(ROOT, "console-ui", "dist");
@@ -992,6 +1023,7 @@ async function main(): Promise<void> {
   }
 
   const stop = async (): Promise<void> => {
+    stopping = true;
     clearInterval(timer);
     // A Story worker keeps running after its parent dies, and a restarted
     // orchestrator would dispatch the same card again beside it: drain first.

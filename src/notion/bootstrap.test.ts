@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Client } from "@notionhq/client";
 import schema from "./notion-schema.json" with { type: "json" };
-import { bootstrapNotion, bootstrapRequirements, upgradeEpicBoard } from "./bootstrap.js";
+import { bootstrapNotion, bootstrapRequirements, upgradeEpicBoard, upgradeStoryBoard } from "./bootstrap.js";
 
 describe("bootstrapNotion", () => {
   it("creates Epics before the databases that relate to it, then adds rollups", async () => {
@@ -20,7 +20,7 @@ describe("bootstrapNotion", () => {
       dataSources: {
         update: async (args: Record<string, unknown>) => { updates.push(args); return { id: "epics-ds" }; },
       },
-    } as unknown as Pick<Client, "databases" | "dataSources">;
+    } as unknown as Pick<Client, "databases" | "dataSources" | "pages">;
 
     const result = await bootstrapNotion(client, "hub-page");
     expect(result).toEqual({
@@ -51,7 +51,7 @@ describe("bootstrapNotion", () => {
         retrieve: async () => { throw new Error("unexpected"); },
       },
       dataSources: { update: async () => { throw new Error("adding Requirements must not touch other schemas"); } },
-    } as unknown as Pick<Client, "databases" | "dataSources">;
+    } as unknown as Pick<Client, "databases" | "dataSources" | "pages">;
 
     await expect(bootstrapRequirements(client, "hub-page", "existing-epics-ds")).resolves.toEqual({
       requirementsDatabaseId: "requirements-db",
@@ -86,7 +86,7 @@ describe("bootstrapNotion", () => {
         retrieve: async () => { throw new Error("unexpected"); },
       },
       dataSources: { update: async () => ({ id: "ds-1" }) },
-    } as unknown as Pick<Client, "databases" | "dataSources">;
+    } as unknown as Pick<Client, "databases" | "dataSources" | "pages">;
     await bootstrapNotion(client, "hub-page");
 
     const properties = (created[1]!.initial_data_source as { properties: Record<string, any> }).properties;
@@ -112,7 +112,7 @@ describe("bootstrapNotion", () => {
         }),
         update: async (input: Record<string, unknown>) => { updates.push(input); return { id: "ds-1" }; },
       },
-    } as unknown as Pick<Client, "databases" | "dataSources">;
+    } as unknown as Pick<Client, "databases" | "dataSources" | "pages">;
 
     await upgradeEpicBoard(client, "epics-ds");
 
@@ -123,5 +123,53 @@ describe("bootstrapNotion", () => {
     expect(options.slice(4).every((option) => option.color !== undefined)).toBe(true);
     expect(properties[schema.propertyNames.mergeRequest]).toEqual({ url: {} });
     expect(properties[schema.propertyNames.waitingOnHuman].formula.expression).toContain("验收中");
+    expect(properties[schema.propertyNames.taskId]).toEqual({ rich_text: {} });
+  });
+
+  it("adds the new phase words before moving pages off the old ones, because Notion cannot rename an option", async () => {
+    const updates: Array<Record<string, unknown>> = [];
+    const moved: Array<{ page: string; to: string }> = [];
+    let live = [
+      { id: "o-queued", name: "排队中", color: "gray" },
+      { id: "o-shape", name: "需求分析", color: "purple" },
+      { id: "o-e2e", name: "端到端", color: "orange" },
+    ];
+    const client = {
+      databases: { create: async () => { throw new Error("nothing is created on upgrade"); }, retrieve: async () => { throw new Error("unexpected"); } },
+      dataSources: {
+        retrieve: async () => ({ properties: { [schema.propertyNames.phase]: { select: { options: live } } } }),
+        query: async (input: any) => ({
+          results: input.filter.select.equals === "端到端" ? [{ id: "page-1" }] : [],
+          has_more: false,
+          next_cursor: null,
+        }),
+        update: async (input: any) => {
+          updates.push(input);
+          const sent = input.properties[schema.propertyNames.phase].select.options as Array<{ id?: string; name?: string; color?: string }>;
+          live = sent.map((option, index) => {
+            const known = live.find((existing) => existing.id === option.id);
+            return known ?? { id: `new-${index}`, name: option.name!, color: option.color ?? "default" };
+          });
+          return { id: "ds-1" };
+        },
+      },
+      pages: {
+        update: async (input: any) => {
+          moved.push({ page: input.page_id, to: input.properties[schema.propertyNames.phase].select.name });
+          return { id: input.page_id };
+        },
+      },
+    } as unknown as Pick<Client, "databases" | "dataSources" | "pages">;
+
+    await upgradeStoryBoard(client, "stories-ds");
+
+    // The word a page moves onto has to be on the board before the page moves,
+    // and the word it leaves can only go afterwards.
+    expect(updates).toHaveLength(2);
+    const added = (updates[0]!.properties as any)[schema.propertyNames.phase].select.options
+      .map((option: any) => option.name).filter(Boolean);
+    expect(added).toContain("验证");
+    expect(moved).toEqual([{ page: "page-1", to: "验证" }]);
+    expect(live.map((option) => option.name)).toEqual(schema.options.phase);
   });
 });

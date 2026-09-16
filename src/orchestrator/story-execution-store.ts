@@ -160,6 +160,28 @@ export class StoryExecutionStore {
     await this.writeGuard?.assert(cardId);
   }
 
+  /** The Epic id behind an Epic page, for a card a person filed by relation. */
+  async epicIdForPage(notionPageId: string): Promise<string | undefined> {
+    const row = (await this.client.execute({
+      sql: "SELECT id FROM epics WHERE notion_page_id = ?",
+      args: [notionPageId],
+    })).rows[0];
+    return row ? String(row.id) : undefined;
+  }
+
+  /**
+   * Files an already-known Story under its Epic. Intake creates a card once
+   * and never rewrites it, so a relation set after the card was ingested --
+   * or before this was read at all -- would otherwise never arrive. Only an
+   * unset epic_id is filled: a Story the decomposer placed keeps its Epic.
+   */
+  async attachEpic(cardId: string, epicId: string): Promise<void> {
+    await this.client.execute({
+      sql: "UPDATE stories SET epic_id = ?, updated_at = ? WHERE id = ? AND epic_id IS NULL",
+      args: [epicId, this.now(), cardId],
+    });
+  }
+
   async createStory(input: StoryIntake): Promise<boolean> {
     if (input.requirement.trim() === "") throw new Error("Story requirement must not be empty");
     const time = this.now();
@@ -259,13 +281,28 @@ export class StoryExecutionStore {
         // A transition a person made is also the moment the inner-loop budget
         // starts again: the budget counts the rounds failed since somebody last
         // acted on the card, so without this stamp a resume grants a reentry
-        // budget and no rounds to use it in.
+        // budget and no rounds to use it in. The reentry count is cleared for
+        // the same reason `applyHumanTransition` clears it: a card parked on
+        // its retry budget has spent every reentry, so a person who answers
+        // and does not get the count back watches it park again on the next
+        // failure. Answering in Notion arrives here rather than there, so
+        // leaving it out made the door people actually use the broken one.
         sql: `UPDATE stories
               SET state = ?, phase = ?, stop_reason = NULL, resume_state = NULL,
+                  phase_reentries = CASE WHEN ? THEN 0 ELSE phase_reentries END,
                   last_human_action_at = CASE WHEN ? THEN ? ELSE last_human_action_at END,
                   updated_at = ?
               WHERE id = ? AND state = ?`,
-        args: [to, phaseForState(to), actor === "human" ? 1 : 0, time, time, cardId, expectedFrom],
+        args: [
+          to,
+          phaseForState(to),
+          actor === "human" && expectedFrom === "NEEDS_INPUT" ? 1 : 0,
+          actor === "human" ? 1 : 0,
+          time,
+          time,
+          cardId,
+          expectedFrom,
+        ],
       },
       {
         sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)

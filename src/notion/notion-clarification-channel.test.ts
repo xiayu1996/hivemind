@@ -9,6 +9,9 @@ import { NotionClarificationChannel } from "./notion-clarification-channel.js";
 
 const REQUIREMENT_ID = "R-abc123def456";
 const PAGE_ID = "requirement-page";
+/** On a minute boundary: Notion stamps a comment only to the minute, so that is
+ * the resolution at which an answer is told apart from what came before it. */
+const MINUTE = 1_700_000_040_000;
 
 class FakeCommentSource implements NotionCommentSource {
   readonly comments: NotionComment[] = [];
@@ -28,7 +31,7 @@ describe("NotionClarificationChannel", () => {
   beforeEach(async () => {
     client = createClient({ url: ":memory:" });
     await migrate(client);
-    let time = 1_000;
+    let time = MINUTE;
     store = new RequirementStore(client, () => time++);
     source = new FakeCommentSource();
     posted = [];
@@ -45,8 +48,8 @@ describe("NotionClarificationChannel", () => {
       return { status: 404, data: {} };
     };
     const gateway = new NotionGateway({ transport, ratePerSecond: 1_000_000, mergeWindowMs: 0 });
-    const ingestor = new CommentIngestor(client, source, { now: () => 9_000, botUserId: "bot" });
-    channel = new NotionClarificationChannel(client, gateway, ingestor, () => 9_000);
+    const ingestor = new CommentIngestor(client, source, { now: () => MINUTE + 9_000, botUserId: "bot" });
+    channel = new NotionClarificationChannel(client, gateway, ingestor, () => MINUTE + 9_000);
     await store.createRequirement({
       id: REQUIREMENT_ID,
       notionPageId: PAGE_ID,
@@ -97,13 +100,28 @@ describe("NotionClarificationChannel", () => {
     const askedAt = (await store.clarifyHistory(REQUIREMENT_ID))[0]!.askedAt;
     await channel.ask({ requirementId: REQUIREMENT_ID, round, questions: [{ question: "谁会用它？", options: [] }] });
     source.comments.push(
-      { id: "old", pageId: PAGE_ID, blockId: null, discussionId: null, authorId: "person", body: "早先的闲聊", createdTime: askedAt - 1 },
+      { id: "old", pageId: PAGE_ID, blockId: null, discussionId: null, authorId: "person", body: "早先的闲聊", createdTime: MINUTE - 60_000 },
       { id: "bot-echo", pageId: PAGE_ID, blockId: null, discussionId: null, authorId: "bot", body: "[澄清 第 1 轮]", createdTime: askedAt + 1 },
       { id: "answer", pageId: PAGE_ID, blockId: null, discussionId: null, authorId: "person", body: "值班的人", createdTime: askedAt + 2 },
     );
 
     await expect(channel.collect(REQUIREMENT_ID, round)).resolves.toMatchObject([
       { id: "answer", author: "person", body: "值班的人" },
+    ]);
+  });
+
+  it("counts an answer Notion stamped in the same minute the question went out", async () => {
+    const round = await store.openClarifyRound(REQUIREMENT_ID, ["谁会用它？"], "run-ask");
+    await channel.ask({ requirementId: REQUIREMENT_ID, round, questions: [{ question: "谁会用它？", options: [] }] });
+    // Notion records the reply at the top of the minute, so its stamp reads as
+    // older than the question we asked seconds earlier. Dropping it would mean
+    // waiting forever for an answer that is already on the page.
+    source.comments.push(
+      { id: "answer", pageId: PAGE_ID, blockId: null, discussionId: null, authorId: "person", body: "值班的人", createdTime: MINUTE },
+    );
+
+    await expect(channel.collect(REQUIREMENT_ID, round)).resolves.toMatchObject([
+      { id: "answer", body: "值班的人" },
     ]);
   });
 

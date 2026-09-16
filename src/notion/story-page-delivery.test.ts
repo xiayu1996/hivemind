@@ -50,6 +50,11 @@ class FakeNotion {
       return { status: 200, data: this.append(decodeURIComponent(childrenMatch[1]!), request) };
     }
     const blockMatch = /^\/v1\/blocks\/([^/]+)$/.exec(path);
+    if (request.method === "GET" && blockMatch) {
+      const id = decodeURIComponent(blockMatch[1]!);
+      const block = [...this.children.values()].flat().find((item) => item.id === id);
+      return block ? { status: 200, data: block } : { status: 404, data: { message: "Could not find block" } };
+    }
     if (request.method === "PATCH" && blockMatch) {
       return { status: 200, data: this.patch(decodeURIComponent(blockMatch[1]!), request.body) };
     }
@@ -75,6 +80,14 @@ class FakeNotion {
     }
     return { status: 404, data: {} };
   };
+
+  /** Drops a block the way a person deleting it in the app does. */
+  remove(blockId: string): void {
+    for (const [parent, blocks] of this.children) {
+      const index = blocks.findIndex((item) => item.id === blockId);
+      if (index >= 0) this.children.set(parent, blocks.toSpliced(index, 1));
+    }
+  }
 
   visible(parentId: string): FakeBlock[] {
     return (this.children.get(parentId) ?? []).filter((item) => !item.archived);
@@ -243,6 +256,47 @@ describe("NotionStoryPageDelivery", () => {
       return payload?.rich_text?.map((run) => run.plain_text ?? "").join("") ?? "";
     });
     expect(texts.filter((text) => text.startsWith("Execution stopped"))).toHaveLength(1);
+    client.close();
+  });
+
+  it("asks the page about a round it recorded rather than trusting how recently it wrote it", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, () => 10);
+    await store.createStory({ id: "S-EPIC1-01", notionPageId: "page-1", title: "Story", requirement: "Requirement" });
+    await store.freezeDefinitionOfDone("S-EPIC1-01", parseDoD(DOD));
+    await client.execute({
+      sql: `INSERT INTO verify_records (card_id, round, code_session_id, verify_session_id, verdict, failed_scenarios, created_at)
+            VALUES ('S-EPIC1-01', 1, 'code-1', 'verify-1', 'rejected', '["S-EPIC1-01-a"]', 20)`,
+    });
+
+    const fake = new FakeNotion("page-1");
+    const gateway = new NotionGateway({ transport: fake.transport, ratePerSecond: 1_000_000, mergeWindowMs: 0 });
+    const page = new NotionStoryPageDelivery(client, gateway, () => 20);
+    const delivery = new NotionStoryDelivery(page, new NotionStoryPropertyDelivery(gateway, client, () => 20));
+    const outbox = new NotionOutbox(client, () => 20);
+    await new NotionStoryProjection(client, () => 20).enqueue("S-EPIC1-01");
+    await outbox.replay(delivery);
+    const toggle = String((await client.execute("SELECT toggle_block_id FROM notion_verification_rounds")).rows[0]?.toggle_block_id);
+
+    // Hours later, and with the listing lagging so the plan asks for the round
+    // again: the toggle is still on the page, so nothing is appended.
+    const later = new NotionStoryDelivery(
+      new NotionStoryPageDelivery(client, gateway, () => 20 + 60 * 60_000),
+      new NotionStoryPropertyDelivery(gateway, client, () => 20 + 60 * 60_000),
+    );
+    fake.lagAppends = true;
+    await client.execute("UPDATE notion_outbox SET state = 'pending', claimed_until = NULL");
+    await outbox.replay(later);
+    expect(fake.visible("page-1").filter((item) => item.type === "toggle")).toHaveLength(1);
+
+    // A person deleting the toggle is the one case where it must come back.
+    await client.execute({ sql: "UPDATE stories SET notion_page_id = 'page-1' WHERE id = 'S-EPIC1-01'" });
+    fake.remove(toggle);
+    fake.lagAppends = false;
+    await client.execute("UPDATE notion_outbox SET state = 'pending', claimed_until = NULL");
+    await outbox.replay(later);
+    expect(fake.visible("page-1").filter((item) => item.type === "toggle")).toHaveLength(1);
     client.close();
   });
 });

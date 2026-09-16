@@ -77,6 +77,30 @@ describe("Notion Story intake", () => {
     }]);
   });
 
+  it("files a card under the Epic a person related it to, even one ingested before the link", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, () => 100);
+    await client.execute({
+      sql: "INSERT INTO epics (id, notion_page_id, title, state, created_at, updated_at) VALUES ('EPIC1', 'epic-page-1', 'Epic', 'EXECUTING', 1, 1)",
+    });
+    await ingestReadyStories(api(), "stories-source", store);
+    expect((await client.execute("SELECT epic_id FROM stories")).rows[0]?.epic_id).toBeNull();
+
+    const linked = {
+      ...page,
+      properties: { ...page.properties, Epic: { type: "relation", relation: [{ id: "epic-page-1" }] } },
+    };
+    const linkedApi: NotionStoryApi = {
+      queryReady: async () => ({ results: [linked], hasMore: false, nextCursor: null }),
+      listChildren: async () => ({ results: blocks, hasMore: false, nextCursor: null }),
+    };
+    await ingestReadyStories(linkedApi, "stories-source", store);
+
+    expect((await client.execute("SELECT epic_id FROM stories")).rows[0]?.epic_id).toBe("EPIC1");
+    client.close();
+  });
+
   it("ingests each Notion page once and persists its section anchors", async () => {
     const client = createClient({ url: ":memory:" });
     await migrate(client);

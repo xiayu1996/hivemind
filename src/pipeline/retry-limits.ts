@@ -33,6 +33,26 @@ export async function retryLimits(config: ConfigStore): Promise<RetryLimits> {
   };
 }
 
+/**
+ * States a Story is re-dispatched from after its run died, rather than parked
+ * for a person. Every phase that builds something is here: a process that
+ * crashed, timed out, or was killed says nothing about whether the work can be
+ * done, and MERGE fails on the hosting platform as often as on the code.
+ * VERIFY is deliberately absent — how often it repeats is the inner loop's to
+ * bound, and `retry.maxInnerLoopRounds` already owns that accounting. QUEUED is
+ * here because a card that died before the pipeline started has nothing
+ * recorded against it, so without a counted attempt the dispatch query would
+ * select it again on every cycle, forever.
+ */
+const REENTERABLE_STATES: ReadonlySet<string> = new Set([
+  "QUEUED", "SHAPE", "DESIGN", "SPECIFY", "CODE", "REGRESSION_FIX", "MERGE",
+]);
+
+/** Whether a Story whose run just died is dispatched again or parked. */
+export function mayReenterPhase(state: string, reentries: number, budget: number): boolean {
+  return REENTERABLE_STATES.has(state) && reentries < budget;
+}
+
 export type RetryDiagnosisSide = "requirement" | "system";
 
 export interface RetryDiagnosis {

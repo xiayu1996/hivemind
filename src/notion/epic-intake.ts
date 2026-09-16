@@ -24,9 +24,17 @@ function blockText(block: Record<string, unknown>): string {
   return "";
 }
 
-/** The board already writes the Epic id as the first token of the title
- * ("M2 并行与回归"), and Story ids are built from it, so that is the id. */
-function epicIdFrom(title: string): string {
+function richText(value: unknown): string {
+  const parsed = z.object({ rich_text: z.array(z.object({ plain_text: z.string() }).passthrough()) }).safeParse(value);
+  return parsed.success ? parsed.data.rich_text.map((item) => item.plain_text).join("").trim() : "";
+}
+
+/** The id column is where the id lives. A page written before that column
+ * existed carries it as the first token of the title ("M2 并行与回归"), and
+ * Story ids are built from it, so that stays as the fallback. */
+function epicIdFrom(properties: Record<string, unknown>, title: string): string {
+  const declared = richText(properties[schema.propertyNames.taskId]);
+  if (declared) return declared;
   const token = title.split(/\s+/)[0] ?? "";
   if (!/^[A-Za-z0-9._-]+$/.test(token) || !/[A-Za-z0-9]/.test(token)) {
     throw new Error(`cannot read an Epic id from the title: ${title}`);
@@ -66,7 +74,7 @@ export async function ingestEpicsForDecomposition(
     // An Epic with an empty body has nothing to decompose; leaving it alone is
     // better than sending the model a title and letting it invent the rest.
     if (!requirement) continue;
-    const id = epicIdFrom(title);
+    const id = epicIdFrom(properties, title);
     const time = now();
     await client.execute({
       sql: `INSERT INTO epics (id, notion_page_id, title, state, repo, created_at, updated_at)

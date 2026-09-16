@@ -41,6 +41,26 @@ beforeEach(async () => {
 afterEach(() => client.close());
 
 describe("escalateParkedStories", () => {
+  it("counts a parked or failed Story as stuck, because neither moves without a person", async () => {
+    await epic("E1", "EXECUTING");
+    await story("S-E1-01", "E1", "HUMAN_PARKED");
+    await epic("E2", "EXECUTING");
+    await story("S-E2-01", "E2", "FAILED");
+
+    const changes = await escalateParkedStories(client, () => 100);
+
+    expect(changes.map((change) => change.epicId).toSorted()).toEqual(["E1", "E2"]);
+    expect(await epicState("E1")).toBe("BLOCKED");
+    expect(await epicState("E2")).toBe("BLOCKED");
+    const question = String((await latestBlock(client, "E1"))?.question.question);
+    expect(question).toContain("\u505c\u9760");
+
+    await client.execute("UPDATE stories SET state = 'CODE' WHERE id = 'S-E1-01'");
+    await escalateParkedStories(client, () => 200);
+    expect(await epicState("E1")).toBe("EXECUTING");
+  });
+
+
   it("blocks an executing Epic whose Story waits for a person and says which Story and why", async () => {
     await epic("E1", "EXECUTING");
     await story("S-E1-01", "E1", "DELIVERED");

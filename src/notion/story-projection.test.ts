@@ -7,6 +7,32 @@ import schema from "./notion-schema.json" with { type: "json" };
 import { NotionStoryProjection } from "./story-projection.js";
 
 describe("NotionStoryProjection", () => {
+  it("shows the phase a stopped card stopped in, not the queue it left long ago", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, () => 10);
+    await store.createStory({ id: "S-EPIC1-01", notionPageId: "page-1", title: "Story", requirement: "Requirement" });
+    const projection = new NotionStoryProjection(client, () => 20);
+    const phaseOf = async (): Promise<string> => {
+      await client.execute("DELETE FROM notion_outbox");
+      await projection.enqueue("S-EPIC1-01");
+      const row = (await client.execute(
+        "SELECT payload FROM notion_outbox WHERE operation = 'sync_story_properties'",
+      )).rows[0];
+      const payload = JSON.parse(String(row?.payload)) as { properties: Record<string, { select?: { name: string } }> };
+      return payload.properties[schema.propertyNames.phase]?.select?.name ?? "";
+    };
+
+    expect(await phaseOf()).toBe(schema.options.phase[0]);
+    await client.execute("UPDATE stories SET state = 'SPECIFY', phase = 'SPECIFY' WHERE id = 'S-EPIC1-01'");
+    expect(await phaseOf()).toBe("\u5199\u6d4b\u8bd5");
+    await client.execute(
+      "UPDATE stories SET state = 'NEEDS_INPUT', phase = NULL, resume_state = 'VERIFY', stop_reason = 'verify_loop_exceeded' WHERE id = 'S-EPIC1-01'",
+    );
+    expect(await phaseOf()).toBe("\u9a8c\u8bc1");
+    client.close();
+  });
+
   it("queues a complete central-truth projection and deduplicates an unchanged page", async () => {
     const client = createClient({ url: ":memory:" });
     await migrate(client);

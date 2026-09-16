@@ -24,9 +24,13 @@ export function epicBranchName(epicId: string): string {
  * lazily at the first merge left the first Story's delivery failing on a ref
  * that only one machine had (S-E3OVERVIEW-01, 2026-09-10).
  *
- * Idempotent: an existing local branch is kept, an existing remote branch is
- * left as it is, and a push is a plain push — a diverged remote fails loudly
- * rather than being overwritten.
+ * Idempotent, and idempotent under concurrency: two callers reach here by
+ * design — the plan approval publishes the branch while the first Story's
+ * dispatch makes sure it exists — so every check can go stale between reading
+ * and acting on it. Both recoveries ask git what is true now rather than
+ * reading the error text. An existing local branch is kept, an existing remote
+ * branch is left as it is, and a push is a plain push, so a diverged remote
+ * still fails loudly rather than being overwritten.
  */
 export async function publishEpicBranch(input: PublishEpicBranchInput): Promise<{ branch: string; pushed: boolean }> {
   const branch = epicBranchName(input.epicId);
@@ -38,11 +42,33 @@ export async function publishEpicBranch(input: PublishEpicBranchInput): Promise<
     await input.git.run(cwd, ["fetch", "origin", `${branch}:refs/remotes/origin/${branch}`]);
     return { branch, pushed: false };
   }
-  const local = await input.git.run(cwd, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).then(() => true, () => false);
-  if (!local) {
+  if ((await localHead(input.git, cwd, branch)) === null) {
     await input.git.run(cwd, ["fetch", "origin", main]);
-    await input.git.run(cwd, ["branch", branch, `origin/${main}`]);
+    try {
+      await input.git.run(cwd, ["branch", branch, `origin/${main}`]);
+    } catch (error) {
+      // A branch that appeared in this window is the other caller's, cut from
+      // the same start point, so it is the branch we were about to create.
+      if ((await localHead(input.git, cwd, branch)) === null) throw error;
+    }
   }
-  await input.git.run(cwd, ["push", "--set-upstream", "origin", branch]);
-  return { branch, pushed: true };
+  let pushed = true;
+  try {
+    await input.git.run(cwd, ["push", "--set-upstream", "origin", branch]);
+  } catch (error) {
+    // The other caller's push can land between the ls-remote above and this
+    // one. A remote carrying exactly the commit we were publishing is the
+    // outcome we wanted, whoever wrote it; anything else is a real failure.
+    const published = (await input.git.run(cwd, ["ls-remote", "--heads", "origin", branch])).trim();
+    const mine = await localHead(input.git, cwd, branch);
+    if (mine === null || !published.startsWith(mine)) throw error;
+    pushed = false;
+  }
+  return { branch, pushed };
+}
+
+/** The commit the local branch points at, or null when it does not exist. */
+async function localHead(git: EpicBranchGitPort, cwd: string, branch: string): Promise<string | null> {
+  return git.run(cwd, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`])
+    .then((out) => out.trim() || null, () => null);
 }

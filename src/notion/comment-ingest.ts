@@ -3,6 +3,19 @@ import type { UserDirectory } from "./user-directory.js";
 
 const OVERLAP_MS = 2 * 60 * 1_000;
 
+/**
+ * Rounds one of our own millisecond timestamps down to the resolution Notion
+ * stamps a comment with. Notion records created_time only to the minute, so a
+ * reply written seconds after the thing it answers carries an older stamp than
+ * that thing does; a consumer comparing the two directly drops the reply, and
+ * drops it for good, because a cutoff like that never moves back. Callers pair
+ * this with an `ingested_at > <the unfloored timestamp>` condition, which
+ * removes whatever was already on the page before that moment.
+ */
+export function floorToNotionMinute(localMs: number): number {
+  return localMs - (localMs % 60_000);
+}
+
 export interface NotionComment {
   id: string;
   pageId: string;

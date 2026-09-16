@@ -12,6 +12,10 @@ const selectProperty = z.object({
   type: z.literal("select"),
   select: z.object({ name: z.string() }).nullable(),
 }).passthrough();
+const relationProperty = z.object({
+  type: z.literal("relation"),
+  relation: z.array(z.object({ id: z.string().min(1) }).passthrough()),
+}).passthrough();
 const multiSelectProperty = z.object({
   type: z.literal("multi_select"),
   multi_select: z.array(z.object({ name: z.string() }).passthrough()),
@@ -124,6 +128,8 @@ export class NotionGatewayStoryApi implements NotionStoryApi {
 
 export interface ReadyStory extends StoryIntake {
   sections: Partial<Record<StorySection, string>>;
+  /** The Epic page a person linked the card to, resolved to an Epic id at ingest. */
+  epicPageId?: string | undefined;
 }
 
 export class IncompleteNotionStoryError extends Error {
@@ -152,6 +158,12 @@ function richText(properties: Record<string, unknown>, name: string): string {
 function select(properties: Record<string, unknown>, name: string): string {
   const parsed = selectProperty.safeParse(properties[name]);
   return parsed.success ? parsed.data.select?.name ?? "" : "";
+}
+
+/** The first related page id, which for the Epic column is the Epic's page. */
+function relation(properties: Record<string, unknown>, name: string): string | undefined {
+  const parsed = relationProperty.safeParse(properties[name]);
+  return parsed.success ? parsed.data.relation[0]?.id : undefined;
 }
 
 function multiSelect(properties: Record<string, unknown>, name: string): string[] {
@@ -236,6 +248,7 @@ export async function listReadyStories(api: NotionStoryApi, dataSourceId: string
         priority: priority(select(page.data.properties, names.priority)),
         capabilities: multiSelect(page.data.properties, names.capabilities),
         sections: content.sections,
+        epicPageId: relation(page.data.properties, names.epic),
       });
     }
     cursor = response.hasMore && response.nextCursor ? response.nextCursor : undefined;
@@ -250,7 +263,12 @@ export async function ingestReadyStories(
 ): Promise<string[]> {
   const created: string[] = [];
   for (const story of await listReadyStories(api, dataSourceId)) {
-    const inserted = await store.createStory(story);
+    // A card a person filed under an Epic belongs to that Epic even though
+    // they only ever set the relation. Without this the Epic never learns that
+    // one of its Stories stopped, and the board shows it running.
+    const epicId = story.epicPageId ? await store.epicIdForPage(story.epicPageId) : undefined;
+    const inserted = await store.createStory(epicId ? { ...story, epicId: story.epicId ?? epicId } : story);
+    if (epicId) await store.attachEpic(story.id, epicId);
     for (const [section, anchorBlockId] of Object.entries(story.sections)) {
       await store.registerNotionSection(story.id, section as StorySection, anchorBlockId);
     }
