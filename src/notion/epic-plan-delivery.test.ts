@@ -39,6 +39,10 @@ describe("NotionEpicPlanDelivery", () => {
         if (request.path.endsWith("/query")) {
           return { status: 200, data: { results: children, has_more: false } };
         }
+        if (request.method === "PATCH" && request.path.includes("/children")) {
+          const appended = (request.body as { children: unknown[] }).children;
+          return { status: 200, data: { results: appended.map((_, index) => ({ id: `new-${index}` })) } };
+        }
         return { status: 200, data: { id: "created-page" } };
       }),
     } as unknown as NotionGateway;
@@ -68,7 +72,9 @@ describe("NotionEpicPlanDelivery", () => {
       const append = requests.find((request) => request.method === "PATCH");
       const text = JSON.stringify(append?.body);
       expect(append?.path).toContain("epic-page");
-      expect(text).toContain("Customers see one review request per initiative.");
+      // The goal is the projection's to render, under its own heading, next
+      // to the scenarios this batch carries.
+      expect(text).not.toContain("Customers see one review request per initiative.");
       expect(text).toContain("S-M2-01");
       // The name comes first and the id follows it as a handle.
       expect(text).toContain('"content":"Split the initiative"');
@@ -236,24 +242,27 @@ describe("NotionEpicPlanDelivery", () => {
   describe("sync_epic_page", () => {
     const payload = {
       epicId: "M2",
-      status: "验收中",
+      state: "EPIC_ACCEPT",
+      status: "\u9a8c\u6536\u4e2d",
       mrUrl: "https://example.test/pull/26",
       targetBranch: "main",
       integrationBranch: "epic/M2",
-      blockedReason: null,
+      businessGoal: "\u8ba9\u4eba\u4e00\u6b21\u9a8c\u6536\u4e00\u6279\u4ea4\u4ed8",
+      prdScenarios: [{ id: "s01", text: "\u7ba1\u7406\u5458\u6253\u5f00\u89c4\u5219\u9875\uff0c\u4fdd\u5b58\u4e00\u6761\u89c4\u5219\uff0c\u5217\u8868\u91cc\u51fa\u73b0\u5b83" }],
       stories: [
-        { id: "S-M2-01", title: "Split", state: "DELIVERED", stopReason: null, mrUrl: "https://example.test/pull/20" },
-        { id: "S-M2-02", title: "Approve", state: "CODE", stopReason: null, mrUrl: null },
+        { id: "S-M2-01", title: "Split", pageId: "3dd20688-7a32-815a-a78b-d1e934a4d958", dependsOn: [] },
+        { id: "S-M2-02", title: "Approve", pageId: null, dependsOn: ["S-M2-01"] },
       ],
     };
 
-    it("moves the column, links the review request and rewrites the progress section in place", async () => {
+    it("writes what the batch carries, links the Stories it planned, and takes the progress section away", async () => {
       await client.execute("INSERT INTO epics (id, notion_page_id, title, state, created_at, updated_at) VALUES ('M2', 'epic-page', 'M2', 'EPIC_ACCEPT', 1, 1)");
       children = [
-        { id: "b-plan", type: "heading_2", heading_2: { rich_text: [{ plain_text: "拆解方案" }] } },
-        { id: "b-goal", type: "paragraph", paragraph: { rich_text: [{ plain_text: "goal" }] } },
-        { id: "b-progress", type: "heading_2", heading_2: { rich_text: [{ plain_text: "进展" }] } },
-        { id: "b-old-1", type: "bulleted_list_item", bulleted_list_item: { rich_text: [{ plain_text: "S-M2-01 Split — 开发中" }] } },
+        { id: "b-body", type: "paragraph", paragraph: { rich_text: [{ plain_text: "\u8fd9\u4e00\u6279\u8981\u505a\u4ec0\u4e48" }] } },
+        { id: "b-plan", type: "heading_2", heading_2: { rich_text: [{ plain_text: "\u62c6\u89e3\u65b9\u6848" }] } },
+        { id: "b-plan-1", type: "bulleted_list_item", bulleted_list_item: { rich_text: [{ plain_text: "Split S-M2-01" }] } },
+        { id: "b-progress", type: "heading_2", heading_2: { rich_text: [{ plain_text: "\u8fdb\u5c55" }] } },
+        { id: "b-old-1", type: "bulleted_list_item", bulleted_list_item: { rich_text: [{ plain_text: "S-M2-01 Split \u2014 \u5f00\u53d1\u4e2d" }] } },
         { id: "b-old-marker", type: "paragraph", paragraph: { rich_text: [{ plain_text: "hivemind-progress:old" }] } },
       ];
       const delivery = new NotionEpicPlanDelivery(gateway(), client, "stories-ds", () => 10);
@@ -262,26 +271,37 @@ describe("NotionEpicPlanDelivery", () => {
       await delivery.send(record("sync_epic_page", payload, { payloadHash: "new" }));
 
       const properties = requests.find((request) => request.method === "PATCH" && request.path === "/v1/pages/epic-page");
-      expect(JSON.stringify(properties?.body)).toContain("验收中");
+      expect(JSON.stringify(properties?.body)).toContain("\u9a8c\u6536\u4e2d");
       expect(JSON.stringify(properties?.body)).toContain("https://example.test/pull/26");
+      // The progress section and the marker line go; the plan a person
+      // approved is never touched.
       expect(requests.filter((request) => request.method === "DELETE").map((request) => request.path)).toEqual([
         "/v1/blocks/b-progress", "/v1/blocks/b-old-1", "/v1/blocks/b-old-marker",
       ]);
-      const appended = requests.find((request) => request.method === "PATCH" && request.path.endsWith("/children"));
-      const body = JSON.stringify(appended?.body);
-      expect(body).toContain("进展");
-      expect(body).toContain("S-M2-01 Split — 已交付，MR https://example.test/pull/20");
-      // The board and the page call the phase by the same word.
-      expect(body).toContain("S-M2-02 Approve — 开发");
-      expect(body).not.toContain("hivemind-progress:");
-      const applied = await client.execute("SELECT payload_hash FROM epic_notion_sections WHERE epic_id = 'M2' AND section = 'progress'");
+      const appended = requests
+        .filter((request) => request.method === "PATCH" && request.path.endsWith("/children"))
+        .map((request) => JSON.stringify(request.body));
+      const written = appended.join("\n");
+      expect(written).toContain("\u76ee\u6807");
+      expect(written).toContain("\u8ba9\u4eba\u4e00\u6b21\u9a8c\u6536\u4e00\u6279\u4ea4\u4ed8");
+      expect(written).toContain("\u5217\u8868\u91cc\u51fa\u73b0\u5b83");
+      expect(written).toContain("\u5728\u300c\u9a8c\u6536\u300d\u533a\u9010\u6761\u6253\u52fe");
+      expect(written).toContain("epic/M2");
+      // Nothing about where a Story is: that is the board's job.
+      expect(written).not.toContain("\u5f00\u53d1\u4e2d");
+      expect(written).not.toContain("hivemind-progress:");
+      // The goal goes above the plan a person approved, the rest below it.
+      expect(appended[1]).toContain('"after":"b-body"');
+      // A planned Story that now has a page reads as a link to it.
+      const mention = requests.find((request) => request.path === "/v1/blocks/b-plan-1");
+      expect(JSON.stringify(mention?.body)).toContain("3dd20688-7a32-815a-a78b-d1e934a4d958");
+      const applied = await client.execute("SELECT payload_hash FROM epic_notion_sections WHERE epic_id = 'M2' AND section = 'page'");
       expect(applied.rows[0]?.payload_hash).toBe("new");
-      expect(body).not.toContain("goal");
       const row = (await client.execute("SELECT notion_status_shadow FROM epics WHERE id = 'M2'")).rows[0];
-      expect(row?.notion_status_shadow).toBe("验收中");
+      expect(row?.notion_status_shadow).toBe("\u9a8c\u6536\u4e2d");
     });
 
-    it("recognises a page that already shows this progress", async () => {
+    it("recognises a page that already shows this", async () => {
       await client.execute("INSERT INTO epics (id, notion_page_id, title, state, created_at, updated_at) VALUES ('M2', 'epic-page', 'M2', 'EPIC_ACCEPT', 1, 1)");
       children = [{ id: "m", type: "paragraph", paragraph: { rich_text: [{ plain_text: "hivemind-progress:same" }] } }];
       const delivery = new NotionEpicPlanDelivery(gateway(), client, "stories-ds", () => 10);
@@ -293,7 +313,7 @@ describe("NotionEpicPlanDelivery", () => {
       const delivery = new NotionEpicPlanDelivery(gateway(), client, "stories-ds", () => 10);
       await delivery.send(record("sync_epic_page", payload, { payloadHash: "new" }));
       const properties = requests.find((request) => request.method === "PATCH" && request.path === "/v1/pages/epic-page");
-      expect(JSON.stringify(properties?.body)).not.toContain("验收中");
+      expect(JSON.stringify(properties?.body)).not.toContain("\u9a8c\u6536\u4e2d");
       expect(JSON.stringify(properties?.body)).toContain("https://example.test/pull/26");
     });
   });

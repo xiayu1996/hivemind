@@ -111,6 +111,19 @@ describe("RequirementDecomposer", () => {
       { id: "CONSOLE1", state: "INTAKE", requirement_id: REQUIREMENT_ID, repo: "owner/hivemind" },
       { id: "CONSOLE2", state: "INTAKE", requirement_id: REQUIREMENT_ID, repo: "owner/hivemind" },
     ]);
+    // Which batch answers for which PRD scenario. Acceptance happens per Epic,
+    // so the mapping has to be a fact in the database and not a line in a
+    // payload nobody can query.
+    const carried = (await client.execute(
+      "SELECT epic_id, prd_scenario_id FROM epic_prd_scenarios ORDER BY prd_scenario_id",
+    )).rows;
+    expect(carried).toMatchObject([
+      { epic_id: "CONSOLE1", prd_scenario_id: SCENARIOS[0]!.id },
+      { epic_id: "CONSOLE2", prd_scenario_id: SCENARIOS[1]!.id },
+    ]);
+    const goals = (await client.execute("SELECT business_goal FROM epics ORDER BY id")).rows;
+    expect(goals.every((row) => String(row.business_goal).length > 0)).toBe(true);
+
     const outbox = (await client.execute("SELECT operation, card_id FROM notion_outbox ORDER BY card_id")).rows;
     expect(outbox).toMatchObject([
       { operation: "create_epic_page", card_id: "CONSOLE1" },

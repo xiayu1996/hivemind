@@ -75,6 +75,12 @@
       "verification": { "title": "验证记录", "aliases": [] },
       "questions": { "title": "需要你处理", "aliases": ["待人回答"] },
       "technical": { "title": "技术细节", "aliases": [] }
+    },
+    "epic": {
+      "goal": { "title": "目标", "aliases": ["交付范围"] },
+      "plan": { "title": "拆解方案", "aliases": [] },
+      "dependencies": { "title": "依赖", "aliases": [] },
+      "technical": { "title": "技术细节", "aliases": [] }
     }
   },
   "waiting": {

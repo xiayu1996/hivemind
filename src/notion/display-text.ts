@@ -17,7 +17,28 @@ const stopReasons: Record<StoryStopReason, string> = text.stopReasons;
 /** The story page carries one section the pipeline has no state for. */
 export type PageSection = StorySection | "technical";
 
-const sectionTitles: Record<PageSection, { title: string; aliases: readonly string[] }> = text.sections.story;
+interface SectionName { title: string; aliases: readonly string[] }
+
+const sectionTitles: Record<PageSection, SectionName> = text.sections.story;
+
+/** The Epic page's own sections. It shares no heading with the Story page:
+ * what an Epic owns is the batch, not the work inside it. */
+export type EpicPageSection = "goal" | "plan" | "dependencies" | "technical";
+
+const epicSectionTitles: Record<EpicPageSection, SectionName> = text.sections.epic;
+
+export function epicSectionTitle(section: EpicPageSection): string {
+  return epicSectionTitles[section].title;
+}
+
+/** Recognises an Epic heading whichever version of the page wrote it. */
+export function epicSectionForTitle(heading: string): EpicPageSection | undefined {
+  const wanted = heading.trim();
+  for (const [section, names] of Object.entries(epicSectionTitles) as Array<[EpicPageSection, SectionName]>) {
+    if (names.title === wanted || names.aliases.includes(wanted)) return section;
+  }
+  return undefined;
+}
 
 export const DISPLAY_TIME_ZONE = text.timeZone;
 export const ICONS = text.icons;

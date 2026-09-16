@@ -11,6 +11,7 @@ import { archiveBlock, type NotionGateway } from "./gateway.js";
 import { shouldSuppressSystemProjection } from "./intent-interpreter.js";
 import type { NotionOutboxDelivery, NotionOutboxRecord } from "./outbox.js";
 import schema from "./notion-schema.json" with { type: "json" };
+import { quietText } from "./display-text.js";
 
 const SECTION_TITLES: Record<RequirementSection, string> = {
   metadata: "元信息",
@@ -82,6 +83,14 @@ function blockBody(type: "paragraph" | "callout" | "to_do" | "heading_2", conten
       // The tick belongs to the person; a projection only ever creates the box.
       ...(type === "to_do" ? { checked: false } : {}),
     },
+  };
+}
+
+function calloutBlock(quiet: { icon: string; color: string; action: string }): Record<string, unknown> {
+  return {
+    object: "block",
+    type: "callout",
+    callout: { rich_text: richText(quiet.action), icon: { type: "emoji", emoji: quiet.icon }, color: quiet.color },
   };
 }
 
@@ -312,7 +321,13 @@ export class NotionRequirementPageDelivery implements NotionOutboxDelivery {
       body: {
         parent: { type: "data_source_id", data_source_id: this.epicsDataSourceId },
         properties,
-        children: payload.body.split("\n\n").map((part) => blockBody("paragraph", part)),
+        // The callout is created with the page: a block can only be appended
+        // after another one, so the only way it sits at the top is to be there
+        // from the start.
+        children: [
+          calloutBlock(quietText()),
+          ...payload.body.split("\n\n").map((part) => blockBody("paragraph", part)),
+        ],
       },
     });
     const pageId = z.object({ id: z.string().min(1) }).parse(created.data).id;

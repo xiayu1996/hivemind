@@ -101,6 +101,9 @@ CREATE TABLE IF NOT EXISTS epics (
   state             TEXT NOT NULL CHECK (state IN (
                       'INTAKE','DECOMPOSE','PLAN_APPROVAL','EXECUTING','EPIC_ACCEPT','DONE','BLOCKED','FAILED')),
   requirement_id    TEXT REFERENCES requirements(id),
+  -- What this batch is for, in the words the person who asked for it used. The
+  -- Epic page is the only place a reader learns why these Stories are one Epic.
+  business_goal     TEXT,
   repo              TEXT,
   integration_branch TEXT,
   mr_url            TEXT,
@@ -111,12 +114,23 @@ CREATE TABLE IF NOT EXISTS epics (
   updated_at        INTEGER NOT NULL
 );
 
+-- Which Epic carries each PRD scenario. The primary key is the rule: a
+-- scenario is delivered by exactly one batch, so the Epic page can say what it
+-- is answerable for and acceptance has one place to happen.
+CREATE TABLE IF NOT EXISTS epic_prd_scenarios (
+  requirement_id  TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+  epic_id         TEXT NOT NULL REFERENCES epics(id) ON DELETE CASCADE,
+  prd_scenario_id TEXT NOT NULL,
+  PRIMARY KEY (requirement_id, prd_scenario_id)
+);
+CREATE INDEX IF NOT EXISTS idx_epic_prd_scenarios_epic ON epic_prd_scenarios(epic_id);
+
 -- What the Epic page already shows, per section. It used to be a marker line
 -- printed on the page itself, which every reader had to read past; the page is
 -- for a person, so the replay key lives here instead.
 CREATE TABLE IF NOT EXISTS epic_notion_sections (
   epic_id      TEXT NOT NULL REFERENCES epics(id) ON DELETE CASCADE,
-  section      TEXT NOT NULL CHECK (section IN ('plan','progress')),
+  section      TEXT NOT NULL CHECK (section IN ('plan','page')),
   payload_hash TEXT NOT NULL,
   updated_at   INTEGER NOT NULL,
   PRIMARY KEY (epic_id, section)

@@ -229,7 +229,10 @@ describe("NotionRequirementPageDelivery", () => {
     const created = fake.pages.get(String(epic?.notion_page_id));
     expect(created?.[schema.propertyNames.epicStatus]).toEqual({ select: { name: schema.options.epicStatus[0] } });
     expect(created?.[schema.propertyNames.requirementRelation]).toEqual({ relation: [{ id: PAGE_ID }] });
+    // The callout is created with the page: a block can only be appended
+    // after another one, so this is the only way it sits at the top.
     expect(fake.contents(String(epic?.notion_page_id))).toEqual([
+      "现在没有等你处理的事。",
       "值班的人一眼看到谁在等他",
       "打开首屏就能看到全部在等人回答的卡片。",
     ]);
