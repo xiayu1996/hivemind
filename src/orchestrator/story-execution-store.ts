@@ -643,7 +643,7 @@ export class StoryExecutionStore {
       if (!declared.has(id)) throw new Error(`verification references undeclared scenario: ${id}`);
     }
     const failedSet = new Set(failed);
-    const passed = verified.filter((id) => !failedSet.has(id));
+    const passedSet = new Set(verified.filter((id) => !failedSet.has(id)));
     const specStatus = {
       sql: `UPDATE story_specs
             SET status = CASE WHEN spec_id IN (${failed.length > 0 ? failed.map(() => "?").join(",") : "NULL"})
@@ -665,7 +665,7 @@ export class StoryExecutionStore {
         frozenVersions.dodVersion ?? "",
         versions.get(scenarioId) ?? "",
         treeSha,
-        failed.includes(scenarioId) ? "failed" : passed.includes(scenarioId) ? "passed" : "inconclusive",
+        failedSet.has(scenarioId) ? "failed" : passedSet.has(scenarioId) ? "passed" : "inconclusive",
         input.evidenceDir ?? null,
         time,
       ],

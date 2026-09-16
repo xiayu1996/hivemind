@@ -179,20 +179,20 @@ describe("collectCodeExitFacts", () => {
   });
 });
 
+/** A worktree where CODE also rewrote a frozen test and a generated file. */
+const trespassing = async (args: readonly string[]): Promise<string> => {
+  const command = args.join(" ");
+  if (command === "status --porcelain") return "";
+  if (command.startsWith("merge-base")) return "abc123\n";
+  if (command.startsWith("log")) return "feat(S-DEMO-01-listing): green\n";
+  if (command.startsWith("diff --name-only specify9")) return "src/console/data.test.ts\nsrc/console/data.ts\n";
+  if (command.startsWith("diff --name-only")) return "src/console/data.ts\nsrc/generated/api.ts\n";
+  if (command.startsWith("diff --check")) return "";
+  throw new Error(`unexpected git command: ${command}`);
+};
+
 describe("the repository's own checks", () => {
   const TEST_PATTERNS = ["**/*.test.*", "tests/**"];
-
-  /** A worktree where CODE also rewrote a frozen test and a generated file. */
-  const trespassing = async (args: readonly string[]): Promise<string> => {
-    const command = args.join(" ");
-    if (command === "status --porcelain") return "";
-    if (command.startsWith("merge-base")) return "abc123\n";
-    if (command.startsWith("log")) return "feat(S-DEMO-01-listing): green\n";
-    if (command.startsWith("diff --name-only specify9")) return "src/console/data.test.ts\nsrc/console/data.ts\n";
-    if (command.startsWith("diff --name-only")) return "src/console/data.ts\nsrc/generated/api.ts\n";
-    if (command.startsWith("diff --check")) return "";
-    throw new Error(`unexpected git command: ${command}`);
-  };
 
   it("catches a phase that rewrote the tests SPECIFY froze, even though the guard let the write through", async () => {
     const collected = await collectCodeExitFacts({
