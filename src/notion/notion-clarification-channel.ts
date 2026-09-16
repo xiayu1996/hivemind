@@ -6,6 +6,7 @@ import type {
   ClarificationQuestionBatch,
 } from "../orchestrator/clarification-channel.js";
 import { numberedQuestions, replyHint, type HumanQuestion } from "../orchestrator/human-question.js";
+import { floorToNotionMinute } from "./comment-ingest.js";
 import type { CommentIngestor } from "./comment-ingest.js";
 import type { NotionGateway } from "./gateway.js";
 
@@ -49,9 +50,13 @@ export class NotionClarificationChannel implements ClarificationChannel {
     if (askedAt === null) return [];
     await this.ingestor.pollPage(pageId);
     const rows = (await this.client.execute({
+      // Notion's minute-granular created_time keeps out what was written before
+      // the question; our own ingested_at keeps out what was already on the
+      // page when it went out. Neither condition covers the other.
       sql: `SELECT comment_id, author, body, created_time FROM ingested_comments
-            WHERE page_id = ? AND created_time > ? ORDER BY created_time, comment_id`,
-      args: [pageId, askedAt],
+            WHERE page_id = ? AND created_time >= ? AND ingested_at > ?
+            ORDER BY created_time, comment_id`,
+      args: [pageId, floorToNotionMinute(askedAt), askedAt],
     })).rows;
     return rows.map((row) => ({
       id: String(row.comment_id),

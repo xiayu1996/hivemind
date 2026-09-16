@@ -10,6 +10,9 @@ import { NotionRequirementInputSync } from "./requirement-input-sync.js";
 
 const REQUIREMENT_ID = "R-abc123def456";
 const PAGE_ID = "requirement-page";
+/** On a minute boundary: Notion stamps a comment only to the minute, so that is
+ * the resolution at which a reply is told apart from what came before it. */
+const MINUTE = 1_700_000_040_000;
 const PRD_BODY = JSON.stringify({
   businessGoal: "值班的人随时知道现在在做什么",
   nonGoals: [],
@@ -51,14 +54,14 @@ describe("NotionRequirementInputSync", () => {
   beforeEach(async () => {
     client = createClient({ url: ":memory:" });
     await migrate(client);
-    let time = 1_000;
+    let time = MINUTE;
     store = new RequirementStore(client, () => time++);
-    checklist = new AcceptanceChecklist(client, store, { publish: async () => undefined }, () => 9_000);
+    checklist = new AcceptanceChecklist(client, store, { publish: async () => undefined }, () => MINUTE + 9_000);
     comments = [];
     status = "PRD 待确认";
     checkedBlocks = new Set();
-    const ingestor = new CommentIngestor(client, { listComments: async () => comments }, { now: () => 50_000 });
-    sync = new NotionRequirementInputSync(client, gateway(), ingestor, store, checklist, () => 50_000);
+    const ingestor = new CommentIngestor(client, { listComments: async () => comments }, { now: () => MINUTE + 50_000 });
+    sync = new NotionRequirementInputSync(client, gateway(), ingestor, store, checklist, () => MINUTE + 50_000);
     await store.createRequirement({ id: REQUIREMENT_ID, notionPageId: PAGE_ID, title: "控制台", originalRequest: "我想随时知道现在在做什么。" });
     await store.transition(REQUIREMENT_ID, "CLARIFY", "PRD_CONFIRM", "system", "run");
     await store.saveDraftPrd(REQUIREMENT_ID, PRD_BODY, "run");
@@ -72,7 +75,7 @@ describe("NotionRequirementInputSync", () => {
   });
 
   it("confirms the PRD when the person writes approval under it", async () => {
-    comment("c-approve", "批准", 2_000);
+    comment("c-approve", "批准", MINUTE + 2_000);
     const result = await sync.pollComments(REQUIREMENT_ID);
     expect(result).toMatchObject({ ingested: 1, prdConfirmed: true });
     await expect(store.getPrd(REQUIREMENT_ID)).resolves.toMatchObject({ revision: 1, status: "confirmed" });
@@ -80,9 +83,25 @@ describe("NotionRequirementInputSync", () => {
     await expect(sync.pollComments(REQUIREMENT_ID)).resolves.toMatchObject({ prdConfirmed: false });
   });
 
+  it("confirms on approval Notion stamped in the same minute the draft was written", async () => {
+    // Notion records a comment only to the minute, so approval written seconds
+    // after the draft carries a stamp older than the draft itself. Reading that
+    // as "written before this draft" strands the requirement: the cutoff never
+    // moves back, so the approval is never looked at again.
+    const draft = (await client.execute("SELECT created_at FROM requirement_prds WHERE revision = 1")).rows[0];
+    comment("c-approve", "批准", Number(draft?.created_at) - 1);
+    await expect(sync.pollComments(REQUIREMENT_ID)).resolves.toMatchObject({ prdConfirmed: true });
+  });
+
+  it("leaves page chatter written before the draft out of the rewrite", async () => {
+    const draft = (await client.execute("SELECT created_at FROM requirement_prds WHERE revision = 1")).rows[0];
+    comment("c-old", "顺便说一句，这个页面我早就建好了", Number(draft?.created_at) - 60_000);
+    await expect(sync.pollComments(REQUIREMENT_ID)).resolves.toMatchObject({ prdConfirmed: false, revisionRequested: false });
+  });
+
   it("carries everything the person asked to change into one rewrite", async () => {
-    comment("c-1", "第二个场景漏了值班交接", 2_000);
-    comment("c-2", "另外周报不要放进来", 2_100);
+    comment("c-1", "第二个场景漏了值班交接", MINUTE + 2_000);
+    comment("c-2", "另外周报不要放进来", MINUTE + 2_100);
     await expect(sync.pollComments(REQUIREMENT_ID)).resolves.toMatchObject({ revisionRequested: true });
     await expect(store.getPrd(REQUIREMENT_ID)).resolves.toMatchObject({ revision: 1, status: "superseded" });
     await expect(store.prdRevisionFeedback(REQUIREMENT_ID)).resolves.toEqual(["第二个场景漏了值班交接\n另外周报不要放进来"]);
@@ -98,7 +117,7 @@ describe("NotionRequirementInputSync", () => {
     await expect(store.getPrd(REQUIREMENT_ID)).resolves.toMatchObject({ status: "confirmed" });
     const row = (await client.execute("SELECT notion_status_shadow, human_wins_until FROM requirements")).rows[0];
     expect(row?.notion_status_shadow).toBe("拆解执行中");
-    expect(Number(row?.human_wins_until)).toBeGreaterThan(50_000);
+    expect(Number(row?.human_wins_until)).toBeGreaterThan(MINUTE + 50_000);
   });
 
   it("parks on a drag to the parked column and restores exactly the state it left", async () => {
@@ -164,18 +183,18 @@ describe("NotionRequirementInputSync", () => {
 
   describe("while the requirement is stopped for a person", () => {
     beforeEach(async () => {
-      // The store clock is past 1_000 here; the stop lands around 1_010.
+      // The store clock has moved a few ticks past MINUTE; the stop lands there.
       await store.stopForHumanInput(REQUIREMENT_ID, "PRD_CONFIRM", "run-stop", "PRD was unusable: no scenarios");
     });
 
     it("stays stopped while nobody has written anything since the stop", async () => {
-      comment("c-old", "先做手机端", 500);
+      comment("c-old", "先做手机端", MINUTE - 60_000);
       await expect(sync.pollComments(REQUIREMENT_ID)).resolves.toMatchObject({ resumed: false });
       await expect(store.getRequirement(REQUIREMENT_ID)).resolves.toMatchObject({ stopReason: "blocking_question" });
     });
 
     it("resumes on the first human comment after the stop and files it where the loop reads", async () => {
-      comment("c-answer", "场景就按澄清里说的两条来", 5_000);
+      comment("c-answer", "场景就按澄清里说的两条来", MINUTE + 5_000);
       await expect(sync.pollComments(REQUIREMENT_ID)).resolves.toMatchObject({ resumed: true });
       await expect(store.getRequirement(REQUIREMENT_ID)).resolves.toMatchObject({ stopReason: null, state: "PRD_CONFIRM" });
       await expect(store.listActionable("PRD_CONFIRM")).resolves.toHaveLength(1);

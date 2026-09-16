@@ -2,7 +2,7 @@ import { createClient } from "@libsql/client";
 import { describe, expect, it } from "vitest";
 import { ConfigStore } from "../config/store.js";
 import { migrate } from "../persistence/migrate.js";
-import { diagnoseRetryLimit, renderRetryReport, retryLimits } from "./retry-limits.js";
+import { diagnoseRetryLimit, mayReenterPhase, renderRetryReport, retryLimits } from "./retry-limits.js";
 
 describe("retryLimits", () => {
   it("reads every ceiling from config so no call site keeps its own default", async () => {
@@ -77,5 +77,26 @@ describe("renderRetryReport", () => {
   it("reads sensibly when nothing was verified at all", () => {
     expect(renderRetryReport("S-EPIC1-01", "retry_limit_exceeded", diagnoseRetryLimit([])))
       .toContain("no verification round completed");
+  });
+});
+
+describe("mayReenterPhase", () => {
+  it("re-dispatches every phase that builds something", () => {
+    for (const state of ["QUEUED", "SHAPE", "DESIGN", "SPECIFY", "CODE", "REGRESSION_FIX", "MERGE"]) {
+      expect(mayReenterPhase(state, 1, 3)).toBe(true);
+    }
+  });
+
+  it("leaves VERIFY to the inner loop that already counts its rounds", () => {
+    expect(mayReenterPhase("VERIFY", 1, 3)).toBe(false);
+  });
+
+  it("parks a card whose budget is spent", () => {
+    expect(mayReenterPhase("SHAPE", 3, 3)).toBe(false);
+  });
+
+  it("does not re-dispatch a card that is already stopped or done", () => {
+    expect(mayReenterPhase("NEEDS_INPUT", 1, 3)).toBe(false);
+    expect(mayReenterPhase("DELIVERED", 1, 3)).toBe(false);
   });
 });

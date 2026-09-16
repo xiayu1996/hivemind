@@ -259,13 +259,28 @@ export class StoryExecutionStore {
         // A transition a person made is also the moment the inner-loop budget
         // starts again: the budget counts the rounds failed since somebody last
         // acted on the card, so without this stamp a resume grants a reentry
-        // budget and no rounds to use it in.
+        // budget and no rounds to use it in. The reentry count is cleared for
+        // the same reason `applyHumanTransition` clears it: a card parked on
+        // its retry budget has spent every reentry, so a person who answers
+        // and does not get the count back watches it park again on the next
+        // failure. Answering in Notion arrives here rather than there, so
+        // leaving it out made the door people actually use the broken one.
         sql: `UPDATE stories
               SET state = ?, phase = ?, stop_reason = NULL, resume_state = NULL,
+                  phase_reentries = CASE WHEN ? THEN 0 ELSE phase_reentries END,
                   last_human_action_at = CASE WHEN ? THEN ? ELSE last_human_action_at END,
                   updated_at = ?
               WHERE id = ? AND state = ?`,
-        args: [to, phaseForState(to), actor === "human" ? 1 : 0, time, time, cardId, expectedFrom],
+        args: [
+          to,
+          phaseForState(to),
+          actor === "human" && expectedFrom === "NEEDS_INPUT" ? 1 : 0,
+          actor === "human" ? 1 : 0,
+          time,
+          time,
+          cardId,
+          expectedFrom,
+        ],
       },
       {
         sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
