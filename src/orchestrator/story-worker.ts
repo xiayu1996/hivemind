@@ -683,7 +683,18 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
         // in English or in implementation words is sent back to the same
         // session, which costs a retry rather than a person's attention.
         const language = lintDoDLanguage(definitionOfDone);
-        if (language.length > 0) throw new DoDValidationError(renderDoDLanguageFindings(language));
+        if (language.length > 0) {
+          // Counted so the rule is judged on evidence: a gate that never fires
+          // says the prompt is already enough, and one that fires every card
+          // says the prompt is not the layer to fix it in.
+          await this.friction?.record({
+            cardId,
+            runId,
+            kind: "dod_language_rejected",
+            detail: language.map((finding) => `${finding.where} ${finding.what}`).join("; "),
+          });
+          throw new DoDValidationError(renderDoDLanguageFindings(language));
+        }
         const frozen = await this.store.findFrozenDefinitionOfDone(cardId);
         if (frozen) {
           await this.store.refreezeDefinitionOfDone(cardId, definitionOfDone);

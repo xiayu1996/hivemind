@@ -134,6 +134,19 @@ pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src
 - **等人不算在干活**：RPC 下"阻塞等人"的信号是 stdout 的 `extension_ui_request`（对话类方法要等 stdin 回 `extension_ui_response`），不是 extension 侧的 `ui_prompt_start/end`——后者在 RPC 模式不发。心跳读 `waitingOnUser`。
 - **usage-limit 文案里的分钟数是相对值**，锚定事件自身时间戳，不能锚定"我们读到它的时间"——在 outbox 积压过就会算错窗口。
 
+### 给人看的产出
+
+- **每个模型产出的字段先分清读者**：给人读的（场景名与 given/when/then、验收标准、设计摘要、verdict 的 `reason`、
+  交付报告业务段）用中文业务语言，给下游读的（`technical_notes`、`detail`、技术细节段）怎么准确怎么写。
+  新增字段先回答"这是给谁读的"，两类内容不共用一个字段——分开之后"这段合不合格"才是可判定的，
+  技术内容也永远有地方去，不必为了合规被删掉。
+- **语言要求由确定性出口把关，不靠 prompt 自觉**：`lintHumanSentence` 判语言与实现词汇，findings 回喂同一个
+  session 重写（SHAPE 的 DoD、DESIGN 的摘要、MERGE 的报告各一条回路）。判官模型不进这条路径：
+  同样输入必须得到同样结论，否则 `assemblePhasePrompt` 的逐字节确定性就没了。
+- **约束解码拿不到**：pi 的 RPC `prompt` 只收 `{message, images}`，没有 output schema，链上又有订阅型 OAuth
+  provider 不经我们自己的 API 调用。结构保证止于 zod，语言保证止于出口检查——要再往上一层得先给 pi 提能力。
+- **被退回的次数记进 friction**（`dod_language_rejected`），用数据决定要不要加强这条规则，而不是靠猜。
+
 ### 代码风格
 
 - 代码中不出现中文、特殊字符、无意义缩写，也不出现只在某次会话里成立的简称或步骤编号。

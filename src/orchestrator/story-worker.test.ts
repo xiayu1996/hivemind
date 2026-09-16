@@ -645,11 +645,14 @@ describe("SingleStoryWorker SHAPE re-entry after a crash", () => {
     const verifier: StoryVerifyPort = {
       run: vi.fn(async (input) => ({ sessionId: `session-verify-${input.round}`, verdict: "accepted" as const, failedScenarios: [], artifact: "{}" })),
     };
+    const friction = { record: vi.fn(async () => undefined) };
     const worker = new SingleStoryWorker(store, { run: phases }, verifier,
-      { deliver: vi.fn(async () => ({ mrUrl: null })) }, { enqueue: vi.fn(async () => undefined) });
+      { deliver: vi.fn(async () => ({ mrUrl: null })) }, { enqueue: vi.fn(async () => undefined) }, { friction });
 
     await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
     expect(shaped).toBe(2);
+    // Counted, so the rule can be judged on how often it actually fires.
+    expect(friction.record).toHaveBeenCalledWith(expect.objectContaining({ kind: "dod_language_rejected" }));
     const frozen = await store.getDefinitionOfDone("S-EPIC1-01");
     expect(frozen.scenarios[0]?.title).toBe("上一阶段的产出还在");
     const titles = await client.execute("SELECT title FROM story_specs WHERE story_id = 'S-EPIC1-01' ORDER BY seq");
