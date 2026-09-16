@@ -264,9 +264,11 @@ async function moveOption(
 }
 
 /**
- * Rewrites one select column to the current vocabulary. A renamed word keeps
- * its option id so the pages holding it follow along; a word that merges into
- * one already on the board has its pages moved first and is then dropped.
+ * Rewrites one select column to the current vocabulary in three passes, which
+ * is what the API leaves available: Notion ignores a new name sent with an
+ * option id (renaming is a UI-only move) and silently drops every option the
+ * update omits, blanking the pages that hold it. So the new words are added
+ * first, the pages move onto them, and only then do the old words go.
  */
 async function retireOptions(
   client: BootstrapClient,
@@ -274,37 +276,39 @@ async function retireOptions(
   property: string,
   group: OptionGroup,
   renames: Record<string, string | undefined>,
-): Promise<Array<{ id: string; name?: string }>> {
-  const current = await client.dataSources.retrieve({ data_source_id: sourceId });
-  const live = liveOptions(current.properties[property]);
-  const wanted = new Set(schema.options[group] as readonly string[]);
-  const kept = new Set(live.filter((option) => wanted.has(option.name)).map((option) => option.name));
-
-  const written: Array<{ name: string; option: { id: string; name?: string } | SelectOption }> = [];
-  for (const option of live) {
-    const target = renames[option.name];
-    if (!target) {
-      written.push({ name: option.name, option: { id: option.id } });
-      continue;
-    }
-    if (kept.has(target)) {
-      await moveOption(client, sourceId, property, option.name, target);
-      continue;
-    }
-    // Renaming by id carries the pages with it, so nothing has to move.
-    written.push({ name: target, option: { id: option.id, name: target } });
-    kept.add(target);
-  }
-  for (const option of selectOptions(group)) {
-    if (!kept.has(option.name)) written.push({ name: option.name, option });
-  }
-  // The board reads the column in the order the options arrive, so they leave
-  // in the order the vocabulary declares them and unknown words trail behind.
+): Promise<void> {
+  const read = async (): Promise<LiveOption[]> => {
+    const current = await client.dataSources.retrieve({ data_source_id: sourceId });
+    return liveOptions(current.properties[property]);
+  };
   const order = schema.options[group] as readonly string[];
   const rank = (name: string) => (order.indexOf(name) < 0 ? order.length : order.indexOf(name));
-  return written
-    .toSorted((left, right) => rank(left.name) - rank(right.name))
-    .map((entry) => entry.option) as Array<{ id: string; name?: string }>;
+
+  const before = await read();
+  const missing = selectOptions(group).filter((option) => !before.some((live) => live.name === option.name));
+  if (missing.length > 0) {
+    await client.dataSources.update({
+      data_source_id: sourceId,
+      properties: {
+        [property]: { select: { options: [...before.map((option) => ({ id: option.id })), ...missing] as never } },
+      },
+    });
+  }
+
+  const retired = before.filter((option) => renames[option.name]);
+  for (const option of retired) {
+    await moveOption(client, sourceId, property, option.name, renames[option.name]!);
+  }
+  if (retired.length === 0 && missing.length === 0) return;
+
+  const after = await read();
+  const kept = after
+    .filter((option) => !renames[option.name])
+    .toSorted((left, right) => rank(left.name) - rank(right.name));
+  await client.dataSources.update({
+    data_source_id: sourceId,
+    properties: { [property]: { select: { options: kept.map((option) => ({ id: option.id })) as never } } },
+  });
 }
 
 /**
@@ -318,33 +322,44 @@ export async function upgradeStoryBoard(
   repositorySlug?: string,
 ): Promise<void> {
   const names = schema.propertyNames;
-  const phaseOptions = await retireOptions(
+  await retireOptions(
     client,
     storiesDataSourceId,
     names.phase,
     "phase",
     schema.retiredOptions.phase as Record<string, string | undefined>,
   );
-  await client.dataSources.update({
-    data_source_id: storiesDataSourceId,
-    properties: { [names.phase]: { select: { options: phaseOptions as never } } },
-  });
 
   if (!repositorySlug) return;
   const bare = repositorySlug.split("/").at(-1);
   if (!bare || bare === repositorySlug) return;
-  const current = await client.dataSources.retrieve({ data_source_id: storiesDataSourceId });
-  const live = liveOptions(current.properties[names.repository]);
-  const stale = live.find((option) => option.name === bare);
-  if (!stale) return;
-  const slugExists = live.some((option) => option.name === repositorySlug);
-  if (slugExists) await moveOption(client, storiesDataSourceId, names.repository, bare, repositorySlug);
-  const options = live
-    .filter((option) => slugExists ? option.id !== stale.id : true)
-    .map((option) => (option.id === stale.id ? { id: option.id, name: repositorySlug } : { id: option.id }));
+  const live = liveOptions(
+    (await client.dataSources.retrieve({ data_source_id: storiesDataSourceId })).properties[names.repository],
+  );
+  if (!live.some((option) => option.name === bare)) return;
+  // The slug has to exist before the pages can move onto it, and the bare name
+  // can only go once nothing holds it.
+  if (!live.some((option) => option.name === repositorySlug)) {
+    await client.dataSources.update({
+      data_source_id: storiesDataSourceId,
+      properties: {
+        [names.repository]: {
+          select: { options: [...live.map((option) => ({ id: option.id })), { name: repositorySlug }] as never },
+        },
+      },
+    });
+  }
+  await moveOption(client, storiesDataSourceId, names.repository, bare, repositorySlug);
+  const after = liveOptions(
+    (await client.dataSources.retrieve({ data_source_id: storiesDataSourceId })).properties[names.repository],
+  );
   await client.dataSources.update({
     data_source_id: storiesDataSourceId,
-    properties: { [names.repository]: { select: { options: options as never } } },
+    properties: {
+      [names.repository]: {
+        select: { options: after.filter((option) => option.name !== bare).map((option) => ({ id: option.id })) as never },
+      },
+    },
   });
 }
 

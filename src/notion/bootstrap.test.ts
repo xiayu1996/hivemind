@@ -126,39 +126,50 @@ describe("bootstrapNotion", () => {
     expect(properties[schema.propertyNames.taskId]).toEqual({ rich_text: {} });
   });
 
-  it("renames a phase word in place and empties the one that merges into another before dropping it", async () => {
+  it("adds the new phase words before moving pages off the old ones, because Notion cannot rename an option", async () => {
     const updates: Array<Record<string, unknown>> = [];
-    const moved: Array<Record<string, unknown>> = [];
-    const live = [
+    const moved: Array<{ page: string; to: string }> = [];
+    let live = [
       { id: "o-queued", name: "排队中", color: "gray" },
       { id: "o-shape", name: "需求分析", color: "purple" },
-      { id: "o-code", name: "开发中", color: "blue" },
-      { id: "o-verify", name: "验证中", color: "yellow" },
       { id: "o-e2e", name: "端到端", color: "orange" },
-      { id: "o-mr", name: "MR 已建", color: "green" },
     ];
     const client = {
       databases: { create: async () => { throw new Error("nothing is created on upgrade"); }, retrieve: async () => { throw new Error("unexpected"); } },
       dataSources: {
         retrieve: async () => ({ properties: { [schema.propertyNames.phase]: { select: { options: live } } } }),
-        query: async (input: Record<string, unknown>) => {
-          moved.push(input);
-          return { results: [{ id: "page-1" }], has_more: false, next_cursor: null };
+        query: async (input: any) => ({
+          results: input.filter.select.equals === "端到端" ? [{ id: "page-1" }] : [],
+          has_more: false,
+          next_cursor: null,
+        }),
+        update: async (input: any) => {
+          updates.push(input);
+          const sent = input.properties[schema.propertyNames.phase].select.options as Array<{ id?: string; name?: string; color?: string }>;
+          live = sent.map((option, index) => {
+            const known = live.find((existing) => existing.id === option.id);
+            return known ?? { id: `new-${index}`, name: option.name!, color: option.color ?? "default" };
+          });
+          return { id: "ds-1" };
         },
-        update: async (input: Record<string, unknown>) => { updates.push(input); return { id: "ds-1" }; },
       },
-      pages: { update: async (input: Record<string, unknown>) => { moved.push(input); return { id: "page-1" }; } },
+      pages: {
+        update: async (input: any) => {
+          moved.push({ page: input.page_id, to: input.properties[schema.propertyNames.phase].select.name });
+          return { id: input.page_id };
+        },
+      },
     } as unknown as Pick<Client, "databases" | "dataSources" | "pages">;
 
     await upgradeStoryBoard(client, "stories-ds");
 
-    const options = (updates[0]!.properties as Record<string, any>)[schema.propertyNames.phase].select.options;
-    // 验证中 is renamed to 验证, so 端到端 has nowhere of its own to go: its
-    // pages move first and the option itself never reaches the new list.
-    expect(options).toContainEqual({ id: "o-verify", name: "验证" });
-    expect(options.some((option: any) => option.id === "o-e2e")).toBe(false);
-    expect(moved.some((call) => JSON.stringify(call).includes("端到端"))).toBe(true);
-    expect(options.map((option: any) => option.name ?? live.find((o) => o.id === option.id)!.name))
-      .toEqual(schema.options.phase);
+    // The word a page moves onto has to be on the board before the page moves,
+    // and the word it leaves can only go afterwards.
+    expect(updates).toHaveLength(2);
+    const added = (updates[0]!.properties as any)[schema.propertyNames.phase].select.options
+      .map((option: any) => option.name).filter(Boolean);
+    expect(added).toContain("验证");
+    expect(moved).toEqual([{ page: "page-1", to: "验证" }]);
+    expect(live.map((option) => option.name)).toEqual(schema.options.phase);
   });
 });
