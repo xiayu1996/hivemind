@@ -170,15 +170,10 @@ async function main(): Promise<void> {
         const commented = await humanInput.pollComments(requirementId);
         if (commented.prdConfirmed) console.log(`${requirementId} PRD confirmed by comment`);
         if (commented.revisionRequested) console.log(`${requirementId} PRD revision requested by comment`);
-        if (commented.gapsRecorded > 0) console.log(`${requirementId} acceptance gaps noted: ${commented.gapsRecorded}`);
         if (commented.resumed) {
           console.log(`${requirementId} resumed by comment`);
           await projector.publish(requirementId);
         }
-      }
-      if (state === "ACCEPTANCE") {
-        const ticked = await humanInput.pollContent(requirementId);
-        if (ticked.ticked > 0) console.log(`${requirementId} scenarios accepted by tick: ${ticked.ticked}`);
       }
     }
   };
@@ -213,8 +208,8 @@ async function main(): Promise<void> {
       // page by payload hash, so a quiet pass costs no Notion call.
       await projector.publish(requirement.id);
       if (!await decomposer.canEnterAcceptance(requirement.id)) continue;
-      const items = await acceptance.open(requirement.id);
-      console.log(`${requirement.id} acceptance: ${items.length} scenarios awaiting a verdict`);
+      const outcome = await acceptance.settle(requirement.id);
+      console.log(`${requirement.id} acceptance: ${outcome.kind}`);
     }
     for (const requirement of await store.listActionable("ACCEPTANCE")) {
       const outcome = await acceptance.settle(requirement.id);

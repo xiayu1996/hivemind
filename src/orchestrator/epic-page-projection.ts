@@ -49,6 +49,17 @@ export interface EpicPagePayload {
   businessGoal: string | null;
   prdScenarios: Array<{ id: string; text: string }>;
   stories: EpicPageStory[];
+  /** What this batch is judged on, once it has a review request to judge. */
+  acceptance: EpicAcceptanceLine[];
+}
+
+/** One scenario as the person judging the batch sees it: a box they tick, and
+ * what they said about it if they did not. */
+export interface EpicAcceptanceLine {
+  prdScenarioId: string;
+  text: string;
+  status: "open" | "accepted" | "gap";
+  note: string | null;
 }
 
 export async function epicPagePayload(client: Client, epicId: string, targetBranch = "main"): Promise<EpicPagePayload | null> {
@@ -82,7 +93,23 @@ export async function epicPagePayload(client: Client, epicId: string, targetBran
     businessGoal: epic.business_goal === null ? null : String(epic.business_goal),
     prdScenarios: epic.requirement_id === null ? [] : await prdScenarios(client, String(epic.requirement_id), epicId),
     stories,
+    acceptance: await acceptanceLines(client, epicId),
   };
+}
+
+/** The scenarios up for judgement on this Epic, if any have been opened. */
+async function acceptanceLines(client: Client, epicId: string): Promise<EpicAcceptanceLine[]> {
+  const rows = (await client.execute({
+    sql: `SELECT prd_scenario_id, text, status, note FROM epic_acceptance_items
+          WHERE epic_id = ? ORDER BY prd_scenario_id`,
+    args: [epicId],
+  })).rows;
+  return rows.map((row) => ({
+    prdScenarioId: String(row.prd_scenario_id),
+    text: String(row.text),
+    status: String(row.status) as EpicAcceptanceLine["status"],
+    note: row.note === null ? null : String(row.note),
+  }));
 }
 
 /** The PRD scenarios this batch answers for, in the words the PRD used. */
@@ -181,11 +208,20 @@ function fill(template: string, values: Record<string, string>): string {
 
 /** The sections the projection owns, rebuilt whole; the plan above them is a
  * record of what a person approved and is only ever appended to. */
-export type OwnedEpicSection = Exclude<EpicPageSection, "plan">;
+export type OwnedEpicSection = Exclude<EpicPageSection, "plan" | "acceptance">;
+
+/** The acceptance section is neither owned nor append-only: each box is a
+ * block a person ticks and comments on, so it is written once and afterwards
+ * only rewritten in place. */
+export interface RenderedAcceptance {
+  intro: string;
+  items: Array<{ prdScenarioId: string; line: string; checked: boolean }>;
+}
 
 export interface RenderedEpicPage {
   callout: { content: string; icon: string; color: string };
   sections: Array<{ section: OwnedEpicSection; blocks: Block[] }>;
+  acceptance: RenderedAcceptance | null;
   /** Everything a person reads, for the hash that decides on a rewrite. */
   lines: string[];
 }
@@ -225,6 +261,15 @@ export function renderEpicPage(payload: EpicPagePayload): RenderedEpicPage {
     ? []
     : [toggle(t(text.technicalFold), technicalLines.map((line) => paragraph(t(line))))];
 
+  const acceptance: RenderedAcceptance | null = payload.acceptance.length === 0 ? null : {
+    intro: text.acceptanceIntro,
+    items: payload.acceptance.map((item) => ({
+      prdScenarioId: item.prdScenarioId,
+      line: [item.text, ...(item.note ? [fill(text.acceptanceGap, { note: item.note })] : [])].join("\n"),
+      checked: item.status === "accepted",
+    })),
+  };
+
   const sections: RenderedEpicPage["sections"] = [
     { section: "goal", blocks: goal },
     { section: "dependencies", blocks: dependencies },
@@ -236,8 +281,12 @@ export function renderEpicPage(payload: EpicPagePayload): RenderedEpicPage {
       epicSectionTitle(section),
       ...blocks.map((block) => renderedText(block)),
     ]),
+    ...(acceptance
+      ? [epicSectionTitle("acceptance"), acceptance.intro,
+        ...acceptance.items.map((item) => `${item.checked ? "\u2705" : "\u2610"} ${item.line}`)]
+      : []),
   ];
-  return { callout, sections, lines };
+  return { callout, sections, acceptance, lines };
 }
 
 /** What a block says, however it is built, so two renderings compare as text. */

@@ -115,6 +115,10 @@
         "title": "依赖",
         "aliases": []
       },
+      "acceptance": {
+        "title": "验收",
+        "aliases": []
+      },
       "technical": {
         "title": "技术细节",
         "aliases": []

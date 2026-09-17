@@ -104,3 +104,44 @@ describe("Epic page projection", () => {
     expect(rows).toEqual([{ state: "sent" }]);
   });
 });
+
+describe("the acceptance section", () => {
+  let client: ReturnType<typeof createClient>;
+
+  beforeEach(async () => {
+    client = createClient({ url: ":memory:" });
+    await migrate(client);
+    await client.batch([
+      `INSERT INTO epics (id, notion_page_id, title, state, created_at, updated_at)
+       VALUES ('E1','epic-page','Epic','EPIC_ACCEPT',1,1)`,
+      `INSERT INTO epic_acceptance_items (epic_id, prd_scenario_id, text, status, decided_at, created_at)
+       VALUES ('E1','s01','管理员保存一条规则，列表里出现它','accepted',2,1)`,
+      `INSERT INTO epic_acceptance_items (epic_id, prd_scenario_id, text, status, note, decided_at, created_at)
+       VALUES ('E1','s02','删掉规则，列表里没有它','gap','删了以后还在',2,1)`,
+    ], "write");
+  });
+
+  afterEach(() => client.close());
+
+  it("shows one box per scenario, with what the person said about the ones they refused", async () => {
+    const rendered = renderEpicPage((await epicPagePayload(client, "E1"))!);
+    expect(rendered.acceptance?.items).toEqual([
+      { prdScenarioId: "s01", line: "管理员保存一条规则，列表里出现它", checked: true },
+      {
+        prdScenarioId: "s02",
+        line: "删掉规则，列表里没有它\n你说：删了以后还在",
+        checked: false,
+      },
+    ]);
+    // The page says what ticking means, so nobody has to look it up.
+    expect(rendered.acceptance?.intro).toContain("勾上");
+    expect(rendered.lines.join("\n")).toContain("验收");
+  });
+
+  it("has no acceptance section before the batch is up for judgement", async () => {
+    await client.execute("DELETE FROM epic_acceptance_items");
+    const rendered = renderEpicPage((await epicPagePayload(client, "E1"))!);
+    expect(rendered.acceptance).toBeNull();
+    expect(rendered.lines.join("\n")).not.toContain("验收中");
+  });
+});

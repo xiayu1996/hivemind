@@ -89,6 +89,17 @@ export const epicPrdScenarios = sqliteTable("epic_prd_scenarios", {
   prdScenarioId: text("prd_scenario_id").notNull(),
 }, (t) => [primaryKey({ columns: [t.requirementId, t.prdScenarioId] })]);
 
+export const epicAcceptanceItems = sqliteTable("epic_acceptance_items", {
+  epicId: text("epic_id").notNull(),
+  prdScenarioId: text("prd_scenario_id").notNull(),
+  text: text("text").notNull(),
+  status: text("status").notNull().default("open"),
+  notionBlockId: text("notion_block_id").unique(),
+  note: text("note"),
+  decidedAt: ms("decided_at"),
+  createdAt: ms("created_at").notNull(),
+}, (t) => [primaryKey({ columns: [t.epicId, t.prdScenarioId] })]);
+
 export const epicNotionSections = sqliteTable("epic_notion_sections", {
   epicId: text("epic_id").notNull(),
   section: text("section").notNull(),

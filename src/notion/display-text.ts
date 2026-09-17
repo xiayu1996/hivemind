@@ -23,7 +23,7 @@ const sectionTitles: Record<PageSection, SectionName> = text.sections.story;
 
 /** The Epic page's own sections. It shares no heading with the Story page:
  * what an Epic owns is the batch, not the work inside it. */
-export type EpicPageSection = "goal" | "plan" | "dependencies" | "technical";
+export type EpicPageSection = "goal" | "plan" | "dependencies" | "acceptance" | "technical";
 
 const epicSectionTitles: Record<EpicPageSection, SectionName> = text.sections.epic;
 

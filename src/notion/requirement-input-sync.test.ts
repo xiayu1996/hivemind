@@ -137,47 +137,30 @@ describe("NotionRequirementInputSync", () => {
       await store.transition(REQUIREMENT_ID, "DECOMPOSING", "EXECUTING", "system", "run");
       await client.execute({
         sql: `INSERT INTO epics (id, notion_page_id, title, state, requirement_id, created_at, updated_at)
-              VALUES ('E1', 'epic-page', 'E1 交付', 'DONE', ?, 1, 1)`,
+              VALUES ('E1', 'epic-page', 'E1 \u4ea4\u4ed8', 'DONE', ?, 1, 1)`,
         args: [REQUIREMENT_ID],
       });
-      await checklist.open(REQUIREMENT_ID);
-      await store.bindAcceptanceBlock(REQUIREMENT_ID, "A01", "box-a01");
-      await store.bindAcceptanceBlock(REQUIREMENT_ID, "A02", "box-a02");
-      status = "待验收";
+      status = "\u5f85\u9a8c\u6536";
       await sync.pollProperties(REQUIREMENT_ID);
     });
 
-    it("turns a ticked box into a verdict on that scenario, once", async () => {
-      checkedBlocks.add("box-a01");
-      await expect(sync.pollContent(REQUIREMENT_ID)).resolves.toEqual({ ticked: 1 });
-      await expect(sync.pollContent(REQUIREMENT_ID)).resolves.toEqual({ ticked: 0 });
-      await expect(store.acceptanceItems(REQUIREMENT_ID)).resolves.toMatchObject([
-        { itemId: "A01", status: "accepted" },
-        { itemId: "A02", status: "open" },
-      ]);
-    });
-
-    it("turns a comment on a box into a gap in the person's own words", async () => {
-      comment("c-gap", "手机上打开是空白的", 3_000, "box-a02");
-      comment("c-chat", "辛苦了", 3_100);
-      await expect(sync.pollComments(REQUIREMENT_ID)).resolves.toMatchObject({ gapsRecorded: 1 });
-      await expect(store.acceptanceItems(REQUIREMENT_ID)).resolves.toMatchObject([
-        { itemId: "A01", status: "open" },
-        { itemId: "A02", status: "gap" },
-      ]);
-      expect((await store.acceptanceGapNotes(REQUIREMENT_ID)).get("A02")).toBe("手机上打开是空白的");
-    });
-
+    // The scenarios are judged on the Epic that delivered them; the only thing
+    // this page still accepts is a person calling the whole thing done.
     it("reads a drag to accepted as a verdict on every scenario still open", async () => {
-      checkedBlocks.add("box-a01");
-      await sync.pollContent(REQUIREMENT_ID);
-      status = "已验收";
+      // Summarising leaves a scenario open only when no batch ever judged it;
+      // dragging the card is how a person closes that by hand.
+      await store.transition(REQUIREMENT_ID, "EXECUTING", "ACCEPTANCE", "system", "run");
+      await client.execute({
+        sql: `INSERT INTO requirement_acceptance_items
+                (requirement_id, item_id, prd_scenario_id, text, status, created_at)
+              VALUES (?, 'A01', 's01', '\u573a\u666f\u4e00', 'open', 1)`,
+        args: [REQUIREMENT_ID],
+      });
+      status = "\u5df2\u9a8c\u6536";
       await expect(sync.pollProperties(REQUIREMENT_ID)).resolves.toMatchObject({ intent: "accept", applied: true });
       await expect(store.acceptanceItems(REQUIREMENT_ID)).resolves.toMatchObject([
         { itemId: "A01", status: "accepted" },
-        { itemId: "A02", status: "accepted" },
       ]);
-      await expect(checklist.settle(REQUIREMENT_ID)).resolves.toEqual({ kind: "accepted" });
     });
   });
 

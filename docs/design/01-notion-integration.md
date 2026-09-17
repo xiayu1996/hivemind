@@ -96,10 +96,16 @@ Epics DB：标题、Epic 状态（待拆解/拆解待确认/进行中/已完成�
 ## 目标          （业务目标 + 本批承接的 PRD 场景 bullets）
 ## 拆解方案      （只追加；每 Story 一行 page mention + 一句话 + 依赖）
 ## 依赖          （仅 depends_on 非空时，mermaid）
+## 验收          （本批承接的每条 PRD 场景一个 to_do；勾上 = 通过，
+                  不勾 + 在该行下写评论 = 在本 Epic 下开一张补交付 Story）
 ## 技术细节（折叠）（集成分支、Epic MR）
 ```
 
 没有「进展」区：Story 实时状态由看板「按 Epic」视图与「进度」rollup 呈现。`epic_prd_scenarios(requirement_id, epic_id, prd_scenario_id, PK(requirement_id, prd_scenario_id))` 的主键即「一条场景恰好一个 Epic 承接」，是「目标」区与 Epic 层验收的共同依据。
+
+**验收下沉到 Epic（2026-09-17）**：`epic_acceptance_items(epic_id, prd_scenario_id, status, notion_block_id, note, decided_at)` 在 Epic MR 建好时由 `epic_prd_scenarios` 播种，Epic 进「验收中」。勾选是唯一的通过信号，不勾只是「还没判」，永远不读作否决；评论写在哪条场景下，缺口就记在哪条，并在**本 Epic 下**开一张补交付 Story（不是补交付 Epic），Epic 回 EXECUTING 并重开 MR。全部勾上且 MR 已合并 → Epic DONE（`EpicCompletion` 两个条件一起判）。验收区的块永不重建：勾与评论都挂在那个块上。
+
+**拆解审批是配置项**：`decompose.planApproval` 默认 `false`——Story 立即建，Epic 不进 `PLAN_APPROVAL`，审批事件记 `auto`；置 `true` 时行为与旧版一致。人的注意力花在「这批交付对不对」，不花在「这批怎么切」。
 
 ## 3. 读写协议
 
@@ -232,6 +238,8 @@ Notion 评论/拖列/改文字
                     （子块 前提/操作/结果）、等你裁决；确认后只加一条冻结横幅，正文再不改写
 ## 交付结果          只读一行：场景由承接它们的 Epic 逐批验收，本页只汇总
 ```
+
+需求层不再要人点第二遍：所有 Epic DONE 后 `AcceptanceChecklist.settle` 把各 Epic 的逐条判定抄成 `requirement_acceptance_items`（事件 source 记 `auto`），全通过即 DONE。只有「没有任何一批交付承接过」的场景才会在这一层变成缺口，并开一个补齐 Epic——那是拆解漏了，不是交付没做到。
 
 没有「元信息」「原始需求」「待人回答」「场景化验收清单」四个区：前三个复述了看板属性、人自己的话和评论通道，第四个的验收已下沉到 Epic 层（见 2.3）。旧页上的这些标题连同其下的块一次性归档，`交付结果` 由「场景化验收清单」原位改名（别名在词表里），锚点与其上的评论不受影响。区段锚点存 `requirement_notion_sections(section IN ('callout','clarify','prd','delivery'))`。
 

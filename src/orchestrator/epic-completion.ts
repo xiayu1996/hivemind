@@ -1,30 +1,33 @@
 import type { Client } from "@libsql/client";
 import type { MergeRequestState, MergeRequestStatePort } from "../vcs/mr/types.js";
+import { EpicAcceptance } from "./epic-acceptance.js";
 import { EPIC_BOARD_STATUS, epicStatusStatement } from "./epic-status-projection.js";
 import { assertEpicTransition } from "./state-machine.js";
 
 export type EpicCompletionOutcome =
   | { epicId: string; kind: "done" }
   | { epicId: string; kind: "awaiting_merge" }
-  | { epicId: string; kind: "awaiting_acceptance" }
+  | { epicId: string; kind: "awaiting_acceptance"; open?: number }
+  | { epicId: string; kind: "gap"; storyIds: string[] }
   | { epicId: string; kind: "review_closed"; reason: string }
   | { epicId: string; kind: "unreadable"; reason: string };
 
 /**
- * Closes an Epic once its review request has landed. Finishing is decided by
- * code, not reported by an agent: the merge is read from the hosting platform,
- * and the human side comes from where the design puts it — an Epic that
- * belongs to a requirement is accepted scenario by scenario on the requirement
- * page, while a standalone Epic is accepted by dragging it to the finished
- * column of the board. A review request closed without landing sends the Epic
- * back to EXECUTING with no mr_url, so the next maintenance cycle opens a
- * fresh one instead of waiting on a review nobody will merge.
+ * Closes an Epic once its review request has landed and the batch has been
+ * judged. Finishing is decided by code, not reported by an agent: the merge is
+ * read from the hosting platform, and the human side comes from where the
+ * design puts it — an Epic raised from a requirement is accepted scenario by
+ * scenario on its own page, while a standalone Epic is accepted by dragging it
+ * to the finished column of the board. A review request closed without landing
+ * sends the Epic back to EXECUTING with no mr_url, so the next maintenance
+ * cycle opens a fresh one instead of waiting on a review nobody will merge.
  */
 export class EpicCompletion {
   constructor(
     private readonly client: Client,
     private readonly mergeRequests: MergeRequestStatePort,
     private readonly now: () => number = Date.now,
+    private readonly acceptance: EpicAcceptance = new EpicAcceptance(client, now),
   ) {}
 
   async tick(): Promise<EpicCompletionOutcome[]> {
@@ -63,7 +66,20 @@ export class EpicCompletion {
                WHERE epic_id = ? AND pool <> 'main'`,
         args: [this.now(), epicId],
       });
-      const standalone = row.requirement_id === null;
+      // What the batch promised is judged here, on the batch: the merge says
+      // the code landed, and the ticks say it does what was asked for.
+      const settled = await this.acceptance.settle(epicId);
+      if (settled.kind === "waiting") {
+        outcomes.push({ epicId, kind: "awaiting_acceptance", open: settled.open });
+        continue;
+      }
+      if (settled.kind === "gap") {
+        outcomes.push({ epicId, kind: "gap", storyIds: settled.storyIds });
+        continue;
+      }
+      // An Epic nobody raised from a requirement has no scenarios to tick, so
+      // the one drag to the finished column is what closes it.
+      const standalone = settled.kind === "unjudged" && row.requirement_id === null;
       if (standalone && row.notion_status_shadow !== EPIC_BOARD_STATUS.done) {
         outcomes.push({ epicId, kind: "awaiting_acceptance" });
         continue;

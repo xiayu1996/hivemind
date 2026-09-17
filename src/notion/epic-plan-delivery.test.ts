@@ -253,6 +253,7 @@ describe("NotionEpicPlanDelivery", () => {
         { id: "S-M2-01", title: "Split", pageId: "3dd20688-7a32-815a-a78b-d1e934a4d958", dependsOn: [] },
         { id: "S-M2-02", title: "Approve", pageId: null, dependsOn: ["S-M2-01"] },
       ],
+      acceptance: [],
     };
 
     it("writes what the batch carries, links the Stories it planned, and takes the progress section away", async () => {
@@ -309,6 +310,49 @@ describe("NotionEpicPlanDelivery", () => {
       children = [{ id: "m", type: "paragraph", paragraph: { rich_text: [{ plain_text: "hivemind-progress:same" }] } }];
       const delivery = new NotionEpicPlanDelivery(gateway(), client, "stories-ds", () => 10);
       expect(await delivery.isApplied(record("sync_epic_page", payload, { payloadHash: "same" }))).toBe(true);
+    });
+
+    it("writes the acceptance boxes once and afterwards only rewrites what they say", async () => {
+      await client.batch([
+        `INSERT INTO epics (id, notion_page_id, title, state, created_at, updated_at)
+         VALUES ('M2', 'epic-page', 'M2', 'EPIC_ACCEPT', 1, 1)`,
+        `INSERT INTO epic_acceptance_items (epic_id, prd_scenario_id, text, status, created_at)
+         VALUES ('M2', 's01', '\u4fdd\u5b58\u4e00\u6761\u89c4\u5219\uff0c\u5217\u8868\u91cc\u51fa\u73b0\u5b83', 'open', 1)`,
+      ], "write");
+      const judged = { ...payload, acceptance: [
+        { prdScenarioId: "s01", text: "\u4fdd\u5b58\u4e00\u6761\u89c4\u5219\uff0c\u5217\u8868\u91cc\u51fa\u73b0\u5b83", status: "open", note: null },
+      ] };
+      const delivery = new NotionEpicPlanDelivery(gateway(), client, "stories-ds", () => 10);
+      await delivery.send(record("sync_epic_page", judged, { payloadHash: "new" }));
+
+      const boxes = requests
+        .filter((request) => request.method === "PATCH" && request.path.endsWith("/children"))
+        .map((request) => JSON.stringify(request.body))
+        .filter((body) => body.includes("to_do"));
+      expect(boxes).toHaveLength(1);
+      // The tick lives on the block, so the block id is what the database
+      // keeps: without it a reprojection would ask the same question twice.
+      const bound = await client.execute("SELECT notion_block_id FROM epic_acceptance_items WHERE epic_id = 'M2'");
+      expect(String(bound.rows[0]?.notion_block_id)).toMatch(/^new-/);
+
+      // Second pass: the person has said what is missing, and the box that
+      // carries their comment is rewritten rather than replaced.
+      const blockId = String(bound.rows[0]?.notion_block_id);
+      children = [
+        { id: "b-accept", type: "heading_2", heading_2: { rich_text: [{ plain_text: "\u9a8c\u6536" }] } },
+        { id: blockId, type: "to_do", to_do: { rich_text: [{ plain_text: "\u4fdd\u5b58\u4e00\u6761\u89c4\u5219\uff0c\u5217\u8868\u91cc\u51fa\u73b0\u5b83" }] } },
+      ];
+      requests = [];
+      await delivery.send(record("sync_epic_page", {
+        ...judged,
+        acceptance: [{ ...judged.acceptance[0]!, status: "gap", note: "\u4fdd\u5b58\u540e\u6ca1\u5237\u65b0" }],
+      }, { payloadHash: "newer" }));
+      expect(requests.filter((request) => request.method === "DELETE").map((request) => request.path))
+        .not.toContain(`/v1/blocks/${blockId}`);
+      const rewrite = requests.find((request) => request.path === `/v1/blocks/${blockId}`);
+      expect(JSON.stringify(rewrite?.body)).toContain("\u4fdd\u5b58\u540e\u6ca1\u5237\u65b0");
+      // The answer is the person's: a projection never ticks or unticks.
+      expect(JSON.stringify(rewrite?.body)).not.toContain("checked");
     });
 
     it("leaves the column alone while a person's drag still stands, but still updates the page", async () => {

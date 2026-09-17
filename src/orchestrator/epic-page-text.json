@@ -3,5 +3,7 @@
   "carriedScenarios": "这一批要交付的场景：",
   "technicalFold": "展开技术细节",
   "reviewRequest": "Epic MR：{url}（合并到 {target}）",
-  "integrationBranch": "集成分支：{branch}"
+  "integrationBranch": "集成分支：{branch}",
+  "acceptanceIntro": "勾上 = 这条场景做到了；做得不对就不要勾，在这一行下写条评论说差在哪，我会在本 Epic 下补一张卡。",
+  "acceptanceGap": "你说：{note}"
 }

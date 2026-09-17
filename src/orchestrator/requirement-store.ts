@@ -43,7 +43,7 @@ export interface AcceptanceItem {
 }
 
 export type ApprovalKind = "prd_confirm" | "prd_revision" | "acceptance" | "resume_answer";
-export type ApprovalSource = "comment" | "drag";
+export type ApprovalSource = "comment" | "drag" | "auto";
 
 export type RequirementNotionSection = "callout" | "clarify" | "prd" | "delivery";
 

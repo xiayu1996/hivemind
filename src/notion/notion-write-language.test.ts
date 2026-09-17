@@ -71,6 +71,12 @@ describe("what Notion is written with", () => {
         businessGoal: "\u8ba9\u4eba\u80fd\u4fdd\u5b58\u4e00\u6761\u89c4\u5219",
         prdScenarios: [{ id: "s01", text: "\u6253\u5f00\u9875\u9762\uff0c\u4fdd\u5b58\u89c4\u5219\uff0c\u5217\u8868\u91cc\u51fa\u73b0\u5b83" }],
         stories: [{ id: "S-E1-01", title: "\u4fdd\u5b58\u89c4\u5219", pageId: null, dependsOn: [] }],
+        acceptance: [{
+          prdScenarioId: "s01",
+          text: "\u6253\u5f00\u9875\u9762\uff0c\u4fdd\u5b58\u89c4\u5219\uff0c\u5217\u8868\u91cc\u51fa\u73b0\u5b83",
+          status: "gap",
+          note: "\u4fdd\u5b58\u540e\u5217\u8868\u6ca1\u5237\u65b0",
+        }],
       });
       assertReadable(`epic page ${state}`, rendered.lines);
     }

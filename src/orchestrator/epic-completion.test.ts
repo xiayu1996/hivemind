@@ -127,3 +127,44 @@ describe("EpicCompletion", () => {
     await expect(completion.tick()).resolves.toEqual([]);
   });
 });
+
+describe("EpicCompletion with scenarios to judge", () => {
+  let judged: ReturnType<typeof createClient>;
+
+  beforeEach(async () => {
+    judged = createClient({ url: ":memory:" });
+    await migrate(judged);
+    await judged.batch([
+      `INSERT INTO requirements (id, notion_page_id, title, state, original_request, created_at, updated_at)
+       VALUES ('R1','req-page','控制台','EXECUTING','我想看到进度',1,1)`,
+      `INSERT INTO epics (id, notion_page_id, title, state, requirement_id, mr_url, created_at, updated_at)
+       VALUES ('E1','epic-page','Epic','EPIC_ACCEPT','R1','https://example.test/pull/1',1,1)`,
+      `INSERT INTO epic_acceptance_items (epic_id, prd_scenario_id, text, status, created_at)
+       VALUES ('E1','s01','保存一条规则，列表里出现它','open',1)`,
+    ], "write");
+  });
+
+  afterEach(() => judged.close());
+
+  const merged = { state: async () => "merged" as const };
+
+  it("does not finish a merged batch nobody has judged yet", async () => {
+    const outcomes = await new EpicCompletion(judged, merged, () => 10).tick();
+    expect(outcomes).toEqual([{ epicId: "E1", kind: "awaiting_acceptance", open: 1 }]);
+    expect((await judged.execute("SELECT state FROM epics WHERE id = 'E1'")).rows[0]?.state).toBe("EPIC_ACCEPT");
+  });
+
+  it("finishes it once every scenario has been ticked", async () => {
+    await judged.execute("UPDATE epic_acceptance_items SET status = 'accepted', decided_at = 5 WHERE epic_id = 'E1'");
+    const outcomes = await new EpicCompletion(judged, merged, () => 10).tick();
+    expect(outcomes).toEqual([{ epicId: "E1", kind: "done" }]);
+  });
+
+  it("sends the batch back to work when the person said a scenario is missing", async () => {
+    await judged.execute("UPDATE epic_acceptance_items SET status = 'gap', decided_at = 5, note = '列表没刷新' WHERE epic_id = 'E1'");
+    const outcomes = await new EpicCompletion(judged, merged, () => 10).tick();
+    expect(outcomes).toMatchObject([{ epicId: "E1", kind: "gap", storyIds: ["S-E1-01"] }]);
+    expect((await judged.execute("SELECT state, mr_url FROM epics WHERE id = 'E1'")).rows[0])
+      .toMatchObject({ state: "EXECUTING", mr_url: null });
+  });
+});

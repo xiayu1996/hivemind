@@ -4,7 +4,13 @@ import type { NotionGateway } from "./gateway.js";
 import type { NotionOutboxDelivery, NotionOutboxRecord } from "./outbox.js";
 import { COMMENT_EPIC_PAGE } from "../orchestrator/epic-blocker.js";
 import { SYNC_EPIC_STATUS } from "../orchestrator/epic-status-projection.js";
-import { SYNC_EPIC_PAGE, renderEpicPage, type EpicPagePayload } from "../orchestrator/epic-page-projection.js";
+import {
+  SYNC_EPIC_PAGE,
+  renderEpicPage,
+  type EpicPagePayload,
+  type RenderedAcceptance,
+} from "../orchestrator/epic-page-projection.js";
+import { EpicAcceptance } from "../orchestrator/epic-acceptance.js";
 import pageText from "../orchestrator/epic-page-text.json" with { type: "json" };
 import schema from "./notion-schema.json" with { type: "json" };
 import { bullet as richBullet, code, heading2, pageMention, runs, t, type Block } from "./rich-text.js";
@@ -43,6 +49,12 @@ const pageSchema = z.object({
     pageId: z.string().nullable(),
     dependsOn: z.array(z.string()),
   })),
+  acceptance: z.array(z.object({
+    prdScenarioId: z.string().min(1),
+    text: z.string(),
+    status: z.enum(["open", "accepted", "gap"]),
+    note: z.string().nullable(),
+  })).default([]),
 }) as unknown as z.ZodType<EpicPagePayload>;
 
 const commentSchema = z.object({
@@ -180,7 +192,7 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
     if (stale.size > 0) blocks = blocks.filter((block) => !stale.has(String(block.id)));
 
     const calloutId = await this.writeCallout(pageId, blocks, rendered.callout);
-    await this.writeSections(pageId, blocks, rendered.sections, calloutId);
+    await this.writeSections(pageId, blocks, rendered, calloutId, payload.epicId);
     await this.mentionStoryPages(blocks, payload);
     await this.rememberSection(payload.epicId, "page", payloadHash);
   }
@@ -218,34 +230,89 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
   }
 
   /**
-   * Each owned section lands where a reader expects it: the goal above the
-   * plan a person approved, the rest below it. Notion can only append after a
-   * block, so each section is anchored on the last block written before it.
+   * Each section lands where a reader expects it. Two of them are not rebuilt:
+   * the plan a person approved, and the acceptance boxes they tick and comment
+   * on. Notion can only append after a block, so the rebuilt sections are
+   * anchored on whatever the page already carries before them.
    */
   private async writeSections(
     pageId: string,
     blocks: Array<Record<string, unknown>>,
-    sections: ReturnType<typeof renderEpicPage>["sections"],
+    rendered: ReturnType<typeof renderEpicPage>,
     calloutId: string | undefined,
+    epicId: string,
   ): Promise<void> {
-    const planBlocks = this.sectionBlocks(blocks, epicSectionTitle("plan"));
-    // The goal follows the callout, which is the block a reader meets first.
-    const first = calloutId ?? (blocks[0] ? String(blocks[0].id) : undefined);
-    let afterGoal = planBlocks.at(-1) ?? first;
-    let anchor: string | undefined = first;
-    for (const { section, blocks: children } of sections) {
+    const owned = new Map(rendered.sections.map((entry) => [entry.section, entry.blocks]));
+    let anchor: string | undefined = calloutId ?? (blocks[0] ? String(blocks[0].id) : undefined);
+    for (const section of ["goal", "plan", "dependencies", "acceptance", "technical"] as const) {
+      if (section === "plan") {
+        anchor = this.sectionBlocks(blocks, epicSectionTitle("plan")).at(-1) ?? anchor;
+        continue;
+      }
+      if (section === "acceptance") {
+        anchor = await this.writeAcceptance(pageId, blocks, rendered.acceptance, anchor, epicId) ?? anchor;
+        continue;
+      }
+      const children = owned.get(section) ?? [];
       if (children.length === 0) continue;
-      const after = section === "goal" ? anchor : afterGoal;
-      const created = await this.append(
-        pageId,
-        [heading2(t(epicSectionTitle(section))), ...children],
-        after,
-      );
-      const last = created.at(-1);
-      if (!last) continue;
-      if (section === "goal") anchor = last;
-      else afterGoal = last;
+      const created = await this.append(pageId, [heading2(t(epicSectionTitle(section))), ...children], anchor);
+      anchor = created.at(-1) ?? anchor;
     }
+  }
+
+  /**
+   * The acceptance boxes are written once and afterwards only rewritten: the
+   * tick is the person's answer and lives on the block, together with whatever
+   * they wrote under it. Rebuilding the section would throw both away.
+   */
+  private async writeAcceptance(
+    pageId: string,
+    blocks: Array<Record<string, unknown>>,
+    acceptance: RenderedAcceptance | null,
+    anchor: string | undefined,
+    epicId: string,
+  ): Promise<string | undefined> {
+    if (!acceptance) return undefined;
+    const store = new EpicAcceptance(this.client, this.now);
+    const bound = new Map((await store.items(epicId))
+      .flatMap((item) => item.notionBlockId ? [[item.prdScenarioId, item.notionBlockId] as const] : []));
+    const present = new Set(this.sectionBlocks(blocks, epicSectionTitle("acceptance")));
+    const existing = new Map([...bound].filter(([, blockId]) => present.has(blockId)));
+
+    if (existing.size === 0) {
+      const created = await this.append(pageId, [
+        heading2(t(epicSectionTitle("acceptance"))),
+        { object: "block", type: "paragraph", paragraph: { rich_text: t(acceptance.intro) } } as unknown as Block,
+        ...acceptance.items.map((item) => ({
+          object: "block",
+          type: "to_do",
+          // The tick belongs to the person; a projection only creates the box.
+          to_do: { rich_text: t(item.line), checked: item.checked },
+        }) as unknown as Block),
+      ], anchor);
+      for (const [index, item] of acceptance.items.entries()) {
+        const blockId = created[index + 2];
+        if (blockId) await store.bindBlock(epicId, item.prdScenarioId, blockId);
+      }
+      return created.at(-1);
+    }
+
+    let last = anchor;
+    for (const item of acceptance.items) {
+      const blockId = existing.get(item.prdScenarioId);
+      if (!blockId) continue;
+      last = blockId;
+      const current = blocks.find((block) => String(block.id) === blockId);
+      if (current && plainText(current.to_do) === item.line) continue;
+      await this.gateway.request({
+        method: "PATCH",
+        path: `/v1/blocks/${encoded(blockId)}`,
+        priority: "projection",
+        // Only the words are rewritten: `checked` is the person's own answer.
+        body: { to_do: { rich_text: t(item.line) } },
+      });
+    }
+    return last;
   }
 
   private async append(pageId: string, children: Block[], after?: string): Promise<string[]> {
@@ -286,14 +353,18 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
     }
   }
 
-  /** Every block under a heading this projection owns, the heading included. */
+  /**
+   * Every block under a heading this projection rebuilds, the heading
+   * included. Two sections are not among them: the plan a person approved, and
+   * the acceptance boxes they tick and write under.
+   */
   private ownedSectionBlocks(blocks: Array<Record<string, unknown>>): string[] {
     const ids: string[] = [];
     let inside = false;
     for (const block of blocks) {
       if (String(block.type ?? "") === "heading_2") {
         const section = epicSectionForTitle(plainText(block.heading_2));
-        inside = section !== undefined && section !== "plan";
+        inside = section !== undefined && section !== "plan" && section !== "acceptance";
         if (!inside) continue;
       }
       if (inside) ids.push(String(block.id));

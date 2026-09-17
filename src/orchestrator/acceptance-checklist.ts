@@ -3,7 +3,7 @@ import type { Client } from "@libsql/client";
 import type { RequirementPagePublisher } from "./clarify-loop.js";
 import type { EpicIntake } from "./decompose-runner.js";
 import type { PrdScenario } from "./requirement-artifacts.js";
-import type { AcceptanceItem, ApprovalSource, RequirementStore } from "./requirement-store.js";
+import type { AcceptanceItem, RequirementStore } from "./requirement-store.js";
 
 export interface ChecklistItem {
   itemId: string;
@@ -11,7 +11,10 @@ export interface ChecklistItem {
   text: string;
 }
 
+const NO_EPIC_CARRIED = "\u6ca1\u6709\u4efb\u4f55\u4e00\u6279\u4ea4\u4ed8\u627f\u63a5\u8fd9\u6761\u573a\u666f\uff0c\u672c\u6279\u628a\u5b83\u8865\u4e0a\u3002";
+
 export type AcceptanceOutcome =
+  /** A verdict is missing, which only a rerun of the Epics can produce. */
   | { kind: "waiting"; open: number }
   | { kind: "accepted" }
   | { kind: "gap"; epic: EpicIntake };
@@ -46,9 +49,12 @@ export function buildChecklist(scenarios: readonly PrdScenario[]): ChecklistItem
 }
 
 /**
- * Runs scenario-level acceptance. A person judges business outcomes here and
- * nothing else; a rejected scenario becomes an extra delivery batch rather
- * than a conversation about code.
+ * Summarises what the Epics already decided. The judgement happens on each
+ * batch, where the person saw the delivery; asking them to tick the same
+ * scenarios a second time at the end teaches them to click through a list
+ * without reading it. What is left here is arithmetic: every scenario a batch
+ * accepted closes the requirement, and one no batch ever carried is a hole in
+ * the split, which becomes one more delivery batch.
  */
 export class AcceptanceChecklist {
   constructor(
@@ -58,9 +64,12 @@ export class AcceptanceChecklist {
     private readonly now: () => number = Date.now,
   ) {}
 
-  /** Moves a delivered requirement into judgement and puts the list in front
-   * of the person. Safe to call repeatedly; it seeds the list only once. */
-  async open(requirementId: string): Promise<ChecklistItem[]> {
+  /**
+   * Closes a requirement whose Epics are all finished. Safe to call
+   * repeatedly: seeding and each verdict are written once, so a crash between
+   * them costs a repeat, not a second decision.
+   */
+  async settle(requirementId: string): Promise<AcceptanceOutcome> {
     const requirement = await this.store.getRequirement(requirementId);
     if (requirement.state === "EXECUTING") {
       const epics = await this.store.linkedEpicStates(requirementId);
@@ -75,65 +84,10 @@ export class AcceptanceChecklist {
     const prd = await this.store.getPrd(requirementId);
     if (!prd || prd.status !== "confirmed") throw new Error(`requirement ${requirementId} has no confirmed PRD`);
     const scenarios = (JSON.parse(prd.body) as { scenarios: PrdScenario[] }).scenarios;
-    const items = buildChecklist(scenarios);
-    await this.store.seedAcceptanceItems(requirementId, items, runId(requirementId));
-    await this.publisher.publish(requirementId);
-    return items;
-  }
+    await this.store.seedAcceptanceItems(requirementId, buildChecklist(scenarios), runId(requirementId));
+    await this.copyEpicVerdicts(requirementId);
 
-  /** Applies a tick a person made on the requirement page. An unticked box is
-   * the absence of a verdict, not a rejection, so it changes nothing. */
-  async applyCheck(
-    requirementId: string,
-    notionBlockId: string,
-    checked: boolean,
-    eventId: string,
-    source: ApprovalSource = "comment",
-  ): Promise<boolean> {
-    if (!checked) return false;
-    const item = (await this.store.acceptanceItems(requirementId))
-      .find((candidate) => candidate.notionBlockId === notionBlockId);
-    if (!item || item.status !== "open") return false;
-    return this.store.decideAcceptanceItem(
-      requirementId,
-      item.itemId,
-      "accepted",
-      eventId,
-      source,
-      runId(requirementId),
-    );
-  }
-
-  async recordGap(
-    requirementId: string,
-    itemId: string,
-    note: string,
-    eventId: string,
-    source: ApprovalSource = "comment",
-  ): Promise<boolean> {
-    return this.store.decideAcceptanceItem(
-      requirementId,
-      itemId,
-      "gap",
-      eventId,
-      source,
-      runId(requirementId),
-      note,
-    );
-  }
-
-  /**
-   * Closes the round once every scenario has a verdict: all accepted ends the
-   * requirement, any gap opens one more delivery batch carrying exactly the
-   * scenarios that failed and what the person said about them.
-   */
-  async settle(requirementId: string): Promise<AcceptanceOutcome> {
-    const requirement = await this.store.getRequirement(requirementId);
-    if (requirement.state !== "ACCEPTANCE") {
-      throw new Error(`requirement ${requirementId} is ${requirement.state}, not under acceptance`);
-    }
     const items = await this.store.acceptanceItems(requirementId);
-    if (items.length === 0) throw new Error(`requirement ${requirementId} has no acceptance list`);
     const open = items.filter((item) => item.status === "open");
     if (open.length > 0) return { kind: "waiting", open: open.length };
 
@@ -152,6 +106,41 @@ export class AcceptanceChecklist {
     await this.store.transition(requirementId, "DECOMPOSING", "EXECUTING", "system", runId(requirementId));
     await this.publisher.publish(requirementId);
     return { kind: "gap", epic };
+  }
+
+  /**
+   * Each scenario takes the verdict of the batch that carried it. A scenario
+   * no batch carried has nobody who could have judged it, and is recorded as
+   * missing rather than quietly counted as delivered.
+   */
+  private async copyEpicVerdicts(requirementId: string): Promise<void> {
+    const decided = new Map((await this.client.execute({
+      sql: `SELECT i.prd_scenario_id, i.status, i.note FROM epic_acceptance_items i
+              JOIN epics e ON e.id = i.epic_id
+             WHERE e.requirement_id = ?`,
+      args: [requirementId],
+    })).rows.map((row) => [String(row.prd_scenario_id), {
+      status: String(row.status),
+      note: row.note === null ? "" : String(row.note),
+    }] as const));
+
+    for (const item of await this.store.acceptanceItems(requirementId)) {
+      if (item.status !== "open") continue;
+      const verdict = decided.get(item.prdScenarioId);
+      const eventId = `epic-verdict:${requirementId}:${item.itemId}`;
+      if (verdict?.status === "accepted") {
+        await this.store.decideAcceptanceItem(
+          requirementId, item.itemId, "accepted", eventId, "auto", runId(requirementId),
+        );
+        continue;
+      }
+      if (verdict === undefined) {
+        await this.store.decideAcceptanceItem(
+          requirementId, item.itemId, "gap", eventId, "auto", runId(requirementId),
+          NO_EPIC_CARRIED,
+        );
+      }
+    }
   }
 
   private async writeGapEpic(

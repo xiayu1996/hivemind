@@ -80,7 +80,9 @@ CREATE TABLE IF NOT EXISTS requirement_approval_events (
   event_id       TEXT PRIMARY KEY,
   requirement_id TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
   kind           TEXT NOT NULL CHECK (kind IN ('prd_confirm','prd_revision','acceptance','resume_answer')),
-  source         TEXT NOT NULL CHECK (source IN ('comment','drag')),
+  -- `auto` is the system itself: scenario verdicts are made on each Epic, and
+  -- the requirement only copies them in.
+  source         TEXT NOT NULL CHECK (source IN ('comment','drag','auto')),
   created_at     INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_requirement_approval_events ON requirement_approval_events(requirement_id);
@@ -124,6 +126,25 @@ CREATE TABLE IF NOT EXISTS epic_prd_scenarios (
   PRIMARY KEY (requirement_id, prd_scenario_id)
 );
 CREATE INDEX IF NOT EXISTS idx_epic_prd_scenarios_epic ON epic_prd_scenarios(epic_id);
+
+-- Scenario-level acceptance, judged on the batch that delivered it. One row
+-- per PRD scenario the Epic carries: the person ticks what this delivery got
+-- right, and what they do not tick becomes another Story under the same Epic.
+-- Acceptance lives here rather than on the requirement because a requirement
+-- is delivered in batches, and asking about all of them at the end asks about
+-- work the person judged months apart.
+CREATE TABLE IF NOT EXISTS epic_acceptance_items (
+  epic_id         TEXT NOT NULL REFERENCES epics(id) ON DELETE CASCADE,
+  prd_scenario_id TEXT NOT NULL,
+  text            TEXT NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','accepted','gap')),
+  notion_block_id TEXT UNIQUE,
+  note            TEXT,
+  decided_at      INTEGER,
+  created_at      INTEGER NOT NULL,
+  PRIMARY KEY (epic_id, prd_scenario_id),
+  CHECK ((status = 'open') = (decided_at IS NULL))
+);
 
 -- What the Epic page already shows, per section. It used to be a marker line
 -- printed on the page itself, which every reader had to read past; the page is
