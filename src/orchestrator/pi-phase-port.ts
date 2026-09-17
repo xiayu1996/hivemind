@@ -39,6 +39,7 @@ import { RpcPiRunner, type RpcRunnerConfig } from "../runner/rpc-runner.js";
 import type { PiRunner, PromptResult } from "../runner/types.js";
 import type {
   ManagedPhaseInput,
+  PhaseExitGate,
   ManagedPhaseResult,
   StoryPhasePort,
 } from "./story-worker.js";
@@ -93,11 +94,20 @@ const IMPLEMENTING_PHASES = new Set<string>(["CODE", "REGRESSION_FIX"]);
 const DEFAULT_CODE_EXIT_ROUNDS = 3;
 const DEFAULT_REPORT_REWRITES = 2;
 
+/** A phase exit that its own session could not satisfy. Carries the findings
+ * so the next attempt starts from them instead of from a bare failure. */
+export class PhaseExitNotMetError extends Error {
+  constructor(phase: string, readonly findings: string) {
+    super(`${phase} exit checks were not met: ${findings}`);
+    this.name = "PhaseExitNotMetError";
+  }
+}
+
 /** A CODE exit that never satisfied its checks. Carries the findings so the
  * next round starts from them instead of from a bare failure message. */
-export class CodeExitNotMetError extends Error {
-  constructor(readonly findings: readonly string[]) {
-    super(`CODE exit checks were not met: ${findings.join(" | ")}`);
+export class CodeExitNotMetError extends PhaseExitNotMetError {
+  constructor(readonly codeFindings: readonly string[]) {
+    super("CODE", codeFindings.join(" | "));
     this.name = "CodeExitNotMetError";
   }
 }
@@ -424,6 +434,14 @@ export class PiStoryPhasePort implements StoryPhasePort {
           renderDesignSummaryFindings,
         );
       }
+      // A phase's own exit, on the same terms as CODE's: findings go back to
+      // the live session, which costs no round and no reentry.
+      let exitGateRounds: number | undefined;
+      if (input.exitGate) {
+        const enforced = await this.enforceExitGate(input, runner, input.exitGate, artifacts);
+        artifacts = enforced.artifacts;
+        exitGateRounds = enforced.rounds;
+      }
       const telemetry: PhaseTelemetryInput = {
         runId: input.runId,
         cardId: input.context.cardId,
@@ -438,7 +456,10 @@ export class PiStoryPhasePort implements StoryPhasePort {
       };
       const cost = await this.options.recordCost?.(telemetry);
       emitSafely(this.options.emit, { ...telemetry, ...(cost ? { cost: cost.data } : {}) });
-      return { sessionId: phaseSessionId, artifacts, spec };
+      return {
+        sessionId: phaseSessionId, artifacts, spec,
+        ...(exitGateRounds === undefined ? {} : { exitGateRounds }),
+      };
     } finally {
       await runner.stop().catch(() => undefined);
       await grant.release().catch(() => undefined);
@@ -470,6 +491,37 @@ export class PiStoryPhasePort implements StoryPhasePort {
       const result = await promptWithContinueRetry(
         runner,
         renderCodeExitFindings(verdict),
+        { maxContinueRetries: this.options.maxContinueRetries ?? 8 },
+        this.options.promptTimeoutMs,
+      );
+      if (result.failure) throw new Error(result.failure.errorMessage);
+      current = parseResult(input, lastAssistantText(await runner.getMessages()));
+    }
+  }
+
+  /**
+   * A phase's own deterministic exit, enforced inside the session that
+   * produced the output.
+   *
+   * Same shape as the CODE exit and for the same reason: a refusal is a work
+   * item, not a verdict on the Story. Refusing in a new session instead costs
+   * a whole phase run to fix something the session that wrote it could correct
+   * in one turn, and the abandoned run reads downstream as a crash.
+   */
+  private async enforceExitGate(
+    input: ManagedPhaseInput,
+    runner: PiRunner,
+    gate: PhaseExitGate,
+    artifacts: ManagedPhaseResult["artifacts"],
+  ): Promise<{ artifacts: ManagedPhaseResult["artifacts"]; rounds: number }> {
+    let current = artifacts;
+    for (let attempt = 1; ; attempt++) {
+      const verdict = await gate.evaluate(current, attempt);
+      if (verdict.passed) return { artifacts: current, rounds: attempt };
+      if (attempt >= gate.maxRounds) throw new PhaseExitNotMetError(input.phase, verdict.findings);
+      const result = await promptWithContinueRetry(
+        runner,
+        verdict.findings,
         { maxContinueRetries: this.options.maxContinueRetries ?? 8 },
         this.options.promptTimeoutMs,
       );

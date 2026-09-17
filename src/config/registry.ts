@@ -578,6 +578,13 @@ export const CONFIG_KEYS = {
     reload: "hot",
     description: "How many times the CODE exit findings are handed back to the same session before the phase gives up. The findings cost no inner-loop round and no reentry; this only bounds the handback.",
   }),
+  "specifyExit.maxRounds": def({
+    schema: positiveInt.max(10),
+    default: 3,
+    scope: "global",
+    reload: "hot",
+    description: "How many times the SPECIFY exit findings are handed back to the same session before the phase gives up. A contract in the wrong mode, or tests that do not fail for the reason they claim, is a work item the session that wrote it can fix in one turn; refusing it into a new run costs a whole phase and reads downstream as a crash. The findings cost no inner-loop round and no reentry; this only bounds the handback.",
+  }),
   "guard.contextFilePolicy": def({
     schema: z.enum(["explicit", "inherit"]),
     default: "explicit",

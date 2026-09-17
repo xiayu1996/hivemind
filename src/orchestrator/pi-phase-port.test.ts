@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PiRunner, PromptResult } from "../runner/types.js";
 import { testAgentSpec } from "../runner/agent-spec.testing.js";
 import type { CodeExitFacts } from "../pipeline/code-exit-gate.js";
-import { CodeExitNotMetError, PiStoryPhasePort } from "./pi-phase-port.js";
+import { CodeExitNotMetError, PhaseExitNotMetError, PiStoryPhasePort } from "./pi-phase-port.js";
 import type { ManagedPhaseInput } from "./story-worker.js";
 
 const usage = { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, reasoning: 1, costUsd: 0.1 };
@@ -274,6 +274,58 @@ describe("PiStoryPhasePort", () => {
     });
 
     await expect(port.run(phaseInput("CODE"))).rejects.toBeInstanceOf(CodeExitNotMetError);
+  });
+
+  it("hands a phase exit's findings back to the same session", async () => {
+    temporary = await mkdtemp(join(tmpdir(), "hivemind-pi-phase-"));
+    const runner = fakeRunner(JSON.stringify({ test_contract_yaml: "story_id: S-EPIC1-01" }));
+    const verdicts = [
+      { passed: false as const, findings: "The contract must be full, not narrow." },
+      { passed: true as const },
+    ];
+    const port = new PiStoryPhasePort({
+      binary: "pi",
+      resolveSpec: async () => ({ spec: await testAgentSpec(), release: async () => undefined }),
+      worktreePath: resolve("."),
+      promptRoot: resolve("prompts"),
+      sessionRoot: join(temporary, "sessions"),
+      evidencePath: join(temporary, "evidence"),
+      auditPath: join(temporary, "audit.jsonl"),
+      guardExtension: resolve("extensions/hive-guard.ts"),
+      canonicalCaptureExtension: resolve("extensions/canonical-capture.ts"),
+      createRunner: () => runner,
+      readProviderPayloads: async () => [{ model: "mock-1", messages: [] }],
+    });
+
+    await expect(port.run({
+      ...phaseInput("SPECIFY"),
+      exitGate: { maxRounds: 3, evaluate: async () => verdicts.shift()! },
+    })).resolves.toMatchObject({ exitGateRounds: 2 });
+    const prompted = (runner.prompt as unknown as { mock: { calls: string[][] } }).mock.calls.map((call) => call[0]!);
+    expect(prompted).toHaveLength(2);
+    expect(prompted[1]).toContain("The contract must be full");
+  });
+
+  it("gives up on a phase exit its own session cannot satisfy", async () => {
+    temporary = await mkdtemp(join(tmpdir(), "hivemind-pi-phase-"));
+    const port = new PiStoryPhasePort({
+      binary: "pi",
+      resolveSpec: async () => ({ spec: await testAgentSpec(), release: async () => undefined }),
+      worktreePath: resolve("."),
+      promptRoot: resolve("prompts"),
+      sessionRoot: join(temporary, "sessions"),
+      evidencePath: join(temporary, "evidence"),
+      auditPath: join(temporary, "audit.jsonl"),
+      guardExtension: resolve("extensions/hive-guard.ts"),
+      canonicalCaptureExtension: resolve("extensions/canonical-capture.ts"),
+      createRunner: () => fakeRunner(JSON.stringify({ test_contract_yaml: "story_id: S-EPIC1-01" })),
+      readProviderPayloads: async () => [{ model: "mock-1", messages: [] }],
+    });
+
+    await expect(port.run({
+      ...phaseInput("SPECIFY"),
+      exitGate: { maxRounds: 2, evaluate: async () => ({ passed: false, findings: "still not red" }) },
+    })).rejects.toBeInstanceOf(PhaseExitNotMetError);
   });
 
   it("asks MERGE to rewrite a report whose business section reads like a transcript", async () => {
