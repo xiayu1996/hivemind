@@ -7,6 +7,7 @@ import {
   type PrdScenario,
   type RequirementDecompositionCandidate,
 } from "./requirement-artifacts.js";
+import type { SolutionBody } from "./requirement-solution.js";
 import type { RequirementStore } from "./requirement-store.js";
 
 export interface RequirementDecomposeRequest {
@@ -15,6 +16,10 @@ export interface RequirementDecomposeRequest {
   businessGoal: string;
   nonGoals: readonly string[];
   scenarios: readonly PrdScenario[];
+  /** What was decided about how to build it, null when this requirement never
+   * needed a solution of its own. The page list inside it is what an Epic
+   * boundary should follow when the requirement has an interface. */
+  solution: SolutionBody | null;
   previousRejections: readonly string[];
 }
 
@@ -70,12 +75,17 @@ export class RequirementDecomposer {
       scenarios: PrdScenario[];
     };
     const scenarioIds = body.scenarios.map((scenario) => scenario.id);
+    const confirmed = await this.store.getSolution(requirementId);
+    const solution: SolutionBody | null = confirmed?.status === "confirmed"
+      ? JSON.parse(confirmed.body) as SolutionBody
+      : null;
 
     const rejections: string[] = [];
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       const candidate = await this.port.run({
         requirementId,
         title: requirement.title,
+        solution,
         businessGoal: body.businessGoal,
         nonGoals: body.nonGoals,
         scenarios: body.scenarios,

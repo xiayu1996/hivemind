@@ -362,6 +362,36 @@ export async function upgradeRequirementBoard(
     });
   }
   await seedRepositoryOptions(client, requirementsDataSourceId, slugs);
+  await seedStatusOptions(client, requirementsDataSourceId);
+}
+
+/**
+ * Adds any requirement-status column this version writes and the live board
+ * does not have yet. Add-only for the same reason as the repository options:
+ * removing one blanks the property on every card still in it.
+ */
+export async function seedStatusOptions(
+  client: BootstrapClient,
+  requirementsDataSourceId: string,
+): Promise<string[]> {
+  const names = schema.propertyNames;
+  const live = liveOptions(
+    (await client.dataSources.retrieve({ data_source_id: requirementsDataSourceId }))
+      .properties[names.requirementStatus],
+  );
+  const missing = schema.options.requirementStatus.filter((name) => !live.some((option) => option.name === name));
+  if (missing.length === 0) return [];
+  await client.dataSources.update({
+    data_source_id: requirementsDataSourceId,
+    properties: {
+      [names.requirementStatus]: {
+        select: {
+          options: [...live.map((option) => ({ id: option.id })), ...missing.map((name) => ({ name }))] as never,
+        },
+      },
+    },
+  });
+  return missing;
 }
 
 /**

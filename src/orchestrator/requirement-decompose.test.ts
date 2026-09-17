@@ -91,7 +91,8 @@ describe("RequirementDecomposer", () => {
       scenarios: SCENARIOS,
     }), "run-prd");
     await store.confirmPrd(REQUIREMENT_ID, 1, "comment-1", "comment", "run-confirm");
-    await store.transition(REQUIREMENT_ID, "PRD_CONFIRM", "DECOMPOSING", "system", "run-2");
+    await store.transition(REQUIREMENT_ID, "PRD_CONFIRM", "SOLUTION", "system", "run-2");
+    await store.transition(REQUIREMENT_ID, "SOLUTION", "DECOMPOSING", "system", "run-2");
   });
 
   afterEach(() => client.close());

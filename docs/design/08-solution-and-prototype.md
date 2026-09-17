@@ -53,11 +53,13 @@ CLARIFY → PRD_CONFIRM → SOLUTION → DECOMPOSING → EXECUTING → ACCEPTANC
 **产物永远生成，停不停人由确定性条件决定**，不接受模型自称"不用审"：
 
 ```
-stackChanges 非空 或 interface 非空  →  必须人批
-两者都空                            →  自动通过，产物仍落库并注入下游
+stackChanges 非空 或 openDecisions 非空 或 interface 非空  →  必须人批
+三者都空                                                  →  自动通过，产物仍落库并注入下游
 ```
 
-理由是这两类恰恰是错了最贵的两类，其余需求不该为此多等一个人。
+前两类是错了最贵的两类：一个是仓库从此背着的依赖，一个是后面每张卡都会照抄的界面。
+`openDecisions` 同列，是因为一个自动通过的提问等于一个没人回答的提问（2026-09-17 实现时补入）。
+其余需求不该为此多等一个人。自动通过同样记一条 `source = auto` 的确认事件，页面与审计都说得出是谁放行的。
 
 ### 2.3 反向兜底：卡不得自己引入技术栈
 
@@ -177,7 +179,7 @@ CREATE TABLE IF NOT EXISTS requirement_solutions (
 
 每片可独立合入、独立回滚：
 
-1. **状态机与产物**：`SOLUTION` 状态、`requirement_solutions` 表、SOLUTION phase 与 prompt、确定性停人条件（§2.2）、注入点。此片先不产界面契约。
+1. **状态机与产物**：`SOLUTION` 状态、`requirement_solutions` 表、SOLUTION phase 与 prompt、确定性停人条件（§2.2）、方案注入需求拆解。此片先不产界面契约。人批的手势同时落地（看板新增「方案待确认」列、拖列与评论两条路），否则这一片一上线就会把需求堵在一个没人能通过的关上。
 2. **界面契约三件套**：`docs/prototype/` 形态、原型自动截图、注入内容与确定性排序。
 3. **Notion 方案区段**：页面骨架、截图上传、to_do 回读、`approve_solution` 意图、看板新列。文案全部进 `display-text.json`，过 `notion-write-language.test.ts`。
 4. **反向兜底**：SHAPE 的 `interface = null` 检查、CODE 出口的依赖清单检查、目标目录为空时不并行。

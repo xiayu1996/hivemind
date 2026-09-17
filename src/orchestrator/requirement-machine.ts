@@ -3,6 +3,7 @@ import type { TransitionActor } from "./state-machine.js";
 export type RequirementState =
   | "CLARIFY"
   | "PRD_CONFIRM"
+  | "SOLUTION"
   | "DECOMPOSING"
   | "EXECUTING"
   | "ACCEPTANCE"
@@ -13,12 +14,19 @@ export type RequirementState =
 /**
  * The requirement layer sits above the Epic machine (03 doc section 7.1).
  * Waiting on a human answer is not a state of its own: the requirement stays in
- * CLARIFY / PRD_CONFIRM / ACCEPTANCE while the person responds, mirroring how a
+ * CLARIFY / PRD_CONFIRM / SOLUTION / ACCEPTANCE while the person responds, mirroring how a
  * Story waits inside blocking_question semantics rather than a new stop kind.
  */
 export const REQUIREMENT_TRANSITIONS: Record<RequirementState, readonly RequirementState[]> = {
   CLARIFY: ["PRD_CONFIRM", "FAILED"],
-  PRD_CONFIRM: ["CLARIFY", "DECOMPOSING", "FAILED"],
+  // An approved PRD says what to build, not what to build it with. SOLUTION is
+  // where the stack and, for a requirement with an interface, the interface
+  // contract are decided once for every card that follows (design 08).
+  PRD_CONFIRM: ["CLARIFY", "SOLUTION", "FAILED"],
+  // Back to PRD_CONFIRM because a solution can only be written against a
+  // requirement that holds still: when the person reads the approach and
+  // changes what they want, the PRD is what changed.
+  SOLUTION: ["PRD_CONFIRM", "DECOMPOSING", "FAILED"],
   DECOMPOSING: ["EXECUTING", "FAILED"],
   EXECUTING: ["ACCEPTANCE", "FAILED"],
   ACCEPTANCE: ["DONE", "DECOMPOSING", "FAILED"],

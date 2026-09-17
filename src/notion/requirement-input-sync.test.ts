@@ -110,14 +110,33 @@ describe("NotionRequirementInputSync", () => {
     await expect(sync.pollComments(REQUIREMENT_ID)).resolves.toMatchObject({ revisionRequested: false, prdConfirmed: false });
   });
 
-  it("reads a drag to the decomposition column as PRD approval", async () => {
+  it("reads a drag out of PRD confirmation as PRD approval", async () => {
     await sync.pollProperties(REQUIREMENT_ID);
-    status = "拆解执行中";
+    status = "方案待确认";
     await expect(sync.pollProperties(REQUIREMENT_ID)).resolves.toMatchObject({ intent: "approve_prd", applied: true });
     await expect(store.getPrd(REQUIREMENT_ID)).resolves.toMatchObject({ status: "confirmed" });
     const row = (await client.execute("SELECT notion_status_shadow, human_wins_until FROM requirements")).rows[0];
-    expect(row?.notion_status_shadow).toBe("拆解执行中");
+    expect(row?.notion_status_shadow).toBe("方案待确认");
     expect(Number(row?.human_wins_until)).toBeGreaterThan(MINUTE + 50_000);
+  });
+
+  it("reads a drag out of solution confirmation as the approval of that solution", async () => {
+    await store.transition(REQUIREMENT_ID, "PRD_CONFIRM", "SOLUTION", "system", "run-handover");
+    await store.saveDraftSolution(REQUIREMENT_ID, JSON.stringify({
+      approach: { summary: "沿用现有服务端。", alternatives: [] },
+      stackChanges: [],
+      openDecisions: [{ question: "手机优先吗？", recommendation: "是" }],
+      qualityGates: [],
+      interface: null,
+    }), "run-solution");
+    status = "方案待确认";
+    await sync.pollProperties(REQUIREMENT_ID);
+
+    status = "拆解执行中";
+    await expect(sync.pollProperties(REQUIREMENT_ID)).resolves.toMatchObject({
+      intent: "approve_solution", applied: true,
+    });
+    await expect(store.getSolution(REQUIREMENT_ID)).resolves.toMatchObject({ status: "confirmed" });
   });
 
   it("parks on a drag to the parked column and restores exactly the state it left", async () => {
@@ -133,7 +152,8 @@ describe("NotionRequirementInputSync", () => {
   describe("under acceptance", () => {
     beforeEach(async () => {
       await store.confirmPrd(REQUIREMENT_ID, 1, "approve", "comment", "run");
-      await store.transition(REQUIREMENT_ID, "PRD_CONFIRM", "DECOMPOSING", "system", "run");
+      await store.transition(REQUIREMENT_ID, "PRD_CONFIRM", "SOLUTION", "system", "run");
+    await store.transition(REQUIREMENT_ID, "SOLUTION", "DECOMPOSING", "system", "run");
       await store.transition(REQUIREMENT_ID, "DECOMPOSING", "EXECUTING", "system", "run");
       await client.execute({
         sql: `INSERT INTO epics (id, notion_page_id, title, state, requirement_id, created_at, updated_at)

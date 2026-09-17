@@ -29,18 +29,21 @@ export function requirementStatusFor(state: RequirementState, clarifyRounds: num
     case "PRD_CONFIRM": {
       return STATUS[2]!;
     }
-    case "DECOMPOSING":
-    case "EXECUTING": {
+    case "SOLUTION": {
       return STATUS[3]!;
     }
-    case "ACCEPTANCE": {
+    case "DECOMPOSING":
+    case "EXECUTING": {
       return STATUS[4]!;
     }
-    case "DONE": {
+    case "ACCEPTANCE": {
       return STATUS[5]!;
     }
-    default: {
+    case "DONE": {
       return STATUS[6]!;
+    }
+    default: {
+      return STATUS[7]!;
     }
   }
 }

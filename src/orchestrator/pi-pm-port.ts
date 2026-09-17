@@ -8,6 +8,8 @@ import { jsonPayloadCandidates } from "../util/json-payload.js";
 import type { ClarifyPort, ClarifyRequest, ClarifyRound } from "./clarify-loop.js";
 import { humanQuestionInputSchema, questionLines } from "./human-question.js";
 import type { PrdPort, PrdRequest } from "./prd-runner.js";
+import type { SolutionPort, SolutionRequest } from "./solution-runner.js";
+import type { SolutionBody, SolutionCandidate } from "./requirement-solution.js";
 import type { RequirementDecomposePort, RequirementDecomposeRequest } from "./requirement-decompose.js";
 import type {
   ClarificationCandidate,
@@ -32,6 +34,29 @@ const prdSchema = z.object({
     then: z.string().min(1),
   }).strict()),
   openQuestions: z.array(z.string()).optional(),
+}).strict();
+
+const solutionSchema = z.object({
+  approach: z.object({
+    summary: z.string(),
+    alternatives: z.array(z.object({ option: z.string(), reason: z.string() }).strict()).optional(),
+  }).strict(),
+  stackChanges: z.array(z.object({
+    kind: z.enum(["added", "upgraded", "removed"]),
+    name: z.string(),
+    reason: z.string(),
+    impact: z.string(),
+  }).strict()).optional(),
+  openDecisions: z.array(z.object({ question: z.string(), recommendation: z.string() }).strict()).optional(),
+  qualityGates: z.array(z.object({
+    name: z.string(),
+    command: z.array(z.string()),
+    covers: z.string(),
+  }).strict()).optional(),
+  interface: z.object({
+    kind: z.enum(["web", "mobile", "desktop"]),
+    pages: z.array(z.object({ name: z.string(), purpose: z.string() }).strict()),
+  }).strict().nullable().optional(),
 }).strict();
 
 const decompositionSchema = z.object({
@@ -75,14 +100,20 @@ export interface SessionUsage {
  * manager that edited the tree would be doing the work it is supposed to be
  * describing.
  */
-export class PiPmPort implements ClarifyPort, PrdPort, RequirementDecomposePort {
+export class PiPmPort implements ClarifyPort, PrdPort, SolutionPort, RequirementDecomposePort {
   constructor(private readonly options: PiPmPortOptions) {}
 
   async run(input: ClarifyRequest): Promise<ClarificationCandidate>;
   async run(input: PrdRequest): Promise<PrdCandidate>;
+  async run(input: SolutionRequest): Promise<SolutionCandidate>;
   async run(input: RequirementDecomposeRequest): Promise<RequirementDecompositionCandidate>;
-  async run(input: ClarifyRequest | PrdRequest | RequirementDecomposeRequest): Promise<unknown> {
+  async run(
+    input: ClarifyRequest | PrdRequest | SolutionRequest | RequirementDecomposeRequest,
+  ): Promise<unknown> {
     if ("maxQuestions" in input) return this.session("CLARIFY", clarifyPrompt(input), clarificationSchema);
+    // The solution is the only request that names a repository: what it may
+    // keep or change is that repository's stack.
+    if ("repository" in input) return this.session("SOLUTION", solutionPrompt(input), solutionSchema);
     if ("revisionFeedback" in input) return this.session("PRD", prdPrompt(input), prdSchema);
     return this.session("REQUIREMENT_DECOMPOSE", decomposePrompt(input), decompositionSchema);
   }
@@ -184,9 +215,56 @@ function prdPrompt(input: PrdRequest): string {
   return `${parts.join("\n\n")}\n`;
 }
 
+function scenarioLines(scenarios: readonly { id: string; given: string; when: string; then: string }[]): string[] {
+  // oxlint-disable-next-line unicorn/no-thenable -- Given/When/Then is the external PRD contract.
+  return scenarios.map((scenario) => `- ${scenario.id}: 给定 ${scenario.given}，当 ${scenario.when}，则 ${scenario.then}`);
+}
+
+function solutionPrompt(input: SolutionRequest): string {
+  const parts = [
+    `需求 id: ${input.requirementId}`,
+    `需求标题: ${input.title}`,
+    `目标仓库: ${input.repository}`,
+    `## 已确认的业务目标\n\n${input.businessGoal.trim()}`,
+    ...(input.nonGoals.length > 0
+      ? [`## 本次明确不做\n\n${input.nonGoals.map((entry) => `- ${entry}`).join("\n")}`]
+      : []),
+    `## 要支撑的场景\n\n${scenarioLines(input.scenarios).join("\n")}`,
+  ];
+  if (input.revisionFeedback.length > 0) {
+    const rows = input.revisionFeedback.map((entry) => `- ${entry}`);
+    parts.push(`## 提需求的人要求修改的地方\n\n必须逐条落进新版方案:\n\n${rows.join("\n")}`);
+  }
+  parts.push(...rejections(input.previousRejections));
+  parts.push([
+    "只输出一个 JSON 对象，不要附加解释。字段:",
+    "approach{summary, alternatives[{option, reason}]}, stackChanges[{kind, name, reason, impact}],",
+    "openDecisions[{question, recommendation}], qualityGates[{name, command[], covers}], interface",
+    "不涉及界面时 interface 写 null；沿用现有技术栈时 stackChanges 写空数组。",
+  ].join("\n"));
+  return `${parts.join("\n\n")}\n`;
+}
+
+/**
+ * What the approved solution binds the split to. Rendered from the stored body
+ * in a fixed order so the same state produces the same prompt bytes.
+ */
+function solutionSection(solution: SolutionBody | null): string[] {
+  if (!solution) return [];
+  const lines = [`做法: ${solution.approach.summary}`];
+  for (const change of solution.stackChanges) {
+    lines.push(`技术栈变动: ${change.kind} ${change.name} — ${change.reason}`);
+  }
+  if (solution.interface) {
+    lines.push(`界面: ${solution.interface.kind}，共 ${solution.interface.pages.length} 个页面`);
+    for (const page of solution.interface.pages) lines.push(`- ${page.name}: ${page.purpose}`);
+    lines.push("这条需求有界面，按页面与流程切 Epic，不要按功能名词切。");
+  }
+  return [`## 已确认的技术方案\n\n${lines.join("\n")}`];
+}
+
 function decomposePrompt(input: RequirementDecomposeRequest): string {
-  const scenarios = input.scenarios
-    .map((scenario) => `- ${scenario.id}: 给定 ${scenario.given}，当 ${scenario.when}，则 ${scenario.then}`);
+  const scenarios = scenarioLines(input.scenarios);
   const parts = [
     `需求 id: ${input.requirementId}`,
     `需求标题: ${input.title}`,
@@ -194,6 +272,7 @@ function decomposePrompt(input: RequirementDecomposeRequest): string {
     ...(input.nonGoals.length > 0
       ? [`## 本次明确不做\n\n${input.nonGoals.map((entry) => `- ${entry}`).join("\n")}`]
       : []),
+    ...solutionSection(input.solution),
     `## 必须全部覆盖的场景\n\n${scenarios.join("\n")}`,
     ...rejections(input.previousRejections),
     [

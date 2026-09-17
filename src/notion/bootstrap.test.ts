@@ -5,6 +5,7 @@ import {
   bootstrapNotion,
   bootstrapRequirements,
   seedRepositoryOptions,
+  seedStatusOptions,
   upgradeEpicBoard,
   upgradeRequirementBoard,
   upgradeStoryBoard,
@@ -215,6 +216,29 @@ describe("seedRepositoryOptions", () => {
 
     await expect(seedRepositoryOptions(client, "requirements-ds", ["acme/widget"])).resolves.toEqual([]);
     expect(updates).toEqual([]);
+  });
+
+  it("adds a status column the board predates, without touching the ones in use", async () => {
+    const updates: Array<Record<string, unknown>> = [];
+    const live = schema.options.requirementStatus
+      .filter((name) => name !== "方案待确认")
+      .map((name, index) => ({ id: `s-${index}`, name }));
+    const client = {
+      databases: { create: async () => { throw new Error("nothing is created"); }, retrieve: async () => { throw new Error("unexpected"); } },
+      dataSources: {
+        retrieve: async () => ({
+          properties: {
+            [schema.propertyNames.requirementStatus]: { type: "select", select: { options: live } },
+          },
+        }),
+        update: async (input: any) => { updates.push(input); return { id: "ds-1" }; },
+      },
+    } as unknown as Pick<Client, "databases" | "dataSources" | "pages">;
+
+    await expect(seedStatusOptions(client, "requirements-ds")).resolves.toEqual(["方案待确认"]);
+    const sent = (updates[0]!.properties as any)[schema.propertyNames.requirementStatus].select.options;
+    expect(sent.filter((option: any) => option.name)).toEqual([{ name: "方案待确认" }]);
+    expect(sent.filter((option: any) => option.id)).toHaveLength(live.length);
   });
 
   it("adds the target repository column to a Requirements board that predates it", async () => {

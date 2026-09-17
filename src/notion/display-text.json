@@ -28,6 +28,7 @@
     "requirement": {
       "CLARIFY": "澄清中",
       "PRD_CONFIRM": "PRD 待确认",
+      "SOLUTION": "方案待确认",
       "DECOMPOSING": "拆解中",
       "EXECUTING": "拆解执行中",
       "ACCEPTANCE": "待验收",

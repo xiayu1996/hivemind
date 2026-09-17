@@ -13,13 +13,22 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface RequirementPropertyPollResult {
   requirementId: string;
-  intent: "initialized" | "none" | "approve_prd" | "accept" | "park" | "resume" | "unsupported_property_change";
+  intent:
+    | "initialized"
+    | "none"
+    | "approve_prd"
+    | "approve_solution"
+    | "accept"
+    | "park"
+    | "resume"
+    | "unsupported_property_change";
   applied: boolean;
 }
 
 export interface RequirementCommentPollResult {
   ingested: number;
   prdConfirmed: boolean;
+  solutionConfirmed: boolean;
   revisionRequested: boolean;
   /** A person answered a stopped requirement; the loop may pick it up again. */
   resumed: boolean;
@@ -98,6 +107,13 @@ export class NotionRequirementInputSync {
           requirementId, prd.revision, `notion-property:${requirementId}:${randomUUID()}`, "drag", runId(requirementId),
         );
       }
+    } else if (intent.type === "approve_solution") {
+      const solution = await this.store.getSolution(requirementId);
+      if (solution?.status === "draft") {
+        applied = await this.store.confirmSolution(
+          requirementId, solution.revision, `notion-property:${requirementId}:${randomUUID()}`, "drag", runId(requirementId),
+        );
+      }
     } else if (intent.type === "accept") {
       // Dragging the whole card to accepted is a verdict on every scenario
       // still waiting for one.
@@ -133,7 +149,11 @@ export class NotionRequirementInputSync {
     await this.comments.registerPage(pageId, anchors);
     const polled = await this.comments.pollPage(pageId);
     const result: RequirementCommentPollResult = {
-      ingested: polled.inserted, prdConfirmed: false, revisionRequested: false, resumed: false,
+      ingested: polled.inserted,
+      prdConfirmed: false,
+      solutionConfirmed: false,
+      revisionRequested: false,
+      resumed: false,
     };
 
     if (requirement.stopReason) {
@@ -141,37 +161,68 @@ export class NotionRequirementInputSync {
       return result;
     }
 
+    // The PRD and the solution are read the same way: one draft on the page,
+    // an approval that ends the reading, and everything else travelling
+    // together into the rewrite.
     if (requirement.state === "PRD_CONFIRM") {
-      const draft = (await this.client.execute({
-        sql: `SELECT revision, created_at FROM requirement_prds
-              WHERE requirement_id = ? AND status = 'draft' ORDER BY revision DESC LIMIT 1`,
-        args: [requirementId],
-      })).rows[0];
-      if (!draft) return result;
-      const revision = Number(draft.revision);
-      const unclaimed = await this.unclaimedComments(pageId, Number(draft.created_at));
-      const revisions: Array<{ id: string; body: string }> = [];
-      for (const comment of unclaimed) {
-        const intent = interpretRequirementComment("PRD_CONFIRM", comment.body);
-        if (intent.type === "approve_prd" && revisions.length === 0) {
-          result.prdConfirmed = await this.store.confirmPrd(requirementId, revision, comment.id, "comment", runId(requirementId));
-          break;
-        }
-        if (intent.type === "request_revision") revisions.push({ id: comment.id, body: intent.body });
-      }
-      if (!result.prdConfirmed && revisions.length > 0) {
-        // Everything the person wrote about this draft travels together into
-        // the rewrite; one comment superseding the draft must not drop the rest.
-        const [first, ...rest] = revisions;
-        result.revisionRequested = await this.store.requestPrdRevision(
-          requirementId, revision, revisions.map((item) => item.body).join("\n"), first!.id, "comment", runId(requirementId),
-        );
-        for (const item of rest) await this.store.claimApprovalEvent(requirementId, item.id, "prd_revision", "comment");
-      }
+      const verdict = await this.readDraftVerdict(requirementId, pageId, "PRD_CONFIRM");
+      result.prdConfirmed = verdict.confirmed;
+      result.revisionRequested = verdict.revisionRequested;
+      return result;
+    }
+    if (requirement.state === "SOLUTION") {
+      const verdict = await this.readDraftVerdict(requirementId, pageId, "SOLUTION");
+      result.solutionConfirmed = verdict.confirmed;
+      result.revisionRequested = verdict.revisionRequested;
       return result;
     }
 
     return result;
+  }
+
+  private async readDraftVerdict(
+    requirementId: string,
+    pageId: string,
+    state: "PRD_CONFIRM" | "SOLUTION",
+  ): Promise<{ confirmed: boolean; revisionRequested: boolean }> {
+    const prd = state === "PRD_CONFIRM";
+    const draft = (await this.client.execute({
+      sql: prd
+        ? `SELECT revision, created_at FROM requirement_prds
+             WHERE requirement_id = ? AND status = 'draft' ORDER BY revision DESC LIMIT 1`
+        : `SELECT revision, created_at FROM requirement_solutions
+             WHERE requirement_id = ? AND status = 'draft' ORDER BY revision DESC LIMIT 1`,
+      args: [requirementId],
+    })).rows[0];
+    if (!draft) return { confirmed: false, revisionRequested: false };
+    const revision = Number(draft.revision);
+    const unclaimed = await this.unclaimedComments(pageId, Number(draft.created_at));
+    const revisions: Array<{ id: string; body: string }> = [];
+    let confirmed = false;
+    for (const comment of unclaimed) {
+      const intent = interpretRequirementComment(state, comment.body);
+      if ((intent.type === "approve_prd" || intent.type === "approve_solution") && revisions.length === 0) {
+        confirmed = prd
+          ? await this.store.confirmPrd(requirementId, revision, comment.id, "comment", runId(requirementId))
+          : await this.store.confirmSolution(requirementId, revision, comment.id, "comment", runId(requirementId));
+        break;
+      }
+      if (intent.type === "request_revision" || intent.type === "request_solution_revision") {
+        revisions.push({ id: comment.id, body: intent.body });
+      }
+    }
+    if (confirmed || revisions.length === 0) return { confirmed, revisionRequested: false };
+    // Everything the person wrote about this draft travels together into the
+    // rewrite; one comment superseding the draft must not drop the rest.
+    const [first, ...rest] = revisions;
+    const body = revisions.map((item) => item.body).join("\n");
+    const revisionRequested = prd
+      ? await this.store.requestPrdRevision(requirementId, revision, body, first!.id, "comment", runId(requirementId))
+      : await this.store.requestSolutionRevision(requirementId, revision, body, first!.id, "comment", runId(requirementId));
+    for (const item of rest) {
+      await this.store.claimApprovalEvent(requirementId, item.id, prd ? "prd_revision" : "solution_revision", "comment");
+    }
+    return { confirmed, revisionRequested };
   }
 
   /**
