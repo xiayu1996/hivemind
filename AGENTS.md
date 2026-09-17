@@ -49,12 +49,14 @@ npm run lint      # oxlint src poc scripts
 npm run typecheck # tsc --noEmit，strict
 npm run build     # tsc 产出 dist/
 npm run db:migrate
-npm run preflight -- --repository-path <repo>   # 就绪探针：pi/凭据/Notion/CLI/systemd/浏览器，不打印任何凭据
+npm run preflight                              # 就绪探针：pi/凭据/Notion/CLI/仓库可达性/systemd/浏览器，不打印任何凭据
 npm run health                                 # 推进探针：卡/Epic/回归/outbox 是否真在动；只有"卡住"才非零退出，"等人"不算
-npm run orchestrator:run -- --repository-path <repo> --repository-id <id>   # Epic/Story 执行常驻
-npm run requirements:run -- --repository-slug <owner/name>                  # 产品经理常驻（与上者共用一库一 outbox）
+npm run orchestrator:run                       # Epic/Story 执行常驻（服务注册表里的全部仓库）
+npm run requirements:run                       # 产品经理常驻（与上者共用一库一 outbox）
 
-deploy/linux/install.sh --repository-path <repo>   # 部署唯一入口，幂等；Ubuntu / Arch(Omarchy) / WSL2 Ubuntu 同一条命令
+npx tsx scripts/repository-add.ts <git-url> [--default-branch main]   # 注册一个仓库并在本机拉出 checkout
+
+deploy/linux/install.sh --repository-url <git-url>   # 部署唯一入口，幂等；Ubuntu / Arch(Omarchy) / WSL2 Ubuntu 同一条命令
 
 npx tsx scripts/catalog-snapshot.ts <provider>   # 采 provider 目录快照（该机需有这家凭据）
 npx tsx scripts/provider-add.ts <provider> ...   # 声明 provider（写 model.providers，等价于在 console 上改）
@@ -73,7 +75,7 @@ npx tsx scripts/replay-phase.ts --card-id <id> --phase CODE --print-prompt      
 Node `>=26`，ESM，包管理用 npm。部署只有 Linux 一条路：Windows 主机跑在 WSL2 Ubuntu 里，不再有原生 Windows 路径。
 `deploy/linux/install.sh` 是唯一入口，每个阶段先查再做，人工步骤（凭据、pi 登录、gh 登录）原地停下、重跑续接；见 [docs/runbooks/linux-single-node.md](docs/runbooks/linux-single-node.md)。
 pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src/runner/pi-binary.ts` 取，shell 经 `node -p` 取，不得再出现字面版本号。
-`scripts/` 只放长期入口（run-* / smoke-* / preflight / health-check / notion-bootstrap / install-pi / pi-login / catalog-snapshot / provider-add / inspect-round / replay-phase）；一次性排障脚本用完即删，不进仓库。
+`scripts/` 只放长期入口（run-* / smoke-* / preflight / health-check / notion-bootstrap / install-pi / pi-login / catalog-snapshot / provider-add / repository-add / inspect-round / replay-phase）；一次性排障脚本用完即删，不进仓库。
 
 ### 本地验证顺序
 
@@ -98,6 +100,8 @@ pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src
 - **全系统只有四类真停点**：`blocking_question`、`verify_loop_exceeded`、`retry_limit_exceeded`、`cost_ceiling_exceeded`（见 03 §1.5，DB CHECK 强制）。新增停点需要改设计文档。
 - **轮次上限管"打转"，费用上限管"敞口"，互不代替**：同样 6 轮内环在 1M 模型上花费差一个数量级，所以 `cost.perCardUsdCeiling` 独立于 `retry.*`，在 phase 边界检查（turn 掐不断，故上限是超支下界而非精确切口），且**订阅额度不计入**——包月的钱花不花卡都一样。哪家算计费由 profile 的 `billing` 决定,不写则按 `authType` 推(api_key=计费 / oauth=订阅),付费型 OAuth 账号必须显式写明;卡跑在订阅 provider 上时 `spend` 端口**不挂**——一个永远回零的端口读起来像上限在生效,而其实什么都没管。费用停点不出诊断、不进反思管道：它对"这活能不能干成"零信息量。
 - **内环收敛判据是"不得重复"**：`failed(N)` 与此前任一轮（回看窗口 `retry.oscillationLookback`）相同即停 `verify_loop_exceeded`——下一轮会是已经跑过的那一轮。换掉一批失败（修好三个、坏掉一个）是进展，照常消耗一轮继续；兜底是轮次预算而不是判据。轮次硬上限（内环 3，含归因到本 Story 的合流打回 / phase 连续崩溃 3，前进即清零 / continue 8 / regression 重开 2）设在离散轮次，不设在时长或 token；内环预算耗尽停 `retry_limit_exceeded`。
+- **加一个仓库也是数据改动**：`repositories` 表只存 slug、clone URL 与默认分支，本机 checkout 路径由 `<workRoot>/repos/<name>` 推出来——路径是单机状态，写进库在第二台机器上就是错的。仓库**永远由 hivemind 自己 clone**，不复用操作者的 checkout（那棵树停在谁的分支上都不一定），主 checkout 保持 detached 以便 worktree 取任意分支。需求卡的「目标仓库」只在注册表里选；选了没注册的就留在看板上不入库，人补一下属性下一轮即被接走。
+
 - **加一个 provider 是数据改动，不是代码改动**：`model.providers`（registry 键，console 可编辑，标了 dangerous）声明每家怎么认证、每档用哪个模型；代码里不出现任何字面 model id。加进 `model.failoverChain` 是另一个决策，分开配、分开审计。
 - **chain 顺序是成本决策：订阅在前、计费 API 在后**。包月的钱花不花都一样，所以订阅能扛的每一轮都是 deepseek 不用出的钱；deepseek 在链上是为了在订阅撞到 usage-limit 窗口时让服务不停，不是分担负载。
 - **大脑档是这条成本序的唯一例外，由 `model.tierFailoverChains` 单独排序**：拆解/设计/界面走查读的是人话、判的是屏幕，这一档最强的模型在前（`gpt-5.6-sol`），便宜的在后。它后面仍挂满整条链——**订阅打满只许降级，不许停工**；全系统唯一能因"没模型可用"停下的原因，是最后那个计费 API 没钱了。per-tier 顺序只能命名 `model.failoverChain` 里的 provider（`assertModelPolicy` 强制），因为链才是发凭据、采错误文案、记熔断状态的那份全集。

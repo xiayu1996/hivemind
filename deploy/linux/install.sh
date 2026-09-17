@@ -4,7 +4,8 @@
 # loop (the product manager). Supports Ubuntu/Debian, Arch-based distributions
 # such as Omarchy, and Ubuntu inside WSL2 on Windows.
 #
-#   deploy/linux/install.sh --repository-path /srv/repo [--repository-id repo] [--repository-slug owner/name]
+#   deploy/linux/install.sh --repository-url https://github.com/acme/widget.git [--default-branch main]
+#   deploy/linux/install.sh --repository-path /srv/repo        # takes the URL from that checkout's origin
 #
 # Idempotent: every stage checks before it acts, so rerun it after a pull, after
 # filling in credentials, or after any interrupted attempt. Stages a person has
@@ -18,35 +19,24 @@ REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 HIVEMIND_HOME="${HIVEMIND_HOME:-$HOME/.hivemind}"
 SECRETS="$HIVEMIND_HOME/secrets.env"
 PROVIDER="${HIVEMIND_PI_PROVIDER:-openai-codex}"
-REPOSITORY_PATH=""
-REPOSITORY_ID=""
-REPOSITORY_SLUG=""
+REPOSITORY_URL=""
+DEFAULT_BRANCH=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --repository-path) REPOSITORY_PATH="$2"; shift 2 ;;
-    --repository-id) REPOSITORY_ID="$2"; shift 2 ;;
-    --repository-slug) REPOSITORY_SLUG="$2"; shift 2 ;;
+    --repository-url) REPOSITORY_URL="$2"; shift 2 ;;
+    --default-branch) DEFAULT_BRANCH="$2"; shift 2 ;;
+    # An operator who already has a checkout names it instead; the URL is the
+    # same fact written down differently, and it is the URL hivemind keeps.
+    --repository-path) REPOSITORY_URL="$(git -C "$2" remote get-url origin)"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 1 ;;
   esac
 done
-if [ -z "$REPOSITORY_PATH" ]; then
-  echo "--repository-path is required: the checkout the agents will work in" >&2
+if [ -z "$REPOSITORY_URL" ]; then
+  echo "--repository-url is required: the clone URL of the repository the agents will work in" >&2
+  echo "(hivemind clones it itself; it never works in an operator's checkout)" >&2
   exit 1
 fi
-REPOSITORY_PATH="$(cd "$REPOSITORY_PATH" && pwd)"
-if [ -z "$REPOSITORY_SLUG" ]; then
-  REMOTE="$(git -C "$REPOSITORY_PATH" remote get-url origin)"
-  REPOSITORY_SLUG="$(echo "${REMOTE%.git}" | sed -E 's#.*[/:]([^/:]+/[^/]+)$#\1#')"
-fi
-case "$REPOSITORY_SLUG" in
-  */*) ;;
-  *)
-    echo "cannot read an owner/name slug from the origin remote; pass --repository-slug owner/name" >&2
-    echo "(cards on the board name the repository by that slug, and only matching cards are dispatched here)" >&2
-    exit 1 ;;
-esac
-REPOSITORY_ID="${REPOSITORY_ID:-${REPOSITORY_SLUG##*/}}"
 
 step() { echo; echo "== $*"; }
 # A stage only a person can finish: say the one thing to do, then stop. Exit 2
@@ -208,13 +198,9 @@ NODE_BIN_DIR="$(dirname "$(command -v node)")"
 cat >"$HIVEMIND_HOME/service.env" <<EOT
 PATH=$NODE_BIN_DIR:/usr/local/bin:/usr/bin:/bin
 HIVEMIND_REPO=$REPO
-HIVEMIND_REPOSITORY_PATH=$REPOSITORY_PATH
-HIVEMIND_REPOSITORY_ID=$REPOSITORY_ID
-HIVEMIND_REPOSITORY_SLUG=$REPOSITORY_SLUG
 HIVEMIND_DB_URL=file:$REPO/data/hivemind.db
 EOT
 chmod 600 "$HIVEMIND_HOME/service.env"
-echo "repository $REPOSITORY_SLUG (id $REPOSITORY_ID) at $REPOSITORY_PATH"
 
 step "systemd user units"
 UNIT_DIR="$HOME/.config/systemd/user"
@@ -254,6 +240,17 @@ if ! "$REVIEW_CLI" auth status >/dev/null 2>&1; then
 fi
 echo "signed in"
 
+step "Repository registry"
+# After the review CLI login, because registering asks the remote for its
+# default branch and that is the first thing the credentials are used for. The
+# gh credential helper is what makes an https clone work without a prompt.
+if [ "$REVIEW_CLI" = "gh" ]; then
+  gh auth setup-git >/dev/null 2>&1 || true
+fi
+if ! (cd "$REPO" && npx tsx scripts/repository-add.ts "$REPOSITORY_URL" ${DEFAULT_BRANCH:+--default-branch "$DEFAULT_BRANCH"}); then
+  waiting "give this host access to $REPOSITORY_URL (gh auth login, or an ssh key), then rerun"
+fi
+
 step "Notion board"
 # Bootstrap is not idempotent on the Notion side (it would create a second board),
 # so it only runs while the ids it produces are absent from the secrets file.
@@ -266,9 +263,12 @@ else
   (cd "$REPO" && npx tsx scripts/notion-bootstrap.ts)
   echo "board views are created by hand once: docs/runbooks/notion-bootstrap.md"
 fi
+# Additive and idempotent: it adds the target repository column to a board that
+# predates it, and one option per registered repository.
+(cd "$REPO" && npx tsx scripts/notion-bootstrap.ts --upgrade-requirements) || true
 
 step "Preflight"
-if ! (cd "$REPO" && npm run --silent preflight -- --repository-path "$REPOSITORY_PATH"); then
+if ! (cd "$REPO" && npm run --silent preflight); then
   echo
   echo "fix the FAIL lines above and rerun this script" >&2
   exit 1

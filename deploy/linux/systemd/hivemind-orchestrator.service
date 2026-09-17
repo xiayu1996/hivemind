@@ -11,7 +11,9 @@ EnvironmentFile=%h/.hivemind/service.env
 EnvironmentFile=-%h/.hivemind/secrets.env
 # @REPO@ is replaced by deploy/linux/install.sh; systemd does not expand variables here.
 WorkingDirectory=@REPO@
-ExecStart=/usr/bin/env npx tsx scripts/run-local-orchestrator.ts --repository-path ${HIVEMIND_REPOSITORY_PATH} --repository-id ${HIVEMIND_REPOSITORY_ID}
+# Which repositories it serves is read from the registry in the central
+# database, not from a flag: registering another one needs no unit change.
+ExecStart=/usr/bin/env npx tsx scripts/run-local-orchestrator.ts
 Restart=always
 RestartSec=10
 # pi sessions and worktrees live under data/; the unit must not be cleaned up by tmpfiles.

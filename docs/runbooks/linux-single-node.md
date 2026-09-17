@@ -18,7 +18,9 @@
 ```sh
 git clone <hivemind> ~/hivemind
 cd ~/hivemind
-deploy/linux/install.sh --repository-path <被开发仓库的本地 checkout>
+deploy/linux/install.sh --repository-url <被开发仓库的 clone URL>
+# 已经有一份 checkout 也行，脚本只从它身上取 origin URL：
+# deploy/linux/install.sh --repository-path <本地 checkout>
 ```
 
 脚本幂等，可反复执行。它按顺序做：识别发行版与 WSL；校验 Node；`npm ci`（lockfile 未变则跳过）；装 Chromium 系统库（apt 走 Playwright 自带清单，Arch 走 pacman `--needed`）；Ubuntu 23.10+ 解除 AppArmor 对用户命名空间的限制并写入 `/etc/sysctl.d/`（否则 Chromium 沙箱报 `No usable sandbox!`，不要用 `--no-sandbox` 绕过）；装 pinned pi（版本在 `package.json` 的 `hivemind.piVersion`，SHA256 校验）；装 `deploy/pi/models.json` 到 `~/.pi/agent/`（hivemind 追加给 pi 的模型声明；已存在且内容不同时原地停下并打 diff，不覆盖手工配置）；装 headless shell；建 `~/.hivemind`、`secrets.env` 模板、`service.env`（systemd 不加载登录 shell，node 路径要写死）；渲染两个 systemd 用户单元。
@@ -47,10 +49,10 @@ deploy/linux/install.sh --repository-path <被开发仓库的本地 checkout>
 安装脚本末尾会跑，也可单独跑：
 
 ```sh
-npm run preflight -- --repository-path <repo>
+npm run preflight
 ```
 
-逐项 PASS/WARN/FAIL：Node、pi 版本、secrets 权限与键、Notion 可达与三库已共享、库迁移与配置断言、failover 链各 provider 凭据与一次真实往返、四个 purpose 档位都有 provider、`gh`/`glab` 已登录、git 身份、仓库 origin、systemd 为 PID 1、内核允许 Chromium 沙箱、headless Chromium 已装。任何 FAIL 都不要启动服务；探针不打印凭据值。
+逐项 PASS/WARN/FAIL：Node、pi 版本、secrets 权限与键、Notion 可达与三库已共享、库迁移与配置断言、failover 链各 provider 凭据与一次真实往返、四个 purpose 档位都有 provider、`gh`/`glab` 已登录、git 身份、每个已注册仓库的远端可达性（`ls-remote` 一次，不打印 userinfo）、systemd 为 PID 1、内核允许 Chromium 沙箱、headless Chromium 已装。任何 FAIL 都不要启动服务；探针不打印凭据值。
 
 **探针查不出的两件事，在第一张卡进 SPECIFY 之前必须自己配上**（都是 per-repo 作用域，探针不查是因为它们没有对错、只有"这个仓库怎么跑"）：
 
@@ -59,11 +61,38 @@ npm run preflight -- --repository-path <repo>
 | `specifyExit.testCommand` | 默认空。SPECIFY **拒绝冻结**——它证不了红，而一份没被测量过的冻结契约比没有契约更糟。本仓库是 `["npx","vitest","run","--reporter=json"]`；出口按 vitest/jest 共用的 JSON reporter 逐字段比对失败，所以必须是 JSON reporter，人读的输出不行 |
 | `codeExit.projectChecks` | 默认空。CODE 出口只剩 commit、证据与标记三项，仓库自己的 lint/typecheck/测试**一条都不跑**，合流复验也拒绝把未检查的合流算通过 |
 
-**这两个键的作用域 id 是仓库 slug（`owner/name`），不是 `--repository-id`。** 编排器按 slug 读（`ConfigStore.load(client, { repository: repositorySlug })`），Story 子进程按卡上的 `stories.repo` 读，也是 slug。写成 `--repository-id` 的值不会报任何错：`ConfigStore` 只查 `global` 与 slug 两个作用域，别的作用域 id 连读都不读——于是配置明明在库里，SPECIFY 出口照旧说"本仓库没声明 testCommand"，而这句话是对的。
+**这两个键的作用域 id 是仓库 slug（`owner/name`），不是 checkout 目录名。** 编排器按卡所属仓库读（`ConfigStore.load(client, { repository: slug })`），Story 子进程按卡上的 `stories.repo` 读，也是 slug。写成别的作用域 id 不会报任何错：`ConfigStore` 只查 `global` 与 slug 两个作用域，别的连读都不读——于是配置明明在库里，SPECIFY 出口照旧说"本仓库没声明 testCommand"，而这句话是对的。
 
 `codeExit.protectedPaths`（生成物目录）与 `codeExit.testPathPatterns`（什么算测试路径）按仓库实际情况酌情补；后者有一套通用默认值，多数仓库不用改。
 
 **换库之后这些配置不会跟着走。** `config_entries` 存在中央库里，按预发布立场重建库（`0001` 改写后旧库自称已迁移却在执行旧约束，探针会 FAIL 并要求重建）会把它们一起清掉——重建后照着上表重新配一遍，否则第一张卡会停在 SPECIFY 出口。
+
+## 3.1 再加一个仓库
+
+```sh
+npx tsx scripts/repository-add.ts <git-url> [--default-branch main]
+```
+
+注册即生效，两个常驻不用重启：编排器每轮开头读一次注册表，新仓库下一轮就进派单范围。脚本自己 clone 到 `data/work/repos/<name>`，并把 slug 加进需求看板与 Story 看板的「目标仓库」选项。
+
+几条约束值得知道：
+
+- **checkout 路径不入库**，由 `<workRoot>/repos/<仓库名>` 推出来——路径是单机状态，写进库在第二台机器上就是错的。同名异 owner（`a/widget` 与 `b/widget`）在注册时就被 `checkout_key` 唯一约束挡掉，不会共用一棵树。
+- **主 checkout 始终 detached**，这样 `git worktree add … main` 永远不会撞上"分支已被占用"。
+- **注册表里有两个及以上仓库之后**，需求卡必须自己选「目标仓库」：没选的卡留在看板上不入库（日志每张卡只提一次），人补上属性下一轮即被接走。直接在 Epics 看板上手写的 Epic 同理——它没有仓库属性，多仓时会被跳过，从需求走一遍即可。
+- **per-repo 配置（`specifyExit.testCommand`、`codeExit.projectChecks` 等）要按新仓库的 slug 再配一遍**，见上一节。
+
+## 3.2 从旧版（`--repository-path`）迁移
+
+旧版把操作者的 checkout 当工作树，unit 的 `ExecStart` 上带着 `--repository-path/--repository-id`。迁移：
+
+```sh
+git -C <旧 checkout> worktree prune          # 旧 worktree 挂在它的 .git 下
+rm -rf data/work/worktrees/<旧 repositoryId>
+deploy/linux/install.sh --repository-path <旧 checkout>   # 取 origin URL 注册，重写两个 unit
+```
+
+`sessions/`、`evidence/` 的目录键仍是仓库名，历史证据原地可用；`config_entries` 的作用域是 slug，不用重录。
 
 ## 4. 运行中
 
