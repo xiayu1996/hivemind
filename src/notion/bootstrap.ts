@@ -367,8 +367,14 @@ export async function upgradeRequirementBoard(
 
 /**
  * Adds any requirement-status column this version writes and the live board
- * does not have yet. Add-only for the same reason as the repository options:
- * removing one blanks the property on every card still in it.
+ * does not have yet, and puts the columns in the order the schema declares.
+ *
+ * Add-only for the same reason as the repository options: removing one blanks
+ * the property on every card still in it, so an option the schema no longer
+ * declares is kept and sorted to the end. The order is part of the payload
+ * because a select's option order is the board's column order, and a new
+ * column appended after the closing ones reads as a state that comes after
+ * them. Options travel by id so that renaming is a rename and not a delete.
  */
 export async function seedStatusOptions(
   client: BootstrapClient,
@@ -379,17 +385,21 @@ export async function seedStatusOptions(
     (await client.dataSources.retrieve({ data_source_id: requirementsDataSourceId }))
       .properties[names.requirementStatus],
   );
-  const missing = schema.options.requirementStatus.filter((name) => !live.some((option) => option.name === name));
-  if (missing.length === 0) return [];
+  const declared = schema.options.requirementStatus;
+  const missing = declared.filter((name) => !live.some((option) => option.name === name));
+  const ordered = [
+    ...declared.map((name) => {
+      const found = live.find((option) => option.name === name);
+      return found ? { id: found.id } : { name };
+    }),
+    ...live.filter((option) => !declared.includes(option.name)).map((option) => ({ id: option.id })),
+  ];
+  const sameOrder = live.length === ordered.length
+    && live.every((option, index) => (ordered[index] as { id?: string }).id === option.id);
+  if (missing.length === 0 && sameOrder) return [];
   await client.dataSources.update({
     data_source_id: requirementsDataSourceId,
-    properties: {
-      [names.requirementStatus]: {
-        select: {
-          options: [...live.map((option) => ({ id: option.id })), ...missing.map((name) => ({ name }))] as never,
-        },
-      },
-    },
+    properties: { [names.requirementStatus]: { select: { options: ordered as never } } },
   });
   return missing;
 }
