@@ -10,13 +10,14 @@ import { alertChannelsFromConfig } from "../src/alert/config.js";
 import { AlertRouter } from "../src/alert/index.js";
 import { alertNeedsInput } from "../src/alert/story-alerts.js";
 import { assertOutOfBandChannel } from "../src/alert/required-channel.js";
-import { diagnoseRetryLimit, mayReenterPhase, renderRetryReport } from "../src/pipeline/retry-limits.js";
+import { diagnoseRetryLimit, renderRetryReport } from "../src/pipeline/retry-limits.js";
 import { ScenarioRegistry } from "../src/regression/scenario-registry.js";
 import { planRegressionSweep } from "../src/regression/scheduler.js";
 import { defaultSecretsPath, loadSecretsFile, upsertSecretFile } from "../src/config/secrets-file.js";
 import { ConfigStore } from "../src/config/store.js";
 import { breakerPolicy, intakeHalted, usableProviders } from "../src/runner/circuit-breaker.js";
 import { classifyError } from "../src/runner/classify.js";
+import { settleDispatchFailure } from "../src/orchestrator/dispatch-failure.js";
 import { assertProviderRetriesDisabled } from "../src/runner/failover.js";
 import { probeProviderReadiness, refreshProviderCredentials } from "../src/runner/auth-probe.js";
 import { assertCredentialRefreshCoverage } from "../src/runner/auth-refresh.js";
@@ -597,52 +598,30 @@ async function main(): Promise<void> {
           env: { ...process.env, HIVEMIND_DB_URL: dbUrl },
         });
       } catch (error) {
-        // The provider's own health is separate from the card's: this records
-        // why the attempt died so the breaker can drop that node of the chain.
-        // A worker that died for reasons the error catalogue does not know
-        // (a defect of ours, a missing binary) says nothing about the provider
-        // and must not open its breaker.
-        // A run this process ended is a cancellation, not an attempt. The card
-        // did nothing wrong and the next start dispatches it again; counting it
-        // would park whatever happened to be in flight every time the service
-        // restarts, which is the reasoning the provider-fault branch below
-        // already applies to an event that is not the card's doing.
-        const signal = (error as { signal?: string | null }).signal;
-        if (stopping || signal === "SIGTERM" || signal === "SIGINT") {
-          console.warn(`Story ${cardId} run was cancelled by this shutdown; it keeps its reentry budget`);
-          return;
-        }
-        const failureMessage = error instanceof Error ? error.message : String(error);
-        const providerFault = classifyError(failureMessage).class !== "UNKNOWN";
-        if (providerFault) {
-          // The worker records the fault against the provider it was actually
-          // running on; this side only knows a provider was at fault, because
-          // the card may have failed over more than once inside that process.
-          // A quota window, a rate limit or an outage says nothing about the
-          // card: the breaker holds dispatch until the provider is back, and
-          // the card simply runs again then. Spending its reentry budget or
-          // parking it would turn a provider event into a stop a person has to
-          // clear by hand.
-          // The breaker's own "intake halted" line is the alert for this; a P0
-          // per attempt would repeat it for every card on every retry.
-          console.warn(`Story ${cardId} attempt ended on a ${classifyError(failureMessage).class} provider fault; it stays ${(await store.getStory(cardId).catch(() => undefined))?.state ?? "as is"} and waits for the breaker`);
-          return;
-        }
-        // The worker already recorded the phase failure. Bound automatic
-        // reentries; which states re-dispatch and why is `mayReenterPhase`.
-        const card = await store.getStory(cardId).catch(() => undefined);
-        if (card && card.state !== "DELIVERED") {
-          await config.reload();
-          const budget = config.get("retry.maxPhaseReentries");
-          await store.recordPhaseReentry(cardId);
-          const reentries = card.phaseReentries + 1;
-          const reenterable = mayReenterPhase(card.state, reentries, budget);
-          if (!reenterable) {
-            await store.stopForInput(cardId, card.state, "retry_limit_exceeded", `reentry-${cardId}`);
-            console.warn(`Story ${cardId} parked after ${reentries} failed attempt(s) in ${card.state}`);
-          } else {
-            console.warn(`Story ${cardId} will re-enter ${card.state} (attempt ${reentries}/${budget})`);
-          }
+        // What a dead run costs the card is one decision, taken in
+        // `decideDispatchFailure`: a run this process killed and a run a
+        // provider killed both say nothing about whether the work can be done,
+        // and only the last two outcomes charge anything. The reason is
+        // written to the card either way, because a card that stops here has
+        // nothing else recorded against it.
+        const decision = await settleDispatchFailure({ store, config, cardId, error, stopping });
+        switch (decision.kind) {
+          case "cancelled":
+            console.warn(`Story ${cardId} run was cancelled by this shutdown; it keeps its reentry budget`);
+            return;
+          case "provider_fault":
+            // The breaker's own "intake halted" line is the alert for this; a
+            // P0 per attempt would repeat it for every card on every retry.
+            console.warn(`Story ${cardId} attempt ended on a ${decision.errorClass} provider fault; it waits for the breaker`);
+            return;
+          case "ignored":
+            break;
+          case "reenter":
+            console.warn(`Story ${cardId} will re-enter ${decision.state} (attempt ${decision.attempt}/${decision.budget})`);
+            break;
+          case "park":
+            console.warn(`Story ${cardId} parked after ${decision.attempt} failed attempt(s) in ${decision.state}`);
+            break;
         }
         throw error;
       }

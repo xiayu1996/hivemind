@@ -116,3 +116,29 @@ export function assertStoryTransition(
   }
   if (!STORY_TRANSITIONS[from].includes(to)) throw new StateTransitionError("Story", from, to);
 }
+
+/**
+ * Where a state sits on the Story's spine. REGRESSION_FIX shares CODE's place:
+ * it is the same kind of work reached from a delivered card, and it leaves the
+ * same way, through VERIFY.
+ */
+const STORY_SPINE: Partial<Record<StoryState, number>> = {
+  QUEUED: 0, SHAPE: 1, DESIGN: 2, SPECIFY: 3, CODE: 4, REGRESSION_FIX: 4, VERIFY: 5, MERGE: 6, DELIVERED: 7,
+};
+
+/**
+ * Whether a transition moves the card along the spine rather than back down it
+ * or off it.
+ *
+ * The crash counter is cleared on one of these, which is what makes it a
+ * per-phase safety net rather than a card-lifetime one: a run that died in
+ * SHAPE says nothing about DESIGN, and counting the two together stopped
+ * S-AGENTRULES-01 on the third failure of its whole life. Stops, parks and the
+ * lanes that send a card backwards are deliberately not forward: a card that
+ * keeps bouncing between two phases is exactly what the counter is for.
+ */
+export function isForwardStoryTransition(from: StoryState, to: StoryState): boolean {
+  const start = STORY_SPINE[from];
+  const end = STORY_SPINE[to];
+  return start !== undefined && end !== undefined && end > start;
+}

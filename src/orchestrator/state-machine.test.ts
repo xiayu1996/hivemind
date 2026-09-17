@@ -5,6 +5,7 @@ import {
   StateTransitionError,
   assertEpicTransition,
   assertStoryTransition,
+  isForwardStoryTransition,
 } from "./state-machine.js";
 
 describe("declared transitions", () => {
@@ -47,5 +48,24 @@ describe("rejection", () => {
   it("allows only a human to restore the state saved before parking", () => {
     expect(() => assertStoryTransition("HUMAN_PARKED", "VERIFY", "human", "VERIFY")).not.toThrow();
     expect(() => assertStoryTransition("HUMAN_PARKED", "CODE", "human", "VERIFY")).toThrow(StateTransitionError);
+  });
+});
+
+describe("isForwardStoryTransition", () => {
+  it.each([
+    ["QUEUED", "SHAPE", true],
+    ["SHAPE", "DESIGN", true],
+    ["SPECIFY", "REGRESSION_FIX", true],
+    ["REGRESSION_FIX", "VERIFY", true],
+    ["MERGE", "DELIVERED", true],
+    ["VERIFY", "CODE", false],
+    ["MERGE", "CODE", false],
+    ["CODE", "SHAPE", false],
+    ["DESIGN", "NEEDS_INPUT", false],
+    ["NEEDS_INPUT", "CODE", false],
+    ["CODE", "HUMAN_PARKED", false],
+    ["DELIVERED", "SPECIFY", false],
+  ] as const)("%s -> %s is forward: %s", (from, to, forward) => {
+    expect(isForwardStoryTransition(from, to)).toBe(forward);
   });
 });
