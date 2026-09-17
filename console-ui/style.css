@@ -168,6 +168,29 @@ p {
   color: var(--muted);
 }
 
+.block {
+  margin-bottom: 14px;
+}
+
+.block:last-child {
+  margin-bottom: 0;
+}
+
+.records {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.records li {
+  margin-bottom: 4px;
+  overflow-wrap: anywhere;
+}
+
+.records .phase {
+  margin-right: 8px;
+}
+
 .notice.error {
   color: var(--failed);
   border-color: var(--failed);

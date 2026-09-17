@@ -64,6 +64,24 @@ export const TEMPLATE = `
             <div class="round-head">
               <h2>第 {{ round.round }} 轮</h2>
             </div>
+            <section class="block">
+              <h3>执行过程</h3>
+              <ul v-if="round.process.length > 0" class="records">
+                <li v-for="(step, index) in round.process" :key="index"><span class="phase">{{ step.phase }}</span>{{ step.summary }}</li>
+              </ul>
+              <p v-else class="muted">这一轮还没有执行过程。</p>
+            </section>
+            <section class="block">
+              <h3>产出</h3>
+              <ul v-if="round.outputs.length > 0" class="records">
+                <li v-for="(output, index) in round.outputs" :key="index"><span class="phase">{{ output.phase }}</span>{{ output.content }}</li>
+              </ul>
+              <p v-else class="muted">这一轮还没有产出。</p>
+            </section>
+            <section class="block">
+              <h3>当前结果</h3>
+              <p>{{ round.currentResult || "这一轮还没有结果。" }}</p>
+            </section>
           </li>
         </ol>
       </template>
