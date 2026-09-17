@@ -2,7 +2,11 @@ import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import type { TaskExecutionDetailDataSource } from "./task-execution-detail.js";
+import {
+  getTaskExecutionDetail,
+  taskExecutionDetailRoute,
+  type TaskExecutionDetailDataSource,
+} from "./task-execution-detail.js";
 
 export interface ConsoleDataSource extends TaskExecutionDetailDataSource {
   nodes(): Promise<unknown[]>;
@@ -56,6 +60,12 @@ export async function createConsoleServer(
   app.get("/api/stats", async () => data.stats());
   app.get("/api/providers", async () => data.providers());
   app.get("/api/queue", async () => data.queue());
+  app.get(taskExecutionDetailRoute, async (request, reply) => {
+    const { taskId } = request.params as { taskId: string };
+    const result = await getTaskExecutionDetail(data, { taskId });
+    if (result.status === 404) return reply.code(404).send(result.body);
+    return result.body;
+  });
 
   const writer = options.configWriter;
   if (writer) {
@@ -95,7 +105,7 @@ export async function createConsoleServer(
     });
     const index = await readFile(join(uiRoot, "index.html"), "utf8");
     app.get("/", async (_request, reply) => reply.type("text/html").send(index));
-    for (const route of ["/nodes", "/tasks", "/costs", "/config", "/stats", "/providers", "/queue"]) {
+    for (const route of ["/nodes", "/tasks", "/tasks/:taskId", "/costs", "/config", "/stats", "/providers", "/queue"]) {
       app.get(route, async (_request, reply) => reply.type("text/html").send(index));
     }
   }
