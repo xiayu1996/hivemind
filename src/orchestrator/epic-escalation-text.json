@@ -9,5 +9,6 @@
     "cost_ceiling_exceeded": "单任务费用超过上限",
     "human_parked": "你把这张卡停靠了",
     "failed": "执行失败"
-  }
+  },
+  "headFailingTemplate": "Epic 分支上「{check}」没通过（{failures}），这不是 Story {stories} 的问题；分支修好后会自动继续。"
 }

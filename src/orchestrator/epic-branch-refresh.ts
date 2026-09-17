@@ -37,9 +37,12 @@ export class EpicBranchFreshness {
     // into a conflict that no part of the system was watching. Dropping the
     // branch the moment its review request opens abandons it in the window
     // where it is most likely to go stale.
+    // BLOCKED as well: an Epic blocked because its own head fails a check is
+    // waiting for exactly the fix that arrives on main, and a branch nobody
+    // refreshes never receives it.
     const epics = (await this.client.execute(
       `SELECT id, integration_branch FROM epics
-        WHERE state IN ('EXECUTING','EPIC_ACCEPT') AND integration_branch IS NOT NULL
+        WHERE state IN ('EXECUTING','EPIC_ACCEPT','BLOCKED') AND integration_branch IS NOT NULL
         ORDER BY created_at, id`,
     )).rows;
     const results: FreshnessResult[] = [];

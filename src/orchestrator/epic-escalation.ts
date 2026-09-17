@@ -1,5 +1,6 @@
 import type { Client } from "@libsql/client";
 import { blockingQuestionStatement } from "./epic-blocker.js";
+import { unrecoveredHeadFailures, type EpicHeadFailure } from "./epic-head-failure.js";
 import type { HumanQuestion } from "./human-question.js";
 import { assertEpicTransition, type StoryStopReason } from "./state-machine.js";
 import text from "./epic-escalation-text.json" with { type: "json" };
@@ -18,7 +19,16 @@ interface ParkedStory {
 const UNKNOWN_STOP = "unknown";
 
 /** The reason line as the event log and operators read it. */
-export function escalationReason(parked: readonly ParkedStory[]): string {
+export function escalationReason(parked: readonly ParkedStory[], headFailure?: EpicHeadFailure): string {
+  if (headFailure) {
+    const stories = parked.map((story) => story.id);
+    const line = `Epic head fails ${headFailure.check}: ${headFailure.failures.join(", ")}`;
+    return [line, ...(stories.length > 0 ? [reasonOfParked(parked)] : [])].join("; ");
+  }
+  return reasonOfParked(parked);
+}
+
+function reasonOfParked(parked: readonly ParkedStory[]): string {
   const byReason = new Map<string, string[]>();
   for (const story of parked) {
     const key = story.stopReason ?? UNKNOWN_STOP;
@@ -31,7 +41,10 @@ export function escalationReason(parked: readonly ParkedStory[]): string {
 
 /** The same fact in the person's words, one line per stop reason, no options:
  * the answer is given on the Story page, not here. */
-export function escalationQuestion(parked: readonly ParkedStory[]): HumanQuestion {
+export function escalationQuestion(
+  parked: readonly ParkedStory[],
+  headFailure?: EpicHeadFailure,
+): HumanQuestion {
   const byReason = new Map<string, string[]>();
   for (const story of parked) {
     const key = story.stopReason ?? UNKNOWN_STOP;
@@ -40,6 +53,15 @@ export function escalationQuestion(parked: readonly ParkedStory[]): HumanQuestio
   const labels = text.stopReasons as Record<string, string | undefined>;
   const lines = [...byReason.entries()].map(([reason, ids]) =>
     text.questionTemplate.replace("{stories}", ids.join(", ")).replace("{reason}", labels[reason] ?? reason));
+  if (headFailure) {
+    // Nothing is asked of the person about the Story: it is finished and the
+    // branch under it is not. Saying so is what keeps somebody from going to
+    // the card and looking for a defect that is not there.
+    lines.unshift(text.headFailingTemplate
+      .replace("{check}", headFailure.check)
+      .replace("{failures}", headFailure.failures.join(", "))
+      .replace("{stories}", headFailure.storyId));
+  }
   return { question: lines.join("\n"), options: [] };
 }
 
@@ -101,14 +123,22 @@ export async function escalateParkedStories(
 ): Promise<EscalationChange[]> {
   const changes: EscalationChange[] = [];
 
+  // Two independent reasons an Epic is not progressing: a Story of its own
+  // that stopped, and its head failing a check nobody's Story can fix.
+  const headFailures = await unrecoveredHeadFailures(client);
   const toBlock = await parkedStoriesByEpic(client, "EXECUTING");
-  for (const [epicId, parked] of toBlock) {
+  for (const epicId of executingEpicsToBlock(toBlock, headFailures, await executingEpics(client))) {
+    const parked = toBlock.get(epicId) ?? [];
+    const headFailure = headFailures.get(epicId);
     assertEpicTransition("EXECUTING", "BLOCKED");
     const storyIds = parked.map((story) => story.id);
-    const question = escalationQuestion(parked);
+    const question = escalationQuestion(parked, headFailure);
     const time = now();
     const runId = `epic:${epicId}`;
-    const data = { from: "EXECUTING", to: "BLOCKED", reason: escalationReason(parked), question, escalation: true, storyIds };
+    const data = {
+      from: "EXECUTING", to: "BLOCKED", reason: escalationReason(parked, headFailure), question, escalation: true, storyIds,
+      ...(headFailure ? { headFailure: { check: headFailure.check, failures: headFailure.failures, storyId: headFailure.storyId } } : {}),
+    };
     const results = await client.batch([
       {
         sql: "UPDATE epics SET state = 'BLOCKED', updated_at = ? WHERE id = ? AND state = 'EXECUTING'",
@@ -129,14 +159,16 @@ export async function escalateParkedStories(
   const stillParked = await parkedStoriesByEpic(client, "BLOCKED");
   for (const row of blocked) {
     const epicId = String(row.id);
-    if (stillParked.has(epicId)) continue;
+    // Both sources have to be clear: a head that is still red would send the
+    // same Story back into a merge that cannot succeed.
+    if (stillParked.has(epicId) || headFailures.has(epicId)) continue;
     const latest = await latestTransition(client, epicId);
     if (latest?.to !== "BLOCKED" || latest.escalation !== true) continue;
     assertEpicTransition("BLOCKED", "EXECUTING");
     const storyIds = Array.isArray(latest.storyIds) ? latest.storyIds.map(String) : [];
     const time = now();
     const runId = `epic:${epicId}`;
-    const data = { from: "BLOCKED", to: "EXECUTING", reason: "parked Stories resumed", escalation: true, storyIds };
+    const data = { from: "BLOCKED", to: "EXECUTING", reason: "the Epic has nothing waiting on a person", escalation: true, storyIds };
     const results = await client.batch([
       {
         sql: "UPDATE epics SET state = 'EXECUTING', updated_at = ? WHERE id = ? AND state = 'BLOCKED'",
@@ -153,4 +185,18 @@ export async function escalateParkedStories(
   }
 
   return changes;
+}
+
+async function executingEpics(client: Client): Promise<string[]> {
+  return (await client.execute("SELECT id FROM epics WHERE state = 'EXECUTING' ORDER BY id")).rows
+    .map((row) => String(row.id));
+}
+
+/** Executing Epics with something to block on, in a stable order. */
+function executingEpicsToBlock(
+  parked: Map<string, ParkedStory[]>,
+  headFailures: Map<string, EpicHeadFailure>,
+  executing: readonly string[],
+): string[] {
+  return executing.filter((epicId) => parked.has(epicId) || headFailures.has(epicId));
 }

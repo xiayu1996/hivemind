@@ -79,6 +79,20 @@ export class EpicIntegrator {
       await this.store.recordMergeConflict(cardId, runId, result.reason);
       return result;
     }
+    if (result.attribution === "baseline_failing") {
+      // The Story is not wrong; the branch it is landing on is. It stays in
+      // MERGE and lands unchanged once the head is green, and the Epic carries
+      // the block in the meantime.
+      await this.store.recordBaselineFailure({
+        cardId,
+        runId,
+        check: result.failedChecks?.[0] ?? "the repository checks",
+        failures: result.failures ?? [],
+        headSha: result.baseRevision ?? "",
+        reason,
+      });
+      return result;
+    }
     await this.store.recordIntegrationRejection(
       cardId,
       runId,

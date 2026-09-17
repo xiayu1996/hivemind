@@ -174,7 +174,9 @@ export interface StorySpecifyGate {
 }
 
 export interface StoryWorkerResult {
-  state: "DELIVERED" | "NEEDS_INPUT" | "CODE";
+  /** MERGE means the Story is finished and waiting on its Epic head, not on
+   * itself: the branch it is landing on is failing a check without it. */
+  state: "DELIVERED" | "NEEDS_INPUT" | "CODE" | "MERGE";
   rounds: number;
   mrUrl: string | null;
   stopReason: "blocking_question" | "verify_loop_exceeded" | "retry_limit_exceeded" | "cost_ceiling_exceeded" | null;
@@ -502,8 +504,12 @@ export class SingleStoryWorker {
           throw new Error(`Story ${cardId} could not be re-verified at merge: ${integrated.reason ?? "the check did not run"}`);
         }
         // An Epic head that was already red is not this Story's round to
-        // spend: no work on this card changes the answer.
-        if (attribution !== "baseline_failing") {
+        // spend and not its state to leave: it stays in MERGE and lands once
+        // the head is green, while the Epic carries the block.
+        if (attribution === "baseline_failing") {
+          return { state: "MERGE", rounds: totalRounds, mrUrl: null, stopReason: null };
+        }
+        {
           const spent = await this.store.getInnerLoopSpend(cardId, story.lastHumanActionAt ?? 0);
           if (spent >= this.maxInnerLoopRounds) {
             const stopRunId = this.createRunId(cardId, "CODE", totalRounds);

@@ -365,6 +365,8 @@ MERGE 阶段保留为"写业务语言交付报告"，报告质量由 §5 的业�
 
 **归因到 Story 的打回走状态机并消耗一轮。** 此前 `returnMergeToCode` 是一条裸 UPDATE：不写 `story.transition`、不计任何预算，于是 MERGE⇄CODE 可以无限来回。修订后打回与 VERIFY 拒绝同属一个内环预算（§1.5），口径由事件给出——`verify_records` 的拒绝行加上 `spent=1` 的合流事件，两者都按"人最后一次动卡"之后计。`conflict` 与 `story_regression` 消耗一轮，`baseline_failing` 与 `environment` 不消耗（前者是 Epic 分支的问题，后者交给崩溃安全网）。
 
+**Epic 头自身红：Story 留在 MERGE，Epic 停牌（D3）。** `baseline_failing` 的处置与前一条相反：Story 不回 CODE、不消耗轮次、状态不变——它已经做完了，红的是它要落上去的分支。失败记在 Epic 上（`epic.head_failing`，卡侧另记 `merge.baseline_failing`），Epic 转 BLOCKED 并在页面写明是哪条检查、哪些测试、以及"这不是这张 Story 的问题"。这条停牌**不是可回答的问题**（`escalation: true`，评论答不动它），因为它只能在分支上修。修复通常来自别处（main、另一个 Epic、宿主机上的人手），没有任何东西会通知我们，所以由 `recheckEpicHeads` 回看：Epic 头 sha 变了、等待中的 Story 有更新的人为动作、或距上次超过 `regression.epicPoolIntervalMs` 时才重跑那条检查，通过即写 `epic.head_recovered`，下个周期解锁、Story 重派并在合流时再验一次。被停牌的 Epic 分支照常从 main 刷新（否则修复永远到不了它的头），而它的 MERGE 卡在头恢复前不再派发——否则每周期都要重跑一遍全量检查再写一条一模一样的拒绝。
+
 ### 8.4 供应商故障不进任何预算
 
 usage limit、限流、超时、传输中断、OAuth 刷新失败只进熔断器：卡原地等待，不计内环、不计重入、不产生停点。三类真停点不变，但只由代码层面的失败触发。CODE 的 prompt 超时改为 checkpoint 续跑，续跑耗尽才算一次失败。熔断探测使用不计费的凭据探针，不再以真派单探测；用量窗口解析不到时指数退避。Notion 上区分"等待供应商"与"需要输入"。OAuth 刷新单点化：多 pi 进程共享一份凭据并发刷新会互相作废旋转令牌。
@@ -443,7 +445,7 @@ Story 页「待人回答」区列出已应用的回答：谁、何时、针对�
 - **需求层停点**：`clearStop` 有了调用者——人的回答清掉 stop 并进入下一轮澄清；需求页渲染停点详情与回答方式，而不是一个枚举词。HUMAN_PARKED 且无 resume_state 不再抛错。EXECUTING 期间 Epic 进度变化重新投影需求页。
 - **MERGE 可重入**：MERGE 阶段失败与 DESIGN/CODE 同样在预算内自动重入；平台瞬时错误不是停牌理由。
 - **重置解冻**：人把 Story 拖回 DESIGN，或冻结 DoD 不再满足当前契约，系统解冻 specs、作废 DESIGN/MERGE 第 1 轮与未验证的 CODE 轮，自动回 DESIGN；不再靠幂等复用把旧结果递回来。（2026-09-14 §12.5 收紧：`dod_version` 变更时，受影响 scenario **已经 accepted 的 VERIFY 与走查结论也一并作废**，"已验过"不是豁免。）
-- **停牌上浮**：任一 Story NEEDS_INPUT，Epic 转 BLOCKED 并在 Epic 页写明哪张卡停在什么原因；全部恢复后自动回 EXECUTING。这种 BLOCKED 不能被评论「回答」成重新拆解。
+- **停牌上浮**：任一 Story NEEDS_INPUT，Epic 转 BLOCKED 并在 Epic 页写明哪张卡停在什么原因；全部恢复后自动回 EXECUTING。这种 BLOCKED 不能被评论「回答」成重新拆解。2026-09-17 增补第二个来源：Epic 头自身某条检查红（`epic_head_failing`，见 §8.3），文案写明「这不是 Story X 的问题」；两个来源都清空才解锁。
 - **回归环路接通**：sweep 传 probe worktree，归因能跑；`regression_cards` 有 resolve 语义；REGRESSION_FIX 是可运行的 phase（见 tasks IT-2x）。
 - **outbox 死信**：每行计 attempts，超过上限转 dead 并保留错误；周期日志报 failed/dead 计数，`inspect` 可列死信。
 

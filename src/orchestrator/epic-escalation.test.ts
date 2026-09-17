@@ -33,6 +33,27 @@ async function transitions(id: string): Promise<Record<string, unknown>[]> {
   return rows.map((row) => JSON.parse(String(row.data)) as Record<string, unknown>);
 }
 
+async function headFailing(epicId: string, storyId: string, ts = 50): Promise<void> {
+  await client.execute({
+    sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
+          VALUES (?, (SELECT COALESCE(MAX(seq), -1) + 1 FROM event_log WHERE run_id = ?),
+                  NULL, NULL, 'epic.head_failing', ?, ?)`,
+    args: [`epic:${epicId}`, `epic:${epicId}`, ts, JSON.stringify({
+      storyId, headSha: "beef2", check: "npm test",
+      failures: ["src/runner/catalog-snapshot.test.ts > deepseek"],
+    })],
+  });
+}
+
+async function headRecovered(epicId: string, ts = 60): Promise<void> {
+  await client.execute({
+    sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
+          VALUES (?, (SELECT COALESCE(MAX(seq), -1) + 1 FROM event_log WHERE run_id = ?),
+                  NULL, NULL, 'epic.head_recovered', ?, ?)`,
+    args: [`epic:${epicId}`, `epic:${epicId}`, ts, JSON.stringify({ check: "npm test", headSha: "cafe3" })],
+  });
+}
+
 beforeEach(async () => {
   client = createClient({ url: ":memory:" });
   await migrate(client);
@@ -140,5 +161,67 @@ describe("answerBlocker on an escalated Epic", () => {
     expect(await answerBlocker(client, "E1", "comment-1", "just keep going", () => 2_000)).toBe(false);
     expect(await epicState("E1")).toBe("BLOCKED");
     expect((await client.execute("SELECT COUNT(*) AS n FROM epic_approval_events")).rows[0]?.n).toBe(0);
+  });
+});
+
+describe("an Epic head that is failing on its own", () => {
+  it("blocks the Epic and says whose problem it is not", async () => {
+    await epic("E1", "EXECUTING");
+    await story("S-E1-01", "E1", "MERGE");
+    await headFailing("E1", "S-E1-01");
+
+    const changes = await escalateParkedStories(client, () => 100);
+
+    expect(changes).toEqual([{ epicId: "E1", storyIds: [], kind: "blocked" }]);
+    expect(await epicState("E1")).toBe("BLOCKED");
+    const [transition] = await transitions("E1");
+    expect(String(transition?.reason)).toContain("catalog-snapshot");
+    const question = String((transition!.question as { question: string }).question);
+    expect(question).toContain("npm test");
+    expect(question).toContain("S-E1-01");
+    // The Story is not asked about, because there is nothing to ask: it is
+    // finished and the branch under it is not.
+    expect(await epicState("E1")).toBe("BLOCKED");
+  });
+
+  it("keeps the Epic blocked until the head is green, then lets it continue", async () => {
+    await epic("E1", "EXECUTING");
+    await story("S-E1-01", "E1", "MERGE");
+    await headFailing("E1", "S-E1-01");
+    await escalateParkedStories(client, () => 100);
+
+    expect(await escalateParkedStories(client, () => 110)).toEqual([]);
+    expect(await epicState("E1")).toBe("BLOCKED");
+
+    await headRecovered("E1", 120);
+    expect(await escalateParkedStories(client, () => 130))
+      .toEqual([{ epicId: "E1", storyIds: [], kind: "unblocked" }]);
+    expect(await epicState("E1")).toBe("EXECUTING");
+  });
+
+  it("will not unblock an Epic whose head is green but whose Story still waits for a person", async () => {
+    await epic("E1", "EXECUTING");
+    await story("S-E1-01", "E1", "MERGE");
+    await story("S-E1-02", "E1", "NEEDS_INPUT", "blocking_question");
+    await headFailing("E1", "S-E1-01");
+    await escalateParkedStories(client, () => 100);
+    await headRecovered("E1", 120);
+
+    expect(await escalateParkedStories(client, () => 130)).toEqual([]);
+    expect(await epicState("E1")).toBe("BLOCKED");
+  });
+
+  it("refuses to let a comment answer a head failure into a redecomposition", async () => {
+    await epic("E1", "EXECUTING");
+    await story("S-E1-01", "E1", "MERGE");
+    await headFailing("E1", "S-E1-01");
+    await escalateParkedStories(client, () => 100);
+
+    const block = await latestBlock(client, "E1");
+    expect(block?.escalation).toBe(true);
+    // An escalation is not a question anybody may answer: the head failure is
+    // fixed on the branch, not by redecomposing the Epic.
+    await expect(answerBlocker(client, "E1", "comment-1", "把它拆小一点", () => 140)).resolves.toBe(false);
+    expect(await epicState("E1")).toBe("BLOCKED");
   });
 });
