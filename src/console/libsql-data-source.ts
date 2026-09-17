@@ -4,10 +4,60 @@ import { ProjectionRegistry } from "../observability/projections/registry.js";
 import { renderTraceHtml } from "../observability/projections/trace-html.js";
 import { traceProjection } from "../observability/projections/units.js";
 import { summarizeFootprintDeviation } from "../orchestrator/footprint-deviation.js";
+import {
+  projectTaskExecutionDetail,
+  type TaskExecutionDetail,
+  type TaskExecutionOutput,
+  type TaskRoundObservation,
+} from "./task-execution-detail.js";
 import type { ConsoleDataSource } from "./server.js";
 
 function plain(row: Row): Record<string, unknown> {
   return Object.fromEntries(Object.entries(row));
+}
+
+interface StoredVerification {
+  verdict: "accepted" | "rejected" | "inconclusive";
+  reasons: string[];
+  validationErrors: string[];
+}
+
+/** The verifier's own account, when it wrote structured JSON; a verifier that
+ * never reached a document recorded no structured reason. */
+function readVerification(body: string): { reasons: string[]; validationErrors: string[] } {
+  let parsed: { reasons?: Array<{ reason?: unknown }>; validationErrors?: unknown };
+  try {
+    parsed = JSON.parse(body) as typeof parsed;
+  } catch {
+    return { reasons: [], validationErrors: [] };
+  }
+  const reasons = (parsed.reasons ?? [])
+    .map((item) => (typeof item?.reason === "string" ? item.reason : ""))
+    .filter((reason) => reason !== "");
+  const validationErrors = Array.isArray(parsed.validationErrors)
+    ? parsed.validationErrors.filter((item): item is string => typeof item === "string" && item !== "")
+    : [];
+  return { reasons, validationErrors };
+}
+
+/**
+ * A failed round must show the reason the store holds, never a placeholder.
+ * The verifier's own wording is preferred; a phase run's failure text is the
+ * fallback. When neither exists the snapshot is refused rather than dressed up.
+ */
+function toVerification(
+  stored: StoredVerification,
+  phaseFailure: string | undefined,
+): NonNullable<TaskRoundObservation["verification"]> {
+  const detail = stored.reasons.join("; ") || stored.validationErrors.join("; ");
+  if (stored.verdict === "accepted") {
+    return { verdict: "accepted", result: detail || stored.verdict };
+  }
+  const failureReason = detail || phaseFailure;
+  if (failureReason === undefined || failureReason === "") {
+    throw new Error(`verification round was ${stored.verdict} without a persisted reason`);
+  }
+  return { verdict: stored.verdict, result: failureReason, failureReason };
 }
 
 export class LibsqlConsoleDataSource implements ConsoleDataSource {
@@ -137,5 +187,95 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
     )).rows.map((row) => Object.assign(plain(row), {
       value: JSON.parse(String(row.value_json)),
     }));
+  }
+
+  /**
+   * One task's whole execution history, from the central store alone. Every
+   * round the card has is grouped once, oldest first, with the phase runs as
+   * its process, the artifacts as its outputs and the verification (or latest
+   * progress) as its current result. The query is scoped by card id, so a
+   * neighbouring task's rows can never enter the snapshot.
+   */
+  async taskExecutionDetail(taskId: string): Promise<TaskExecutionDetail | null> {
+    const story = (await this.client.execute({
+      sql: "SELECT id, title FROM stories WHERE id = ?",
+      args: [taskId],
+    })).rows[0];
+    if (story === undefined) return null;
+
+    const [runs, artifacts, verifications] = await Promise.all([
+      this.client.execute({
+        sql: `SELECT run_id, phase, round, status, failure, started_at, ended_at
+                FROM phase_runs WHERE card_id = ? ORDER BY round, started_at, run_id`,
+        args: [taskId],
+      }),
+      this.client.execute({
+        sql: `SELECT run_id, phase, round, kind, body, created_at
+                FROM phase_artifacts WHERE card_id = ? ORDER BY created_at, id`,
+        args: [taskId],
+      }),
+      this.client.execute({
+        sql: "SELECT round, verdict FROM verify_records WHERE card_id = ? ORDER BY round",
+        args: [taskId],
+      }),
+    ]);
+
+    const outputsByRun = new Map<string, TaskExecutionOutput[]>();
+    for (const row of artifacts.rows) {
+      const runId = String(row.run_id);
+      const outputs = outputsByRun.get(runId) ?? [];
+      outputs.push({
+        phase: String(row.phase),
+        kind: String(row.kind),
+        content: String(row.body),
+        createdAt: Number(row.created_at),
+      });
+      outputsByRun.set(runId, outputs);
+    }
+
+    const failureByRound = new Map<number, string>();
+    for (const row of runs.rows) {
+      if (String(row.status) !== "failed" || row.failure === null) continue;
+      failureByRound.set(Number(row.round), String(row.failure));
+    }
+
+    const verificationByRound = new Map<number, StoredVerification>();
+    for (const row of verifications.rows) {
+      const round = Number(row.round);
+      const body = artifacts.rows
+        .findLast((artifact) => Number(artifact.round) === round && String(artifact.kind) === "verification")?.body;
+      const parsed = body === undefined ? { reasons: [], validationErrors: [] } : readVerification(String(body));
+      verificationByRound.set(round, {
+        verdict: String(row.verdict) as StoredVerification["verdict"],
+        reasons: parsed.reasons,
+        validationErrors: parsed.validationErrors,
+      });
+    }
+
+    const observations: TaskRoundObservation[] = runs.rows.map((row) => {
+      const round = Number(row.round);
+      const outputs = outputsByRun.get(String(row.run_id)) ?? [];
+      const verification = verificationByRound.get(round);
+      const failure = failureByRound.get(round);
+      const observation: TaskRoundObservation = {
+        round,
+        phase: String(row.phase),
+        runStatus: String(row.status) as TaskRoundObservation["runStatus"],
+        startedAt: Number(row.started_at),
+        progress: outputs.at(-1)?.content ?? "",
+        outputs,
+      };
+      if (row.ended_at !== null) observation.endedAt = Number(row.ended_at);
+      if (failure !== undefined) observation.failureReason = failure;
+      if (verification !== undefined) observation.verification = toVerification(verification, failure);
+      return observation;
+    });
+
+    return projectTaskExecutionDetail({
+      taskId,
+      taskName: String(story.title),
+      observedAt: Date.now(),
+      observations,
+    });
   }
 }
