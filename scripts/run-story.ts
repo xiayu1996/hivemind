@@ -503,6 +503,7 @@ async function main(): Promise<void> {
         ...(integration ? { integration } : {}),
         maxInnerLoopRounds: limits.maxInnerLoopRounds,
         maxRegressionReopens: limits.maxRegressionReopens,
+        specifyExitRounds: config.get("specifyExit.maxRounds"),
         convergence: { oscillationLookback: limits.oscillationLookback },
         treeSha: () => currentTreeSha(worktreePath),
         specify: {

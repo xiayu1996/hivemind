@@ -716,6 +716,65 @@ describe("SingleStoryWorker SHAPE re-entry after a crash", () => {
     expect(titles.rows.map((row) => row.title)).toEqual(["上一阶段的产出还在", "打回后问题变少"]);
   });
 
+  it("lets the SPECIFY session correct a contract the exit refuses, without spending a phase run", async () => {
+    const phases = vi.fn(async (input: ManagedPhaseInput) => {
+      if (input.phase === "SPECIFY") {
+        const gate = input.exitGate!;
+        const refused = await gate.evaluate([{ kind: "test-contract", body: NARROW_CONTRACT }], 1);
+        expect(refused).toMatchObject({ passed: false, findings: expect.stringContaining("must be full") });
+        return {
+          sessionId: "session-specify",
+          artifacts: [{ kind: "test-contract", body: TEST_CONTRACT }],
+          exitGateRounds: 2,
+        };
+      }
+      const front = frontPhase(input);
+      if (front) return front;
+      if (input.phase === "CODE") return { sessionId: `session-code-${input.round}`, artifacts: [{ kind: "implementation", body: "done" }] };
+      return { sessionId: "session-merge", artifacts: [{ kind: "delivery-report", body: "Both scenarios passed." }] };
+    });
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => ({ sessionId: `session-verify-${input.round}`, verdict: "accepted" as const, failedScenarios: [], artifact: "{}" })),
+    };
+    const friction = { record: vi.fn(async () => undefined) };
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier,
+      { deliver: vi.fn(async () => ({ mrUrl: null })) }, { enqueue: vi.fn(async () => undefined) }, { friction });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
+    // One SPECIFY run, and nothing invalidated: the refusal was a work item
+    // inside the session, not a verdict on the phase.
+    expect(phases.mock.calls.filter(([input]) => input.phase === "SPECIFY")).toHaveLength(1);
+    expect(friction.record).not.toHaveBeenCalledWith(expect.objectContaining({ kind: "specify_exit_rejected" }));
+    const invalidated = await client.execute(
+      "SELECT count(*) AS n FROM event_log WHERE card_id = 'S-EPIC1-01' AND type = 'phase.invalidated'",
+    );
+    expect(Number(invalidated.rows[0]!.n)).toBe(0);
+  });
+
+  it("fails the SPECIFY phase when the contract is still wrong after the session has had its rounds", async () => {
+    const phases = vi.fn(async (input: ManagedPhaseInput) => {
+      // A port that does not enforce the gate: the worker has to judge what
+      // came back on its own.
+      if (input.phase === "SPECIFY") {
+        return { sessionId: "session-specify", artifacts: [{ kind: "test-contract", body: NARROW_CONTRACT }] };
+      }
+      return frontPhase(input) ?? { sessionId: "session-code", artifacts: [{ kind: "implementation", body: "done" }] };
+    });
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => ({ sessionId: `session-verify-${input.round}`, verdict: "accepted" as const, failedScenarios: [], artifact: "{}" })),
+    };
+    const friction = { record: vi.fn(async () => undefined) };
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier,
+      { deliver: vi.fn(async () => ({ mrUrl: null })) }, { enqueue: vi.fn(async () => undefined) }, { friction });
+
+    await expect(worker.run("S-EPIC1-01")).rejects.toThrow(/must be full/);
+    expect(friction.record).toHaveBeenCalledWith(expect.objectContaining({ kind: "specify_exit_rejected" }));
+    const invalidated = await client.execute(
+      "SELECT count(*) AS n FROM event_log WHERE card_id = 'S-EPIC1-01' AND type = 'phase.invalidated'",
+    );
+    expect(Number(invalidated.rows[0]!.n)).toBe(1);
+  });
+
   it("shapes a CODE Story again when its frozen DoD no longer satisfies the contract", async () => {
     await store.transition("S-EPIC1-01", "QUEUED", "SHAPE", "system", "run-shape");
     await store.beginPhase({ runId: "run-shape", cardId: "S-EPIC1-01", phase: "SHAPE", round: 1, prompt: "shape" });

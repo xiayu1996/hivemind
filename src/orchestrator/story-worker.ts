@@ -8,7 +8,7 @@ import {
 } from "../pipeline/convergence.js";
 import type { MergeFailureAttribution } from "../vcs/merge-flow.js";
 import { evaluateSpecExit, applyDowngrades, renderSpecExitFindings, type SpecExitPorts } from "../pipeline/spec-exit-gate.js";
-import { parseTestContract } from "../pipeline/test-contract.js";
+import { parseTestContract, type TestContract } from "../pipeline/test-contract.js";
 import { costCeilingVerdict, renderCostCeilingReport, type CardSpend } from "../pipeline/cost-ceiling.js";
 import {
   DoDValidationError,
@@ -41,6 +41,27 @@ export interface ManagedPhaseInput {
   attempt?: number;
   /** A restart continuing the same attempt, which legitimately finds messages. */
   resuming?: boolean;
+  /** A deterministic exit the port enforces inside the live session. */
+  exitGate?: PhaseExitGate;
+}
+
+/**
+ * A phase's own exit check, handed back to the session that produced the
+ * output rather than returned as a verdict on the Story.
+ *
+ * Refusing in a new session is the expensive way to do this: the work has to
+ * be redone from a prompt instead of corrected in place, and the refusal reads
+ * downstream as a phase that failed. S-AGENTRULES-01 stopped on two SPECIFY
+ * refusals that a single sentence back into the same session would have fixed.
+ */
+export interface PhaseExitGate {
+  /** Judges what the phase produced. Findings are what the session is told. */
+  evaluate(
+    artifacts: readonly { kind: string; body: string }[],
+    attempt: number,
+  ): Promise<{ passed: true } | { passed: false; findings: string }>;
+  /** Attempts inside one session, after which the phase has failed. */
+  maxRounds: number;
 }
 
 export interface ManagedPhaseResult {
@@ -48,6 +69,8 @@ export interface ManagedPhaseResult {
   artifacts: Array<{ kind: string; body: string }>;
   /** What the phase actually ran on, when the port resolved one. */
   spec?: ResolvedAgentSpec;
+  /** How many times the exit gate judged this phase, when one was given. */
+  exitGateRounds?: number;
 }
 
 export interface StoryPhasePort {
@@ -120,6 +143,9 @@ export interface StoryIntegrationPort {
 
 export interface StoryWorkerOptions {
   maxInnerLoopRounds?: number;
+  /** Handbacks inside one SPECIFY session before the phase has failed. Read
+   * from `specifyExit.maxRounds`. */
+  specifyExitRounds?: number;
   /** How many times the regression loop may reopen a delivered Story. */
   maxRegressionReopens?: number;
   /** How many consecutive verification attempts may be lost to the environment
@@ -190,7 +216,11 @@ export interface StoryWorkerResult {
 }
 
 function artifact(result: ManagedPhaseResult, kind: string): string {
-  const found = result.artifacts.find((item) => item.kind === kind);
+  return artifactOf(result.artifacts, kind);
+}
+
+function artifactOf(artifacts: readonly { kind: string; body: string }[], kind: string): string {
+  const found = artifacts.find((item) => item.kind === kind);
   if (!found) throw new Error(`phase result is missing required artifact: ${kind}`);
   return found.body;
 }
@@ -200,6 +230,7 @@ export class SingleStoryWorker {
   private readonly maxInnerLoopRounds: number;
   private readonly maxRegressionReopens: number;
   private readonly maxInconclusiveRounds: number;
+  private readonly specifyExitRounds: number;
   private readonly friction: StoryFrictionPort | undefined;
   private readonly createRunId: (cardId: string, phase: StoryPhase, round: number) => string;
   private readonly integration: StoryIntegrationPort | undefined;
@@ -224,6 +255,7 @@ export class SingleStoryWorker {
     this.treeSha = options.treeSha;
     this.maxInconclusiveRounds = options.maxInconclusiveRounds ?? 2;
     this.maxInnerLoopRounds = options.maxInnerLoopRounds ?? 3;
+    this.specifyExitRounds = options.specifyExitRounds ?? 3;
     this.maxRegressionReopens = options.maxRegressionReopens ?? 2;
     if (!Number.isInteger(this.maxInnerLoopRounds) || this.maxInnerLoopRounds < 1) {
       throw new Error("maxInnerLoopRounds must be a positive integer");
@@ -812,51 +844,74 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
     const gate = this.specifyGate;
     const attempt = (await this.store.testContractAttempts(cardId)) + 1;
     const runId = this.createRunId(cardId, "SPECIFY", attempt);
-    const result = await this.runPhase(cardId, "SPECIFY", attempt, runId);
-    const contractYaml = artifact(result, "test-contract");
-    const contract = parseTestContract(contractYaml);
-    if (contract.mode !== expectedMode) {
-      // A narrow rerun that writes a full contract would put every scenario of
-      // a delivered card back under proof, and a full one that writes narrow
-      // would leave most of the card unproven.
-      const message = `SPECIFY produced a ${contract.mode} contract where ${expectedMode} was required`;
-      await this.store.invalidateCompletedPhase(cardId, "SPECIFY", attempt, message);
-      throw new Error(message);
+    // Frozen before the phase runs, not after: the gate re-measures the tree
+    // on every handback, and a base that moved under it would compare two
+    // different questions. A card re-entered by hand, or a delivered card
+    // running a narrow regression pass, has legitimate implementation in its
+    // tree, so this is entry and not the DESIGN commit (03 section 12.2).
+    const baseCommit = gate ? await gate.baseCommit() : "";
+    let settled: { contract: TestContract; frozen: { commit: string; treeSha: string } } | undefined;
+    // Findings go back to the same SPECIFY session. A contract in the wrong
+    // mode, or tests that do not fail for the reason they claim, is a work
+    // item the session that wrote it can fix in one turn; refusing it into a
+    // new run cost S-AGENTRULES-01 two phase runs and then the card.
+    const exitGate: PhaseExitGate = {
+      maxRounds: this.specifyExitRounds,
+      evaluate: async (artifacts) => {
+        const contractYaml = artifactOf(artifacts, "test-contract");
+        const contract = parseTestContract(contractYaml);
+        if (contract.mode !== expectedMode) {
+          // A narrow rerun that writes a full contract would put every
+          // scenario of a delivered card back under proof, and a full one
+          // that writes narrow would leave most of the card unproven.
+          return {
+            passed: false,
+            findings: `The contract must be ${expectedMode}, not ${contract.mode}. Rewrite it in ${expectedMode} mode.`,
+          };
+        }
+        await this.store.beginTestContract({
+          cardId, attempt, mode: contract.mode, contractYaml,
+          specifyBaseCommit: baseCommit, testPaths: gate ? gate.testPathPatterns() : [],
+        });
+        if (!gate) {
+          // No repository to measure against. The contract is recorded so a
+          // caller without a worktree can drive the phase; nothing is proved.
+          return { passed: true };
+        }
+        const verdict = await evaluateSpecExit({
+          cardId,
+          contract,
+          dod,
+          baseCommit,
+          testPathPatterns: gate.testPathPatterns(),
+          ports: gate.ports(cardId),
+        });
+        if (!verdict.passed || !verdict.frozen) {
+          return { passed: false, findings: renderSpecExitFindings(verdict) };
+        }
+        settled = { contract, frozen: verdict.frozen };
+        return { passed: true };
+      },
+    };
+
+    const result = await this.runPhase(cardId, "SPECIFY", attempt, runId, exitGate);
+    if (settled === undefined) {
+      // A port that does not enforce the gate (a caller driving phases
+      // directly) still has to be judged, once, on what it produced.
+      const verdict = await exitGate.evaluate(result.artifacts, 1);
+      if (!verdict.passed) {
+        await this.store.invalidateCompletedPhase(cardId, "SPECIFY", attempt, verdict.findings);
+        await this.friction?.record({
+          cardId, runId, kind: "specify_exit_rejected", detail: verdict.findings,
+        });
+        throw new Error(verdict.findings);
+      }
     }
-    if (!gate) {
-      // No repository to measure against. The contract is still recorded, so a
-      // caller without a worktree can drive the phase; nothing is proved.
-      await this.store.beginTestContract({
-        cardId, attempt, mode: contract.mode, contractYaml,
-        specifyBaseCommit: "", testPaths: [],
-      });
-      return { runId };
-    }
-    // Frozen at entry, not derived from DESIGN. A card re-entered by hand, or a
-    // delivered card running a narrow regression pass, has legitimate
-    // implementation in its tree; cleaning against the DESIGN commit would
-    // revert everything the card has already done.
-    const baseCommit = await gate.baseCommit();
-    await this.store.beginTestContract({
-      cardId, attempt, mode: contract.mode, contractYaml,
-      specifyBaseCommit: baseCommit, testPaths: gate.testPathPatterns(),
-    });
-    const verdict = await evaluateSpecExit({
-      cardId,
-      contract,
-      dod,
-      baseCommit,
-      testPathPatterns: gate.testPathPatterns(),
-      ports: gate.ports(cardId),
-    });
-    if (!verdict.passed || !verdict.frozen) {
-      await this.store.invalidateCompletedPhase(cardId, "SPECIFY", attempt, renderSpecExitFindings(verdict));
-      throw new Error(renderSpecExitFindings(verdict));
-    }
-    await this.store.freezeTestContract(cardId, attempt, verdict.frozen.commit, verdict.frozen.treeSha);
+    if (!settled) return { runId };
+    await this.store.freezeTestContract(cardId, attempt, settled.frozen.commit, settled.frozen.treeSha);
     // A scenario this phase could not settle is handed to VERIFY explicitly, so
     // the contract it will be judged by says who proves it.
-    const downgraded = applyDowngrades(dod, contract);
+    const downgraded = applyDowngrades(dod, settled.contract);
     if (JSON.stringify(downgraded) !== JSON.stringify(dod)) {
       await this.store.refreezeDefinitionOfDone(cardId, downgraded);
     }
@@ -887,6 +942,7 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
     phase: Exclude<StoryPhase, "VERIFY">,
     round: number,
     runId: string,
+    exitGate?: PhaseExitGate,
   ): Promise<ManagedPhaseResult> {
     const persisted = await this.store.getCompletedPhase(cardId, phase, round);
     if (persisted) return persisted;
@@ -897,7 +953,9 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
     // it has to land in a session file of its own.
     const { attempt } = await this.store.beginPhase({ runId, cardId, phase, round, prompt });
     try {
-      const result = await this.phases.run({ runId, phase, round, prompt, context, attempt });
+      const result = await this.phases.run({
+        runId, phase, round, prompt, context, attempt, ...(exitGate ? { exitGate } : {}),
+      });
       await this.store.completePhase({
         runId,
         sessionId: result.sessionId,
