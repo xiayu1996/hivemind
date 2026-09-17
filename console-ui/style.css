@@ -160,6 +160,38 @@ p {
   font-size: 15px;
 }
 
+.status {
+  display: inline-block;
+  padding: 1px 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.status-completed {
+  color: var(--done);
+  background: var(--done-bg);
+  border-color: #a7f3d0;
+}
+
+.status-running {
+  color: var(--running);
+  background: var(--running-bg);
+  border-color: #bfdbfe;
+}
+
+.status-failed {
+  color: var(--failed);
+  background: var(--failed-bg);
+  border-color: #fecaca;
+}
+
+.failure {
+  color: var(--failed);
+  font-weight: 500;
+}
+
 .notice {
   padding: 14px 16px;
   border: 1px dashed var(--line);

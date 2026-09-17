@@ -1,6 +1,10 @@
 import { createApp, onMounted, ref } from "vue";
 import { loadTaskExecutionDetail, taskExecutionDetailPath, taskExecutionDetailRequestPath } from "./task-detail.js";
 
+/** How a round's outcome is written on the page. Colour never carries the
+ * meaning on its own; every status is also a word. */
+const STATUS_LABELS = { completed: "已完成", running: "正在进行", failed: "执行失败" };
+
 /** Reads one task's execution detail from the console's own read endpoint. */
 const detailApi = {
   async get(taskId, signal) {
@@ -63,6 +67,7 @@ export const TEMPLATE = `
           <li v-for="round in pageState.detail.rounds" :key="round.round" class="round">
             <div class="round-head">
               <h2>第 {{ round.round }} 轮</h2>
+              <span v-if="statusLabels[round.status]" class="status" :class="'status-' + round.status">{{ statusLabels[round.status] }}</span>
             </div>
             <section class="block">
               <h3>执行过程</h3>
@@ -82,6 +87,7 @@ export const TEMPLATE = `
               <h3>当前结果</h3>
               <p>{{ round.currentResult || "这一轮还没有结果。" }}</p>
             </section>
+            <p v-if="round.status === 'failed'" class="failure">失败原因：{{ round.failureReason }}</p>
           </li>
         </ol>
       </template>
@@ -118,7 +124,7 @@ export const App = {
       }
     });
 
-    return { route, tasks, listError, pageState, detailPath: taskExecutionDetailPath };
+    return { route, tasks, listError, pageState, statusLabels: STATUS_LABELS, detailPath: taskExecutionDetailPath };
   },
   template: TEMPLATE,
 };
