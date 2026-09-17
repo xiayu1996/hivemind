@@ -241,6 +241,57 @@ describe("seedRepositoryOptions", () => {
     expect(sent.filter((option: any) => option.id)).toHaveLength(live.length);
   });
 
+  it("puts the columns in the order a person walks them, and keeps one it no longer declares", async () => {
+    const updates: Array<Record<string, unknown>> = [];
+    const declared = schema.options.requirementStatus;
+    // The board a live upgrade leaves behind: the new column appended last,
+    // where it reads as a state that comes after the closing ones.
+    const live = [
+      ...declared.filter((name) => name !== "方案待确认").map((name) => ({ id: `s-${name}`, name })),
+      { id: "s-retired", name: "旧状态" },
+      { id: "s-方案待确认", name: "方案待确认" },
+    ];
+    const client = {
+      databases: { create: async () => { throw new Error("nothing is created"); }, retrieve: async () => { throw new Error("unexpected"); } },
+      dataSources: {
+        retrieve: async () => ({
+          properties: {
+            [schema.propertyNames.requirementStatus]: { type: "select", select: { options: live } },
+          },
+        }),
+        update: async (input: any) => { updates.push(input); return { id: "ds-1" }; },
+      },
+    } as unknown as Pick<Client, "databases" | "dataSources" | "pages">;
+
+    // Nothing is missing, so the write happens for the order alone.
+    await expect(seedStatusOptions(client, "requirements-ds")).resolves.toEqual([]);
+    const sent = (updates[0]!.properties as any)[schema.propertyNames.requirementStatus].select.options;
+    expect(sent.map((option: any) => option.id)).toEqual([
+      ...declared.map((name) => `s-${name}`),
+      // Kept rather than removed: dropping it blanks every card still in it.
+      "s-retired",
+    ]);
+  });
+
+  it("writes nothing when the board already has every column in the declared order", async () => {
+    const updates: Array<Record<string, unknown>> = [];
+    const live = schema.options.requirementStatus.map((name) => ({ id: `s-${name}`, name }));
+    const client = {
+      databases: { create: async () => { throw new Error("nothing is created"); }, retrieve: async () => { throw new Error("unexpected"); } },
+      dataSources: {
+        retrieve: async () => ({
+          properties: {
+            [schema.propertyNames.requirementStatus]: { type: "select", select: { options: live } },
+          },
+        }),
+        update: async () => { throw new Error("nothing is written"); },
+      },
+    } as unknown as Pick<Client, "databases" | "dataSources" | "pages">;
+
+    await expect(seedStatusOptions(client, "requirements-ds")).resolves.toEqual([]);
+    expect(updates).toEqual([]);
+  });
+
   it("adds the target repository column to a Requirements board that predates it", async () => {
     const updates: Array<Record<string, unknown>> = [];
     let properties: Record<string, unknown> = {};
