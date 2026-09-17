@@ -143,7 +143,7 @@
 | ID | 任务 | 输出物 | 验证方式 | 前置 |
 |---|---|---|---|---|
 | M1-35 | ✅ 旁路告警通道：飞书 webhook / 邮件；needs_input 与 P0 级走此通道（Notion 故障时的唯一出口） | `src/alert/` | 双通道契约/部分失败/脱敏单测通过。按 M0-09 结论（API 建的 @mention 不产生推送）改为**硬要求**：无通道时启动即拒，除非显式关掉 `alert.requireOutOfBandChannel`（高危键，控制台改需二次确认）；needs_input 告警无人接收时明确报错而非静默丢弃，报告体带收敛曲线与两分法结论。仍开放：真实飞书/邮件推送未跑 | M1-01 |
-| M1-36 | ⚠️ 控制台骨架：Fastify 只读 API（节点健康 / 任务视图 EventLog 时间线 + trace HTML / 成本 / config） | `src/console/` | Windows loopback 实际数据启动；公网通配绑定被拒。**2026-09-17：前端 SPA（`console-ui/`）连同 `build:console` 一并删除**——它由 hivemind 自己按新需求重做，服务端在 `serveUi` 为假时只提供 `/api/*`，与写面（M2-13）都保留 | M1-32, M1-33 |
+| M1-36 | ⚠️ 控制台骨架：Fastify 只读 API（节点健康 / 任务视图 EventLog 时间线 + trace HTML / 成本 / config） | `src/console/` + `console-ui/` | Windows loopback 实际数据启动；公网通配绑定被拒。**2026-09-17：前端 SPA（`console-ui/`）连同 `build:console` 一并删除**——它由 hivemind 自己按新需求重做，服务端在 `serveUi` 为假时只提供 `/api/*`，与写面（M2-13）都保留。**同日：重建从 S-TRACE02-01 开始**——控制台的页面改为直接托管 `console-ui/` 下的普通 ES 模块（存在构建产物时仍优先），所以持有中央库的进程无需构建就有页面；已交付任务列表与任务执行详情两页 | M1-32, M1-33 |
 
 ### M1-J 验收
 
