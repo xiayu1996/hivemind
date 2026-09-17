@@ -28,7 +28,7 @@ describe("GitMrStoryDelivery", () => {
     expect(calls).toEqual([
       ["branch", "--show-current"],
       ["status", "--porcelain"],
-      ["push", "--set-upstream", "origin", "story/epic1-01"],
+      ["push", "--force-with-lease", "--set-upstream", "origin", "story/epic1-01"],
       ["rev-list", "--count", "origin/epic/EPIC1..story/epic1-01"],
     ]);
     expect(findOpen).toHaveBeenCalledWith({ repository: "example/repo", sourceBranch: "story/epic1-01", targetBranch: "epic/EPIC1" });

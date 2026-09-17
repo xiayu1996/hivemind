@@ -66,7 +66,15 @@ export class GitMrStoryDelivery implements StoryDeliveryPort {
     }
     const status = await this.git.run(this.options.worktreePath, ["status", "--porcelain"]);
     if (status.trim() !== "") throw new Error("worktree has uncommitted changes at delivery");
-    await this.git.run(this.options.worktreePath, ["push", "--set-upstream", "origin", story.branch]);
+    // The lease, not a bare force: MERGE rebases the Story branch onto the Epic
+    // head before it re-verifies, so a second delivery (the first merge was
+    // refused, the head has since moved) publishes rewritten commits that no
+    // plain push can fast-forward. The lease still refuses if anything other
+    // than this host moved the branch.
+    await this.git.run(
+      this.options.worktreePath,
+      ["push", "--force-with-lease", "--set-upstream", "origin", story.branch],
+    );
     await this.recordActualFootprint(story.id, story.branch);
     // A Story in an Epic stacks onto the Epic branch it is about to land on.
     const targetBranch = story.epicId
