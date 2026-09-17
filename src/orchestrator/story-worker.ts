@@ -6,6 +6,7 @@ import {
   type ConvergenceOptions,
   type ConvergenceResult,
 } from "../pipeline/convergence.js";
+import type { MergeFailureAttribution } from "../vcs/merge-flow.js";
 import { evaluateSpecExit, applyDowngrades, renderSpecExitFindings, type SpecExitPorts } from "../pipeline/spec-exit-gate.js";
 import { parseTestContract } from "../pipeline/test-contract.js";
 import { costCeilingVerdict, renderCostCeilingReport, type CardSpend } from "../pipeline/cost-ceiling.js";
@@ -107,7 +108,14 @@ export interface StoryIntegrationPort {
     cardId: string,
     runId: string,
     publish?: () => Promise<{ mrUrl: string | null }>,
-  ): Promise<{ kind: string; reason?: string; mrUrl?: string | null }>;
+  ): Promise<{
+    kind: string;
+    reason?: string | undefined;
+    mrUrl?: string | null | undefined;
+    /** Why the re-verification refused it, which decides what it costs. */
+    attribution?: MergeFailureAttribution | undefined;
+    failures?: readonly string[] | undefined;
+  }>;
 }
 
 export interface StoryWorkerOptions {
@@ -325,16 +333,19 @@ export class SingleStoryWorker {
     if (!mergeOnly) {
       // The budget counts the rounds since a person last acted on the card: a
       // resume is a decision to spend more, not a replay of the spent rounds.
+      // CODE, VERIFY and MERGE are one loop, so a merge this Story's own work
+      // broke has already taken a round out of the same budget.
       const failureHistory = await this.store.getVerificationFailureHistory(cardId, story.lastHumanActionAt ?? 0);
+      const alreadySpent = await this.store.getInnerLoopSpend(cardId, story.lastHumanActionAt ?? 0);
       // Round numbers keep counting across resumes; the budget does not.
       let round = story.innerLoopRounds;
-      if (failureHistory.length >= this.maxInnerLoopRounds) {
+      if (alreadySpent >= this.maxInnerLoopRounds) {
         // The Epic head refused the branch after the budget was already spent:
         // there is no round left to fix it in, so the card stops on the budget.
         const stopRunId = this.createRunId(cardId, "VERIFY", round);
         await this.store.stopForInput(cardId, story.state, "retry_limit_exceeded", stopRunId, {
           convergence: "budget_exhausted",
-          spent: failureHistory.length,
+          spent: alreadySpent,
           budget: this.maxInnerLoopRounds,
           failed: failureHistory.at(-1) ?? [],
         });
@@ -342,7 +353,7 @@ export class SingleStoryWorker {
         return { state: "NEEDS_INPUT", rounds: round, mrUrl: null, stopReason: "retry_limit_exceeded" };
       }
       // `spent` is the budget: only a round that failed in the code costs one.
-      let spent = failureHistory.length;
+      let spent = alreadySpent;
       let inconclusiveStreak = 0;
       while (spent < this.maxInnerLoopRounds) {
         // Before buying another CODE turn, not after: the ceiling exists to stop
@@ -481,6 +492,32 @@ export class SingleStoryWorker {
       );
       if (integrated.kind !== "merged") {
         await this.projection.enqueue(cardId);
+        // A check that would not start says nothing about the code. Throwing
+        // hands it to the crash safety net, which is where an environment
+        // failure belongs; charging it to the Story would buy a model turn to
+        // fix a missing binary.
+        const attribution: MergeFailureAttribution | undefined =
+          integrated.kind === "conflict" ? "story_regression" : integrated.attribution;
+        if (attribution === "environment") {
+          throw new Error(`Story ${cardId} could not be re-verified at merge: ${integrated.reason ?? "the check did not run"}`);
+        }
+        // An Epic head that was already red is not this Story's round to
+        // spend: no work on this card changes the answer.
+        if (attribution !== "baseline_failing") {
+          const spent = await this.store.getInnerLoopSpend(cardId, story.lastHumanActionAt ?? 0);
+          if (spent >= this.maxInnerLoopRounds) {
+            const stopRunId = this.createRunId(cardId, "CODE", totalRounds);
+            await this.store.stopForInput(cardId, "CODE", "retry_limit_exceeded", stopRunId, {
+              convergence: "budget_exhausted",
+              spent,
+              budget: this.maxInnerLoopRounds,
+              mergeBounce: integrated.kind === "conflict" ? "conflict" : "story_regression",
+              ...(integrated.failures ? { failures: integrated.failures } : {}),
+            });
+            await this.projection.enqueue(cardId);
+            return { state: "NEEDS_INPUT", rounds: totalRounds, mrUrl: null, stopReason: "retry_limit_exceeded" };
+          }
+        }
         return { state: "CODE", rounds: totalRounds, mrUrl: null, stopReason: null };
       }
       mrUrl = integrated.mrUrl ?? null;

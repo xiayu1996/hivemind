@@ -161,8 +161,14 @@ describe("StoryExecutionStore merge recovery", () => {
   it("S-M2-05-conflict returns an unresolved rebase conflict to CODE and records it without delivering", async () => {
     await store.recordMergeConflict("S-M2-05-conflict", "merge-run", "CONFLICT (content): Merge conflict in src/vcs/merge-flow.ts");
     await expect(store.getStory("S-M2-05-conflict")).resolves.toMatchObject({ state: "CODE", phase: "CODE", mrUrl: null });
-    await expect(client.execute("SELECT type, data FROM event_log WHERE run_id = 'merge-run'")).resolves.toMatchObject({
-      rows: [{ type: "merge.conflict", data: JSON.stringify({ reason: "CONFLICT (content): Merge conflict in src/vcs/merge-flow.ts" }) }],
+    const events = (await client.execute("SELECT type, data FROM event_log WHERE run_id = 'merge-run' ORDER BY id")).rows;
+    // A conflict is the Story's own to resolve, so the round is spent; the
+    // transition beside it is what makes the bounce bounded rather than a
+    // silent UPDATE the budget never saw.
+    expect(events.map((row) => row.type)).toEqual(["merge.conflict", "story.transition"]);
+    expect(JSON.parse(String(events[0]?.data))).toEqual({
+      reason: "CONFLICT (content): Merge conflict in src/vcs/merge-flow.ts",
+      spent: true,
     });
   });
 });
@@ -546,11 +552,19 @@ describe("StoryExecutionStore phase input", () => {
     expect(input.previousRejections).toEqual([
       { phase: "MERGE", reason: "git diff --check reported trailing whitespace in src/a.ts:12" },
     ]);
-    await store.recordIntegrationRejection("S-EPIC1-01", "run-merge", "subset re-verification on epic/EPIC1 failed for S-EPIC1-01-a: page returned 404");
+    await store.recordIntegrationRejection(
+      "S-EPIC1-01",
+      "run-merge",
+      "subset re-verification for S-EPIC1-01-a: page returned 404",
+      { attribution: "story_regression", failures: ["src/web/page.test.ts > renders the page"] },
+    );
     const bounced = await store.buildPhaseInput("S-EPIC1-01", "CODE", 2);
+    // The names of what broke travel beside the prose, so the round is not
+    // handed 800 bytes of log tail with the one decidable line cut off.
     expect(bounced.previousRejections).toContainEqual({
       phase: "MERGE",
-      reason: "re-verification on the Epic head failed: subset re-verification on epic/EPIC1 failed for S-EPIC1-01-a: page returned 404",
+      reason: "the checks failed with this Story on top of the Epic head: subset re-verification for S-EPIC1-01-a: page returned 404",
+      failures: ["src/web/page.test.ts > renders the page"],
     });
     const design = await store.buildPhaseInput("S-EPIC1-01", "DESIGN", 2);
     expect(design.previousRejections).toEqual([]);

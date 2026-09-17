@@ -9,7 +9,7 @@ import {
   type StoryStopReason,
   type TransitionActor,
 } from "./state-machine.js";
-import type { PhaseInput, ScenarioFailure } from "../pipeline/phase-input.js";
+import type { PhaseInput, PhaseRejection, ScenarioFailure } from "../pipeline/phase-input.js";
 import { parseDoD, type DefinitionOfDone } from "../pipeline/dod.js";
 import { dodVersion, scenarioVersions } from "../pipeline/dod-version.js";
 import { isProviderFault } from "../pipeline/failure-classification.js";
@@ -983,6 +983,17 @@ export class StoryExecutionStore {
     return this.returnMergeToCode(cardId, runId, "merge.verification_failed", reason, detail);
   }
 
+  /**
+   * Sends a refused merge back to CODE through the state machine, and says
+   * whether the round costs the Story one of its budget.
+   *
+   * It used to be a bare UPDATE with no transition event and no accounting, so
+   * a Story could bounce between MERGE and CODE forever: S-AGENTRULES-01 did
+   * it twice on a failure it had not caused and would have kept going. A
+   * failure the Story introduced, and a conflict only it can resolve, spend a
+   * round; a head that was already red and a check that never ran do not, since
+   * no amount of work on this card changes either.
+   */
   private async returnMergeToCode(
     cardId: string,
     runId: string,
@@ -991,6 +1002,8 @@ export class StoryExecutionStore {
     detail?: MergeRejectionDetail,
   ): Promise<void> {
     if (reason.trim() === "") throw new Error("merge rejection reason must not be empty");
+    assertStoryTransition("MERGE", "CODE", "system");
+    const spent = detail?.attribution !== "baseline_failing" && detail?.attribution !== "environment";
     const time = this.now();
     const [update] = await this.client.batch([
       {
@@ -998,9 +1011,40 @@ export class StoryExecutionStore {
               WHERE id = ? AND state = 'MERGE'`,
         args: [time, cardId],
       },
-      eventStatement(runId, cardId, "MERGE", type, { reason, ...detail }, time),
+      eventStatement(runId, cardId, "MERGE", type, { reason, ...detail, spent }, time),
+      eventStatement(runId, cardId, "CODE", "story.transition", { from: "MERGE", to: "CODE", actor: "system" }, time),
     ], "write");
     if (update?.rowsAffected !== 1) throw new Error(`cannot return ${cardId} to CODE unless it is in MERGE`);
+  }
+
+  /**
+   * Rounds this Story has spent since a person last acted on it.
+   *
+   * CODE, VERIFY and MERGE are one loop, so a merge the Story's own work broke
+   * costs the same as a verification round it failed. The count comes from
+   * events rather than a column because the two sources already exist and a
+   * column would have to repeat the "since the last human action" rule that
+   * grants a resumed card a fresh budget. verify_records cannot hold the merge
+   * bounces either: it is keyed by round and requires the two session ids a
+   * bounce does not have.
+   */
+  async getInnerLoopSpend(cardId: string, since = 0): Promise<number> {
+    const [verifications, bounces] = await this.client.batch([
+      {
+        sql: `SELECT COUNT(*) AS spent FROM verify_records
+              WHERE card_id = ? AND created_at > ? AND verdict = 'rejected'`,
+        args: [cardId, since],
+      },
+      {
+        sql: `SELECT COUNT(*) AS spent FROM event_log
+              WHERE card_id = ? AND ts > ?
+                AND type IN ('merge.verification_failed', 'merge.conflict')
+                AND json_extract(data, '$.spent') = 1`,
+        args: [cardId, since],
+      },
+    ], "read");
+    return numberValue(verifications!.rows[0]!.spent, "verification rounds")
+      + numberValue(bounces!.rows[0]!.spent, "merge bounces");
   }
 
   /** The Story is on the Epic head. Recorded so a later Story's subset
@@ -1543,12 +1587,23 @@ export class StoryExecutionStore {
           }))
           // A round the provider killed was not refused for its approach.
           .filter((rejection) => !isProviderFault(rejection.reason)),
-        ...bounceResult.rows.map((row) => ({
-          phase: "MERGE",
-          reason: `${String(row.type) === "merge.conflict" ? "rebase onto the Epic head conflicted" : "re-verification on the Epic head failed"}: ${
-            String((JSON.parse(stringValue(row.data, "merge event")) as { reason?: string }).reason ?? "")
-          }`.slice(0, 800),
-        })),
+        ...bounceResult.rows.map((row) => {
+          const event = JSON.parse(stringValue(row.data, "merge event")) as {
+            reason?: string;
+            failures?: string[];
+          };
+          const headline = String(row.type) === "merge.conflict"
+            ? "rebase onto the Epic head conflicted"
+            : "the checks failed with this Story on top of the Epic head";
+          // Truncation is on the prose only: the names are what the round has
+          // to act on, and they used to fall outside the window.
+          const rejection: PhaseRejection = {
+            phase: "MERGE",
+            reason: `${headline}: ${String(event.reason ?? "")}`.slice(0, 800),
+          };
+          if (event.failures && event.failures.length > 0) rejection.failures = event.failures;
+          return rejection;
+        }),
       ],
     };
   }

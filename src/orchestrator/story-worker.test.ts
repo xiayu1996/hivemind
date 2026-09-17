@@ -829,6 +829,79 @@ describe("SingleStoryWorker inside an Epic", () => {
     expect(delivery.deliver).not.toHaveBeenCalled();
   });
 
+  it("spends a round on a merge its own work broke, and stops on the budget", async () => {
+    const { phases, verifier, delivery, projection } = ports();
+    const integration = {
+      integrate: vi.fn(async (cardId: string, runId: string) => {
+        await store.recordIntegrationRejection(cardId, runId, "npm test fails with this Story on top", {
+          attribution: "story_regression", failures: ["src/coupon.test.ts > applies the discount"],
+        });
+        return {
+          kind: "verification_failed",
+          reason: "npm test fails with this Story on top",
+          attribution: "story_regression" as const,
+          failures: ["src/coupon.test.ts > applies the discount"],
+        };
+      }),
+    };
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier, delivery, projection, {
+      integration, maxInnerLoopRounds: 1, runId: (_cardId, phase, round) => `run-${phase}-${round}`,
+    });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({
+      state: "NEEDS_INPUT", stopReason: "retry_limit_exceeded",
+    });
+    const stopped = JSON.parse(String((await client.execute(
+      "SELECT data FROM event_log WHERE type = 'story.stopped' ORDER BY id DESC LIMIT 1",
+    )).rows[0]?.data)) as Record<string, unknown>;
+    expect(stopped).toMatchObject({
+      reason: "retry_limit_exceeded",
+      convergence: "budget_exhausted",
+      mergeBounce: "story_regression",
+      failures: ["src/coupon.test.ts > applies the discount"],
+    });
+  });
+
+  it("charges nothing for a merge the Epic head was already failing", async () => {
+    const { phases, verifier, delivery, projection } = ports();
+    const integration = {
+      integrate: vi.fn(async (cardId: string, runId: string) => {
+        await store.recordIntegrationRejection(cardId, runId, "npm test fails on the Epic head without this Story", {
+          attribution: "baseline_failing", failures: ["src/runner/catalog-snapshot.test.ts > deepseek"],
+        });
+        return {
+          kind: "verification_failed",
+          reason: "npm test fails on the Epic head without this Story",
+          attribution: "baseline_failing" as const,
+        };
+      }),
+    };
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier, delivery, projection, {
+      integration, maxInnerLoopRounds: 1,
+    });
+
+    // The same failure that stops the card above leaves it alone here: no
+    // amount of work on this Story turns the Epic head green.
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "CODE", stopReason: null });
+    await expect(store.getInnerLoopSpend("S-EPIC1-01")).resolves.toBe(0);
+  });
+
+  it("hands a check that never ran to the crash safety net instead of the card", async () => {
+    const { phases, verifier, delivery, projection } = ports();
+    const integration = {
+      integrate: vi.fn(async () => ({
+        kind: "verification_failed",
+        reason: "npm test could not be run: spawn npm ENOENT",
+        attribution: "environment" as const,
+      })),
+    };
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier, delivery, projection, {
+      integration, maxInnerLoopRounds: 1,
+    });
+
+    await expect(worker.run("S-EPIC1-01")).rejects.toThrow(/could not be re-verified at merge/);
+  });
+
   it("leaves a Story with no Epic to its own delivery path", async () => {
     await client.execute("UPDATE stories SET epic_id = NULL WHERE id = 'S-EPIC1-01'");
     const { phases, verifier, delivery, projection } = ports();
@@ -965,7 +1038,7 @@ describe("SingleStoryWorker regression fix", () => {
 
     await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED", rounds: 5 });
     expect(phases.mock.calls.map(([input]) => input.phase)).toEqual(["SPECIFY", "REGRESSION_FIX", "REGRESSION_FIX"]);
-    expect(phases.mock.calls[2]![0].prompt).toContain("re-verification on the Epic head failed");
+    expect(phases.mock.calls[2]![0].prompt).toContain("the checks failed with this Story on top of the Epic head");
   });
 });
 
