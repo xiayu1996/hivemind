@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createConsoleServer, listenConsole, type ConsoleDataSource } from "./server.js";
+import * as taskDetailModule from "./task-execution-detail.js";
 
-// @scenario S-TRACE02-01-empty
-// @scenario S-TRACE02-01-statuses
-// @scenario S-TRACE02-01-timeline
 const data: ConsoleDataSource = {
   nodes: async () => [{ hostId: "windows-1", status: "healthy" }],
   tasks: async () => [{ id: "story-1", events: [{ type: "turn_end" }], traceHtml: "<div>trace</div>" }],
@@ -45,6 +43,69 @@ describe("read-only console", () => {
     const response = await app.inject({ method: "GET", url: "/api/queue" });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ waiting: [{ id: "story-2" }] });
+    await app.close();
+  });
+
+  it("@scenario S-TRACE02-01-timeline projects persisted rounds in ascending order", () => {
+    expect(taskDetailModule.projectTaskExecutionDetail).toBeTypeOf("function");
+    const detail = taskDetailModule.projectTaskExecutionDetail({
+      taskId: "S-TRACE02-01",
+      taskName: "Round-by-round execution detail",
+      observedAt: 400,
+      observations: [
+        { round: 2, phase: "VERIFY", runStatus: "completed", startedAt: 200, progress: "Second", outputs: [] },
+        { round: 1, phase: "CODE", runStatus: "completed", startedAt: 100, progress: "First", outputs: [] },
+      ],
+    });
+
+    expect(detail.rounds.map((round) => round.round)).toEqual([1, 2]);
+    expect(detail.rounds.map((round) => round.process[0]?.summary)).toEqual(["First", "Second"]);
+  });
+
+  it("@scenario S-TRACE02-01-statuses retains the persisted failure reason", () => {
+    expect(taskDetailModule.projectTaskExecutionDetail).toBeTypeOf("function");
+    const detail = taskDetailModule.projectTaskExecutionDetail({
+      taskId: "S-TRACE02-01",
+      taskName: "Round-by-round execution detail",
+      observedAt: 400,
+      observations: [{
+        round: 1,
+        phase: "VERIFY",
+        runStatus: "completed",
+        startedAt: 100,
+        progress: "Verification failed",
+        outputs: [],
+        verification: {
+          verdict: "rejected",
+          result: "Not accepted",
+          failureReason: "The selected task included another task's output",
+        },
+      }],
+    });
+
+    expect(detail.rounds).toEqual([expect.objectContaining({
+      round: 1,
+      status: "failed",
+      failureReason: "The selected task included another task's output",
+    })]);
+  });
+
+  it("@scenario S-TRACE02-01-empty returns a known task with no rounds without inventing round one", async () => {
+    const detail = {
+      taskId: "S-TRACE02-01",
+      taskName: "Round-by-round execution detail",
+      rounds: [],
+      observedAt: 400,
+    } as const;
+    const app = await createConsoleServer({
+      ...data,
+      taskExecutionDetail: async (taskId) => taskId === detail.taskId ? detail : null,
+    }, { serveUi: false });
+    const response = await app.inject({ method: "GET", url: "/api/tasks/S-TRACE02-01" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(detail);
+    expect(response.body).not.toContain("failureReason");
     await app.close();
   });
 });
