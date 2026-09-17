@@ -136,7 +136,7 @@ describe("RequirementDecomposer", () => {
     const outcome = await decomposer(new ScriptedPort([candidate()])).decompose(REQUIREMENT_ID);
     const epic = outcome.kind === "decomposed" ? outcome.epics[0]! : undefined;
 
-    const approvals = new PlanApprovalStore(client, () => 6_000);
+    const approvals = new PlanApprovalStore(client, () => 6_000, { planApproval: true });
     const epicDecomposer = new EpicDecomposer(client, approvals, {
       run: async (request) => {
         expect(request.requirement).toContain("值班的人打开首屏");

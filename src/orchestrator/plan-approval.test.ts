@@ -23,7 +23,7 @@ const plan = {
 async function presentedPlan() {
   const client = createClient({ url: ":memory:" });
   await migrate(client);
-  const approvals = new PlanApprovalStore(client, () => 1_000);
+  const approvals = new PlanApprovalStore(client, () => 1_000, { planApproval: true });
   await approvals.present({ epicId: "M2", notionPageId: "epic-page", title: "Plan approval", plan });
   return { client, approvals };
 }
@@ -92,6 +92,38 @@ describe("@scenario S-M2-02-revise plan approval", () => {
     expect(await approvals.getEpic("M2")).toMatchObject({ state: "DECOMPOSE" });
     expect((await client.execute("SELECT id FROM stories")).rows).toEqual([]);
     expect((await client.execute("SELECT story_id FROM execution_dispatches")).rows).toEqual([]);
+    client.close();
+  });
+});
+
+describe("plan approval switched off (the default)", () => {
+  it("starts the Stories itself and never asks the board to wait", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const approvals = new PlanApprovalStore(client, () => 1_000);
+    await approvals.present({ epicId: "M2", notionPageId: "epic-page", title: "Plan approval", plan });
+
+    expect(await approvals.getEpic("M2")).toMatchObject({ state: "EXECUTING" });
+    expect((await client.execute("SELECT story_id FROM execution_dispatches")).rows).toEqual([{ story_id: "S-M2-02" }]);
+    // Who decided is on the record: the system did, because this deployment
+    // says a person does not review how the work was cut.
+    expect((await client.execute("SELECT source FROM epic_approval_events")).rows).toEqual([{ source: "auto" }]);
+    const statuses = (await client.execute(
+      "SELECT payload FROM notion_outbox WHERE operation = 'sync_epic_status' ORDER BY id",
+    )).rows.map((row) => (JSON.parse(String(row.payload)) as { status: string }).status);
+    expect(statuses).not.toContain("拆解待确认");
+    client.close();
+  });
+
+  it("does not present the same plan twice when the decomposition is replayed", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const approvals = new PlanApprovalStore(client, () => 1_000);
+    await approvals.present({ epicId: "M2", notionPageId: "epic-page", title: "Plan approval", plan });
+    await approvals.present({ epicId: "M2", notionPageId: "epic-page", title: "Plan approval", plan });
+
+    expect(await approvals.approvedEventCount("M2")).toBe(1);
+    expect((await client.execute("SELECT id FROM stories")).rows).toEqual([{ id: "S-M2-02" }]);
     client.close();
   });
 });

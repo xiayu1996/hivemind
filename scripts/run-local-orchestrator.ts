@@ -252,8 +252,10 @@ async function main(): Promise<void> {
     gateway,
     comments,
     new PlanApprovalStore(handle.client, Date.now, {
-      maxStories: config.get("decompose.maxStoriesPerEpic"),
-    }, publishEpicBranchFor),
+      limits: { maxStories: config.get("decompose.maxStoriesPerEpic") },
+      planApproval: config.get("decompose.planApproval"),
+      onApproved: publishEpicBranchFor,
+    }),
   );
   const media = new NotionMediaReconciler(
     handle.client,
@@ -421,7 +423,11 @@ async function main(): Promise<void> {
     const decompositionLimits = { maxStories: config.get("decompose.maxStoriesPerEpic") };
     const decomposer = new EpicDecomposer(
       handle.client,
-      new PlanApprovalStore(handle.client, Date.now, decompositionLimits, publishEpicBranchFor),
+      new PlanApprovalStore(handle.client, Date.now, {
+        limits: decompositionLimits,
+        planApproval: config.get("decompose.planApproval"),
+        onApproved: publishEpicBranchFor,
+      }),
       new PiDecomposePort({
         binary: piBinary,
         spec: await resolveAgentSpec({ config, policy: modelPolicy }, "decompose", provider),

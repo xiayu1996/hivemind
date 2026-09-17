@@ -5,7 +5,9 @@ import { evaluateDecomposition } from "./decompose.js";
 import { EPIC_BOARD_STATUS, epicStatusStatement } from "./epic-status-projection.js";
 import { assertEpicTransition, type EpicState } from "./state-machine.js";
 
-export type ApprovalSource = "comment" | "drag";
+/** Who decided. `auto` is the system itself, when the deployment has said a
+ * person does not review decompositions. */
+export type ApprovalSource = "comment" | "drag" | "auto";
 
 export interface PresentPlanInput {
   epicId: string;
@@ -47,24 +49,41 @@ function presentationPayload(plan: DecompositionCandidate): string {
   });
 }
 
+export interface PlanApprovalOptions {
+  /** The Story-count ceiling, from `decompose.maxStoriesPerEpic`. Passed in
+   * rather than read here so the gate and DECOMPOSE judge the same plan by the
+   * same number. */
+  limits?: DecompositionLimits;
+  /** Whether a person reviews the split before the Stories exist, from
+   * `decompose.planApproval`. Off by default: the split is a judgement about
+   * how the work is cut, and asking a person to confirm every one of them
+   * spends the attention that Epic acceptance needs. */
+  planApproval?: boolean;
+  /**
+   * Runs once the Stories exist and the Epic is EXECUTING. The instance that
+   * manages the repository publishes the Epic's integration branch here, so
+   * every Story's draft MR has a real target from its first delivery. A
+   * failure is reported, not thrown: the approval already happened, and the
+   * dispatcher publishes again before it cuts the first Story worktree.
+   */
+  onApproved?: (epicId: string) => Promise<void>;
+}
+
 /** The durable gate between accepted decomposition and any executable Story. */
 export class PlanApprovalStore {
+  private readonly limits: DecompositionLimits;
+  private readonly planApproval: boolean;
+  private readonly onApproved: ((epicId: string) => Promise<void>) | undefined;
+
   constructor(
     private readonly client: Client,
     private readonly now: () => number = Date.now,
-    /** The Story-count ceiling, from `decompose.maxStoriesPerEpic`. Passed in
-     * rather than read here so the gate and DECOMPOSE judge the same plan by
-     * the same number. */
-    private readonly limits: DecompositionLimits = {},
-    /**
-     * Runs once the Stories exist and the Epic is EXECUTING. The instance that
-     * manages the repository publishes the Epic's integration branch here, so
-     * every Story's draft MR has a real target from its first delivery. A
-     * failure is reported, not thrown: the approval already happened, and the
-     * dispatcher publishes again before it cuts the first Story worktree.
-     */
-    private readonly onApproved?: (epicId: string) => Promise<void>,
-  ) {}
+    options: PlanApprovalOptions = {},
+  ) {
+    this.limits = options.limits ?? {};
+    this.planApproval = options.planApproval ?? false;
+    this.onApproved = options.onApproved;
+  }
 
   async present(input: PresentPlanInput): Promise<void> {
     const accepted = evaluateDecomposition(input.plan, this.limits);
@@ -92,8 +111,13 @@ export class PlanApprovalStore {
               ON CONFLICT(target, payload_hash) DO NOTHING`,
         args: [input.epicId, input.notionPageId, body, hash(body), time],
       },
-      epicStatusStatement(input.epicId, EPIC_BOARD_STATUS.planned, time),
+      epicStatusStatement(input.epicId, this.planApproval ? EPIC_BOARD_STATUS.planned : EPIC_BOARD_STATUS.executing, time),
     ], "write");
+    // Nobody is waited on for the split, so the gate closes behind itself and
+    // the Stories exist at once. The page still shows how the work was cut.
+    if (!this.planApproval) {
+      await this.approve({ epicId: input.epicId, eventId: `auto-approval:${input.epicId}`, source: "auto" });
+    }
   }
 
   async getEpic(epicId: string): Promise<EpicApprovalSnapshot> {

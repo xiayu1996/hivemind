@@ -261,7 +261,7 @@ CREATE TABLE IF NOT EXISTS epic_plans (
 CREATE TABLE IF NOT EXISTS epic_approval_events (
   event_id      TEXT PRIMARY KEY,
   epic_id       TEXT NOT NULL REFERENCES epics(id) ON DELETE CASCADE,
-  source        TEXT NOT NULL CHECK (source IN ('comment','drag')),
+  source        TEXT NOT NULL CHECK (source IN ('comment','drag','auto')),
   created_at    INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_epic_approval_events_epic ON epic_approval_events(epic_id);
