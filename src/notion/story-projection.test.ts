@@ -73,7 +73,7 @@ depends_on: []
     const page = rows.rows.find((row) => row.operation === "sync_story_page");
     const payload = JSON.parse(String(page?.payload));
     expect(payload.desired).toMatchObject({
-      design: "Design is pending.",
+      design: "设计还没写出来。",
       specs: [{ id: "S-EPIC1-01-a", status: "pending" }],
     });
     const property = rows.rows.find((row) => row.operation === "sync_story_properties");
@@ -155,8 +155,9 @@ depends_on: []
         "代码校验拒绝了这些结论：S-EPIC1-03-a: screenshot is missing",
       ].join("\n"),
     });
-    expect(desired.questions).toContain("Execution stopped: verify_loop_exceeded. Last verification round 2: 未通过");
-    expect(desired.metadata).toContain("Budget 1/6");
+    expect(desired.questions).toContain("这张卡停下了：验证轮次用完。");
+    expect(desired.questions).toContain("最近一轮（第 2 轮）：未通过");
+    expect(desired.metadata).toContain("本段预算 1/6");
     client.close();
   });
 
@@ -244,6 +245,29 @@ depends_on: []
     expect(desired.questions).toBe(
       "已应用的回答：\n- Claude Code session on behalf of Ryan（2025-09-09 06:40 UTC，针对 S-EPIC1-04-a，已用于第 8 轮）：Use the latest event.",
     );
+    client.close();
+  });
+
+  it("puts a face on the card that says whether it wants a person", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, () => 10);
+    await store.createStory({ id: "S-EPIC1-01", notionPageId: "page-1", title: "Story", requirement: "Requirement" });
+    const projection = new NotionStoryProjection(client, () => 20);
+
+    const iconFor = async (state: string): Promise<string> => {
+      await client.execute({ sql: "UPDATE stories SET state = ? WHERE id = 'S-EPIC1-01'", args: [state] });
+      await projection.enqueue("S-EPIC1-01");
+      const row = (await client.execute(
+        "SELECT payload FROM notion_outbox WHERE operation = 'sync_story_properties' ORDER BY id DESC LIMIT 1",
+      )).rows[0];
+      return (JSON.parse(String(row?.payload)) as { icon: string }).icon;
+    };
+
+    expect(await iconFor("NEEDS_INPUT")).toBe("🙋");
+    expect(await iconFor("CODE")).toBe("🔧");
+    expect(await iconFor("DELIVERED")).toBe("✅");
+    expect(await iconFor("HUMAN_PARKED")).toBe("⏸");
     client.close();
   });
 });

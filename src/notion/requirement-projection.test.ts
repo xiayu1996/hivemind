@@ -104,7 +104,7 @@ describe("RequirementPageProjector", () => {
     const rows = (await client.execute("SELECT payload FROM notion_outbox ORDER BY id")).rows;
     expect(rows).toHaveLength(2);
     const metadata = (JSON.parse(String(rows[1]!.payload)) as { desired: { metadata: string } }).desired.metadata;
-    expect(metadata).toContain("E-1（开发中，Story 1/1 已交付）");
+    expect(metadata).toContain("E-1（进行中，Story 1/1 已交付）");
   });
 
   it("marks a confirmed PRD frozen so the page projection stops touching it", async () => {

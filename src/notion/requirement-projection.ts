@@ -13,6 +13,7 @@ import { questionText } from "../orchestrator/human-question.js";
 import type { DesiredRequirementPage } from "./blocks/requirement-page.js";
 import type { NotionOutbox } from "./outbox.js";
 import schema from "./notion-schema.json" with { type: "json" };
+import { epicStateWord, stopReasonWord } from "./display-text.js";
 
 const STATUS = schema.options.requirementStatus;
 
@@ -55,21 +56,10 @@ export interface RequirementPageInput {
   stop?: RequirementStop | null;
 }
 
-const EPIC_STATE_LABELS: Record<string, string> = {
-  INTAKE: "待开始",
-  DECOMPOSE: "拆解中",
-  PLAN_APPROVAL: "方案待确认",
-  EXECUTING: "开发中",
-  EPIC_ACCEPT: "验收中",
-  DONE: "已完成",
-  BLOCKED: "受阻",
-  FAILED: "失败",
-};
-
 function epicProgressLine(epics: readonly LinkedEpicProgress[]): string {
   if (epics.length === 0) return "关联 Epic: 暂无";
   const parts = epics.map((epic) => {
-    const label = EPIC_STATE_LABELS[epic.state] ?? epic.state;
+    const label = epicStateWord(epic.state);
     const stories = epic.storiesTotal > 0 ? `，Story ${epic.storiesDelivered}/${epic.storiesTotal} 已交付` : "";
     return `${epic.epicId}（${label}${stories}）`;
   });
@@ -100,7 +90,7 @@ export function buildRequirementPage(input: RequirementPageInput): DesiredRequir
     `状态: ${requirementStatusFor(requirement.state, requirement.clarifyRounds)}`,
     `澄清轮次: ${requirement.clarifyRounds}`,
     epicProgressLine(input.linkedEpics),
-    ...(requirement.stopReason ? [`等待人回答: ${requirement.stopReason}`] : []),
+    ...(requirement.stopReason ? [`等你回答：${stopReasonWord(requirement.stopReason)}`] : []),
   ].join(" · ");
   const stop = requirement.stopReason ? input.stop ?? null : null;
 

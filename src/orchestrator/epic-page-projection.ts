@@ -2,6 +2,7 @@ import type { Client, InStatement } from "@libsql/client";
 import { createHash } from "node:crypto";
 import { payloadHash } from "../notion/outbox.js";
 import text from "./epic-page-text.json" with { type: "json" };
+import { stopReasonWord, storyStateWord } from "../notion/display-text.js";
 import { BOARD_STATUS_FOR_STATE, type EpicBoardStatus } from "./epic-status-projection.js";
 import type { EpicState } from "./state-machine.js";
 
@@ -151,11 +152,9 @@ export function renderEpicProgress(payload: EpicPagePayload): { lead: string[]; 
   } else if (payload.blockedReason) {
     lead.push(fill(text.blocked, { reason: payload.blockedReason }));
   }
-  const states: Record<string, string> = text.storyStates;
-  const stops: Record<string, string> = text.stopReasons;
   const stories = payload.stories.map((story) => {
-    let line = fill(text.storyLine, { id: story.id, title: story.title, state: states[story.state] ?? story.state });
-    if (story.stopReason) line += fill(text.storyStop, { reason: stops[story.stopReason] ?? story.stopReason });
+    let line = fill(text.storyLine, { id: story.id, title: story.title, state: storyStateWord(story.state) });
+    if (story.stopReason) line += fill(text.storyStop, { reason: stopReasonWord(story.stopReason) });
     if (story.mrUrl) line += fill(text.storyMr, { url: story.mrUrl });
     return line;
   });

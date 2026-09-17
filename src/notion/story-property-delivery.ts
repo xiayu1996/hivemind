@@ -12,20 +12,9 @@ const payloadSchema = z.object({
   cardId: z.string().min(1),
   pageId: z.string().min(1),
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  icon: z.string().min(1).optional(),
   properties: z.record(z.string(), z.unknown()),
 });
-const pageSchema = z.object({ properties: z.record(z.string(), z.unknown()) }).passthrough();
-const richTextSchema = z.object({
-  rich_text: z.array(z.object({ plain_text: z.string() }).passthrough()),
-}).passthrough();
-
-function currentFingerprint(properties: Record<string, unknown>): string | undefined {
-  const parsed = richTextSchema.safeParse(properties[schema.propertyNames.syncFingerprint]);
-  if (!parsed.success) return undefined;
-  const value = parsed.data.rich_text.map((item) => item.plain_text).join("");
-  return /^[a-f0-9]{64}$/.test(value) ? value : undefined;
-}
-
 /** Applies card-level properties only when their central-truth fingerprint changed. */
 export class NotionStoryPropertyDelivery implements NotionOutboxDelivery {
   constructor(
@@ -37,7 +26,7 @@ export class NotionStoryPropertyDelivery implements NotionOutboxDelivery {
   async isApplied(record: NotionOutboxRecord): Promise<boolean> {
     const payload = this.payload(record);
     if (await this.isSuppressed(payload.cardId)) return true;
-    const applied = await this.observed(payload.pageId) === payload.fingerprint;
+    const applied = await this.observed(payload.cardId) === payload.fingerprint;
     if (applied) await this.remember(payload);
     return applied;
   }
@@ -45,10 +34,11 @@ export class NotionStoryPropertyDelivery implements NotionOutboxDelivery {
   async send(record: NotionOutboxRecord): Promise<void> {
     const payload = this.payload(record);
     if (await this.isSuppressed(payload.cardId)) return;
-    const observed = await this.observed(payload.pageId);
+    const observed = await this.observed(payload.cardId);
     await this.gateway.updatePageProperties({
       pageId: payload.pageId,
       properties: payload.properties,
+      ...(payload.icon ? { icon: payload.icon } : {}),
       fingerprint: payload.fingerprint,
       ...(observed ? { currentFingerprint: observed } : {}),
     });
@@ -62,13 +52,16 @@ export class NotionStoryPropertyDelivery implements NotionOutboxDelivery {
     return payloadSchema.parse(record.payload);
   }
 
-  private async observed(pageId: string): Promise<string | undefined> {
-    const response = await this.gateway.request({
-      method: "GET",
-      path: `/v1/pages/${encodeURIComponent(pageId)}`,
-      priority: "status",
-    });
-    return currentFingerprint(pageSchema.parse(response.data).properties);
+  /** What the board was last written with. Reading it from central truth
+   * rather than from the page costs no request and cannot be edited by a
+   * person who has no use for a hash. */
+  private async observed(cardId: string): Promise<string | undefined> {
+    const row = (await this.client.execute({
+      sql: "SELECT notion_property_fingerprint FROM stories WHERE id = ?",
+      args: [cardId],
+    })).rows[0];
+    const value = row?.notion_property_fingerprint;
+    return typeof value === "string" && /^[a-f0-9]{64}$/.test(value) ? value : undefined;
   }
 
   private async isSuppressed(cardId: string): Promise<boolean> {
@@ -86,8 +79,8 @@ export class NotionStoryPropertyDelivery implements NotionOutboxDelivery {
     );
     if (!status.success) throw new Error("Notion property projection has no AI status");
     await this.client.execute({
-      sql: `UPDATE stories SET notion_ai_status_shadow = ? WHERE id = ?`,
-      args: [status.data.select.name, payload.cardId],
+      sql: `UPDATE stories SET notion_ai_status_shadow = ?, notion_property_fingerprint = ? WHERE id = ?`,
+      args: [status.data.select.name, payload.fingerprint, payload.cardId],
     });
   }
 }

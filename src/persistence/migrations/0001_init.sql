@@ -150,6 +150,9 @@ CREATE TABLE IF NOT EXISTS stories (
   resume_state      TEXT CHECK (resume_state IS NULL OR resume_state IN (
                       'QUEUED','SHAPE','DESIGN','SPECIFY','CODE','VERIFY','MERGE','REGRESSION_FIX','NEEDS_INPUT')),
   notion_ai_status_shadow TEXT,
+  -- What the board was last written with. It lived on the page as a property
+  -- a person could see and edit; central truth is the only place it belongs.
+  notion_property_fingerprint TEXT,
   human_wins_until  INTEGER,
   last_human_action_at INTEGER,
   created_at        INTEGER NOT NULL,
