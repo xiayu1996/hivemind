@@ -221,26 +221,37 @@ export class NotionRequirementPageDelivery implements NotionOutboxDelivery {
     snapshot: RequirementPageSnapshot,
     operations: readonly RequirementPageOperation[],
   ): Promise<void> {
-    const missingSections = operations.flatMap((operation) =>
-      operation.type === "create_section" ? [operation.section] : []);
+    const missingSections = REQUIREMENT_SECTION_ORDER.filter((section) =>
+      operations.some((operation) => operation.type === "create_section" && operation.section === section));
     if (missingSections.length > 0) {
-      // A block can only be appended after another one, so everything a page
-      // built from nothing needs above its first heading is written in the same
-      // call, in the order the design lays it out: the request, then the
-      // callout, then the headings.
       const opening: Block[] = [];
-      const preface = operations.find((operation) => operation.type === "insert_preface");
-      if (preface?.type === "insert_preface") opening.push(paragraph(t(preface.content)));
-      const quiet = quietText();
-      const top = operations.find((operation) => operation.type === "insert_callout");
-      if (top?.type === "insert_callout" && snapshot.preface.length === 0) {
-        opening.push(callout(t(top.content), quiet.icon, quiet.color));
+      if (Object.keys(snapshot.sections).length === 0) {
+        // A block can only be appended after another one, so everything a page
+        // built from nothing needs above its first heading is written in the
+        // same call, in the order the design lays it out: the request, then
+        // the callout, then the headings.
+        const preface = operations.find((operation) => operation.type === "insert_preface");
+        if (preface?.type === "insert_preface") opening.push(paragraph(t(preface.content)));
+        const top = operations.find((operation) => operation.type === "insert_callout");
+        const quiet = quietText();
+        if (top?.type === "insert_callout" && snapshot.preface.length === 0) {
+          opening.push(callout(t(top.content), quiet.icon, quiet.color));
+        }
+        await this.append(pageId, [
+          ...opening,
+          ...missingSections.map((section) => heading2(t(requirementSectionTitle(section)))),
+        ]);
+        return;
       }
-      const ordered = REQUIREMENT_SECTION_ORDER.filter((section) => missingSections.includes(section));
-      await this.append(pageId, [
-        ...opening,
-        ...ordered.map((section) => heading2(t(requirementSectionTitle(section)))),
-      ]);
+      // A page that already has some of its headings gets one at a time, each
+      // after whatever precedes it, so an older page ends up in the same order
+      // as a new one. The caller reads the page again between passes.
+      const section = missingSections[0]!;
+      await this.append(
+        pageId,
+        [heading2(t(requirementSectionTitle(section)))],
+        this.sectionAnchor(snapshot, section),
+      );
       return;
     }
 
@@ -291,6 +302,17 @@ export class NotionRequirementPageDelivery implements NotionOutboxDelivery {
         );
       }
     }
+  }
+
+  /** The block a missing heading belongs after: the end of the nearest section
+   * above it, or the top of the page when it is the first one. */
+  private sectionAnchor(snapshot: RequirementPageSnapshot, section: RequirementSection): string | undefined {
+    const above = REQUIREMENT_SECTION_ORDER.slice(0, REQUIREMENT_SECTION_ORDER.indexOf(section));
+    for (const candidate of above.toReversed()) {
+      const holder = snapshot.sections[candidate];
+      if (holder) return holder.blocks.at(-1)?.id ?? holder.anchorBlockId;
+    }
+    return snapshot.callout?.id ?? snapshot.preface.at(-1)?.id;
   }
 
   private async append(parentId: string, children: Block[], after?: string): Promise<void> {

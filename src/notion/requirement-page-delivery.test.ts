@@ -84,6 +84,17 @@ class FakeNotion {
     });
   }
 
+  /** Blocks a page carried before this projection ever wrote to it. */
+  seed(pageId: string, blocks: ReadonlyArray<[string, string]>): void {
+    for (const [type, content] of blocks) {
+      this.children.get(pageId)!.push(this.create({
+        object: "block",
+        type,
+        [type]: { rich_text: [{ type: "text", text: { content } }] },
+      }));
+    }
+  }
+
   private create(input: Record<string, unknown>): FakeBlock {
     const type = String(input.type);
     const payload = input[type] as Record<string, unknown> | undefined;
@@ -248,6 +259,28 @@ describe("NotionRequirementPageDelivery", () => {
     // person approved, and the scenario they may have commented on stays put.
     expect(fake.visible(PAGE_ID).some((block) => block.id === scenario.id)).toBe(true);
     expect(fake.contents(PAGE_ID)).toContain("\u8fd9\u4efd PRD \u4f60\u5df2\u7ecf\u786e\u8ba4\u8fc7\uff0c\u4e0d\u4f1a\u518d\u88ab\u6539\u5199\u3002");
+  });
+
+  it("puts a heading an older page never had where it belongs, not at the bottom", async () => {
+    // What such a page carries: the person's words, a section that repeated
+    // the board, and the heading this version renames rather than rebuilds.
+    fake.seed(PAGE_ID, [
+      ["paragraph", "\u6211\u60f3\u968f\u65f6\u77e5\u9053\u73b0\u5728\u5728\u505a\u4ec0\u4e48\u3002"],
+      ["heading_2", "\u5143\u4fe1\u606f"],
+      ["paragraph", "\u72b6\u6001: CLARIFY"],
+      ["heading_2", "\u573a\u666f\u5316\u9a8c\u6536\u6e05\u5355"],
+    ]);
+    await projector.publish(REQUIREMENT_ID);
+    await replay();
+
+    expect(fake.contents(PAGE_ID)).toEqual([
+      "\u6211\u60f3\u968f\u65f6\u77e5\u9053\u73b0\u5728\u5728\u505a\u4ec0\u4e48\u3002",
+      "\u56de\u590d\u672c\u9875\u6700\u65b0\u4e00\u6761\u8bc4\u8bba\uff0c\u9009\u5b57\u6bcd\u5373\u53ef\u3002",
+      "\u6f84\u6e05\u8bb0\u5f55",
+      "PRD",
+      "\u4ea4\u4ed8\u7ed3\u679c",
+      "\u573a\u666f\u7531\u627f\u63a5\u5b83\u4eec\u7684 Epic \u9010\u6279\u9a8c\u6536\uff0c\u5168\u90e8\u901a\u8fc7\u540e\u8fd9\u6761\u9700\u6c42\u81ea\u52a8\u7ed3\u6848\u3002",
+    ]);
   });
 
   it("creates the Epic page a decomposition asked for and records its real id", async () => {

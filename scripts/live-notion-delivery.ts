@@ -12,6 +12,9 @@ import { NotionMediaPipeline } from "../src/notion/media.js";
 import { NotionOutbox } from "../src/notion/outbox.js";
 import { NotionStoryPageDelivery } from "../src/notion/story-page-delivery.js";
 import { NotionEpicPlanDelivery } from "../src/notion/epic-plan-delivery.js";
+import { NotionRequirementPageDelivery } from "../src/notion/requirement-page-delivery.js";
+import { RequirementPageProjector } from "../src/notion/requirement-projection.js";
+import { RequirementStore } from "../src/orchestrator/requirement-store.js";
 import { epicPagePayload, epicPageStatement } from "../src/orchestrator/epic-page-projection.js";
 import {
   NotionGatewayMediaPort,
@@ -64,6 +67,7 @@ async function main(): Promise<void> {
   const gateway = new NotionGateway({ transport: createNotionHttpTransport({ token }) });
   const storyPageId = await storyProbe(db, gateway, parentId);
   await epicProbe(db, gateway, secrets, storyPageId);
+  await requirementProbe(db, gateway, secrets);
   db.close();
 }
 
@@ -399,6 +403,140 @@ async function epicProbe(
     body: { archived: true },
   });
   console.log("epic probe page archived");
+}
+
+/**
+ * The requirement page a person asked for something on: their own words stay
+ * where they wrote them, each clarification round folds into one line, and a
+ * PRD they confirmed is never rewritten again. The page starts with two
+ * headings an older build wrote, so the run also shows what happens to those.
+ */
+async function requirementProbe(
+  db: ReturnType<typeof openDb>,
+  gateway: NotionGateway,
+  secrets: Awaited<ReturnType<typeof loadSecretsFile>>,
+): Promise<void> {
+  const requirementsDataSourceId = secrets.get("HIVEMIND_NOTION_REQUIREMENTS_DATA_SOURCE_ID");
+  const epicsDataSourceId = secrets.get("HIVEMIND_NOTION_EPICS_DATA_SOURCE_ID");
+  if (!requirementsDataSourceId || !epicsDataSourceId) throw new Error("a probe data source id is missing");
+  const requirementId = `R-LIVEPAGE-${new Date().toISOString().slice(0, 10)}`;
+  const original = "\u6211\u60f3\u968f\u65f6\u77e5\u9053\u6bcf\u5f20\u5361\u73b0\u5728\u5728\u505a\u4ec0\u4e48\u3002";
+
+  const created = await gateway.request({
+    method: "POST",
+    path: "/v1/pages",
+    priority: "interaction",
+    body: {
+      parent: { type: "data_source_id", data_source_id: requirementsDataSourceId },
+      properties: {
+        [schema.propertyNames.title]: {
+          title: [{ type: "text", text: { content: `\u9700\u6c42\u9875\u63a2\u9488 ${new Date().toISOString()}` } }],
+        },
+      },
+      children: [
+        // The person's own words, written where a person writes them.
+        { object: "block", type: "paragraph", paragraph: { rich_text: [{ type: "text", text: { content: original } }] } },
+        // What an older build left behind: a section that repeated the board,
+        // and one this version renames rather than rebuilds.
+        { object: "block", type: "heading_2", heading_2: { rich_text: [{ type: "text", text: { content: "\u5143\u4fe1\u606f" } }] } },
+        { object: "block", type: "paragraph", paragraph: { rich_text: [{ type: "text", text: { content: "\u72b6\u6001: CLARIFY" } }] } },
+        { object: "block", type: "heading_2", heading_2: { rich_text: [{ type: "text", text: { content: "\u573a\u666f\u5316\u9a8c\u6536\u6e05\u5355" } }] } },
+      ],
+    },
+  });
+  const pageId = String((created.data as { id: string }).id);
+  console.log(`requirement probe page created: ${pageId}`);
+  const prefaceId = (await listChildren(gateway, pageId))[0]!.id;
+
+  const store = new RequirementStore(db.client);
+  const outbox = new NotionOutbox(db.client);
+  const projector = new RequirementPageProjector(store, outbox);
+  const delivery = new NotionRequirementPageDelivery(db.client, gateway, epicsDataSourceId);
+  await db.client.execute({ sql: "DELETE FROM requirements WHERE id = ?", args: [requirementId] });
+  await store.createRequirement({ id: requirementId, notionPageId: pageId, title: "\u9700\u6c42\u9875\u63a2\u9488", originalRequest: original });
+
+  const project = async (round: number): Promise<void> => {
+    await projector.publish(requirementId);
+    const result = await outbox.replay(delivery);
+    if (result.failed > 0) throw new Error(`requirement round ${round} delivery failed, see notion_outbox.last_error`);
+    console.log(`requirement round ${round} delivered`);
+  };
+
+  await store.openClarifyRound(requirementId, [
+    {
+      question: "\u8c01\u4f1a\u7528\u5b83\uff1f",
+      options: [{ label: "\u503c\u73ed\u7684\u4eba", recommended: true }, { label: "\u6240\u6709\u4eba" }],
+    },
+  ], "probe-ask-1");
+  await project(1);
+  const afterFirst = await listChildren(gateway, pageId);
+  const roundBlockId = afterFirst.find((block) => block.type === "toggle")?.id;
+  if (!roundBlockId) throw new Error("the first clarification round has no fold");
+  if (!(afterFirst.find((block) => block.id === roundBlockId)?.text ?? "").includes("\u7b49\u4f60\u56de\u7b54")) {
+    throw new Error("the open round does not say it is waiting for an answer");
+  }
+
+  await store.recordClarifyAnswers(requirementId, 1, ["A"], "probe-answer-1");
+  await store.openClarifyRound(requirementId, ["\u591a\u4e45\u5237\u65b0\u4e00\u6b21\uff1f"], "probe-ask-2");
+  await project(2);
+  await store.recordClarifyAnswers(requirementId, 2, ["\u4e00\u5206\u949f"], "probe-answer-2");
+  await store.transition(requirementId, "CLARIFY", "PRD_CONFIRM", "system", "probe-prd");
+  await store.saveDraftPrd(requirementId, JSON.stringify({
+    businessGoal: "\u503c\u73ed\u7684\u4eba\u968f\u65f6\u770b\u5230\u6bcf\u5f20\u5361\u8fdb\u5230\u54ea\u4e00\u6b65",
+    nonGoals: ["\u8fd9\u6b21\u4e0d\u505a\u6743\u9650"],
+    scenarios: [
+      { id: "s01", given: "\u503c\u73ed\u7684\u4eba\u6253\u5f00\u9996\u5c4f", when: "\u5237\u65b0\u9875\u9762", then: "\u770b\u5230\u5168\u90e8\u5728\u7b49\u4eba\u7684\u5361\u7247" },
+      { id: "s02", given: "\u4e00\u5f20\u5361\u5728\u7b49\u4eba\u56de\u7b54", when: "\u70b9\u8fdb\u53bb", then: "\u4e00\u773c\u770b\u5230\u5728\u7b49\u8c01\u3001\u7b49\u4ec0\u4e48" },
+    ],
+    openQuestions: ["\u8981\u4e0d\u8981\u7ed9\u4ed6\u53d1\u63d0\u9192\uff1f"],
+  }), "probe-prd");
+  await project(3);
+
+  const beforeFreeze = await listChildren(gateway, pageId);
+  const scenarioBlock = beforeFreeze.find((block) => block.type === "numbered_list_item");
+  if (!scenarioBlock) throw new Error("the PRD has no numbered scenario");
+
+  await store.confirmPrd(requirementId, 1, `probe-confirm-${Date.now()}`, "comment", "probe-confirm");
+  await store.transition(requirementId, "PRD_CONFIRM", "DECOMPOSING", "system", "probe-decompose");
+  await project(4);
+
+  const blocks = await listChildren(gateway, pageId);
+  const headings = blocks.filter((block) => block.type === "heading_2").map((block) => block.text ?? "");
+  const expected = ["\u6f84\u6e05\u8bb0\u5f55", "PRD", "\u4ea4\u4ed8\u7ed3\u679c"];
+  if (headings.join("|") !== expected.join("|")) {
+    throw new Error(`requirement headings are wrong or duplicated: ${headings.join(" / ")}`);
+  }
+  if (blocks[0]?.id !== prefaceId) throw new Error("the person's own words no longer open the page");
+  if (blocks.filter((block) => (block.text ?? "") === original).length !== 1) {
+    throw new Error("the request was copied a second time");
+  }
+  const folds = blocks.filter((block) => block.type === "toggle");
+  if (folds.length !== 2) throw new Error(`expected one fold per clarification round, found ${folds.length}`);
+  if (folds[0]?.id !== roundBlockId) throw new Error("the answered round was rebuilt instead of rewritten");
+  if (!(folds[0]?.text ?? "").includes("\u5df2\u56de\u7b54")) throw new Error("the answered round still says it is waiting");
+  if (!blocks.some((block) => block.id === scenarioBlock.id)) {
+    throw new Error("confirming the PRD rewrote the scenarios the person approved");
+  }
+  const callouts = blocks.filter((block) => block.type === "callout");
+  // One at the top for the person, one banner saying the PRD is confirmed.
+  if (callouts.length !== 2) throw new Error(`expected two callouts, found ${callouts.length}`);
+  if ((callouts[0]?.text ?? "") !== "\u73b0\u5728\u6ca1\u6709\u7b49\u4f60\u5904\u7406\u7684\u4e8b\u3002") {
+    throw new Error(`the top callout should be quiet once nobody is waited on: ${callouts[0]?.text ?? ""}`);
+  }
+  console.log(`requirement headings in order: ${headings.join(" / ")}`);
+  console.log(`rounds kept their blocks: ${folds.map((block) => block.id).join(", ")}`);
+
+  if (process.env.HIVEMIND_PROBE_KEEP === "1") {
+    console.log(`requirement probe page kept: https://www.notion.so/${pageId.replaceAll("-", "")}`);
+    return;
+  }
+  await gateway.request({
+    method: "PATCH",
+    path: `/v1/pages/${encodeURIComponent(pageId)}`,
+    priority: "interaction",
+    body: { archived: true },
+  });
+  console.log("requirement probe page archived");
 }
 
 main().catch((error: unknown) => {
