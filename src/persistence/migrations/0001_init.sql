@@ -89,7 +89,7 @@ CREATE INDEX IF NOT EXISTS idx_requirement_approval_events ON requirement_approv
 -- updates in place instead of appending a second copy.
 CREATE TABLE IF NOT EXISTS requirement_notion_sections (
   requirement_id  TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
-  section         TEXT NOT NULL CHECK (section IN ('metadata','original','clarify','prd','acceptance','questions')),
+  section         TEXT NOT NULL CHECK (section IN ('callout','clarify','prd','delivery')),
   anchor_block_id TEXT NOT NULL UNIQUE,
   PRIMARY KEY (requirement_id, section)
 );

@@ -45,7 +45,7 @@ export interface AcceptanceItem {
 export type ApprovalKind = "prd_confirm" | "prd_revision" | "acceptance" | "resume_answer";
 export type ApprovalSource = "comment" | "drag";
 
-export type RequirementNotionSection = "metadata" | "original" | "clarify" | "prd" | "acceptance" | "questions";
+export type RequirementNotionSection = "callout" | "clarify" | "prd" | "delivery";
 
 export interface RequirementStop {
   /** The state the requirement was in when it stopped; it resumes from there. */

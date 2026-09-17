@@ -93,12 +93,6 @@ describe("what Notion is written with", () => {
           clarify: [],
           prd: null,
           acceptance: [],
-          linkedEpics: EPIC_STATES.map((epicState, index) => ({
-            epicId: `E-${index}`,
-            state: epicState,
-            storiesTotal: 2,
-            storiesDelivered: 1,
-          })),
           stop: stopReason ? { state, detail: "有个问题等你回答", stoppedAt: 10 } : null,
         });
         assertReadable(`requirement page ${state}/${stopReason}`, strings(page));

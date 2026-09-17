@@ -27,6 +27,24 @@ export type EpicPageSection = "goal" | "plan" | "dependencies" | "technical";
 
 const epicSectionTitles: Record<EpicPageSection, SectionName> = text.sections.epic;
 
+/** The requirement page's sections. The original request is the page's own
+ * preface, not a section: the person wrote it there. */
+export type RequirementPageSection = "clarify" | "prd" | "delivery";
+
+const requirementSectionTitles: Record<RequirementPageSection, SectionName> = text.sections.requirement;
+
+export function requirementSectionTitle(section: RequirementPageSection): string {
+  return requirementSectionTitles[section].title;
+}
+
+export function requirementSectionForTitle(heading: string): RequirementPageSection | undefined {
+  const wanted = heading.trim();
+  for (const [section, names] of Object.entries(requirementSectionTitles) as Array<[RequirementPageSection, SectionName]>) {
+    if (names.title === wanted || names.aliases.includes(wanted)) return section;
+  }
+  return undefined;
+}
+
 export function epicSectionTitle(section: EpicPageSection): string {
   return epicSectionTitles[section].title;
 }

@@ -81,6 +81,11 @@
       "plan": { "title": "拆解方案", "aliases": [] },
       "dependencies": { "title": "依赖", "aliases": [] },
       "technical": { "title": "技术细节", "aliases": [] }
+    },
+    "requirement": {
+      "clarify": { "title": "澄清记录", "aliases": [] },
+      "prd": { "title": "PRD", "aliases": [] },
+      "delivery": { "title": "交付结果", "aliases": ["场景化验收清单"] }
     }
   },
   "waiting": {

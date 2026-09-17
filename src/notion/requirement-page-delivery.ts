@@ -3,6 +3,10 @@ import { z } from "zod";
 import {
   REQUIREMENT_SECTION_ORDER,
   planRequirementPageUpdate,
+  prdFrozenLine,
+  type DesiredClarifyRound,
+  type DesiredPrd,
+  type DesiredRequirementPage,
   type RequirementPageOperation,
   type RequirementPageSnapshot,
   type RequirementSection,
@@ -11,29 +15,55 @@ import { archiveBlock, type NotionGateway } from "./gateway.js";
 import { shouldSuppressSystemProjection } from "./intent-interpreter.js";
 import type { NotionOutboxDelivery, NotionOutboxRecord } from "./outbox.js";
 import schema from "./notion-schema.json" with { type: "json" };
-import { quietText } from "./display-text.js";
+import { quietText, requirementSectionForTitle, requirementSectionTitle } from "./display-text.js";
+import {
+  bold,
+  callout,
+  code,
+  heading2,
+  italic,
+  numbered,
+  paragraph,
+  quote,
+  runs,
+  t,
+  toggle,
+  type Block,
+} from "./rich-text.js";
 
-const SECTION_TITLES: Record<RequirementSection, string> = {
-  metadata: "元信息",
-  original: "原始需求",
-  clarify: "澄清记录",
-  prd: "PRD",
-  acceptance: "场景化验收清单",
-  questions: "待人回答",
-};
-const TITLE_SECTIONS = new Map(
-  Object.entries(SECTION_TITLES).map(([section, title]) => [title, section as RequirementSection]),
-);
+// Headings this page no longer has. An older build wrote the metadata into a
+// section of its own, copied the person's words under a heading next to them,
+// and kept a waiting section that the callout now carries.
+const RETIRED_TITLES = new Set(["\u5143\u4fe1\u606f", "\u539f\u59cb\u9700\u6c42", "\u5f85\u4eba\u56de\u7b54", "\u9700\u8981\u4f60\u5904\u7406"]);
 
 const desiredSchema = z.object({
-  metadata: z.string(),
+  callout: z.string(),
   original: z.string(),
-  clarify: z.array(z.string()),
-  prd: z.array(z.string()),
-  prdFrozen: z.boolean(),
-  acceptance: z.array(z.string()),
-  questions: z.string().optional(),
-});
+  clarify: z.array(z.object({
+    round: z.number().int().positive(),
+    line: z.string().min(1),
+    items: z.array(z.object({
+      question: z.string(),
+      options: z.array(z.string()),
+      answer: z.string().optional(),
+      reading: z.string().optional(),
+    })),
+  })),
+  prd: z.object({
+    goal: z.string(),
+    nonGoals: z.array(z.string()),
+    scenarios: z.array(z.object({
+      id: z.string().min(1),
+      given: z.string(),
+      when: z.string(),
+      // oxlint-disable-next-line unicorn/no-thenable -- Given/When/Then is the external PRD contract.
+      then: z.string(),
+    })),
+    openQuestions: z.array(z.string()),
+    frozen: z.boolean(),
+  }).nullable(),
+  delivery: z.string(),
+}) as unknown as z.ZodType<DesiredRequirementPage>;
 const pageSchema = z.object({
   requirementId: z.string().min(1),
   pageId: z.string().min(1),
@@ -73,17 +103,8 @@ function richText(content: string): Array<{ type: "text"; text: { content: strin
   return [text(content)];
 }
 
-function blockBody(type: "paragraph" | "callout" | "to_do" | "heading_2", content: string): Record<string, unknown> {
-  return {
-    object: "block",
-    type,
-    [type]: {
-      rich_text: richText(content),
-      ...(type === "callout" ? { icon: { type: "emoji", emoji: "ℹ️" } } : {}),
-      // The tick belongs to the person; a projection only ever creates the box.
-      ...(type === "to_do" ? { checked: false } : {}),
-    },
-  };
+function paragraphBody(content: string): Record<string, unknown> {
+  return { object: "block", type: "paragraph", paragraph: { rich_text: richText(content) } };
 }
 
 function calloutBlock(quiet: { icon: string; color: string; action: string }): Record<string, unknown> {
@@ -99,6 +120,46 @@ function textOf(item: NotionBlock): string {
   const parsed = z.object({ rich_text: z.array(z.object({ plain_text: z.string() }).passthrough()) })
     .passthrough().safeParse(value);
   return parsed.success ? parsed.data.rich_text.map((part) => part.plain_text).join("") : "";
+}
+
+/**
+ * What one clarification round holds: the question as asked, the options a
+ * person picked a letter from, and their reply with what the letters meant.
+ * Nothing is paraphrased -- a paraphrase would quietly become the requirement.
+ */
+function roundChildren(round: DesiredClarifyRound): Block[] {
+  const blocks: Block[] = [];
+  for (const [index, item] of round.items.entries()) {
+    blocks.push(paragraph(bold(`\u95ee ${index + 1}\u3001${item.question}`)));
+    if (item.options.length > 0) blocks.push(quote(t(item.options.join("\n"))));
+    if (item.answer !== undefined) {
+      blocks.push(paragraph(t(`\u7b54\uff1a${item.answer}`)));
+      const reading = item.reading?.slice(item.answer.length).trim();
+      if (reading) blocks.push(paragraph(italic(reading)));
+    }
+  }
+  return blocks;
+}
+
+/** The PRD as a person judges it: what it is for, what it is not, and one
+ * numbered scenario at a time with its own three lines underneath. */
+function prdBlocks(prd: DesiredPrd): Block[] {
+  const blocks: Block[] = [];
+  if (prd.frozen) blocks.push(callout(t(prdFrozenLine()), "\u2705", "green_background"));
+  blocks.push(paragraph(t(prd.goal)));
+  for (const item of prd.nonGoals) blocks.push(paragraph(t(`\u4e0d\u505a\uff1a${item}`)));
+  for (const [index, scenario] of prd.scenarios.entries()) {
+    blocks.push(numbered(
+      runs(t(`\u573a\u666f ${index + 1} \u00b7 ${scenario.then} `), code(scenario.id)),
+      [
+        paragraph(t(`\u524d\u63d0\uff1a${scenario.given}`)),
+        paragraph(t(`\u64cd\u4f5c\uff1a${scenario.when}`)),
+        paragraph(t(`\u7ed3\u679c\uff1a${scenario.then}`)),
+      ],
+    ));
+  }
+  for (const question of prd.openQuestions) blocks.push(paragraph(t(`\u7b49\u4f60\u88c1\u51b3\uff1a${question}`)));
+  return blocks;
 }
 
 /** Every outbox operation this delivery owns, for the replay filter. */
@@ -147,64 +208,116 @@ export class NotionRequirementPageDelivery implements NotionOutboxDelivery {
     for (let pass = 0; pass < 8; pass++) {
       const snapshot = await this.readPage(payload.pageId);
       await this.rememberAnchors(payload.requirementId, snapshot);
-      await this.bindAcceptanceBlocks(payload.requirementId, snapshot);
       const operations = planRequirementPageUpdate(snapshot, payload.desired);
       if (operations.length === 0) break;
-      await this.apply(payload.pageId, snapshot, operations);
+      await this.apply(payload.pageId, payload.desired, snapshot, operations);
     }
     await this.syncStatus(payload.requirementId, payload.pageId, payload.status);
   }
 
   private async apply(
     pageId: string,
+    desired: DesiredRequirementPage,
     snapshot: RequirementPageSnapshot,
     operations: readonly RequirementPageOperation[],
   ): Promise<void> {
     const missingSections = operations.flatMap((operation) =>
       operation.type === "create_section" ? [operation.section] : []);
     if (missingSections.length > 0) {
-      // Headings are appended in the canonical order so a page built in several
-      // passes still reads top to bottom the way the design lays it out.
+      // A block can only be appended after another one, so everything a page
+      // built from nothing needs above its first heading is written in the same
+      // call, in the order the design lays it out: the request, then the
+      // callout, then the headings.
+      const opening: Block[] = [];
+      const preface = operations.find((operation) => operation.type === "insert_preface");
+      if (preface?.type === "insert_preface") opening.push(paragraph(t(preface.content)));
+      const quiet = quietText();
+      const top = operations.find((operation) => operation.type === "insert_callout");
+      if (top?.type === "insert_callout" && snapshot.preface.length === 0) {
+        opening.push(callout(t(top.content), quiet.icon, quiet.color));
+      }
       const ordered = REQUIREMENT_SECTION_ORDER.filter((section) => missingSections.includes(section));
-      await this.gateway.request({
-        method: "PATCH",
-        path: `/v1/blocks/${encoded(pageId)}/children`,
-        priority: "projection",
-        body: { children: ordered.map((section) => blockBody("heading_2", SECTION_TITLES[section])) },
-      });
+      await this.append(pageId, [
+        ...opening,
+        ...ordered.map((section) => heading2(t(requirementSectionTitle(section)))),
+      ]);
       return;
     }
 
+    const rounds = new Map(desired.clarify.map((round) => [round.round, round]));
     for (const operation of operations) {
       if (operation.type === "archive_block") {
         await archiveBlock((input) => this.gateway.request(input), operation.blockId);
-      }
-      if (operation.type === "update_block") {
-        const type = snapshot.sections.metadata?.blocks[0]?.id === operation.blockId ? "callout" : "paragraph";
-        await this.gateway.request({
-          method: "PATCH",
-          path: `/v1/blocks/${encoded(operation.blockId)}`,
-          priority: "projection",
-          body: { [type]: { rich_text: richText(operation.content) } },
+      } else if (operation.type === "rename_section") {
+        // The heading keeps its block, and with it every comment under it.
+        await this.patch(operation.blockId, "heading_2", { rich_text: t(requirementSectionTitle(operation.section)) });
+      } else if (operation.type === "update_block") {
+        const quiet = quietText();
+        const isCallout = snapshot.callout?.id === operation.blockId;
+        await this.patch(operation.blockId, isCallout ? "callout" : "paragraph", {
+          rich_text: t(operation.content),
+          ...(isCallout ? { icon: { type: "emoji", emoji: quiet.icon }, color: quiet.color } : {}),
         });
+      } else if (operation.type === "update_round") {
+        const round = rounds.get(operation.round);
+        if (!round) continue;
+        await this.patch(operation.blockId, "toggle", { rich_text: t(round.line) });
+        // What is behind the fold moved with the line: an answered round shows
+        // the answer next to the question it answers.
+        for (const child of await this.children(operation.blockId)) {
+          await archiveBlock((input) => this.gateway.request(input), child.id);
+        }
+        await this.append(operation.blockId, roundChildren(round));
+      } else if (operation.type === "insert_round") {
+        const round = rounds.get(operation.round);
+        if (round) await this.append(pageId, [toggle(t(round.line), roundChildren(round))], operation.afterBlockId);
+      } else if (operation.type === "insert_prd") {
+        if (desired.prd) await this.append(pageId, prdBlocks(desired.prd), operation.afterBlockId);
+      } else if (operation.type === "insert_prd_banner") {
+        await this.append(pageId, [callout(t(prdFrozenLine()), "\u2705", "green_background")], operation.afterBlockId);
+      } else if (operation.type === "insert_delivery") {
+        await this.append(pageId, [paragraph(t(operation.content))], operation.afterBlockId);
+      } else if (operation.type === "insert_preface") {
+        // A card that arrived as a title alone gets the request written into
+        // the page. On a page that already has headings it lands under the
+        // callout, which is as close to the top as an append can reach.
+        await this.append(pageId, [paragraph(t(operation.content))], snapshot.callout?.id);
+      } else if (operation.type === "insert_callout") {
+        const quiet = quietText();
+        await this.append(
+          pageId,
+          [callout(t(operation.content), quiet.icon, quiet.color)],
+          snapshot.preface.at(-1)?.id,
+        );
       }
     }
+  }
 
-    const inserts = operations.filter((operation) => operation.type === "insert");
-    for (const section of REQUIREMENT_SECTION_ORDER) {
-      const batch = inserts.filter((operation) => operation.section === section);
-      if (batch.length === 0) continue;
-      const after = batch[0]!.afterBlockId;
-      await this.gateway.request({
-        method: "PATCH",
-        path: `/v1/blocks/${encoded(pageId)}/children`,
-        priority: "projection",
-        body: {
-          children: batch.map((operation) => blockBody(operation.block, operation.content)),
-          ...(after ? { after } : {}),
-        },
-      });
-    }
+  private async append(parentId: string, children: Block[], after?: string): Promise<void> {
+    await this.gateway.request({
+      method: "PATCH",
+      path: `/v1/blocks/${encoded(parentId)}/children`,
+      priority: "projection",
+      body: { children, ...(after ? { after } : {}) },
+    });
+  }
+
+  private async patch(blockId: string, type: string, body: Record<string, unknown>): Promise<void> {
+    await this.gateway.request({
+      method: "PATCH",
+      path: `/v1/blocks/${encoded(blockId)}`,
+      priority: "projection",
+      body: { [type]: body },
+    });
+  }
+
+  private async children(blockId: string): Promise<NotionBlock[]> {
+    const response = await this.gateway.request({
+      method: "GET",
+      path: `/v1/blocks/${encoded(blockId)}/children?page_size=100`,
+      priority: "projection",
+    });
+    return listSchema.parse(response.data).results.filter((block) => !block.archived);
   }
 
   /** The board column is a shared field: a person who just moved it wins for
@@ -242,9 +355,18 @@ export class NotionRequirementPageDelivery implements NotionOutboxDelivery {
     return select.success ? select.data.select?.name ?? null : null;
   }
 
+  /**
+   * The page as it stands: what the person wrote before any heading, the
+   * callout at the top, and each section this projection owns. Headings an
+   * older build wrote are collected so their blocks can go.
+   */
   private async readPage(pageId: string): Promise<RequirementPageSnapshot> {
     const sections: RequirementPageSnapshot["sections"] = {};
+    const preface: Array<{ id: string; content: string }> = [];
+    const retired: string[] = [];
+    let top: { id: string; content: string } | undefined;
     let current: RequirementSection | undefined;
+    let inRetired = false;
     let cursor: string | undefined;
     do {
       const suffix = cursor ? `?page_size=100&start_cursor=${encoded(cursor)}` : "?page_size=100";
@@ -256,45 +378,51 @@ export class NotionRequirementPageDelivery implements NotionOutboxDelivery {
       const page = listSchema.parse(response.data);
       for (const block of page.results) {
         if (block.archived) continue;
+        const content = textOf(block);
         if (block.type === "heading_2") {
-          const section = TITLE_SECTIONS.get(textOf(block));
+          const section = requirementSectionForTitle(content);
           current = section;
-          if (section) sections[section] = { anchorBlockId: block.id, blocks: [] };
+          inRetired = section === undefined;
+          if (section) {
+            sections[section] = { anchorBlockId: block.id, title: content, blocks: [] };
+          } else if (RETIRED_TITLES.has(content.trim())) {
+            retired.push(block.id);
+          }
+          continue;
+        }
+        if (block.type === "callout" && !top) {
+          top = { id: block.id, content };
+          continue;
+        }
+        if (inRetired) {
+          retired.push(block.id);
           continue;
         }
         const holder = current ? sections[current] : undefined;
-        if (!current || !holder) continue;
-        sections[current] = {
-          anchorBlockId: holder.anchorBlockId,
-          blocks: [...holder.blocks, { id: block.id, content: textOf(block) }],
-        };
+        if (!current || !holder) {
+          // Before any heading: the words the person wrote themselves.
+          if (!current) preface.push({ id: block.id, content });
+          continue;
+        }
+        sections[current] = { ...holder, blocks: [...holder.blocks, { id: block.id, content }] };
       }
       cursor = page.has_more ? page.next_cursor ?? undefined : undefined;
     } while (cursor);
-    return { sections };
+    return { preface, sections, retired, ...(top ? { callout: top } : {}) };
   }
 
   private async rememberAnchors(requirementId: string, snapshot: RequirementPageSnapshot): Promise<void> {
-    for (const [section, holder] of Object.entries(snapshot.sections)) {
-      if (!holder) continue;
+    const anchors: Array<[string, string]> = [
+      ...(snapshot.callout ? [["callout", snapshot.callout.id] as [string, string]] : []),
+      ...Object.entries(snapshot.sections).flatMap(([section, holder]) =>
+        holder ? [[section, holder.anchorBlockId] as [string, string]] : []),
+    ];
+    for (const [section, anchorBlockId] of anchors) {
       await this.client.execute({
         sql: `INSERT INTO requirement_notion_sections (requirement_id, section, anchor_block_id)
               VALUES (?, ?, ?)
               ON CONFLICT(requirement_id, section) DO UPDATE SET anchor_block_id = excluded.anchor_block_id`,
-        args: [requirementId, section, holder.anchorBlockId],
-      });
-    }
-  }
-
-  /** Ties each checklist box to the scenario it stands for, so a tick can be
-   * read back as a verdict on that scenario and not merely as a tick. */
-  private async bindAcceptanceBlocks(requirementId: string, snapshot: RequirementPageSnapshot): Promise<void> {
-    const blocks = snapshot.sections.acceptance?.blocks ?? [];
-    for (const block of blocks) {
-      await this.client.execute({
-        sql: `UPDATE requirement_acceptance_items SET notion_block_id = ?
-              WHERE requirement_id = ? AND text = ? AND (notion_block_id IS NULL OR notion_block_id <> ?)`,
-        args: [block.id, requirementId, block.content, block.id],
+        args: [requirementId, section, anchorBlockId],
       });
     }
   }
@@ -326,7 +454,7 @@ export class NotionRequirementPageDelivery implements NotionOutboxDelivery {
         // from the start.
         children: [
           calloutBlock(quietText()),
-          ...payload.body.split("\n\n").map((part) => blockBody("paragraph", part)),
+          ...payload.body.split("\n\n").map((part) => paragraphBody(part)),
         ],
       },
     });
