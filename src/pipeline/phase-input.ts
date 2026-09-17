@@ -79,6 +79,10 @@ export interface PhaseInput {
 export interface PhaseRejection {
   phase: string;
   reason: string;
+  /** What the refusing check named, when it named anything. Rendered ahead of
+   * the reason: a round handed the tail of a test log never sees the one line
+   * that says which test failed. */
+  failures?: readonly string[] | undefined;
 }
 
 const SECTION = "\n\n";
@@ -176,9 +180,12 @@ export function roundTasks(input: PhaseInput): RoundTask[] {
     });
   }
   for (const rejection of sortBy(input.previousRejections, (r) => `${r.phase} ${r.reason}`)) {
+    const failures = [...(rejection.failures ?? [])].toSorted();
     tasks.push({
       tag: `[rejected:${rejection.phase}]`,
-      text: `${rejection.phase} refused the last attempt: ${rejection.reason.trim()}`
+      text: `${rejection.phase} refused the last attempt: `
+        + (failures.length > 0 ? `these failed: ${failures.join(", ")}. ` : "")
+        + `${rejection.reason.trim()}`
         + " Do not repeat the rejected approach.",
     });
   }

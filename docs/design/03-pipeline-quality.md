@@ -363,6 +363,8 @@ MERGE 阶段保留为"写业务语言交付报告"，报告质量由 §5 的业�
 2. **相关性**：与 CODE 出口共用 `selectProjectChecks`，按 `when` glob 对 `git diff --name-only base candidate` 的结果筛选；全部不相关即通过。
 3. **归因**：候选失败的检查**只有此时**才在基线上再跑一次，得三类结论——`story_regression`（基线绿）、`baseline_failing`（基线同样红且失败集相交）、`environment`（进程根本没起来）。同一次合流多条检查失败时取最重的一条：story_regression > environment > baseline_failing，反过来读会让一个既有失败替一个真失败开脱。失败的**名字**（测试名 / 类型错误位置）由 `extractCheckFailures` 从检查输出里提取并排在原因最前面：日志尾部是错的一端，vitest 的失败摘要在头部。
 
+**归因到 Story 的打回走状态机并消耗一轮。** 此前 `returnMergeToCode` 是一条裸 UPDATE：不写 `story.transition`、不计任何预算，于是 MERGE⇄CODE 可以无限来回。修订后打回与 VERIFY 拒绝同属一个内环预算（§1.5），口径由事件给出——`verify_records` 的拒绝行加上 `spent=1` 的合流事件，两者都按"人最后一次动卡"之后计。`conflict` 与 `story_regression` 消耗一轮，`baseline_failing` 与 `environment` 不消耗（前者是 Epic 分支的问题，后者交给崩溃安全网）。
+
 ### 8.4 供应商故障不进任何预算
 
 usage limit、限流、超时、传输中断、OAuth 刷新失败只进熔断器：卡原地等待，不计内环、不计重入、不产生停点。三类真停点不变，但只由代码层面的失败触发。CODE 的 prompt 超时改为 checkpoint 续跑，续跑耗尽才算一次失败。熔断探测使用不计费的凭据探针，不再以真派单探测；用量窗口解析不到时指数退避。Notion 上区分"等待供应商"与"需要输入"。OAuth 刷新单点化：多 pi 进程共享一份凭据并发刷新会互相作废旋转令牌。

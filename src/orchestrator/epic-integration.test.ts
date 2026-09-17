@@ -72,8 +72,11 @@ describe("EpicIntegrator", () => {
       .resolves.toMatchObject({ kind: "conflict" });
 
     await expect(store.getStory("S-M2-01")).resolves.toMatchObject({ state: "CODE" });
-    const events = (await client.execute("SELECT type FROM event_log WHERE card_id = 'S-M2-01'")).rows;
-    expect(events).toMatchObject([{ type: "merge.conflict" }]);
+    // The bounce goes through the state machine, so it leaves a transition
+    // beside the reason; a bare UPDATE let a Story bounce here forever.
+    const events = (await client.execute("SELECT type, data FROM event_log WHERE card_id = 'S-M2-01' ORDER BY id")).rows;
+    expect(events.map((row) => row.type)).toEqual(["merge.conflict", "story.transition"]);
+    expect(JSON.parse(String(events[0]?.data))).toMatchObject({ spent: true });
     expect((await client.execute("SELECT state FROM execution_dispatches WHERE story_id = 'S-M2-01'")).rows[0]?.state)
       .toBe("dispatched");
   });
@@ -91,8 +94,9 @@ describe("EpicIntegrator", () => {
       .resolves.toMatchObject({ kind: "verification_failed" });
 
     await expect(store.getStory("S-M2-01")).resolves.toMatchObject({ state: "CODE" });
-    expect((await client.execute("SELECT type FROM event_log WHERE card_id = 'S-M2-01'")).rows)
-      .toMatchObject([{ type: "merge.verification_failed" }]);
+    const events = (await client.execute("SELECT type, data FROM event_log WHERE card_id = 'S-M2-01' ORDER BY id")).rows;
+    expect(events.map((row) => row.type)).toEqual(["merge.verification_failed", "story.transition"]);
+    expect(JSON.parse(String(events[0]?.data))).toMatchObject({ spent: true });
   });
 
   it("refuses to integrate a Story that declares no scenarios", async () => {
