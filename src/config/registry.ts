@@ -110,7 +110,7 @@ export const CONFIG_KEYS = {
     default: 3,
     scope: "global",
     reload: "hot",
-    description: "Maximum re-entries of a single phase, counting failover, crash recovery and cross-host rebuild together.",
+    description: "How many times one phase may be dispatched again after its run died, counting failover, crash recovery and cross-host rebuild together. The count is per phase, not per card: it clears as soon as the card moves forward, because a run that died in SHAPE says nothing about DESIGN. This is the crash safety net, not the work's round budget - that is retry.maxInnerLoopRounds.",
   }),
   "retry.maxContinueRetries": def({
     schema: positiveInt.max(50),

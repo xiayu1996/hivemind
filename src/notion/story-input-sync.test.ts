@@ -214,8 +214,14 @@ depends_on: []
       title: "Never started",
       requirement: "Requirement",
     });
-    await store.recordPhaseReentry("S-EPIC1-03");
-    await store.recordPhaseReentry("S-EPIC1-03");
+    await store.recordDispatchFailure({
+      cardId: "S-EPIC1-03", state: "QUEUED", errorClass: "UNKNOWN",
+      message: "worker exited with code 1", attempt: 1, budget: 3, runId: "reentry-S-EPIC1-03",
+    });
+    await store.recordDispatchFailure({
+      cardId: "S-EPIC1-03", state: "QUEUED", errorClass: "UNKNOWN",
+      message: "worker exited with code 1", attempt: 2, budget: 3, runId: "reentry-S-EPIC1-03",
+    });
     await store.stopForInput("S-EPIC1-03", "QUEUED", "retry_limit_exceeded", "reentry-S-EPIC1-03");
     await client.execute({
       sql: "UPDATE stories SET notion_ai_status_shadow = ? WHERE id = 'S-EPIC1-03'",

@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import type { StorySection } from "../notion/blocks/story-page.js";
 import type { Client } from "@libsql/client";
+import { redactForExport } from "../observability/redact.js";
 import {
   assertStoryTransition,
+  isForwardStoryTransition,
   type StoryState,
   type StoryStopReason,
   type TransitionActor,
@@ -14,6 +16,10 @@ import { isProviderFault } from "../pipeline/failure-classification.js";
 
 export type { StoryPhase } from "../pipeline/phase.js";
 import type { StoryPhase } from "../pipeline/phase.js";
+
+/** A child process's stderr; long enough to carry a stack, short enough that
+ * one dead run cannot fill the event log. */
+const DISPATCH_FAILURE_MESSAGE_LIMIT = 4000;
 
 export interface StoryIntake {
   id: string;
@@ -279,6 +285,12 @@ export class StoryExecutionStore {
     const time = this.now();
     const [update] = await this.client.batch([
       {
+        // The crash counter is cleared by progress. A run that died in SHAPE
+        // says nothing about whether DESIGN will run, so carrying the count
+        // across phases turned three unrelated crashes in a card's life into a
+        // stop. Moving forward is the proof that the phase the count belonged
+        // to is over; a card bouncing between two phases never earns it.
+        //
         // A transition a person made is also the moment the inner-loop budget
         // starts again: the budget counts the rounds failed since somebody last
         // acted on the card, so without this stamp a resume grants a reentry
@@ -297,7 +309,8 @@ export class StoryExecutionStore {
         args: [
           to,
           phaseForState(to),
-          actor === "human" && expectedFrom === "NEEDS_INPUT" ? 1 : 0,
+          (actor === "human" && expectedFrom === "NEEDS_INPUT")
+            || (actor === "system" && isForwardStoryTransition(expectedFrom, to)) ? 1 : 0,
           actor === "human" ? 1 : 0,
           time,
           time,
@@ -746,14 +759,47 @@ export class StoryExecutionStore {
     }
   }
 
-  /** Counts a failed worker attempt so the dispatcher can bound automatic
-   * phase reentries before parking the card for a human. */
-  async recordPhaseReentry(cardId: string): Promise<void> {
-    await this.guard(cardId);
-    await this.client.execute({
-      sql: "UPDATE stories SET phase_reentries = phase_reentries + 1, updated_at = ? WHERE id = ?",
-      args: [this.now(), cardId],
+  /**
+   * Counts a failed worker attempt so the dispatcher can bound automatic phase
+   * reentries before parking the card for a human, and writes down what died.
+   *
+   * The count alone used to be the whole record: a card could reach its
+   * reentry ceiling and stop with no event, no message and nothing in the
+   * phase runs, because the run died before the worker wrote anything. Whoever
+   * opened the card then read "retry limit exceeded" over an empty history.
+   * The message is redacted on the way in - it is a process's stderr, which is
+   * the one place a credential reaches this table.
+   */
+  async recordDispatchFailure(input: {
+    cardId: string;
+    state: StoryState;
+    errorClass: string;
+    message: string;
+    attempt: number;
+    budget: number;
+    runId: string;
+  }): Promise<void> {
+    await this.guard(input.cardId);
+    const time = this.now();
+    const data = redactForExport({
+      state: input.state,
+      errorClass: input.errorClass,
+      attempt: input.attempt,
+      budget: input.budget,
+      message: input.message.slice(0, DISPATCH_FAILURE_MESSAGE_LIMIT),
     });
+    await this.client.batch([
+      {
+        sql: "UPDATE stories SET phase_reentries = phase_reentries + 1, updated_at = ? WHERE id = ?",
+        args: [time, input.cardId],
+      },
+      {
+        sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
+              VALUES (?, (SELECT COALESCE(MAX(seq), -1) + 1 FROM event_log WHERE run_id = ?),
+                      ?, ?, 'story.dispatch_failed', ?, ?)`,
+        args: [input.runId, input.runId, input.cardId, phaseForState(input.state), time, JSON.stringify(data)],
+      },
+    ], "write");
   }
 
   /** Marks a completed phase result as unusable so the next attempt regenerates

@@ -359,7 +359,12 @@ describe("StoryExecutionStore resume after a stop", () => {
     await store.transition("S-EPIC1-01", "QUEUED", "SHAPE", "system", "run-shape");
     await store.transition("S-EPIC1-01", "SHAPE", "DESIGN", "system", "run-design");
     await store.transition("S-EPIC1-01", "DESIGN", "SPECIFY", "system", "run-specify");
-    for (let attempt = 0; attempt < 3; attempt++) await store.recordPhaseReentry("S-EPIC1-01");
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await store.recordDispatchFailure({
+        cardId: "S-EPIC1-01", state: "SPECIFY", errorClass: "UNKNOWN",
+        message: "worker exited with code 1", attempt, budget: 3, runId: `reentry-${attempt}`,
+      });
+    }
     await store.stopForInput("S-EPIC1-01", "SPECIFY", "retry_limit_exceeded", "run-stop");
 
     await store.transition("S-EPIC1-01", "NEEDS_INPUT", "SPECIFY", "human", "notion-comment");
@@ -369,7 +374,7 @@ describe("StoryExecutionStore resume after a stop", () => {
     expect((await store.getStory("S-EPIC1-01")).phaseReentries).toBe(0);
   });
 
-  it("leaves the reentry count alone on a transition the system made", async () => {
+  it("clears the crash count once the card moves on, and keeps it when it is sent back", async () => {
     const client = createClient({ url: ":memory:" });
     await migrate(client);
     let time = 1_000;
@@ -378,14 +383,56 @@ describe("StoryExecutionStore resume after a stop", () => {
       id: "S-EPIC1-01",
       notionPageId: "page-1",
       title: "Still counting",
-      requirement: "Attempts spent inside one phase stay spent.",
+      requirement: "Crashes inside one phase stay spent until the card moves on.",
       branch: "story/epic1-01",
     });
     await store.transition("S-EPIC1-01", "QUEUED", "SHAPE", "system", "run-shape");
-    await store.recordPhaseReentry("S-EPIC1-01");
-    await store.transition("S-EPIC1-01", "SHAPE", "DESIGN", "system", "run-design");
-
+    await store.recordDispatchFailure({
+      cardId: "S-EPIC1-01", state: "SHAPE", errorClass: "UNKNOWN",
+      message: "worker exited with code 1", attempt: 1, budget: 3, runId: "reentry-1",
+    });
     expect((await store.getStory("S-EPIC1-01")).phaseReentries).toBe(1);
+
+    // Getting through SHAPE is the proof that the crash belonged to a phase
+    // that is now over; carrying it into DESIGN is what stopped a card on
+    // three unrelated failures spread across its whole life.
+    await store.transition("S-EPIC1-01", "SHAPE", "DESIGN", "system", "run-design");
+    expect((await store.getStory("S-EPIC1-01")).phaseReentries).toBe(0);
+
+    await store.transition("S-EPIC1-01", "DESIGN", "SPECIFY", "system", "run-specify");
+    await store.recordDispatchFailure({
+      cardId: "S-EPIC1-01", state: "SPECIFY", errorClass: "UNKNOWN",
+      message: "worker exited with code 1", attempt: 1, budget: 3, runId: "reentry-2",
+    });
+    // Backwards is not progress: a card bouncing between two phases is exactly
+    // what the counter is for.
+    await store.transition("S-EPIC1-01", "SPECIFY", "SHAPE", "system", "run-reshape");
+    expect((await store.getStory("S-EPIC1-01")).phaseReentries).toBe(1);
+  });
+
+  it("writes down what killed the run, with the message redacted", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, () => 1_000);
+    await store.createStory({
+      id: "S-EPIC1-01",
+      notionPageId: "page-1",
+      title: "Crashed",
+      requirement: "A dead run leaves something to read.",
+    });
+    await store.recordDispatchFailure({
+      cardId: "S-EPIC1-01", state: "QUEUED", errorClass: "UNKNOWN",
+      message: `spawn failed for token sk-${"x".repeat(24)}`,
+      attempt: 2, budget: 3, runId: "reentry-S-EPIC1-01",
+    });
+
+    const row = (await client.execute(
+      "SELECT data FROM event_log WHERE type = 'story.dispatch_failed'",
+    )).rows[0];
+    const data = JSON.parse(String(row?.data)) as { message: string; attempt: number; errorClass: string };
+    expect(data).toMatchObject({ attempt: 2, budget: 3, errorClass: "UNKNOWN", state: "QUEUED" });
+    expect(data.message).not.toContain("sk-x");
+    expect(data.message).toContain("spawn failed");
   });
 });
 
