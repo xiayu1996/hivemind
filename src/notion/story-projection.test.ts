@@ -4,6 +4,7 @@ import { StoryExecutionStore } from "../orchestrator/story-execution-store.js";
 import { parseDoD } from "../pipeline/dod.js";
 import { migrate } from "../persistence/migrate.js";
 import schema from "./notion-schema.json" with { type: "json" };
+import { STORY_BOARD_STATUS } from "./board-status.js";
 import { NotionStoryProjection } from "./story-projection.js";
 
 describe("NotionStoryProjection", () => {
@@ -195,9 +196,9 @@ depends_on: []
     await client.execute("UPDATE stories SET state = 'NEEDS_INPUT', stop_reason = 'retry_limit_exceeded', resume_state = 'CODE' WHERE id = 'S-EPIC1-04'");
     await projection.enqueue("S-EPIC1-04");
     await client.execute("UPDATE notion_outbox SET state = 'sent', sent_at = 21");
-    await client.execute({ sql: "UPDATE stories SET notion_ai_status_shadow = ? WHERE id = 'S-EPIC1-04'", args: [schema.options.aiStatus[2]!] });
+    await client.execute({ sql: "UPDATE stories SET notion_ai_status_shadow = ? WHERE id = 'S-EPIC1-04'", args: [STORY_BOARD_STATUS.needsInput] });
     // A person resumes it; the board now says active.
-    await client.execute({ sql: "UPDATE stories SET state = 'CODE', stop_reason = NULL, notion_ai_status_shadow = ? WHERE id = 'S-EPIC1-04'", args: [schema.options.aiStatus[1]!] });
+    await client.execute({ sql: "UPDATE stories SET state = 'CODE', stop_reason = NULL, notion_ai_status_shadow = ? WHERE id = 'S-EPIC1-04'", args: [STORY_BOARD_STATUS.running] });
     // It stops again with byte-identical properties.
     await client.execute("UPDATE stories SET state = 'NEEDS_INPUT', stop_reason = 'retry_limit_exceeded', resume_state = 'CODE' WHERE id = 'S-EPIC1-04'");
     await projection.enqueue("S-EPIC1-04");
@@ -304,6 +305,45 @@ depends_on: []
     expect(await iconFor("CODE")).toBe("🔧");
     expect(await iconFor("DELIVERED")).toBe("✅");
     expect(await iconFor("HUMAN_PARKED")).toBe("⏸");
+    client.close();
+  });
+});
+
+describe("when a Story asks for a person at all", () => {
+  it("speaks for every stop only a person can clear, and stays quiet otherwise", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, () => 10);
+    await store.createStory({ id: "S-EPIC1-09", notionPageId: "page-9", title: "Story", requirement: "Requirement" });
+    const projection = new NotionStoryProjection(client, () => 20);
+
+    const callout = async (): Promise<string | undefined> => {
+      await client.execute("DELETE FROM notion_outbox");
+      await projection.enqueue("S-EPIC1-09");
+      const row = (await client.execute(
+        "SELECT payload FROM notion_outbox WHERE operation = 'sync_story_page'",
+      )).rows[0];
+      return (JSON.parse(String(row?.payload)) as { desired: { metadata?: string } }).desired.metadata;
+    };
+
+    // Working, and the review request open: the board says where it is, and
+    // the page has nothing to ask of anybody.
+    for (const state of ["CODE", "VERIFY", "MERGE", "DELIVERED"]) {
+      await client.execute({ sql: "UPDATE stories SET state = ?, stop_reason = NULL WHERE id = 'S-EPIC1-09'", args: [state] });
+      expect(await callout(), state).toBeUndefined();
+    }
+
+    for (const stopReason of ["blocking_question", "verify_loop_exceeded", "retry_limit_exceeded", "cost_ceiling_exceeded"]) {
+      await client.execute({
+        sql: "UPDATE stories SET state = 'NEEDS_INPUT', stop_reason = ?, resume_state = 'CODE' WHERE id = 'S-EPIC1-09'",
+        args: [stopReason],
+      });
+      // Every one of them tells the person what to do, in their own words.
+      expect(await callout(), stopReason).toContain("回复本页评论");
+    }
+
+    await client.execute("UPDATE stories SET state = 'FAILED', stop_reason = NULL WHERE id = 'S-EPIC1-09'");
+    expect(await callout()).toContain("执行失败");
     client.close();
   });
 });

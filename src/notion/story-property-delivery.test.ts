@@ -4,6 +4,7 @@ import { StoryExecutionStore } from "../orchestrator/story-execution-store.js";
 import { migrate } from "../persistence/migrate.js";
 import { NotionGateway } from "./gateway.js";
 import schema from "./notion-schema.json" with { type: "json" };
+import { STORY_BOARD_STATUS } from "./board-status.js";
 import { NotionOutbox } from "./outbox.js";
 import { NotionStoryPropertyDelivery } from "./story-property-delivery.js";
 
@@ -20,7 +21,7 @@ describe("NotionStoryPropertyDelivery", () => {
     });
     await client.execute({
       sql: `UPDATE stories SET notion_ai_status_shadow = ?, human_wins_until = ? WHERE id = ?`,
-      args: [schema.options.aiStatus[4]!, 1_000, "S-EPIC1-01"],
+      args: [STORY_BOARD_STATUS.parked, 1_000, "S-EPIC1-01"],
     });
     const outbox = new NotionOutbox(client, () => 100);
     await outbox.enqueue({
@@ -33,7 +34,7 @@ describe("NotionStoryPropertyDelivery", () => {
         pageId: "page-1",
         fingerprint: "a".repeat(64),
         properties: {
-          [schema.propertyNames.aiStatus]: { select: { name: schema.options.aiStatus[0]! } },
+          [schema.propertyNames.aiStatus]: { select: { name: STORY_BOARD_STATUS.queued } },
         },
       },
     });
@@ -46,7 +47,7 @@ describe("NotionStoryPropertyDelivery", () => {
     const row = (await client.execute(
       "SELECT notion_ai_status_shadow FROM stories WHERE id = 'S-EPIC1-01'",
     )).rows[0];
-    expect(row?.notion_ai_status_shadow).toBe(schema.options.aiStatus[4]!);
+    expect(row?.notion_ai_status_shadow).toBe(STORY_BOARD_STATUS.parked);
     client.close();
   });
 });

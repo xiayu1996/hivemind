@@ -69,23 +69,72 @@
   },
   "sections": {
     "story": {
-      "requirement": { "title": "需求描述", "aliases": [] },
-      "specification": { "title": "验收场景", "aliases": ["需求规格"] },
-      "design": { "title": "设计摘要", "aliases": ["核心设计"] },
-      "verification": { "title": "验证记录", "aliases": [] },
-      "questions": { "title": "需要你处理", "aliases": ["待人回答"] },
-      "technical": { "title": "技术细节", "aliases": [] }
+      "requirement": {
+        "title": "需求描述",
+        "aliases": []
+      },
+      "specification": {
+        "title": "验收场景",
+        "aliases": [
+          "需求规格"
+        ]
+      },
+      "design": {
+        "title": "设计摘要",
+        "aliases": [
+          "核心设计"
+        ]
+      },
+      "verification": {
+        "title": "验证记录",
+        "aliases": []
+      },
+      "questions": {
+        "title": "需要你处理",
+        "aliases": [
+          "待人回答"
+        ]
+      },
+      "technical": {
+        "title": "技术细节",
+        "aliases": []
+      }
     },
     "epic": {
-      "goal": { "title": "目标", "aliases": ["交付范围"] },
-      "plan": { "title": "拆解方案", "aliases": [] },
-      "dependencies": { "title": "依赖", "aliases": [] },
-      "technical": { "title": "技术细节", "aliases": [] }
+      "goal": {
+        "title": "目标",
+        "aliases": [
+          "交付范围"
+        ]
+      },
+      "plan": {
+        "title": "拆解方案",
+        "aliases": []
+      },
+      "dependencies": {
+        "title": "依赖",
+        "aliases": []
+      },
+      "technical": {
+        "title": "技术细节",
+        "aliases": []
+      }
     },
     "requirement": {
-      "clarify": { "title": "澄清记录", "aliases": [] },
-      "prd": { "title": "PRD", "aliases": [] },
-      "delivery": { "title": "交付结果", "aliases": ["场景化验收清单"] }
+      "clarify": {
+        "title": "澄清记录",
+        "aliases": []
+      },
+      "prd": {
+        "title": "PRD",
+        "aliases": []
+      },
+      "delivery": {
+        "title": "交付结果",
+        "aliases": [
+          "场景化验收清单"
+        ]
+      }
     }
   },
   "waiting": {
@@ -104,6 +153,16 @@
         "icon": "⛔",
         "color": "red_background",
         "action": "这张卡执行失败了。看下面的原因，回复本页评论说怎么办；要放着就把卡拖到「人工停靠」。"
+      },
+      "retry_limit_exceeded": {
+        "icon": "🙋",
+        "color": "orange_background",
+        "action": "重试次数用完了，这张卡自己走不下去。看下面停下的原因，回复本页评论说怎么改；要放着就把卡拖到「人工停靠」。"
+      },
+      "cost_ceiling_exceeded": {
+        "icon": "🙋",
+        "color": "orange_background",
+        "action": "这张卡花到了单卡费用上限，已经停下。要它继续就把上限调高后回复本页评论；不做了就把卡拖到「人工停靠」。"
       }
     },
     "epic": {
@@ -136,5 +195,9 @@
       }
     }
   },
-  "quiet": { "icon": "🧭", "color": "gray_background", "action": "现在没有等你处理的事。" }
+  "quiet": {
+    "icon": "🧭",
+    "color": "gray_background",
+    "action": "现在没有等你处理的事。"
+  }
 }

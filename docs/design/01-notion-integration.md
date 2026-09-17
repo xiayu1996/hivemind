@@ -37,7 +37,7 @@ Agent Delivery Hub                    ← workspace 顶层页
 |---|---|---|---|
 | 标题 | title | 人 | |
 | Epic | relation → Epics | 系统（拆解时）/人 | |
-| AI 状态 | select（看板列） | 双通道（见 §4） | 待启动/进行中/需要输入/待人确认/人工停靠/已完成/失败——仅 7 列，人可拖 |
+| AI 状态 | select（看板列） | 双通道（见 §4） | 待启动/进行中/需要输入/人工停靠/已完成/失败——仅 6 列，人可拖。Story 自己的 MR 不再要人逐张确认：把关点是 Epic MR |
 | 执行阶段 | select | 系统 | 排队中/需求分析/开发中/验证中/端到端/MR 已建——细粒度只读 |
 | 优先级 | select P0–P3 | 人 | |
 | 目标仓库 | select（注册表名） | 人 | |
@@ -148,7 +148,7 @@ Story 页 5 个锚定区段以 heading 块为锚，锚块 blockId 持久化 libs
 | ANALYZE / DECOMPOSE | 需求分析 | 进行中 |
 | CODE ⇄ VERIFY | 开发中/验证中 | 进行中 |
 | E2E | 端到端 | 进行中 |
-| MR_CREATED（等人审） | MR 已建 | 待人确认 |
+| MR_CREATED（等人审） | 合入 | 进行中 |
 | NEEDS_INPUT | 等待回答 | 需要输入（+页内待人回答区 + 评论 @创建人） |
 | HUMAN_PARKED | — | 人工停靠 |
 | DONE | — | 已完成 |

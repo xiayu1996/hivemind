@@ -3,6 +3,7 @@ import type { StoryProjectionPort } from "../orchestrator/story-worker.js";
 import { NotionOutbox, payloadHash } from "./outbox.js";
 import type { DesiredStoryPage } from "./blocks/story-page.js";
 import schema from "./notion-schema.json" with { type: "json" };
+import { STORY_BOARD_STATUS } from "./board-status.js";
 import { storyIcon, stopReasonWord, waitingText } from "./display-text.js";
 import { laneWord, type DesiredRound, type DesiredSpec } from "./blocks/story-render.js";
 import { scenarioTitle } from "../pipeline/dod.js";
@@ -25,12 +26,11 @@ function value(input: unknown): string {
 }
 
 export function notionAiStatusForState(state: string): string {
-  const options = schema.options.aiStatus;
-  if (state === "NEEDS_INPUT") return options[2]!;
-  if (state === "HUMAN_PARKED") return options[4]!;
-  if (state === "DELIVERED") return options[5]!;
-  if (state === "FAILED") return options[6]!;
-  return state === "QUEUED" ? options[0]! : options[1]!;
+  if (state === "NEEDS_INPUT") return STORY_BOARD_STATUS.needsInput;
+  if (state === "HUMAN_PARKED") return STORY_BOARD_STATUS.parked;
+  if (state === "DELIVERED") return STORY_BOARD_STATUS.done;
+  if (state === "FAILED") return STORY_BOARD_STATUS.failed;
+  return state === "QUEUED" ? STORY_BOARD_STATUS.queued : STORY_BOARD_STATUS.running;
 }
 
 /** One board word per state the pipeline actually has, so the column reads as
@@ -334,18 +334,14 @@ export class NotionStoryProjection implements StoryProjectionPort {
     const latest = verification.rows[0];
     const detail = latest ? await this.roundDetail(cardId, latest) : undefined;
 
-    // Only three situations are a person's turn: a question, a card that
-    // failed, and a loop that ran out of rounds. Everything else the board
-    // already says, and a page that repeats it spends attention for nothing.
+    // A card speaks up when it has actually stopped and only a person can move
+    // it on: one of the four stop reasons, or a card that failed. Everything
+    // else is progress the board already shows, and a page that repeats it
+    // spends attention for nothing.
     const state = String(story.state);
     const stopReason = story.stop_reason === null ? undefined : String(story.stop_reason);
-    const situation = stopReason === "blocking_question" || state === "NEEDS_INPUT" && !stopReason
-      ? "blocking_question"
-      : state === "FAILED"
-        ? "failed"
-        : stopReason === "verify_loop_exceeded"
-          ? "verify_loop_exceeded"
-          : undefined;
+    const situation = stopReason
+      ?? (state === "FAILED" ? "failed" : state === "NEEDS_INPUT" ? "blocking_question" : undefined);
     const waiting = situation ? waitingText("story", situation) : undefined;
     const questions = waiting ? await this.waitingSection(cardId, stopReason, waiting.action) : undefined;
     const metadata = waiting
