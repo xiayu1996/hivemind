@@ -23,6 +23,7 @@ import { ClarifyLoop } from "../src/orchestrator/clarify-loop.js";
 import { PiPmPort } from "../src/orchestrator/pi-pm-port.js";
 import { PrdRunner } from "../src/orchestrator/prd-runner.js";
 import { RequirementDecomposer } from "../src/orchestrator/requirement-decompose.js";
+import { SolutionRunner } from "../src/orchestrator/solution-runner.js";
 import { RequirementStore } from "../src/orchestrator/requirement-store.js";
 import { openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
@@ -153,6 +154,7 @@ async function main(): Promise<void> {
     maxQuestionsPerRound: config.get("requirement.maxQuestionsPerRound"),
   });
   const prd = new PrdRunner(store, pm, projector);
+  const solution = new SolutionRunner(store, pm, projector);
   const decomposer = new RequirementDecomposer(handle.client, store, pm, projector);
   const acceptance = new AcceptanceChecklist(handle.client, store, projector);
   const humanInput = new NotionRequirementInputSync(handle.client, gateway, comments, store, acceptance);
@@ -172,10 +174,11 @@ async function main(): Promise<void> {
       }
       const state = String(row.state);
       // A stopped requirement, whatever its state, is waiting for a comment.
-      if (state === "PRD_CONFIRM" || state === "ACCEPTANCE" || row.stop_reason !== null) {
+      if (state === "PRD_CONFIRM" || state === "SOLUTION" || state === "ACCEPTANCE" || row.stop_reason !== null) {
         const commented = await humanInput.pollComments(requirementId);
         if (commented.prdConfirmed) console.log(`${requirementId} PRD confirmed by comment`);
-        if (commented.revisionRequested) console.log(`${requirementId} PRD revision requested by comment`);
+        if (commented.solutionConfirmed) console.log(`${requirementId} solution confirmed by comment`);
+        if (commented.revisionRequested) console.log(`${requirementId} revision requested by comment`);
         if (commented.resumed) {
           console.log(`${requirementId} resumed by comment`);
           await projector.publish(requirementId);
@@ -211,6 +214,13 @@ async function main(): Promise<void> {
     for (const requirement of await store.listActionable("PRD_CONFIRM")) {
       const outcome = await prd.advance(requirement.id);
       console.log(`${requirement.id} PRD: ${outcome.kind}`);
+    }
+    for (const requirement of await store.listActionable("SOLUTION")) {
+      const outcome = await solution.advance(requirement.id);
+      const detail = outcome.kind === "drafted" ? ` (waiting on ${outcome.awaiting.join(", ")})`
+        : outcome.kind === "confirmed" ? ` (${outcome.source})`
+        : "";
+      console.log(`${requirement.id} solution: ${outcome.kind}${detail}`);
     }
     for (const requirement of await store.listActionable("DECOMPOSING")) {
       const outcome = await decomposer.decompose(requirement.id);

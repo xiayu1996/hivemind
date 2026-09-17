@@ -131,6 +131,65 @@ describe("PiPmPort", () => {
     expect(instance.prompts[0]).toContain(`场景 id 以 ${REQUIREMENT_ID}- 开头`);
   });
 
+  it("asks the solution about a named repository, and takes the contract it answers with", async () => {
+    const candidate = {
+      approach: {
+        summary: "沿用现有服务端，只补这条需求要的查询。",
+        alternatives: [{ option: "另起一个服务", reason: "多一套部署，没有换来任何东西。" }],
+      },
+      stackChanges: [],
+      openDecisions: [],
+      qualityGates: [],
+      interface: null,
+    };
+    const instance = runner(JSON.stringify(candidate));
+
+    await expect(port(instance).run({
+      requirementId: REQUIREMENT_ID,
+      title: "控制台",
+      repository: "owner/repo",
+      businessGoal: "值班的人随时看到进度",
+      nonGoals: [],
+      scenarios: [{ id: `${REQUIREMENT_ID}-s01`, given: "打开看板", when: "有卡在等人", then: "看到在等谁" }],
+      revisionFeedback: [],
+      previousRejections: [],
+    })).resolves.toEqual(candidate);
+    expect(instance.prompts[0]).toContain("目标仓库: owner/repo");
+  });
+
+  it("binds the split to the approved solution, so pages are what Epics are cut along", async () => {
+    const candidate = {
+      epics: [{
+        id: "CONSOLE1",
+        title: "看板首屏",
+        businessGoal: "值班的人一眼看到谁在等他",
+        body: "打开首屏就能看到全部在等人回答的卡片。",
+        scenarioIds: [`${REQUIREMENT_ID}-s01`],
+      }],
+    };
+    const instance = runner(JSON.stringify(candidate));
+
+    await port(instance).run({
+      requirementId: REQUIREMENT_ID,
+      title: "控制台",
+      businessGoal: "值班的人随时看到进度",
+      nonGoals: [],
+      scenarios: [{ id: `${REQUIREMENT_ID}-s01`, given: "打开看板", when: "有卡在等人", then: "看到在等谁" }],
+      previousRejections: [],
+      solution: {
+        approach: { summary: "沿用现有服务端。", alternatives: [] },
+        stackChanges: [],
+        openDecisions: [],
+        qualityGates: [],
+        interface: { kind: "web", pages: [{ name: "任务列表", purpose: "让人一眼看到哪些任务在等自己" }] },
+      },
+    });
+
+    expect(instance.prompts[0]).toContain("已确认的技术方案");
+    expect(instance.prompts[0]).toContain("任务列表");
+    expect(instance.prompts[0]).toContain("按页面与流程切 Epic");
+  });
+
   it("gives the split every scenario it has to cover", async () => {
     const candidate = {
       epics: [{
@@ -150,6 +209,7 @@ describe("PiPmPort", () => {
       nonGoals: ["这次不做权限"],
       scenarios: [{ id: `${REQUIREMENT_ID}-s01`, given: "打开看板", when: "有卡在等人", then: "看到在等谁" }],
       previousRejections: [],
+      solution: null,
     })).resolves.toEqual(candidate);
     expect(instance.prompts[0]).toContain("必须全部覆盖的场景");
     expect(instance.prompts[0]).toContain("本次明确不做");

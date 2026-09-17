@@ -68,6 +68,9 @@ const READ_ONLY_PHASES = new Set<GuardPhase>([
   "REPORT",
   "CLARIFY",
   "PRD",
+  // The solution is a text a person approves; the interface contract it decides
+  // on is written by the slice that builds it, not by the decision itself.
+  "SOLUTION",
   "REQUIREMENT_DECOMPOSE",
   "UI_REVIEW",
 ]);

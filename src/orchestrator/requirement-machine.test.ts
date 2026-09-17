@@ -29,6 +29,19 @@ describe("gates that a drag must not skip", () => {
     expect(() => assertRequirementTransition("CLARIFY", "DECOMPOSING", "system")).toThrow(RequirementTransitionError);
   });
 
+  it("makes an approved PRD pass the solution before anything is split", () => {
+    // What to build with is decided once, above every card; skipping it is what
+    // let a single Story pick the repository's stack in passing (design 08).
+    expect(() => assertRequirementTransition("PRD_CONFIRM", "SOLUTION", "system")).not.toThrow();
+    expect(() => assertRequirementTransition("SOLUTION", "DECOMPOSING", "system")).not.toThrow();
+    expect(() => assertRequirementTransition("PRD_CONFIRM", "DECOMPOSING", "system")).toThrow(RequirementTransitionError);
+  });
+
+  it("sends a solution the person argues with back to the PRD, not onward", () => {
+    expect(() => assertRequirementTransition("SOLUTION", "PRD_CONFIRM", "system")).not.toThrow();
+    expect(() => assertRequirementTransition("SOLUTION", "EXECUTING", "system")).toThrow(RequirementTransitionError);
+  });
+
   it("sends an acceptance gap back through decomposition, not straight to done", () => {
     expect(() => assertRequirementTransition("ACCEPTANCE", "DECOMPOSING", "system")).not.toThrow();
     expect(() => assertRequirementTransition("EXECUTING", "DONE", "system")).toThrow(RequirementTransitionError);
@@ -37,7 +50,7 @@ describe("gates that a drag must not skip", () => {
 
 describe("human parking", () => {
   it("lets a human park from any nonterminal state", () => {
-    for (const from of ["CLARIFY", "PRD_CONFIRM", "DECOMPOSING", "EXECUTING", "ACCEPTANCE"] as const) {
+    for (const from of ["CLARIFY", "PRD_CONFIRM", "SOLUTION", "DECOMPOSING", "EXECUTING", "ACCEPTANCE"] as const) {
       expect(() => assertRequirementTransition(from, "HUMAN_PARKED", "human")).not.toThrow();
     }
   });

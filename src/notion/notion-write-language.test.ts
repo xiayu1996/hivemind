@@ -16,7 +16,7 @@ const EPIC_STATES: EpicState[] = [
   "INTAKE", "DECOMPOSE", "PLAN_APPROVAL", "EXECUTING", "EPIC_ACCEPT", "DONE", "BLOCKED", "FAILED",
 ];
 const REQUIREMENT_STATES: RequirementState[] = [
-  "CLARIFY", "PRD_CONFIRM", "DECOMPOSING", "EXECUTING", "ACCEPTANCE", "DONE", "HUMAN_PARKED", "FAILED",
+  "CLARIFY", "PRD_CONFIRM", "SOLUTION", "DECOMPOSING", "EXECUTING", "ACCEPTANCE", "DONE", "HUMAN_PARKED", "FAILED",
 ];
 const STOP_REASONS: StoryStopReason[] = [
   "blocking_question", "verify_loop_exceeded", "retry_limit_exceeded", "cost_ceiling_exceeded",

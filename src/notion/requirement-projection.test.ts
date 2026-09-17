@@ -17,8 +17,8 @@ describe("requirementStatusFor", () => {
   });
 
   it("shows a requirement the system gave up on in the column a person watches", () => {
-    expect(requirementStatusFor("FAILED", 3)).toBe(STATUS[6]);
-    expect(requirementStatusFor("HUMAN_PARKED", 3)).toBe(STATUS[6]);
+    expect(requirementStatusFor("FAILED", 3)).toBe(STATUS[7]);
+    expect(requirementStatusFor("HUMAN_PARKED", 3)).toBe(STATUS[7]);
   });
 });
 
@@ -91,7 +91,8 @@ describe("RequirementPageProjector", () => {
     expect((await lastDesired()).callout).toBe("回复本页最新一条评论，选字母即可。");
 
     await store.transition(REQUIREMENT_ID, "CLARIFY", "PRD_CONFIRM", "system", "run-1");
-    await store.transition(REQUIREMENT_ID, "PRD_CONFIRM", "DECOMPOSING", "system", "run-2");
+    await store.transition(REQUIREMENT_ID, "PRD_CONFIRM", "SOLUTION", "system", "run-2");
+    await store.transition(REQUIREMENT_ID, "SOLUTION", "DECOMPOSING", "system", "run-2");
     await projector.publish(REQUIREMENT_ID);
     expect((await lastDesired()).callout).toBe("现在没有等你处理的事。");
   });

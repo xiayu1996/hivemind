@@ -34,6 +34,13 @@ export interface PrdRevision {
   status: "draft" | "confirmed" | "superseded";
 }
 
+/** Same shape as a PRD revision; the two artifacts share their whole lifecycle. */
+export interface SolutionRevision {
+  revision: number;
+  body: string;
+  status: "draft" | "confirmed" | "superseded";
+}
+
 export interface AcceptanceItem {
   itemId: string;
   prdScenarioId: string;
@@ -42,7 +49,13 @@ export interface AcceptanceItem {
   notionBlockId: string | null;
 }
 
-export type ApprovalKind = "prd_confirm" | "prd_revision" | "acceptance" | "resume_answer";
+export type ApprovalKind =
+  | "prd_confirm"
+  | "prd_revision"
+  | "solution_confirm"
+  | "solution_revision"
+  | "acceptance"
+  | "resume_answer";
 export type ApprovalSource = "comment" | "drag" | "auto";
 
 export type RequirementNotionSection = "callout" | "clarify" | "prd" | "delivery";
@@ -453,12 +466,132 @@ export class RequirementStore {
     return true;
   }
 
+  /**
+   * The solution follows the PRD's revision rules for the same reason: a person
+   * approves a specific text, and later rewrites must not change what they read.
+   */
+  async saveDraftSolution(id: string, body: string, runId: string): Promise<number> {
+    JSON.parse(body) as unknown;
+    const existing = (await this.client.execute({
+      sql: `SELECT COALESCE(MAX(revision), 0) AS revision,
+                   SUM(CASE WHEN status = 'confirmed' THEN 1 ELSE 0 END) AS confirmed
+            FROM requirement_solutions WHERE requirement_id = ?`,
+      args: [id],
+    })).rows[0];
+    if (Number(existing?.confirmed) > 0) {
+      throw new Error(`solution of ${id} is confirmed and cannot be redrafted`);
+    }
+    const revision = Number(existing?.revision) + 1;
+    const time = this.now();
+    const [, insert] = await this.client.batch([
+      {
+        sql: `UPDATE requirement_solutions SET status = 'superseded'
+              WHERE requirement_id = ? AND status <> 'superseded'`,
+        args: [id],
+      },
+      {
+        sql: `INSERT INTO requirement_solutions (requirement_id, revision, body, status, created_at)
+              VALUES (?, ?, ?, 'draft', ?)`,
+        args: [id, revision, body, time],
+      },
+      eventStatement(runId, id, "requirement.solution_drafted", { revision }, time),
+    ], "write");
+    if (insert?.rowsAffected !== 1) throw new Error(`solution revision ${revision} already exists for ${id}`);
+    return revision;
+  }
+
+  async getSolution(id: string, revision?: number): Promise<SolutionRevision | null> {
+    const row = revision === undefined
+      ? (await this.client.execute({
+          sql: `SELECT revision, body, status FROM requirement_solutions
+                WHERE requirement_id = ? ORDER BY revision DESC LIMIT 1`,
+          args: [id],
+        })).rows[0]
+      : (await this.client.execute({
+          sql: "SELECT revision, body, status FROM requirement_solutions WHERE requirement_id = ? AND revision = ?",
+          args: [id, revision],
+        })).rows[0];
+    if (!row) return null;
+    return {
+      revision: Number(row.revision),
+      body: stringValue(row.body, "solution body"),
+      status: stringValue(row.status, "solution status") as SolutionRevision["status"],
+    };
+  }
+
+  /**
+   * False when this confirmation was already applied. `auto` is the system
+   * confirming a solution that needs no person (design 08 section 2.2); it is
+   * still recorded as an approval so the page and the audit trail can say who
+   * let it through.
+   */
+  async confirmSolution(
+    id: string,
+    revision: number,
+    eventId: string,
+    source: ApprovalSource,
+    runId: string,
+  ): Promise<boolean> {
+    if (!(await this.claimApprovalEvent(id, eventId, "solution_confirm", source))) return false;
+    const time = this.now();
+    const human = source === "auto" ? [] : [{
+      sql: "UPDATE requirements SET last_human_action_at = ?, updated_at = ? WHERE id = ?",
+      args: [time, time, id],
+    }];
+    const [update] = await this.client.batch([
+      {
+        sql: `UPDATE requirement_solutions SET status = 'confirmed', confirmed_at = ?
+              WHERE requirement_id = ? AND revision = ? AND status = 'draft'`,
+        args: [time, id, revision],
+      },
+      ...human,
+      eventStatement(runId, id, "requirement.solution_confirmed", { revision, source, eventId }, time),
+    ], "write");
+    if (update?.rowsAffected !== 1) throw new Error(`solution revision ${revision} of ${id} is not a draft`);
+    return true;
+  }
+
+  async requestSolutionRevision(
+    id: string,
+    revision: number,
+    feedback: string,
+    eventId: string,
+    source: ApprovalSource,
+    runId: string,
+  ): Promise<boolean> {
+    if (feedback.trim() === "") throw new Error("a revision request must say what to change");
+    if (!(await this.claimApprovalEvent(id, eventId, "solution_revision", source))) return false;
+    const time = this.now();
+    const [update] = await this.client.batch([
+      {
+        sql: `UPDATE requirement_solutions SET status = 'superseded'
+              WHERE requirement_id = ? AND revision = ? AND status = 'draft'`,
+        args: [id, revision],
+      },
+      {
+        sql: "UPDATE requirements SET last_human_action_at = ?, updated_at = ? WHERE id = ?",
+        args: [time, time, id],
+      },
+      eventStatement(runId, id, "requirement.solution_revision_requested", { revision, feedback, source }, time),
+    ], "write");
+    if (update?.rowsAffected !== 1) throw new Error(`solution revision ${revision} of ${id} is not a draft`);
+    return true;
+  }
+
+  /** Everything a person has asked to change about the solution, oldest first. */
+  async solutionRevisionFeedback(id: string): Promise<string[]> {
+    return this.feedbackFrom(id, "requirement.solution_revision_requested");
+  }
+
   /** Everything a person has asked to change, oldest first. */
   async prdRevisionFeedback(id: string): Promise<string[]> {
+    return this.feedbackFrom(id, "requirement.prd_revision_requested");
+  }
+
+  private async feedbackFrom(id: string, eventType: string): Promise<string[]> {
     const rows = (await this.client.execute({
-      sql: `SELECT data FROM event_log
-            WHERE card_id = ? AND type = 'requirement.prd_revision_requested' ORDER BY ts, id`,
-      args: [id],
+      sql: "SELECT data FROM event_log WHERE card_id = ? AND type = ? ORDER BY ts, id",
+      args: [id, eventType],
     })).rows;
     return rows.map((row) => {
       const parsed: unknown = JSON.parse(stringValue(row.data, "event data"));

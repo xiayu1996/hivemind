@@ -46,7 +46,9 @@ export class PrdRunner {
 
     const current = await this.store.getPrd(requirementId);
     if (current?.status === "confirmed") {
-      await this.store.transition(requirementId, "PRD_CONFIRM", "DECOMPOSING", "system", runId(requirementId));
+      // An approved PRD says what to build; what to build it with is decided
+      // next, once for every card that follows (design 08).
+      await this.store.transition(requirementId, "PRD_CONFIRM", "SOLUTION", "system", runId(requirementId));
       await this.publisher.publish(requirementId);
       return { kind: "confirmed", revision: current.revision };
     }

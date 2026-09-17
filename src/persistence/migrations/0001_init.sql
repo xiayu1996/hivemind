@@ -35,12 +35,12 @@ CREATE TABLE IF NOT EXISTS requirements (
   notion_page_id    TEXT NOT NULL UNIQUE,
   title             TEXT NOT NULL,
   state             TEXT NOT NULL CHECK (state IN (
-                      'CLARIFY','PRD_CONFIRM','DECOMPOSING','EXECUTING','ACCEPTANCE','DONE','HUMAN_PARKED','FAILED')),
+                      'CLARIFY','PRD_CONFIRM','SOLUTION','DECOMPOSING','EXECUTING','ACCEPTANCE','DONE','HUMAN_PARKED','FAILED')),
   original_request  TEXT NOT NULL,
   clarify_rounds    INTEGER NOT NULL DEFAULT 0,
   stop_reason       TEXT CHECK (stop_reason IS NULL OR stop_reason = 'blocking_question'),
   resume_state      TEXT CHECK (resume_state IS NULL OR resume_state IN (
-                      'CLARIFY','PRD_CONFIRM','DECOMPOSING','EXECUTING','ACCEPTANCE')),
+                      'CLARIFY','PRD_CONFIRM','SOLUTION','DECOMPOSING','EXECUTING','ACCEPTANCE')),
   repo              TEXT,
   notion_status_shadow TEXT,
   human_wins_until  INTEGER,
@@ -79,6 +79,23 @@ CREATE TABLE IF NOT EXISTS requirement_prds (
   CHECK (status <> 'draft' OR confirmed_at IS NULL)
 );
 
+-- The technical solution and, when the requirement has an interface, the
+-- contract that interface is built against. Same revision model as the PRD:
+-- what a person approved stays readable after later rewrites. Whether a
+-- revision needs a human at all is decided from its own body, not from the
+-- agent's opinion of itself (design 08 section 2.2).
+CREATE TABLE IF NOT EXISTS requirement_solutions (
+  requirement_id  TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+  revision        INTEGER NOT NULL CHECK (revision > 0),
+  body            TEXT NOT NULL CHECK (json_valid(body)),
+  status          TEXT NOT NULL CHECK (status IN ('draft','confirmed','superseded')),
+  created_at      INTEGER NOT NULL,
+  confirmed_at    INTEGER,
+  PRIMARY KEY (requirement_id, revision),
+  CHECK (status <> 'confirmed' OR confirmed_at IS NOT NULL),
+  CHECK (status <> 'draft' OR confirmed_at IS NULL)
+);
+
 -- Scenario-level acceptance: one row per PRD scenario, judged by the human in
 -- business language. A gap spawns incremental work instead of reopening code.
 CREATE TABLE IF NOT EXISTS requirement_acceptance_items (
@@ -99,7 +116,8 @@ CREATE TABLE IF NOT EXISTS requirement_acceptance_items (
 CREATE TABLE IF NOT EXISTS requirement_approval_events (
   event_id       TEXT PRIMARY KEY,
   requirement_id TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
-  kind           TEXT NOT NULL CHECK (kind IN ('prd_confirm','prd_revision','acceptance','resume_answer')),
+  kind           TEXT NOT NULL CHECK (kind IN (
+                   'prd_confirm','prd_revision','solution_confirm','solution_revision','acceptance','resume_answer')),
   -- `auto` is the system itself: scenario verdicts are made on each Epic, and
   -- the requirement only copies them in.
   source         TEXT NOT NULL CHECK (source IN ('comment','drag','auto')),

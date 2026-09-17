@@ -67,32 +67,44 @@ describe("requirement property intent", () => {
     )).toEqual({ type: "approve_prd", humanWinsUntil: 121_000 });
   });
 
+  it("reads a drag out of solution confirmation as the approval it is", () => {
+    expect(interpretRequirementPropertyChange(
+      requirementStatus[3]!, requirementStatus[4]!, "SOLUTION", undefined, 1_000,
+    )).toEqual({ type: "approve_solution", humanWinsUntil: 121_000 });
+  });
+
   it("reads a drag to the accepted column as acceptance", () => {
     expect(interpretRequirementPropertyChange(
-      requirementStatus[4]!, requirementStatus[5]!, "ACCEPTANCE", undefined, 1_000,
+      requirementStatus[5]!, requirementStatus[6]!, "ACCEPTANCE", undefined, 1_000,
     )).toEqual({ type: "accept", humanWinsUntil: 121_000 });
   });
 
   it("keeps parking above every other reading, and restores what was parked", () => {
     expect(interpretRequirementPropertyChange(
-      requirementStatus[1]!, requirementStatus[6]!, "CLARIFY", undefined, 1_000,
+      requirementStatus[1]!, requirementStatus[7]!, "CLARIFY", undefined, 1_000,
     )).toEqual({ type: "park", previousState: "CLARIFY", humanWinsUntil: 121_000 });
     expect(interpretRequirementPropertyChange(
-      requirementStatus[6]!, requirementStatus[1]!, "HUMAN_PARKED", "CLARIFY", 1_000,
+      requirementStatus[7]!, requirementStatus[1]!, "HUMAN_PARKED", "CLARIFY", 1_000,
     )).toEqual({ type: "resume", state: "CLARIFY", humanWinsUntil: 121_000 });
     expect(interpretRequirementPropertyChange(
-      requirementStatus[6]!, requirementStatus[1]!, "HUMAN_PARKED", undefined, 1_000,
+      requirementStatus[7]!, requirementStatus[1]!, "HUMAN_PARKED", undefined, 1_000,
     )).toEqual({ type: "none" });
   });
 
   it("refuses to invent a meaning for an unexpected column", () => {
     expect(interpretRequirementPropertyChange(
-      requirementStatus[0]!, requirementStatus[5]!, "CLARIFY", undefined, 1_000,
+      requirementStatus[0]!, requirementStatus[6]!, "CLARIFY", undefined, 1_000,
     )).toMatchObject({ type: "unsupported_property_change" });
   });
 });
 
 describe("requirement comment intent", () => {
+  it("reads a comment on a waiting solution as a verdict on that solution", () => {
+    expect(interpretRequirementComment("SOLUTION", "确认")).toEqual({ type: "approve_solution" });
+    expect(interpretRequirementComment("SOLUTION", "不要引入新的构建工具"))
+      .toEqual({ type: "request_solution_revision", body: "不要引入新的构建工具" });
+  });
+
   it("treats a comment during clarification as an answer", () => {
     expect(interpretRequirementComment("CLARIFY", "值班的人")).toEqual({ type: "answer", body: "值班的人" });
   });

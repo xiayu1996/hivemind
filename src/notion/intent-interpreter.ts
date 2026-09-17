@@ -87,13 +87,16 @@ export type RequirementPropertyIntent =
   | { type: "park"; previousState: RequirementState; humanWinsUntil: number }
   | { type: "resume"; state: RequirementState; humanWinsUntil: number }
   | { type: "approve_prd"; humanWinsUntil: number }
+  | { type: "approve_solution"; humanWinsUntil: number }
   | { type: "accept"; humanWinsUntil: number }
   | { type: "unsupported_property_change"; observedRequirementStatus: string; humanWinsUntil: number };
 
 export type RequirementCommentIntent =
   | { type: "answer"; body: string }
   | { type: "approve_prd" }
+  | { type: "approve_solution" }
   | { type: "request_revision"; body: string }
+  | { type: "request_solution_revision"; body: string }
   | { type: "feedback"; body: string };
 
 export function interpretRequirementPropertyChange(
@@ -105,9 +108,10 @@ export function interpretRequirementPropertyChange(
 ): RequirementPropertyIntent {
   if (shadowRequirementStatus === observedRequirementStatus) return { type: "none" };
   const humanWinsUntil = now + HUMAN_WINS_MS;
-  const parkedColumn = schema.options.requirementStatus[6]!;
-  const decomposingColumn = schema.options.requirementStatus[3]!;
-  const acceptedColumn = schema.options.requirementStatus[5]!;
+  const parkedColumn = schema.options.requirementStatus[7]!;
+  const solutionColumn = schema.options.requirementStatus[3]!;
+  const decomposingColumn = schema.options.requirementStatus[4]!;
+  const acceptedColumn = schema.options.requirementStatus[6]!;
 
   if (observedRequirementStatus === parkedColumn && internalState !== "HUMAN_PARKED") {
     return { type: "park", previousState: internalState, humanWinsUntil };
@@ -119,8 +123,11 @@ export function interpretRequirementPropertyChange(
     if (!parkedResumeState || parkedResumeState === "HUMAN_PARKED") return { type: "none" };
     return { type: "resume", state: parkedResumeState, humanWinsUntil };
   }
-  if (internalState === "PRD_CONFIRM" && observedRequirementStatus === decomposingColumn) {
+  if (internalState === "PRD_CONFIRM" && observedRequirementStatus === solutionColumn) {
     return { type: "approve_prd", humanWinsUntil };
+  }
+  if (internalState === "SOLUTION" && observedRequirementStatus === decomposingColumn) {
+    return { type: "approve_solution", humanWinsUntil };
   }
   if (internalState === "ACCEPTANCE" && observedRequirementStatus === acceptedColumn) {
     return { type: "accept", humanWinsUntil };
@@ -138,11 +145,18 @@ export function interpretRequirementComment(state: RequirementState, body: strin
   if (text === "") throw new Error("a Notion comment cannot be interpreted without text");
   if (state === "CLARIFY") return { type: "answer", body: text };
   if (state === "PRD_CONFIRM") {
-    return ["批准", "确认", "approve", "approved"].includes(text.toLocaleLowerCase())
-      ? { type: "approve_prd" }
-      : { type: "request_revision", body: text };
+    return approved(text) ? { type: "approve_prd" } : { type: "request_revision", body: text };
+  }
+  // The same reading as a PRD awaiting approval: while a solution is on the
+  // page, what a person writes there is about that solution.
+  if (state === "SOLUTION") {
+    return approved(text) ? { type: "approve_solution" } : { type: "request_solution_revision", body: text };
   }
   return { type: "feedback", body: text };
+}
+
+function approved(text: string): boolean {
+  return ["批准", "确认", "approve", "approved"].includes(text.toLocaleLowerCase());
 }
 
 /** Markers a person writes to ask for something other than a note. */

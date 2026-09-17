@@ -91,7 +91,9 @@ describe("PrdRunner", () => {
     await store.confirmPrd(REQUIREMENT_ID, 1, "comment-11", "comment", "run-confirm");
 
     await expect(run.advance(REQUIREMENT_ID)).resolves.toEqual({ kind: "confirmed", revision: 1 });
-    await expect(store.getRequirement(REQUIREMENT_ID)).resolves.toMatchObject({ state: "DECOMPOSING" });
+    // An approved PRD hands over to the solution, not to the split: what to
+    // build it with is still open (design 08).
+    await expect(store.getRequirement(REQUIREMENT_ID)).resolves.toMatchObject({ state: "SOLUTION" });
     await expect(store.saveDraftPrd(REQUIREMENT_ID, "{}", "run-late")).rejects.toThrow(/confirmed/);
   });
 
