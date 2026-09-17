@@ -1,5 +1,11 @@
 import type { TaskExecutionDetail } from "../../src/console/task-execution-detail.js";
 
+/**
+ * The typed face of the detail client. The page itself loads `task-detail.js`,
+ * the same API in plain JavaScript, because the console is served without a
+ * build step; a change to one belongs in the other.
+ */
+
 export interface TaskExecutionDetailClient {
   get(taskId: string, signal?: AbortSignal): Promise<TaskExecutionDetail | null>;
 }
