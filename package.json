@@ -12,7 +12,6 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "build:console": "npm --prefix console-ui run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "oxlint src poc scripts extensions",
     "test": "vitest run",
