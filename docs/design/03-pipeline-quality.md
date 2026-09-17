@@ -357,6 +357,12 @@ MERGE 阶段保留为"写业务语言交付报告"，报告质量由 §5 的业�
 
 §1.3 子集复验的目的是抓"单独对、叠在一起错"。实跑证实这是真需求（三个 Epic 的 Story 都改同一页面与路由表），但 §1.4 的常驻回归 loop 本就负责这件事。修订：rebase 到 Epic 头后，只运行本 Story 与 footprint 相交 Story 在 CODE 阶段写下的全部测试（含 e2e 脚本），通过即 ff-merge；浏览器盲审只在 Story 首轮 VERIFY 做一次，合入后由回归 loop 异步扫，失败开 regression 卡而不是把 Story 打回 CODE。合流从 gate 变成确定性步骤，成本接近零。
 
+**检查跑在 rebase 之后的 Story 树上，失败要先归因（2026-09-17 修订）。** 此前复验在**集成 worktree** 里跑，而那棵树在 ff-merge 之前恰恰是**不含本 Story 的 Epic 头**：S-AGENTRULES-01 因此被一条与它无关的 `catalog-snapshot > deepseek` 打回两轮，两次失败载荷逐字节相同——Story 怎么改都改不了结果。修订三条：
+
+1. **树**：候选 = rebase 后的 Story worktree（即将被 ff 的那棵），基线 = 集成 worktree（此刻的 Epic 头）。复验前后两个 HEAD 都不得移动，否则拒绝合入。
+2. **相关性**：与 CODE 出口共用 `selectProjectChecks`，按 `when` glob 对 `git diff --name-only base candidate` 的结果筛选；全部不相关即通过。
+3. **归因**：候选失败的检查**只有此时**才在基线上再跑一次，得三类结论——`story_regression`（基线绿）、`baseline_failing`（基线同样红且失败集相交）、`environment`（进程根本没起来）。同一次合流多条检查失败时取最重的一条：story_regression > environment > baseline_failing，反过来读会让一个既有失败替一个真失败开脱。失败的**名字**（测试名 / 类型错误位置）由 `extractCheckFailures` 从检查输出里提取并排在原因最前面：日志尾部是错的一端，vitest 的失败摘要在头部。
+
 ### 8.4 供应商故障不进任何预算
 
 usage limit、限流、超时、传输中断、OAuth 刷新失败只进熔断器：卡原地等待，不计内环、不计重入、不产生停点。三类真停点不变，但只由代码层面的失败触发。CODE 的 prompt 超时改为 checkpoint 续跑，续跑耗尽才算一次失败。熔断探测使用不计费的凭据探针，不再以真派单探测；用量窗口解析不到时指数退避。Notion 上区分"等待供应商"与"需要输入"。OAuth 刷新单点化：多 pi 进程共享一份凭据并发刷新会互相作废旋转令牌。

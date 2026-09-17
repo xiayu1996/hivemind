@@ -83,6 +83,13 @@ export class EpicIntegrator {
       cardId,
       runId,
       result.reason ?? `subset re-verification failed for ${result.scenarioIds.join(", ")}`,
+      {
+        ...(result.attribution ? { attribution: result.attribution } : {}),
+        ...(result.failures ? { failures: result.failures } : {}),
+        ...(result.failedChecks ? { failedChecks: result.failedChecks } : {}),
+        ...(result.baseRevision ? { baseRevision: result.baseRevision } : {}),
+        ...(result.candidateRevision ? { candidateRevision: result.candidateRevision } : {}),
+      },
     );
     return result;
   }

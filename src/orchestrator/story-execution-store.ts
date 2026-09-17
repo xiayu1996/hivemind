@@ -21,6 +21,19 @@ import type { StoryPhase } from "../pipeline/phase.js";
  * one dead run cannot fill the event log. */
 const DISPATCH_FAILURE_MESSAGE_LIMIT = 4000;
 
+/**
+ * What the merge re-verification found, kept apart from the prose reason so
+ * the next CODE round can be written from the names rather than from the tail
+ * of a log.
+ */
+export interface MergeRejectionDetail {
+  attribution?: "story_regression" | "baseline_failing" | "environment";
+  failures?: readonly string[];
+  failedChecks?: readonly string[];
+  baseRevision?: string;
+  candidateRevision?: string;
+}
+
 export interface StoryIntake {
   id: string;
   epicId?: string;
@@ -961,11 +974,22 @@ export class StoryExecutionStore {
   /** Re-verifying the affected scenarios on the Epic head failed. The Story is
    * not wrong on its own branch, but it is wrong beside what merged before it,
    * which is the CODE agent's problem to fix. */
-  recordIntegrationRejection(cardId: string, runId: string, reason: string): Promise<void> {
-    return this.returnMergeToCode(cardId, runId, "merge.verification_failed", reason);
+  recordIntegrationRejection(
+    cardId: string,
+    runId: string,
+    reason: string,
+    detail?: MergeRejectionDetail,
+  ): Promise<void> {
+    return this.returnMergeToCode(cardId, runId, "merge.verification_failed", reason, detail);
   }
 
-  private async returnMergeToCode(cardId: string, runId: string, type: string, reason: string): Promise<void> {
+  private async returnMergeToCode(
+    cardId: string,
+    runId: string,
+    type: string,
+    reason: string,
+    detail?: MergeRejectionDetail,
+  ): Promise<void> {
     if (reason.trim() === "") throw new Error("merge rejection reason must not be empty");
     const time = this.now();
     const [update] = await this.client.batch([
@@ -974,7 +998,7 @@ export class StoryExecutionStore {
               WHERE id = ? AND state = 'MERGE'`,
         args: [time, cardId],
       },
-      eventStatement(runId, cardId, "MERGE", type, { reason }, time),
+      eventStatement(runId, cardId, "MERGE", type, { reason, ...detail }, time),
     ], "write");
     if (update?.rowsAffected !== 1) throw new Error(`cannot return ${cardId} to CODE unless it is in MERGE`);
   }

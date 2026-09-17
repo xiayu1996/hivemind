@@ -11,14 +11,41 @@ export interface MergeStory {
   scenarioIds?: readonly string[];
 }
 
+/** Why a re-verification failed, which decides what it costs the Story. */
+export type MergeFailureAttribution =
+  /** The checks pass on the Epic head and fail with the Story on top. */
+  | "story_regression"
+  /** The same check fails on the Epic head alone; the Story is not the cause. */
+  | "baseline_failing"
+  /** The check could not be run at all. */
+  | "environment";
+
+export interface SubsetVerificationRequest {
+  scenarioIds: readonly string[];
+  /** The rebased Story tree, which is what a fast-forward would land. */
+  candidate: { cwd: string; revision: string };
+  /** The Epic head without this Story, for telling the two apart. */
+  base: { cwd: string; revision: string };
+  /** What the Story changes, for deciding which checks are relevant. */
+  changedPaths: readonly string[];
+}
+
+export interface SubsetVerification {
+  passed: boolean;
+  scenarioIds: readonly string[];
+  /** What the verifier and the verdict checks said about the failures; the
+   * Story's next CODE round is written from these. */
+  reasons?: readonly string[];
+  attribution?: MergeFailureAttribution;
+  /** The names the checks themselves gave what broke. */
+  failures?: readonly string[];
+  failedChecks?: readonly string[];
+  /** Checks that actually ran; empty means nothing was relevant. */
+  ranChecks?: readonly string[];
+}
+
 export interface SubsetVerifier {
-  (scenarioIds: readonly string[]): Promise<{
-    passed: boolean;
-    scenarioIds: readonly string[];
-    /** What the verifier and the verdict checks said about the failures; the
-     * Story's next CODE round is written from these. */
-    reasons?: readonly string[];
-  }>;
+  (request: SubsetVerificationRequest): Promise<SubsetVerification>;
 }
 
 export interface EpicMergeFlowOptions {
@@ -39,7 +66,17 @@ export type StoryPublisher = (story: MergeStory) => Promise<{ mrUrl: string | nu
 export type MergeResult =
   | { kind: "merged"; integrationBranch: string; scenarioIds: readonly string[]; mrUrl: string | null }
   | { kind: "conflict"; integrationBranch: string; reason: string }
-  | { kind: "verification_failed"; integrationBranch: string; scenarioIds: readonly string[]; reason?: string };
+  | {
+      kind: "verification_failed";
+      integrationBranch: string;
+      scenarioIds: readonly string[];
+      reason?: string;
+      attribution?: MergeFailureAttribution;
+      failures?: readonly string[];
+      failedChecks?: readonly string[];
+      baseRevision?: string;
+      candidateRevision?: string;
+    };
 
 function integrationBranch(epicId: string): string {
   if (!/^[A-Za-z0-9._-]+$/.test(epicId)) throw new Error("Epic id cannot be used in a branch name");
@@ -107,19 +144,40 @@ export class EpicMergeFlow {
       };
     }
     const scenarioIds = [...new Set(affectedStories.flatMap((story) => story.scenarioIds!))].toSorted();
-    // What the re-verification ran against has to be what gets merged. Without
-    // this the checks could pass on one revision and a different one could be
-    // fast-forwarded in, which is exactly the shape of a green merge nobody
-    // verified.
+    // What the re-verification ran against has to be what gets merged. The
+    // checks therefore run in the rebased Story worktree, which is the tree a
+    // fast-forward lands, and not in the integration worktree, which at this
+    // point still holds the Epic head without this Story: running them there
+    // asked whether the Epic head was green, a question the Story cannot
+    // change however many rounds it spends. Both revisions are read before and
+    // after, because a green merge nobody verified is the same defect whether
+    // the tree moved under the candidate or under the base it was judged
+    // against.
     const verifiedRevision = (await this.git.run(this.options.storyWorktree, ["rev-parse", "HEAD"])).trim();
-    const verification = await this.verifySubset(scenarioIds);
+    const baseRevision = (await this.git.run(this.options.integrationWorktree, ["rev-parse", "HEAD"])).trim();
+    const changedPaths = (await this.git.run(
+      this.options.integrationWorktree,
+      ["diff", "--name-only", baseRevision, verifiedRevision],
+    )).split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== "");
+    const verification = await this.verifySubset({
+      scenarioIds,
+      candidate: { cwd: this.options.storyWorktree, revision: verifiedRevision },
+      base: { cwd: this.options.integrationWorktree, revision: baseRevision },
+      changedPaths,
+    });
     const revisionNow = (await this.git.run(this.options.storyWorktree, ["rev-parse", "HEAD"])).trim();
-    if (revisionNow !== verifiedRevision) {
+    const baseNow = (await this.git.run(this.options.integrationWorktree, ["rev-parse", "HEAD"])).trim();
+    if (revisionNow !== verifiedRevision || baseNow !== baseRevision) {
+      const moved = revisionNow !== verifiedRevision
+        ? `the Story branch moved during re-verification: verified ${verifiedRevision}, now ${revisionNow}`
+        : `the Epic head moved during re-verification: verified against ${baseRevision}, now ${baseNow}`;
       return {
         kind: "verification_failed",
         integrationBranch: target,
         scenarioIds,
-        reason: `the Story branch moved during re-verification: verified ${verifiedRevision}, now ${revisionNow}`,
+        reason: moved,
+        baseRevision,
+        candidateRevision: verifiedRevision,
       };
     }
     if (!verification.passed || verification.scenarioIds.join("\0") !== scenarioIds.join("\0")) {
@@ -129,18 +187,21 @@ export class EpicMergeFlow {
         kind: "verification_failed",
         integrationBranch: target,
         scenarioIds,
-        reason: `subset re-verification on ${target} failed for ${failed.join(", ")}${detail ? `: ${detail}` : ""}`,
+        reason: `subset re-verification for ${failed.join(", ")}${detail ? `: ${detail}` : ""}`,
+        ...(verification.attribution ? { attribution: verification.attribution } : {}),
+        ...(verification.failures ? { failures: verification.failures } : {}),
+        ...(verification.failedChecks ? { failedChecks: verification.failedChecks } : {}),
+        baseRevision,
+        candidateRevision: verifiedRevision,
       };
     }
     if (this.options.actualFootprints) {
-      const baseRevision = (await this.git.run(this.options.integrationWorktree, ["rev-parse", "HEAD"])).trim();
-      const storyRevision = (await this.git.run(this.options.storyWorktree, ["rev-parse", "HEAD"])).trim();
-      const nameStatus = await this.git.run(this.options.integrationWorktree, ["diff", "--name-status", "-z", "--find-renames", baseRevision, storyRevision]);
+      const nameStatus = await this.git.run(this.options.integrationWorktree, ["diff", "--name-status", "-z", "--find-renames", baseRevision, verifiedRevision]);
       await this.options.actualFootprints.capture({
         storyId: input.story.id,
         integrationBranch: target,
         baseRevision,
-        storyRevision,
+        storyRevision: verifiedRevision,
         actualFootprint: normalizeActualFootprint(nameStatus),
       });
     }
