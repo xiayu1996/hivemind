@@ -13,6 +13,14 @@ import type { PhaseInput, PhaseRejection, ScenarioFailure } from "../pipeline/ph
 import { parseDoD, type DefinitionOfDone } from "../pipeline/dod.js";
 import { dodVersion, scenarioVersions } from "../pipeline/dod-version.js";
 import { isProviderFault } from "../pipeline/failure-classification.js";
+import {
+  diagnosisFor,
+  type StopSummary,
+  type StopSummaryBaselineFailure,
+  type StopSummaryDispatchFailure,
+  type StopSummaryMergeBounce,
+} from "./stop-summary.js";
+import type { ConvergenceClassification } from "../pipeline/convergence.js";
 
 export type { StoryPhase } from "../pipeline/phase.js";
 import type { StoryPhase } from "../pipeline/phase.js";
@@ -747,13 +755,19 @@ export class StoryExecutionStore {
     detail?: Record<string, unknown>,
   ): Promise<void> {
     assertStoryTransition(expectedFrom, "NEEDS_INPUT", "system");
+    // Collected here rather than by whoever reads the card later: the pieces
+    // are spread over four tables and the one moment they are all final is
+    // this one. A card that stopped used to offer a single word over a history
+    // nobody could see without reading the event log by hand.
+    const summary = await this.#collectStopSummary(cardId, reason, detail);
     const time = this.now();
     const [update] = await this.client.batch([
       {
         sql: `UPDATE stories
-              SET state = 'NEEDS_INPUT', phase = NULL, stop_reason = ?, resume_state = ?, updated_at = ?
+              SET state = 'NEEDS_INPUT', phase = NULL, stop_reason = ?, resume_state = ?,
+                  stop_summary = ?, updated_at = ?
               WHERE id = ? AND state = ?`,
-        args: [reason, expectedFrom, time, cardId, expectedFrom],
+        args: [reason, expectedFrom, JSON.stringify(summary), time, cardId, expectedFrom],
       },
       {
         sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
@@ -763,13 +777,140 @@ export class StoryExecutionStore {
                 SELECT 1 FROM stories
                 WHERE id = ? AND state = 'NEEDS_INPUT' AND stop_reason = ? AND updated_at = ?
               )`,
-        args: [runId, runId, cardId, time, JSON.stringify({ from: expectedFrom, reason, ...detail }),
+        args: [runId, runId, cardId, time, JSON.stringify({ from: expectedFrom, reason, ...detail, summary }),
           cardId, reason, time],
       },
     ], "write");
     if (update?.rowsAffected !== 1) {
       throw new Error(`Story stop lost a race: ${cardId} is no longer ${expectedFrom}`);
     }
+  }
+
+  /**
+   * What this card's rounds added up to, as of the moment it stops.
+   *
+   * Everything is read from the last human action onwards, which is the same
+   * window the budget uses: a person who answered and let the card run again
+   * is owed the story of what happened since, not of what they already saw.
+   */
+  async #collectStopSummary(
+    cardId: string,
+    reason: StoryStopReason,
+    detail?: Record<string, unknown>,
+  ): Promise<StopSummary> {
+    const story = (await this.client.execute({
+      sql: "SELECT last_human_action_at FROM stories WHERE id = ?",
+      args: [cardId],
+    })).rows[0];
+    const since = Number(story?.last_human_action_at ?? 0);
+    const [verifications, events, refusals, spend] = await this.client.batch([
+      {
+        sql: `SELECT round, failed_scenarios, evidence_dir FROM verify_records
+              WHERE card_id = ? AND created_at > ? AND verdict = 'rejected' ORDER BY round`,
+        args: [cardId, since],
+      },
+      {
+        sql: `SELECT type, data FROM event_log
+              WHERE card_id = ? AND ts > ?
+                AND type IN ('merge.verification_failed', 'merge.conflict',
+                             'merge.baseline_failing', 'story.dispatch_failed')
+              ORDER BY id`,
+        args: [cardId, since],
+      },
+      {
+        sql: `SELECT phase, failure FROM phase_runs
+              WHERE card_id = ? AND status = 'failed' AND failure IS NOT NULL
+                AND COALESCE(ended_at, started_at) > ?
+              ORDER BY COALESCE(ended_at, started_at) DESC LIMIT 5`,
+        args: [cardId, since],
+      },
+      {
+        sql: `SELECT COALESCE(SUM(CASE WHEN is_subscription = 0 THEN cost_usd ELSE 0 END), 0) AS billed
+              FROM cost_entries WHERE card_id = ?`,
+        args: [cardId],
+      },
+    ], "read");
+
+    const rounds = verifications!.rows.map((row) => ({
+      round: numberValue(row.round, "round"),
+      failed: parseStringArray(row.failed_scenarios, "failed scenarios"),
+      reasons: [] as { scenarioId: string; reason: string; detail?: string }[],
+    }));
+    // The per-scenario reasons live in the verification artifact, which is the
+    // only place the words the verifier used survive.
+    for (const round of rounds) {
+      const artifact = (await this.client.execute({
+        sql: `SELECT body FROM phase_artifacts
+              WHERE card_id = ? AND phase = 'VERIFY' AND round = ? AND kind = 'verification'
+              ORDER BY id DESC LIMIT 1`,
+        args: [cardId, round.round],
+      })).rows[0];
+      if (!artifact) continue;
+      round.reasons = scenarioFailuresOf(stringValue(artifact.body, "verification artifact"))
+        .map((failure) => ({ scenarioId: failure.scenarioId, reason: failure.reason }));
+    }
+
+    const mergeBounces: StopSummaryMergeBounce[] = [];
+    const baselineFailures: StopSummaryBaselineFailure[] = [];
+    const dispatchFailures: StopSummaryDispatchFailure[] = [];
+    for (const row of events!.rows) {
+      const data = JSON.parse(stringValue(row.data, "event")) as Record<string, unknown>;
+      const failures = Array.isArray(data.failures) ? data.failures.map(String) : [];
+      const check = Array.isArray(data.failedChecks) ? String(data.failedChecks[0] ?? "") : String(data.check ?? "");
+      if (String(row.type) === "merge.baseline_failing") {
+        baselineFailures.push({ check, failures });
+      } else if (String(row.type) === "story.dispatch_failed") {
+        dispatchFailures.push({
+          state: String(data.state ?? ""),
+          errorClass: String(data.errorClass ?? ""),
+          message: String(data.message ?? ""),
+        });
+      } else if (data.spent === true) {
+        mergeBounces.push({
+          attribution: String(row.type) === "merge.conflict" ? "conflict" : "story_regression",
+          ...(check ? { check } : {}),
+          failures,
+        });
+      }
+    }
+
+    const history = rounds.map((round) => round.failed);
+    const diagnosis = diagnosisFor(reason, history);
+    const summary: StopSummary = {
+      cardId,
+      reason,
+      spent: numberValue(detail?.spent ?? rounds.length + mergeBounces.length, "rounds spent"),
+      budget: numberValue(detail?.budget ?? 0, "round budget"),
+      rounds,
+      mergeBounces,
+      baselineFailures,
+      refusals: refusals!.rows
+        .map((row) => ({
+          phase: stringValue(row.phase, "phase"),
+          reason: stringValue(row.failure, "failure").slice(0, 800),
+        }))
+        .filter((refusal) => !isProviderFault(refusal.reason)),
+      dispatchFailures,
+      costUsd: Number(spend!.rows[0]?.billed ?? 0),
+      ...(diagnosis ? { diagnosis } : {}),
+    };
+    return typeof detail?.convergence === "string"
+      ? { ...summary, convergence: detail.convergence as ConvergenceClassification }
+      : summary;
+  }
+
+  /**
+   * What the card said when it stopped, or null once a person has restarted
+   * it: a summary of rounds that are no longer the reason the card is where it
+   * is would be read as current.
+   */
+  async stopSummary(cardId: string): Promise<StopSummary | null> {
+    const row = (await this.client.execute({
+      sql: "SELECT stop_reason, stop_summary FROM stories WHERE id = ?",
+      args: [cardId],
+    })).rows[0];
+    if (!row || row.stop_reason === null || row.stop_summary === null) return null;
+    return JSON.parse(stringValue(row.stop_summary, "stop summary")) as StopSummary;
   }
 
   /**

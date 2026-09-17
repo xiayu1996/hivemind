@@ -163,7 +163,11 @@ depends_on: []
         validationErrors: ["S-EPIC1-03-a: screenshot is missing"],
       })],
     });
-    await client.execute("UPDATE stories SET state = 'NEEDS_INPUT', stop_reason = 'verify_loop_exceeded', resume_state = 'VERIFY' WHERE id = 'S-EPIC1-03'");
+    // Through the store, because the summary a person reads is collected at
+    // the moment the card stops and not reconstructed by the page.
+    await store.stopForInput("S-EPIC1-03", "QUEUED", "verify_loop_exceeded", "run-stop", {
+      convergence: "stalled", spent: 1, budget: 6,
+    });
     await new NotionStoryProjection(client, () => 20).enqueue("S-EPIC1-03");
     const page = (await client.execute("SELECT payload FROM notion_outbox WHERE operation = 'sync_story_page'")).rows[0];
     const desired = JSON.parse(String(page?.payload)).desired;

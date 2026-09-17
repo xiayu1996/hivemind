@@ -14,6 +14,18 @@ const epicStates: Record<EpicState, string> = text.states.epic;
 const requirementStates: Record<RequirementState, string> = text.states.requirement;
 const stopReasons: Record<StoryStopReason, string> = text.stopReasons;
 
+/** The sentences a stopped card's summary is written from. */
+export const stopSummaryText: Record<string, string> = text.stopSummary;
+
+/** Fills one of those sentences. A missing key is a programming error, not
+ * something to paper over with an English fallback on a person's page. */
+export function stopSummaryLine(key: keyof typeof text.stopSummary, values: Record<string, string> = {}): string {
+  let line = stopSummaryText[key];
+  if (line === undefined) throw new Error(`no display text for stop summary line: ${key}`);
+  for (const [name, value] of Object.entries(values)) line = line.replaceAll(`{${name}}`, value);
+  return line;
+}
+
 /** The story page carries one section the pipeline has no state for. */
 export type PageSection = StorySection | "technical";
 

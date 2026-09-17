@@ -131,6 +131,7 @@ export const stories = sqliteTable("stories", {
   resumeState: text("resume_state"),
   notionAiStatusShadow: text("notion_ai_status_shadow"),
   notionPropertyFingerprint: text("notion_property_fingerprint"),
+  stopSummary: text("stop_summary"),
   humanWinsUntil: ms("human_wins_until"),
   lastHumanActionAt: ms("last_human_action_at"),
   createdAt: ms("created_at").notNull(),

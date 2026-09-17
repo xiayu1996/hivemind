@@ -142,6 +142,8 @@ DECOMPOSE 为每个 Story 产出：
 - **需求侧**：需求太难或拆解粒度不合理 → 建议人工拆卡、补充上下文或调整 Spec；
 - **系统侧**：中间流程/逻辑存在缺陷（如验证契约歧义、prompt 误导、调度错误）→ 自动物化 friction 进反思提案管道（§4），累积后产出流程优化提案。
 
+**停点汇总落库 + 停点钩子（2026-09-17）。** 跨轮诊断（`diagnoseRetryLimit` / `renderConvergenceReport`）此前只进带外告警或 `console.log`，从不落库，于是人在卡上只看到「重试次数用完」一个词。改为：`stopForInput` 在停卡的同一批事务里汇总「人最后一次动卡之后」的全部经过——逐轮没过的场景与理由、归因到本卡的合流打回、Epic 头自身红、出口拒绝、崩溃次数与类别、花费、诊断——写入 `stories.stop_summary` 并随 `story.stopped` 事件一同留存，人恢复卡后不再展示（陈旧的汇总会被读成当前状态）。分发经 `StoryStopSink`：告警 sink 与 friction sink（`story_stopped`，费用停不进——§1.5），后者即反思管道（§4）的输入。Story 页四类停点**都**附汇总，不再只有 `verify_loop_exceeded`。
+
 全系统真停点因此为四类：`blocking_question`、`verify_loop_exceeded`（不收敛提前停）、`retry_limit_exceeded`（上限停 + 诊断）、`cost_ceiling_exceeded`（费用停，无诊断）。四者由 `stories.stop_reason` 的 CHECK 强制。
 
 #### 2026-09-17 修订：判据放宽为"不得重复"，轮次预算收紧为 3
