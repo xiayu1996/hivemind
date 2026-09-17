@@ -73,64 +73,50 @@ describe("AcceptanceChecklist", () => {
 
   afterEach(() => client.close());
 
-  it("refuses to ask for a verdict while work is still running", async () => {
+  async function carries(epicId: string, scenarioId: string, status: "accepted" | "gap", note = ""): Promise<void> {
+    await client.batch([
+      {
+        sql: `INSERT INTO epic_prd_scenarios (requirement_id, epic_id, prd_scenario_id) VALUES (?, ?, ?)`,
+        args: [REQUIREMENT_ID, epicId, scenarioId],
+      },
+      {
+        sql: `INSERT INTO epic_acceptance_items
+                (epic_id, prd_scenario_id, text, status, note, decided_at, created_at)
+              VALUES (?, ?, ?, ?, ?, 9000, 8000)`,
+        args: [epicId, scenarioId, scenarioId, status, note || null],
+      },
+    ], "write");
+  }
+
+  it("refuses to close a requirement while work is still running", async () => {
     await addEpic("CONSOLE1", "EXECUTING");
-    await expect(checklist.open(REQUIREMENT_ID)).rejects.toThrow(/still has Epics in flight/);
+    await expect(checklist.settle(REQUIREMENT_ID)).rejects.toThrow(/still has Epics in flight/);
   });
 
-  it("puts one checklist line per PRD scenario in front of the person", async () => {
+  it("takes each scenario's verdict from the batch that delivered it", async () => {
     await addEpic("CONSOLE1", "DONE");
-    const items = await checklist.open(REQUIREMENT_ID);
-
-    expect(items).toHaveLength(2);
-    await expect(store.getRequirement(REQUIREMENT_ID)).resolves.toMatchObject({ state: "ACCEPTANCE" });
-    await expect(store.acceptanceItems(REQUIREMENT_ID)).resolves.toMatchObject([
-      { itemId: "A01", prdScenarioId: SCENARIOS[0]!.id, status: "open" },
-      { itemId: "A02", prdScenarioId: SCENARIOS[1]!.id, status: "open" },
-    ]);
-
-    // A second pass must not double the list a person is reading.
-    await checklist.open(REQUIREMENT_ID);
-    await expect(store.acceptanceItems(REQUIREMENT_ID)).resolves.toHaveLength(2);
-  });
-
-  it("treats a tick as a verdict and an untick as no verdict at all", async () => {
-    await addEpic("CONSOLE1", "DONE");
-    await checklist.open(REQUIREMENT_ID);
-    await store.bindAcceptanceBlock(REQUIREMENT_ID, "A01", "block-a01");
-
-    await expect(checklist.applyCheck(REQUIREMENT_ID, "block-a01", false, "tick-0")).resolves.toBe(false);
-    await expect(checklist.applyCheck(REQUIREMENT_ID, "block-a01", true, "tick-1")).resolves.toBe(true);
-    await expect(checklist.applyCheck(REQUIREMENT_ID, "block-a01", true, "tick-1")).resolves.toBe(false);
-    await expect(store.acceptanceItems(REQUIREMENT_ID)).resolves.toMatchObject([
-      { itemId: "A01", status: "accepted" },
-      { itemId: "A02", status: "open" },
-    ]);
-    await expect(checklist.settle(REQUIREMENT_ID)).resolves.toEqual({ kind: "waiting", open: 1 });
-  });
-
-  it("ends the requirement when every scenario is accepted", async () => {
-    await addEpic("CONSOLE1", "DONE");
-    await checklist.open(REQUIREMENT_ID);
-    await store.decideAcceptanceItem(REQUIREMENT_ID, "A01", "accepted", "verdict-1", "comment", "run-a1");
-    await store.decideAcceptanceItem(REQUIREMENT_ID, "A02", "accepted", "verdict-2", "comment", "run-a2");
+    await carries("CONSOLE1", SCENARIOS[0]!.id, "accepted");
+    await carries("CONSOLE1", SCENARIOS[1]!.id, "accepted");
 
     await expect(checklist.settle(REQUIREMENT_ID)).resolves.toEqual({ kind: "accepted" });
     await expect(store.getRequirement(REQUIREMENT_ID)).resolves.toMatchObject({ state: "DONE" });
+    // The list on the requirement is a summary, not a second round of ticking.
+    await expect(store.acceptanceItems(REQUIREMENT_ID)).resolves.toMatchObject([
+      { itemId: "A01", prdScenarioId: SCENARIOS[0]!.id, status: "accepted" },
+      { itemId: "A02", prdScenarioId: SCENARIOS[1]!.id, status: "accepted" },
+    ]);
   });
 
-  it("turns a gap into one more delivery batch carrying the person's own words", async () => {
+  it("asks for one more batch when a scenario was never carried by any of them", async () => {
     await addEpic("CONSOLE1", "DONE");
-    await checklist.open(REQUIREMENT_ID);
-    await store.decideAcceptanceItem(REQUIREMENT_ID, "A01", "accepted", "verdict-1", "comment", "run-a1");
-    await checklist.recordGap(REQUIREMENT_ID, "A02", "手机上打开是空白的", "verdict-2");
+    await carries("CONSOLE1", SCENARIOS[0]!.id, "accepted");
 
     const outcome = await checklist.settle(REQUIREMENT_ID);
     expect(outcome).toMatchObject({ kind: "gap" });
     const epic = outcome.kind === "gap" ? outcome.epic : undefined;
     expect(epic?.id).toBe("RABC123G1");
-    expect(epic?.requirement).toContain("他看到今天已经交付的清单");
-    expect(epic?.requirement).toContain("手机上打开是空白的");
+    expect(epic?.requirement).toContain("\u4ed6\u770b\u5230\u4eca\u5929\u5df2\u7ecf\u4ea4\u4ed8\u7684\u6e05\u5355");
+    expect(epic?.requirement).toContain("\u6ca1\u6709\u4efb\u4f55\u4e00\u6279\u4ea4\u4ed8\u627f\u63a5\u8fd9\u6761\u573a\u666f");
 
     await expect(store.getRequirement(REQUIREMENT_ID)).resolves.toMatchObject({ state: "EXECUTING" });
     await expect(store.acceptanceItems(REQUIREMENT_ID)).resolves.toMatchObject([
@@ -139,8 +125,6 @@ describe("AcceptanceChecklist", () => {
     ]);
     const stored = (await client.execute("SELECT id, state, repo FROM epics WHERE id = 'RABC123G1'")).rows;
     expect(stored).toMatchObject([{ state: "INTAKE", repo: "owner/hivemind" }]);
-    const outbox = (await client.execute("SELECT operation FROM notion_outbox WHERE card_id = 'RABC123G1'")).rows;
-    expect(outbox).toMatchObject([{ operation: "create_epic_page" }]);
   });
 
   it("raises one gap Epic, not a second one, when settling is interrupted and retried", async () => {
@@ -148,9 +132,7 @@ describe("AcceptanceChecklist", () => {
     // that died between writing the Epic and reopening the items came back as
     // round two and raised a second Epic for the same gap.
     await addEpic("CONSOLE1", "DONE");
-    await checklist.open(REQUIREMENT_ID);
-    await store.decideAcceptanceItem(REQUIREMENT_ID, "A01", "accepted", "verdict-1", "comment", "run-a1");
-    await checklist.recordGap(REQUIREMENT_ID, "A02", "手机上打开是空白的", "verdict-2");
+    await carries("CONSOLE1", SCENARIOS[0]!.id, "accepted");
 
     // The Epic lands; the host dies before the items are reopened.
     const interruptedStore = Object.create(store) as RequirementStore;

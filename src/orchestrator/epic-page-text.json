@@ -1,10 +1,9 @@
 {
-  "heading": "进展",
-  "reviewRequest": "Epic MR：{url}（等你审阅合并到 {target}）",
-  "integrationBranch": "集成分支：{branch}，Story 逐个合入，全部交付后自动开 Epic MR",
-  "blocked": "受阻：{reason}",
-  "blockedWaiting": "受阻：在等你回答 {stories}",
-  "storyLine": "{id} {title} — {state}",
-  "storyMr": "，MR {url}",
-  "storyStop": "（{reason}）"
+  "legacyProgressHeading": "进展",
+  "carriedScenarios": "这一批要交付的场景：",
+  "technicalFold": "展开技术细节",
+  "reviewRequest": "Epic MR：{url}（合并到 {target}）",
+  "integrationBranch": "集成分支：{branch}",
+  "acceptanceIntro": "勾上 = 这条场景做到了；做得不对就不要勾，在这一行下写条评论说差在哪，我会在本 Epic 下补一张卡。",
+  "acceptanceGap": "你说：{note}"
 }

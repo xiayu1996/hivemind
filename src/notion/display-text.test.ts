@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import schema from "./notion-schema.json" with { type: "json" };
+import { STORY_BOARD_STATUS } from "./board-status.js";
 import {
   displayTime,
   sectionForTitle,
@@ -35,7 +35,7 @@ describe("display text", () => {
   });
 
   it("speaks of a stopped card in the board's own words", () => {
-    expect(storyStateWord("HUMAN_PARKED")).toBe(schema.options.aiStatus[4]);
+    expect(storyStateWord("HUMAN_PARKED")).toBe(STORY_BOARD_STATUS.parked);
     expect(storyStateWord("DELIVERED")).toBe("已交付");
   });
 

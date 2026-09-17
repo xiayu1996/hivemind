@@ -3,17 +3,16 @@ import type { RequirementState } from "../orchestrator/requirement-machine.js";
 import type {
   AcceptanceItem,
   ClarifyRound,
-  LinkedEpicProgress,
   PrdRevision,
   RequirementSnapshot,
   RequirementStop,
   RequirementStore,
 } from "../orchestrator/requirement-store.js";
-import { questionText } from "../orchestrator/human-question.js";
-import type { DesiredRequirementPage } from "./blocks/requirement-page.js";
+import { annotateReply, questionLines } from "../orchestrator/human-question.js";
+import type { DesiredClarifyRound, DesiredRequirementPage } from "./blocks/requirement-page.js";
 import type { NotionOutbox } from "./outbox.js";
 import schema from "./notion-schema.json" with { type: "json" };
-import { epicStateWord, stopReasonWord } from "./display-text.js";
+import { quietText, waitingText } from "./display-text.js";
 
 const STATUS = schema.options.requirementStatus;
 
@@ -51,28 +50,8 @@ export interface RequirementPageInput {
   clarify: readonly ClarifyRound[];
   prd: PrdRevision | null;
   acceptance: readonly AcceptanceItem[];
-  linkedEpics: readonly LinkedEpicProgress[];
   /** The last stop, shown only while `requirement.stopReason` is still set. */
   stop?: RequirementStop | null;
-}
-
-function epicProgressLine(epics: readonly LinkedEpicProgress[]): string {
-  if (epics.length === 0) return "关联 Epic: 暂无";
-  const parts = epics.map((epic) => {
-    const label = epicStateWord(epic.state);
-    const stories = epic.storiesTotal > 0 ? `，Story ${epic.storiesDelivered}/${epic.storiesTotal} 已交付` : "";
-    return `${epic.epicId}（${label}${stories}）`;
-  });
-  return `关联 Epic: ${parts.join("、")}`;
-}
-
-/** What the page says while the system waits on a person, worded like the
- * Story page's own waiting section so both read the same way. */
-export function requirementQuestionsText(stop: RequirementStop): string {
-  return [
-    `系统已停下等你回答：${stop.detail}`,
-    "如何回答：直接在本页评论区留言，系统读到你的回复后会从停下的地方继续。",
-  ].join("\n\n");
 }
 
 interface PrdBody {
@@ -82,49 +61,61 @@ interface PrdBody {
   openQuestions?: string[];
 }
 
+/** Which of the two situations a requirement waits in, if any. Everything else
+ * the board column already says, and the page does not repeat it. */
+function situation(requirement: RequirementSnapshot): "CLARIFY" | "PRD_CONFIRM" | undefined {
+  if (requirement.stopReason) return "CLARIFY";
+  return requirement.state === "CLARIFY" || requirement.state === "PRD_CONFIRM" ? requirement.state : undefined;
+}
+
+/** One clarification round as the page folds it. */
+function clarifyRound(round: ClarifyRound): DesiredClarifyRound {
+  const answers = round.answers ?? [];
+  const answered = answers.length > 0;
+  return {
+    round: round.round,
+    line: `\u7b2c ${round.round} \u8f6e \u00b7 ${round.questions.length} \u9898 \u00b7 ${answered ? "\u5df2\u56de\u7b54" : "\u7b49\u4f60\u56de\u7b54"}`,
+    items: round.questions.map((question, index) => {
+      const reply = answers[index];
+      return {
+        question: question.question,
+        options: questionLines(question).slice(1),
+        ...(reply === undefined ? {} : { answer: reply, reading: annotateReply([question], reply) }),
+      };
+    }),
+  };
+}
+
 /** Renders the page a person reads. Pure, so the same record always produces
  * the same page and a replay can tell "already applied" from "changed". */
 export function buildRequirementPage(input: RequirementPageInput): DesiredRequirementPage {
   const { requirement } = input;
-  const metadata = [
-    `状态: ${requirementStatusFor(requirement.state, requirement.clarifyRounds)}`,
-    `澄清轮次: ${requirement.clarifyRounds}`,
-    epicProgressLine(input.linkedEpics),
-    ...(requirement.stopReason ? [`等你回答：${stopReasonWord(requirement.stopReason)}`] : []),
-  ].join(" · ");
+  const waiting = waitingText("requirement", situation(requirement) ?? "");
   const stop = requirement.stopReason ? input.stop ?? null : null;
+  const callout = waiting
+    ? [...(stop ? [`\u505c\u5728\u8fd9\u91cc\uff1a${stop.detail}`] : []), waiting.action].join("\n")
+    : quietText().action;
 
-  const clarify: string[] = [];
-  for (const round of input.clarify) {
-    for (const [index, question] of round.questions.entries()) {
-      clarify.push(`第 ${round.round} 轮 问 ${index + 1}: ${questionText(question)}`);
-    }
-    for (const [index, answer] of (round.answers ?? []).entries()) {
-      clarify.push(`第 ${round.round} 轮 答 ${index + 1}: ${answer}`);
-    }
-  }
-
-  const prd: string[] = [];
-  if (input.prd) {
-    const body = JSON.parse(input.prd.body) as PrdBody;
-    prd.push(`业务目标: ${body.businessGoal}`);
-    for (const nonGoal of body.nonGoals ?? []) prd.push(`本次不做: ${nonGoal}`);
-    for (const scenario of body.scenarios) {
-      prd.push(`场景 ${scenario.id}: 给定 ${scenario.given}，当 ${scenario.when}，则 ${scenario.then}`);
-    }
-    for (const question of body.openQuestions ?? []) prd.push(`待你裁决: ${question}`);
-  }
+  const body = input.prd ? JSON.parse(input.prd.body) as PrdBody : null;
+  const delivered = input.acceptance.filter((item) => item.status === "accepted").length;
+  const delivery = input.acceptance.length === 0
+    ? "\u573a\u666f\u7531\u627f\u63a5\u5b83\u4eec\u7684 Epic \u9010\u6279\u9a8c\u6536\uff0c\u5168\u90e8\u901a\u8fc7\u540e\u8fd9\u6761\u9700\u6c42\u81ea\u52a8\u7ed3\u6848\u3002"
+    : `\u5df2\u9a8c\u6536 ${delivered}/${input.acceptance.length} \u4e2a\u573a\u666f\uff1b\u9a8c\u6536\u5728\u5404\u4e2a Epic \u9875\u4e0a\u505a\uff0c\u8fd9\u91cc\u53ea\u6c47\u603b\u3002`;
 
   return {
-    metadata,
+    callout,
     original: requirement.originalRequest,
-    clarify,
-    prd,
-    prdFrozen: input.prd?.status === "confirmed",
-    acceptance: input.acceptance.map((item) => item.text),
-    // The heading exists on every requirement page, so the section says that
-    // nothing is waiting rather than standing empty and reading as unfinished.
-    questions: stop ? requirementQuestionsText(stop) : "当前没有等你回答的问题。",
+    clarify: input.clarify.map((round) => clarifyRound(round)),
+    prd: body
+      ? {
+        goal: body.businessGoal,
+        nonGoals: body.nonGoals ?? [],
+        scenarios: body.scenarios,
+        openQuestions: body.openQuestions ?? [],
+        frozen: input.prd?.status === "confirmed",
+      }
+      : null,
+    delivery,
   };
 }
 
@@ -141,14 +132,13 @@ export class RequirementPageProjector implements RequirementPagePublisher {
 
   async publish(requirementId: string): Promise<void> {
     const requirement = await this.store.getRequirement(requirementId);
-    const [clarify, prd, acceptance, linkedEpics, stop] = await Promise.all([
+    const [clarify, prd, acceptance, stop] = await Promise.all([
       this.store.clarifyHistory(requirementId),
       this.store.getPrd(requirementId),
       this.store.acceptanceItems(requirementId),
-      this.store.linkedEpicStates(requirementId),
       requirement.stopReason ? this.store.latestStop(requirementId) : Promise.resolve(null),
     ]);
-    const desired = buildRequirementPage({ requirement, clarify, prd, acceptance, linkedEpics, stop });
+    const desired = buildRequirementPage({ requirement, clarify, prd, acceptance, stop });
     await this.outbox.enqueue({
       cardId: requirementId,
       priority: 1,

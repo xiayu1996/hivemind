@@ -65,7 +65,7 @@ describe("M2 acceptance: one Epic from decomposition to review request", () => {
     await migrate(client);
     time = 1_000;
     store = new StoryExecutionStore(client, () => time++);
-    approvals = new PlanApprovalStore(client, () => time++);
+    approvals = new PlanApprovalStore(client, () => time++, { planApproval: true });
     registry = new ScenarioRegistry(client, () => time);
     await client.execute(
       "INSERT INTO epics (id, notion_page_id, title, state, created_at, updated_at) VALUES ('M2','epic-page','M2 并行与回归','INTAKE',1,1)",

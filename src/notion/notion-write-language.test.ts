@@ -4,7 +4,7 @@ import { migrate } from "../persistence/migrate.js";
 import { StoryExecutionStore } from "../orchestrator/story-execution-store.js";
 import type { EpicState, StoryState, StoryStopReason } from "../orchestrator/state-machine.js";
 import type { RequirementState } from "../orchestrator/requirement-machine.js";
-import { renderEpicProgress } from "../orchestrator/epic-page-projection.js";
+import { renderEpicPage } from "../orchestrator/epic-page-projection.js";
 import { buildRequirementPage } from "./requirement-projection.js";
 import { NotionStoryProjection } from "./story-projection.js";
 
@@ -59,20 +59,26 @@ describe("what Notion is written with", () => {
     expect(() => assertReadable("probe", ["场景 1 · 保存规则 S-E1-01-a"])).not.toThrow();
   });
 
-  it("says what happened to an Epic without naming a state the machine uses", () => {
-    for (const state of STORY_STATES) {
-      for (const stopReason of [null, ...STOP_REASONS]) {
-        const rendered = renderEpicProgress({
-          epicId: "E-1",
-          status: "进行中",
-          mrUrl: "https://example.test/pull/1",
-          targetBranch: "main",
-          integrationBranch: "epic/E-1",
-          blockedReason: null,
-          stories: [{ id: "S-E1-01", title: "保存规则", state, stopReason, mrUrl: null }],
-        });
-        assertReadable(`epic page ${state}/${stopReason}`, [...rendered.lead, ...rendered.stories]);
-      }
+  it("says what an Epic carries without naming a state the machine uses", () => {
+    for (const state of EPIC_STATES) {
+      const rendered = renderEpicPage({
+        epicId: "E-1",
+        state,
+        status: "\u8fdb\u884c\u4e2d",
+        mrUrl: "https://example.test/pull/1",
+        targetBranch: "main",
+        integrationBranch: "epic/E-1",
+        businessGoal: "\u8ba9\u4eba\u80fd\u4fdd\u5b58\u4e00\u6761\u89c4\u5219",
+        prdScenarios: [{ id: "s01", text: "\u6253\u5f00\u9875\u9762\uff0c\u4fdd\u5b58\u89c4\u5219\uff0c\u5217\u8868\u91cc\u51fa\u73b0\u5b83" }],
+        stories: [{ id: "S-E1-01", title: "\u4fdd\u5b58\u89c4\u5219", pageId: null, dependsOn: [] }],
+        acceptance: [{
+          prdScenarioId: "s01",
+          text: "\u6253\u5f00\u9875\u9762\uff0c\u4fdd\u5b58\u89c4\u5219\uff0c\u5217\u8868\u91cc\u51fa\u73b0\u5b83",
+          status: "gap",
+          note: "\u4fdd\u5b58\u540e\u5217\u8868\u6ca1\u5237\u65b0",
+        }],
+      });
+      assertReadable(`epic page ${state}`, rendered.lines);
     }
   });
 
@@ -93,12 +99,6 @@ describe("what Notion is written with", () => {
           clarify: [],
           prd: null,
           acceptance: [],
-          linkedEpics: EPIC_STATES.map((epicState, index) => ({
-            epicId: `E-${index}`,
-            state: epicState,
-            storiesTotal: 2,
-            storiesDelivered: 1,
-          })),
           stop: stopReason ? { state, detail: "有个问题等你回答", stoppedAt: 10 } : null,
         });
         assertReadable(`requirement page ${state}/${stopReason}`, strings(page));
@@ -129,8 +129,13 @@ describe("what Notion is written with", () => {
     const rows = (await client.execute("SELECT payload FROM notion_outbox WHERE operation = 'sync_story_page'")).rows;
     expect(rows.length).toBeGreaterThan(1);
     for (const row of rows) {
-      const payload = JSON.parse(String(row.payload)) as { desired: unknown };
-      assertReadable("story page", strings(payload.desired));
+      // Everything but the fold: the technical section is where an engineering
+      // word is allowed to land, and it is closed until someone opens it.
+      const { technical, ...desired } = (JSON.parse(String(row.payload)) as {
+        desired: Record<string, unknown>;
+      }).desired;
+      expect(technical === undefined || Array.isArray(technical)).toBe(true);
+      assertReadable("story page", strings(desired));
     }
     client.close();
   });

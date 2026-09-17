@@ -33,7 +33,7 @@ describe("EpicDecomposer", () => {
   beforeEach(async () => {
     client = createClient({ url: ":memory:" });
     await migrate(client);
-    approvals = new PlanApprovalStore(client, () => 1_000);
+    approvals = new PlanApprovalStore(client, () => 1_000, { planApproval: true });
     await client.execute({
       sql: "INSERT INTO epics (id, notion_page_id, title, state, created_at, updated_at) VALUES (?, ?, ?, 'INTAKE', 1, 1)",
       args: ["M2", "epic-page", "并行与回归"],
@@ -55,6 +55,18 @@ describe("EpicDecomposer", () => {
     // The plan goes to the page and the card moves to the waiting-for-approval column together.
     const outbox = (await client.execute("SELECT operation FROM notion_outbox ORDER BY id")).rows;
     expect(outbox).toMatchObject([{ operation: "present_epic_plan" }, { operation: "sync_epic_status" }]);
+  });
+
+  it("starts the work itself when nobody reviews how it was split", async () => {
+    const port = { run: vi.fn(async () => plan) };
+    const decomposer = new EpicDecomposer(client, new PlanApprovalStore(client, () => 1_000), port, () => 1_000);
+
+    await expect(decomposer.decompose(epic())).resolves.toMatchObject({ kind: "presented" });
+    expect(await state()).toBe("EXECUTING");
+    // The page still says how the work was cut; nobody is asked to confirm it.
+    const outbox = (await client.execute("SELECT operation FROM notion_outbox ORDER BY id")).rows;
+    expect(outbox.map((row) => row.operation)).toContain("present_epic_plan");
+    expect((await client.execute("SELECT state FROM execution_dispatches")).rows).toEqual([{ state: "pending" }]);
   });
 
   it("feeds the rejection reasons back and tries once more before giving up", async () => {

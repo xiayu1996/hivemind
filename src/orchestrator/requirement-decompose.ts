@@ -133,28 +133,42 @@ export class RequirementDecomposer {
       const title = epic.title;
       const requirementBody = `${epic.businessGoal}\n\n${epic.body}`;
       const pageId = epicPageId(requirementId, epic.id);
+      // The page gets the description alone: the business goal is rendered by
+      // the projection under its own heading, next to the scenarios it carries.
       const payload = JSON.stringify({
         requirementId,
         epicId: epic.id,
         title,
-        body: requirementBody,
+        body: epic.body,
         scenarioIds: [...epic.scenarioIds],
       });
       statements.push({
-        sql: `INSERT INTO epics (id, notion_page_id, title, state, requirement_id, repo, created_at, updated_at)
-              VALUES (?, ?, ?, 'INTAKE', ?, ?, ?, ?)
+        sql: `INSERT INTO epics
+                (id, notion_page_id, title, state, requirement_id, business_goal, repo, created_at, updated_at)
+              VALUES (?, ?, ?, 'INTAKE', ?, ?, ?, ?, ?)
               ON CONFLICT(id) DO UPDATE SET
                 title = excluded.title,
                 requirement_id = excluded.requirement_id,
+                business_goal = excluded.business_goal,
                 repo = COALESCE(epics.repo, excluded.repo),
                 updated_at = excluded.updated_at`,
-        args: [epic.id, pageId, title, requirementId, repo ?? null, time, time],
+        args: [epic.id, pageId, title, requirementId, epic.businessGoal, repo ?? null, time, time],
       }, {
         sql: `INSERT INTO notion_outbox (card_id, priority, operation, target, payload, payload_hash, created_at)
               VALUES (?, 1, 'create_epic_page', ?, ?, ?, ?)
               ON CONFLICT(target, payload_hash) DO NOTHING`,
         args: [epic.id, requirementId, payload, hash(payload), time],
       });
+      // Which batch answers for which PRD scenario. The primary key makes a
+      // rerun move a scenario to its new Epic rather than let two claim it.
+      for (const scenarioId of epic.scenarioIds) {
+        statements.push({
+          sql: `INSERT INTO epic_prd_scenarios (requirement_id, epic_id, prd_scenario_id)
+                VALUES (?, ?, ?)
+                ON CONFLICT(requirement_id, prd_scenario_id) DO UPDATE SET epic_id = excluded.epic_id`,
+          args: [requirementId, epic.id, scenarioId],
+        });
+      }
       intakes.push({ id: epic.id, notionPageId: pageId, title, requirement: requirementBody });
     }
     await this.client.batch(statements, "write");

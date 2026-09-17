@@ -43,7 +43,7 @@ function unavailable(
 ): Extract<MediaResult, { kind: "placeholder" }> {
   return {
     kind: "placeholder",
-    text: `Image unavailable; see evidence ${evidenceId}`,
+    text: `\u622a\u56fe\u6ca1\u4f20\u4e0a\u53bb\uff0c\u539f\u4ef6\u5b58\u5728\u8bc1\u636e\u76ee\u5f55 ${evidenceId}`,
     attached,
     ...(reason ? { reason } : {}),
   };

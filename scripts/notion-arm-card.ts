@@ -5,8 +5,9 @@ import { loadSecretsFile } from "../src/config/secrets-file.js";
 import { NotionGateway } from "../src/notion/gateway.js";
 import { createNotionHttpTransport } from "../src/notion/sdk-adapters.js";
 import schema from "../src/notion/notion-schema.json" with { type: "json" };
+import { STORY_BOARD_STATUS } from "../src/notion/board-status.js";
 
-const READY_STATUS = schema.options.aiStatus[0]!;
+const READY_STATUS = STORY_BOARD_STATUS.queued;
 
 function argument(name: string): string | undefined {
   const index = process.argv.indexOf(name);

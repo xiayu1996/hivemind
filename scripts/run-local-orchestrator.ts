@@ -65,6 +65,7 @@ import { NotionStoryProjection } from "../src/notion/story-projection.js";
 import { NotionSyncCoordinator, type NotionSyncPoller } from "../src/notion/sync.js";
 import { registerNotionWebhookRoute } from "../src/notion/webhook-route.js";
 import { IntegrationDispatchStore } from "../src/orchestrator/integration-dispatch.js";
+import { EpicAcceptance } from "../src/orchestrator/epic-acceptance.js";
 import { PlanApprovalStore } from "../src/orchestrator/plan-approval.js";
 import { dispatchableStories, planRepositoryStoryExecution } from "../src/orchestrator/scheduler.js";
 import { DispatchQueue } from "../src/queue/dispatch.js";
@@ -252,8 +253,10 @@ async function main(): Promise<void> {
     gateway,
     comments,
     new PlanApprovalStore(handle.client, Date.now, {
-      maxStories: config.get("decompose.maxStoriesPerEpic"),
-    }, publishEpicBranchFor),
+      limits: { maxStories: config.get("decompose.maxStoriesPerEpic") },
+      planApproval: config.get("decompose.planApproval"),
+      onApproved: publishEpicBranchFor,
+    }),
   );
   const media = new NotionMediaReconciler(
     handle.client,
@@ -272,11 +275,19 @@ async function main(): Promise<void> {
   const registerActiveStories = async (): Promise<void> => {
     // Approval and blocking-question answers both arrive as Epic-page comments.
     const epics = (await handle.client.execute({
-      sql: "SELECT notion_page_id FROM epics WHERE state IN ('PLAN_APPROVAL', 'BLOCKED') ORDER BY id",
+      sql: `SELECT id, notion_page_id FROM epics
+            WHERE state IN ('PLAN_APPROVAL', 'BLOCKED', 'EPIC_ACCEPT') ORDER BY id`,
     })).rows;
     for (const epic of epics) {
       const pageId = String(epic.notion_page_id);
-      await comments.registerPage(pageId, []);
+      // A comment on an acceptance box says what that scenario is missing, so
+      // the boxes are anchors like any other block a person writes under.
+      const boxes = (await handle.client.execute({
+        sql: `SELECT notion_block_id FROM epic_acceptance_items
+              WHERE epic_id = ? AND notion_block_id IS NOT NULL`,
+        args: [String(epic.id)],
+      })).rows.map((row) => String(row.notion_block_id));
+      await comments.registerPage(pageId, boxes);
       coordinator.registerActivePage(pageId);
     }
     const stories = (await handle.client.execute({
@@ -421,7 +432,11 @@ async function main(): Promise<void> {
     const decompositionLimits = { maxStories: config.get("decompose.maxStoriesPerEpic") };
     const decomposer = new EpicDecomposer(
       handle.client,
-      new PlanApprovalStore(handle.client, Date.now, decompositionLimits, publishEpicBranchFor),
+      new PlanApprovalStore(handle.client, Date.now, {
+        limits: decompositionLimits,
+        planApproval: config.get("decompose.planApproval"),
+        onApproved: publishEpicBranchFor,
+      }),
       new PiDecomposePort({
         binary: piBinary,
         spec: await resolveAgentSpec({ config, policy: modelPolicy }, "decompose", provider),
@@ -712,6 +727,10 @@ async function main(): Promise<void> {
       sql: "UPDATE epics SET state = 'EPIC_ACCEPT', mr_url = ?, updated_at = ? WHERE id = ? AND state = 'EXECUTING'",
       args: [delivered.mrUrl, Date.now(), epicId],
     });
+    // The batch is complete, so what it promised goes up for judgement on its
+    // own page, next to the review request that carries it.
+    const judged = await new EpicAcceptance(handle.client).open(epicId);
+    if (judged.length > 0) console.log(`Epic ${epicId} acceptance: ${judged.length} scenarios to judge`);
     console.log(`Epic ${epicId} review request: ${delivered.mrUrl}`);
   };
 

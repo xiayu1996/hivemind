@@ -3,22 +3,34 @@ import type { StoryProjectionPort } from "../orchestrator/story-worker.js";
 import { NotionOutbox, payloadHash } from "./outbox.js";
 import type { DesiredStoryPage } from "./blocks/story-page.js";
 import schema from "./notion-schema.json" with { type: "json" };
-import { storyIcon, stopReasonWord, storyStateWord } from "./display-text.js";
+import { STORY_BOARD_STATUS } from "./board-status.js";
+import { storyIcon, stopReasonWord, waitingText } from "./display-text.js";
+import { laneWord, type DesiredRound, type DesiredSpec } from "./blocks/story-render.js";
+import { scenarioTitle } from "../pipeline/dod.js";
+import { lintHumanSentence } from "../report/business-language.js";
+import { diagnoseRetryLimit } from "../pipeline/retry-limits.js";
 
-/** Notion caps a rich text run at 2000 characters. */
-const SUMMARY_LIMIT = 1900;
+interface VerificationBody {
+  reasons?: Array<{ scenarioId: string; reason: string; detail?: string }>;
+  validationErrors?: string[];
+  uiReview?: {
+    acceptance?: Array<{ id: string; status: string; reason?: string; detail?: string; cites?: string }>;
+    findings?: Array<{ severity: string; note: string }>;
+    amendments?: Array<{ scenarioId: string; observation: string }>;
+    inconclusive?: string[];
+  };
+}
 
 function value(input: unknown): string {
   return typeof input === "string" ? input : "";
 }
 
 export function notionAiStatusForState(state: string): string {
-  const options = schema.options.aiStatus;
-  if (state === "NEEDS_INPUT") return options[2]!;
-  if (state === "HUMAN_PARKED") return options[4]!;
-  if (state === "DELIVERED") return options[5]!;
-  if (state === "FAILED") return options[6]!;
-  return state === "QUEUED" ? options[0]! : options[1]!;
+  if (state === "NEEDS_INPUT") return STORY_BOARD_STATUS.needsInput;
+  if (state === "HUMAN_PARKED") return STORY_BOARD_STATUS.parked;
+  if (state === "DELIVERED") return STORY_BOARD_STATUS.done;
+  if (state === "FAILED") return STORY_BOARD_STATUS.failed;
+  return state === "QUEUED" ? STORY_BOARD_STATUS.queued : STORY_BOARD_STATUS.running;
 }
 
 /** One board word per state the pipeline actually has, so the column reads as
@@ -49,6 +61,30 @@ function phase(story: Row): string {
     if (word) return word;
   }
   return schema.options.phase[0]!;
+}
+
+/** One scenario as the page shows it. A DoD frozen before these columns
+ * existed has only its id and text, and falls back to a numbered name rather
+ * than to a machine translation of words nobody wrote. */
+function desiredSpec(row: Row): DesiredSpec {
+  // oxlint-disable-next-line unicorn/no-thenable -- Given/When/Then is the external DoD contract.
+  const spec: DesiredSpec = {
+    id: String(row.spec_id),
+    seq: Number(row.seq),
+    status: String(row.status),
+    title: scenarioTitle({ title: value(row.title) || undefined }, Number(row.seq)),
+  };
+  const given = value(row.given);
+  // oxlint-disable-next-line eslint/no-underscore-dangle -- the columns are named after reserved words.
+  const when = value(row.when_);
+  // oxlint-disable-next-line eslint/no-underscore-dangle -- the columns are named after reserved words.
+  const then = value(row.then_);
+  if (given) spec.given = given;
+  if (when) spec.when = when;
+  // oxlint-disable-next-line unicorn/no-thenable -- Given/When/Then is the external DoD contract.
+  if (then) spec.then = then;
+  if (row.layers) spec.layers = JSON.parse(String(row.layers)) as string[];
+  return spec;
 }
 
 /** Builds a complete desired page from central truth and durably queues the projection. */
@@ -86,71 +122,147 @@ export class NotionStoryProjection implements StoryProjectionPort {
   }
 
   /**
-   * What a person reads about a round: which scenarios were looked at and what
-   * was seen, in their words. An accepted round says what passed, not only
-   * that nothing failed; a rejected one says, per scenario, what each lane saw
-   * and which DoD sentence it rests on.
+   * The round as a table: one row per scenario, one column per lane. The
+   * paragraph this replaces made a person read every scenario to find theirs,
+   * and put the code-level reason in front of them whether they wanted it or
+   * not -- that now lives under the technical heading.
    */
-  private async roundSummary(cardId: string, latest: Record<string, unknown>): Promise<string> {
-    const failed = JSON.parse(String(latest.failed_scenarios)) as string[];
+  private async roundDetail(cardId: string, latest: Record<string, unknown>): Promise<{
+    round: DesiredRound;
+    technical: string[];
+  }> {
+    const failed = new Set(JSON.parse(String(latest.failed_scenarios)) as string[]);
     const verdict = String(latest.verdict);
     const declared = (await this.client.execute({
-      sql: "SELECT spec_id FROM story_specs WHERE story_id = ? ORDER BY seq",
+      sql: "SELECT spec_id, seq, title FROM story_specs WHERE story_id = ? ORDER BY seq",
       args: [cardId],
-    })).rows.map((row) => String(row.spec_id));
+    })).rows;
     const artifact = (await this.client.execute({
       sql: `SELECT body FROM phase_artifacts
             WHERE card_id = ? AND phase = 'VERIFY' AND kind = 'verification' AND round = ?
             ORDER BY id DESC LIMIT 1`,
       args: [cardId, Number(latest.round)],
     })).rows[0];
-    const body = artifact ? JSON.parse(String(artifact.body)) as {
-      reasons?: Array<{ scenarioId: string; reason: string }>;
-      validationErrors?: string[];
-      uiReview?: {
-        acceptance?: Array<{ id: string; status: string; reason?: string; cites?: string }>;
-        findings?: Array<{ severity: string; note: string }>;
-        amendments?: Array<{ scenarioId: string; observation: string }>;
-        inconclusive?: string[];
+    const body = artifact ? JSON.parse(String(artifact.body)) as VerificationBody : {};
+    const screen = new Map((body.uiReview?.acceptance ?? []).map((item) => [item.id, item]));
+    const reasons = new Map((body.reasons ?? []).map((item) => [item.scenarioId, item]));
+    const inconclusive = new Set(body.uiReview?.inconclusive ?? []);
+
+    const rows = declared.map((row) => {
+      const id = String(row.spec_id);
+      const seen = screen.get(id);
+      const note = seen?.reason ?? reasons.get(id)?.reason ?? "";
+      return {
+        scenario: `\u573a\u666f ${Number(row.seq)} \u00b7 ${scenarioTitle({ title: value(row.title) || undefined }, Number(row.seq))}`,
+        test: laneWord(failed.has(id) ? "rejected" : "accepted"),
+        screen: seen ? laneWord(seen.status === "passed" ? "accepted" : seen.status === "failed" ? "rejected" : "inconclusive")
+          : inconclusive.has(id) ? laneWord("inconclusive") : "\u2014",
+        note: lintHumanSentence("\u8bf4\u660e", note).length === 0 ? note : "",
       };
-    } : {};
-    const passed = declared.filter((id) => !failed.includes(id));
+    });
+
+    // A reason written for a debugger is not thrown away, it is put where a
+    // person only sees it if they went looking.
+    const technical: string[] = [];
+    for (const [id, item] of reasons) {
+      if (item.reason && lintHumanSentence("reason", item.reason).length > 0) technical.push(`${id}\uff1a${item.reason}`);
+      if (item.detail) technical.push(`${id}\uff1a${item.detail}`);
+    }
+    for (const error of body.validationErrors ?? []) technical.push(error);
+
+    return {
+      round: {
+        round: Number(latest.round),
+        at: Number(latest.created_at ?? this.now()),
+        verdict,
+        passed: rows.length - rows.filter((row) => row.test === laneWord("rejected")).length,
+        total: rows.length,
+        rows,
+        ...(body.uiReview?.findings && body.uiReview.findings.length > 0
+          ? { findings: body.uiReview.findings.map((finding) => finding.note) }
+          : {}),
+      },
+      technical,
+    };
+  }
+
+  /** The newest body of one design artifact kind, or an empty row. */
+  private async latestArtifact(cardId: string, kind: string): Promise<{ body?: unknown }> {
+    const row = (await this.client.execute({
+      sql: `SELECT body FROM phase_artifacts
+            WHERE card_id = ? AND kind = ?
+            ORDER BY round DESC, id DESC LIMIT 1`,
+      args: [cardId, kind],
+    })).rows[0];
+    return { body: row?.body };
+  }
+
+  /** Scenario numbers and names, for text that has only ids to work with. */
+  private async scenarioNames(cardId: string): Promise<Map<string, string>> {
+    const rows = (await this.client.execute({
+      sql: "SELECT spec_id, seq, title FROM story_specs WHERE story_id = ? ORDER BY seq",
+      args: [cardId],
+    })).rows;
+    return new Map(rows.map((row) => [
+      String(row.spec_id),
+      `\u573a\u666f ${Number(row.seq)} \u00b7 ${scenarioTitle({ title: value(row.title) || undefined }, Number(row.seq))}`,
+    ]));
+  }
+
+  /**
+   * Which side a spent verification budget points at, in the words of the
+   * person who has to act on it. The diagnosis itself is the pipeline's; only
+   * its rendering lives here, because the English report it writes for the log
+   * is not what a person reads on a page.
+   */
+  private async loopDiagnosis(cardId: string): Promise<string[]> {
+    const history = (await this.client.execute({
+      sql: "SELECT failed_scenarios FROM verify_records WHERE card_id = ? ORDER BY round",
+      args: [cardId],
+    })).rows.map((row) => JSON.parse(String(row.failed_scenarios)) as string[]);
+    const diagnosis = diagnoseRetryLimit(history);
+    const names = await this.scenarioNames(cardId);
+    const name = (id: string): string => names.get(id) ?? id;
+    const lines = [
+      diagnosis.side === "requirement"
+        ? "\u591a\u534a\u662f\u9700\u6c42\u8fd9\u8fb9\u7684\u4e8b\uff1a\u6bcf\u4e00\u8f6e\u90fd\u5361\u5728\u540c\u4e00\u6279\u573a\u666f\u4e0a\uff0c\u6ca1\u6709\u5f80\u524d\u8d70\u3002"
+        : "\u591a\u534a\u662f\u6267\u884c\u8fd9\u8fb9\u7684\u4e8b\uff1a\u5931\u8d25\u7684\u573a\u666f\u4e00\u76f4\u5728\u53d8\uff0c\u6ca1\u6709\u7a33\u4e0b\u6765\u3002",
+    ];
+    if (diagnosis.curve.length > 0) {
+      lines.push(`\u6bcf\u8f6e\u6ca1\u8fc7\u7684\u573a\u666f\u6570\uff1a${diagnosis.curve.join(" \u2192 ")}`);
+    }
+    if (diagnosis.persistent.length > 0) {
+      lines.push(`\u4ece\u6ca1\u901a\u8fc7\u7684\uff1a${diagnosis.persistent.map(name).join("\u3001")}`);
+    }
+    if (diagnosis.regressed.length > 0) {
+      lines.push(`\u901a\u8fc7\u540e\u53c8\u574f\u4e86\u7684\uff1a${diagnosis.regressed.map(name).join("\u3001")}`);
+    }
+    return lines;
+  }
+
+  /**
+   * What the page asks of a person, and nothing else: why the card stopped,
+   * the questions still open with the answer SHAPE proposed, and how to reply.
+   * Answers already given are folded away separately -- they are a record, not
+   * a thing to do.
+   */
+  private async waitingSection(cardId: string, stopReason: string | undefined, action: string): Promise<string> {
     const lines: string[] = [];
-    if (verdict === "accepted") {
-      // The UI lane's inconclusive scenarios never reject and never consume a
-      // round, so the verdict hides them; the person still has to see which
-      // screens nobody managed to look at.
-      const unreviewed = body.uiReview?.inconclusive ?? [];
-      const walkthrough = unreviewed.length > 0 ? `；走查无结论：${unreviewed.join("、")}` : "";
-      lines.push(`通过：${passed.length} 个场景都验证通过${passed.length > 0 ? `（${passed.join("、")}）` : ""}${walkthrough}`);
-    } else if (verdict === "inconclusive") {
-      lines.push(`无结论：验证环境出了问题，不算这张卡的失败，也不消耗轮次${failed.length > 0 ? `（涉及 ${failed.join("、")}）` : ""}`);
-    } else {
-      lines.push(`未通过：${failed.length} 个场景被打回${passed.length > 0 ? `，${passed.length} 个通过（${passed.join("、")}）` : ""}`);
+    if (stopReason) lines.push(`\u8fd9\u5f20\u5361\u505c\u4e0b\u4e86\uff1a${stopReasonWord(stopReason)}\u3002`);
+    const questions = (await this.client.execute({
+      sql: `SELECT question_key, question, suggestion FROM open_questions
+            WHERE card_id = ? AND blocking = 1 AND answer IS NULL ORDER BY id`,
+      args: [cardId],
+    })).rows;
+    for (const [index, row] of questions.entries()) {
+      lines.push(`${index + 1}. ${String(row.question)}`);
+      const suggestion = value(row.suggestion);
+      if (suggestion) lines.push(`   \u5efa\u8bae\u7684\u7b54\u6cd5\uff1a${suggestion}`);
+      lines.push(`   \u56de\u7b54\u65f6\u5199\u300c${String(row.question_key)}\uff1a<\u4f60\u7684\u56de\u7b54>\u300d`);
     }
-    for (const id of failed) {
-      const fromTests = (body.reasons ?? []).filter((item) => item.scenarioId === id).map((item) => `测试：${item.reason}`);
-      const fromScreen = (body.uiReview?.acceptance ?? [])
-        .filter((item) => item.id === id && item.status === "failed" && item.reason)
-        .map((item) => `走查：${item.reason}${item.cites ? `（依据 DoD「${item.cites}」）` : ""}`);
-      const why = [...fromTests, ...fromScreen];
-      lines.push(`- ${id}：${why.length > 0 ? why.join("；") : "没有记录原因"}`);
-    }
-    if ((body.validationErrors ?? []).length > 0) lines.push(`代码校验拒绝了这些结论：${body.validationErrors!.join("；")}`);
-    // The review's findings and amendments never rejected anything, so they
-    // leave no trace in the verdict; a person still has to be told they exist
-    // and that the card was not held for them.
-    const findings = body.uiReview?.findings ?? [];
-    if (findings.length > 0) {
-      const major = findings.find((finding) => finding.severity === "major");
-      lines.push(`界面走查 ${findings.length} 条（不影响验收）${major ? `，例如：${major.note}` : ""}`);
-    }
-    const amendments = body.uiReview?.amendments ?? [];
-    if (amendments.length > 0) {
-      lines.push(`走查提出了 DoD 没写的要求 ${amendments.length} 条，等你决定：${amendments.map((item) => `${item.scenarioId}：${item.observation}`).join("；")}`);
-    }
-    const summary = lines.join("\n");
-    return summary.length > SUMMARY_LIMIT ? `${summary.slice(0, SUMMARY_LIMIT - 1)}…` : summary;
+    if (stopReason === "verify_loop_exceeded") lines.push(...await this.loopDiagnosis(cardId));
+    lines.push(action);
+    return lines.join("\n");
   }
 
   /** How many rounds a person's last action has bought so far, and out of how many. */
@@ -200,19 +312,17 @@ export class NotionStoryProjection implements StoryProjectionPort {
     if (await this.pageCreationPending(cardId)) return;
     const pageId = String(story.notion_page_id);
     await this.dropStaleTargets(cardId, pageId);
-    const [specs, design, verification, cost] = await Promise.all([
+    const [specs, design, technicalDesign, diagram, verification, cost] = await Promise.all([
       this.client.execute({
-        sql: "SELECT spec_id, seq, status, text FROM story_specs WHERE story_id = ? ORDER BY seq",
+        sql: `SELECT spec_id, seq, status, title, given, when_, then_, layers
+              FROM story_specs WHERE story_id = ? ORDER BY seq`,
         args: [cardId],
       }),
+      this.latestArtifact(cardId, "design-summary"),
+      this.latestArtifact(cardId, "design-technical"),
+      this.latestArtifact(cardId, "design-diagram"),
       this.client.execute({
-        sql: `SELECT body FROM phase_artifacts
-              WHERE card_id = ? AND kind = 'design-summary'
-              ORDER BY round DESC, id DESC LIMIT 1`,
-        args: [cardId],
-      }),
-      this.client.execute({
-        sql: `SELECT round, verdict, failed_scenarios FROM verify_records
+        sql: `SELECT round, verdict, failed_scenarios, created_at FROM verify_records
               WHERE card_id = ? ORDER BY round DESC LIMIT 1`,
         args: [cardId],
       }),
@@ -222,37 +332,44 @@ export class NotionStoryProjection implements StoryProjectionPort {
       }),
     ]);
     const latest = verification.rows[0];
-    const roundSummary = latest ? await this.roundSummary(cardId, latest) : undefined;
-    const stopText = story.stop_reason
-      ? `这张卡停下了：${stopReasonWord(String(story.stop_reason))}。` +
-        (roundSummary && String(story.stop_reason) === "verify_loop_exceeded"
-          ? `\n最近一轮（第 ${Number(latest!.round)} 轮）：${roundSummary}`
-          : "")
+    const detail = latest ? await this.roundDetail(cardId, latest) : undefined;
+
+    // A card speaks up when it has actually stopped and only a person can move
+    // it on: one of the four stop reasons, or a card that failed. Everything
+    // else is progress the board already shows, and a page that repeats it
+    // spends attention for nothing.
+    const state = String(story.state);
+    const stopReason = story.stop_reason === null ? undefined : String(story.stop_reason);
+    const situation = stopReason
+      ?? (state === "FAILED" ? "failed" : state === "NEEDS_INPUT" ? "blocking_question" : undefined);
+    const waiting = situation ? waitingText("story", situation) : undefined;
+    const questions = waiting ? await this.waitingSection(cardId, stopReason, waiting.action) : undefined;
+    const metadata = waiting
+      ? [
+          waiting.action,
+          [
+            `\u7b2c ${Number(story.inner_loop_rounds)} \u8f6e`,
+            await this.budgetLine(cardId, Number(story.last_human_action_at ?? 0)),
+            `\u8d39\u7528 $${Number(cost.rows[0]?.total ?? 0).toFixed(4)}`,
+            ...(story.mr_url ? [`MR ${String(story.mr_url)}`] : []),
+          ].join(" \u00b7 "),
+        ].join("\n")
       : undefined;
     const answers = await this.appliedAnswers(cardId);
-    const questions = [
-      ...(stopText ? [stopText] : []),
-      ...(answers.length > 0 ? [`已应用的回答：\n${answers.join("\n")}`] : []),
-    ].join("\n\n");
+
+    const summary = value(design.body);
+    const technical = [
+      ...(value(technicalDesign.body) ? [value(technicalDesign.body)] : []),
+      ...(detail?.technical ?? []),
+      ...(story.mr_url ? [`MR\uff1a${String(story.mr_url)}`] : []),
+      ...(stopReason ? [`\u505c\u70b9\uff1a${stopReason}`] : []),
+    ];
     const desired: DesiredStoryPage = {
-      metadata: [
-        storyStateWord(String(story.state)),
-        `第 ${Number(story.inner_loop_rounds)} 轮`,
-        await this.budgetLine(cardId, Number(story.last_human_action_at ?? 0)),
-        `费用 $${Number(cost.rows[0]?.total ?? 0).toFixed(4)}`,
-        ...(story.mr_url ? [`MR ${String(story.mr_url)}`] : []),
-      ].join(" · "),
-      design: value(design.rows[0]?.body) || "设计还没写出来。",
+      ...(metadata ? { metadata } : {}),
+      design: summary || "\u8bbe\u8ba1\u8fd8\u6ca1\u5199\u51fa\u6765\u3002",
       ...(questions ? { questions } : {}),
-      specs: specs.rows.map((row) => ({
-        id: String(row.spec_id),
-        seq: Number(row.seq),
-        status: String(row.status),
-        text: String(row.text),
-      })),
-      ...(latest && roundSummary ? {
-        verificationRound: { round: Number(latest.round), summary: roundSummary },
-      } : {}),
+      specs: specs.rows.map(desiredSpec),
+      ...(detail ? { verificationRound: detail.round } : {}),
     };
     await this.outbox.enqueue({
       cardId,
@@ -262,7 +379,13 @@ export class NotionStoryProjection implements StoryProjectionPort {
       payload: {
         cardId,
         pageId,
-        desired,
+        desired: {
+          ...desired,
+          ...(waiting ? { metadataIcon: waiting.icon, metadataColor: waiting.color } : {}),
+          ...(value(diagram.body) ? { diagram: value(diagram.body) } : {}),
+          ...(answers.length > 0 ? { answers } : {}),
+          ...(technical.length > 0 ? { technical } : {}),
+        },
       },
     });
     const names = schema.propertyNames;

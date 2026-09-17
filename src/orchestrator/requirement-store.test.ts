@@ -155,10 +155,10 @@ describe("RequirementStore", () => {
   it("keeps one anchor per owned page section so a redelivery updates in place", async () => {
     await store.registerNotionSection(REQUIREMENT_ID, "prd", "block-prd-1");
     await store.registerNotionSection(REQUIREMENT_ID, "prd", "block-prd-2");
-    await store.registerNotionSection(REQUIREMENT_ID, "acceptance", "block-acceptance");
+    await store.registerNotionSection(REQUIREMENT_ID, "delivery", "block-delivery");
     await expect(store.notionSections(REQUIREMENT_ID)).resolves.toEqual({
       prd: "block-prd-2",
-      acceptance: "block-acceptance",
+      delivery: "block-delivery",
     });
   });
 

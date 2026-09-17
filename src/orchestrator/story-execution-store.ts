@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { StorySection } from "../notion/blocks/story-page.js";
 import type { Client } from "@libsql/client";
 import {
   assertStoryTransition,
@@ -1010,7 +1011,7 @@ export class StoryExecutionStore {
 
   async registerNotionSection(
     cardId: string,
-    section: "requirement" | "specification" | "design" | "verification" | "questions",
+    section: StorySection,
     anchorBlockId: string,
   ): Promise<void> {
     await this.client.execute({

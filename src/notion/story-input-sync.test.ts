@@ -7,6 +7,7 @@ import { migrate } from "../persistence/migrate.js";
 import { CommentIngestor, type NotionCommentSource } from "./comment-ingest.js";
 import { NotionGateway } from "./gateway.js";
 import schema from "./notion-schema.json" with { type: "json" };
+import { STORY_BOARD_STATUS } from "./board-status.js";
 import { NotionStoryInputSync } from "./story-input-sync.js";
 import type { NotionStoryApi } from "./story-intake.js";
 
@@ -51,7 +52,7 @@ describe("NotionStoryInputSync", () => {
       title: "Queued Story",
       requirement: "Requirement",
     });
-    let observed = schema.options.aiStatus[4]!;
+    let observed = STORY_BOARD_STATUS.parked;
     const gateway = new NotionGateway({
       ratePerSecond: 1_000_000,
       transport: async () => ({ status: 200, data: page(observed) }),
@@ -70,7 +71,7 @@ describe("NotionStoryInputSync", () => {
       state: "HUMAN_PARKED",
       resumeState: "QUEUED",
     });
-    observed = schema.options.aiStatus[0]!;
+    observed = STORY_BOARD_STATUS.queued;
     await sync.pollProperties("page-2");
     await expect(store.getStory("S-EPIC1-02")).resolves.toMatchObject({ state: "QUEUED", resumeState: null });
     client.close();
@@ -78,7 +79,7 @@ describe("NotionStoryInputSync", () => {
 
   it("persists park/resume intent and the 120 second human-wins window", async () => {
     const { client, store } = await story();
-    let observed = schema.options.aiStatus[4]!;
+    let observed = STORY_BOARD_STATUS.parked;
     const gateway = new NotionGateway({
       ratePerSecond: 1_000_000,
       transport: async () => ({ status: 200, data: page(observed) }),
@@ -102,7 +103,7 @@ describe("NotionStoryInputSync", () => {
     )).rows[0];
     expect(parked).toMatchObject({ human_wins_until: 121_000, last_human_action_at: 1_000 });
 
-    observed = schema.options.aiStatus[1]!;
+    observed = STORY_BOARD_STATUS.running;
     await expect(sync.pollProperties("page-1")).resolves.toMatchObject({ intent: "resume" });
     await expect(store.getStory("S-EPIC1-01")).resolves.toMatchObject({ state: "CODE", resumeState: null });
     client.close();
@@ -160,7 +161,7 @@ depends_on: []
     await comments.registerPage("page-1", ["spec-1"]);
     const gateway = new NotionGateway({
       ratePerSecond: 1_000_000,
-      transport: async () => ({ status: 200, data: page(schema.options.aiStatus[2]!) }),
+      transport: async () => ({ status: 200, data: page(STORY_BOARD_STATUS.needsInput) }),
     });
     const sync = new NotionStoryInputSync(client, gateway, api, comments, store, () => 1_000);
 
@@ -218,11 +219,11 @@ depends_on: []
     await store.stopForInput("S-EPIC1-03", "QUEUED", "retry_limit_exceeded", "reentry-S-EPIC1-03");
     await client.execute({
       sql: "UPDATE stories SET notion_ai_status_shadow = ? WHERE id = 'S-EPIC1-03'",
-      args: [schema.options.aiStatus[2]!],
+      args: [STORY_BOARD_STATUS.needsInput],
     });
     const gateway = new NotionGateway({
       ratePerSecond: 1_000_000,
-      transport: async () => ({ status: 200, data: page(schema.options.aiStatus[1]!) }),
+      transport: async () => ({ status: 200, data: page(STORY_BOARD_STATUS.running) }),
     });
     const sync = new NotionStoryInputSync(
       client,
@@ -250,10 +251,10 @@ depends_on: []
       await store.transition("S-EPIC1-05", from, to, "system", `${from}-${to}`);
     }
     await store.stopForInput("S-EPIC1-05", "MERGE", "retry_limit_exceeded", "reentry-S-EPIC1-05");
-    await client.execute({ sql: "UPDATE stories SET notion_ai_status_shadow = ? WHERE id = 'S-EPIC1-05'", args: [schema.options.aiStatus[2]!] });
+    await client.execute({ sql: "UPDATE stories SET notion_ai_status_shadow = ? WHERE id = 'S-EPIC1-05'", args: [STORY_BOARD_STATUS.needsInput] });
     const gateway = new NotionGateway({
       ratePerSecond: 1_000_000,
-      transport: async () => ({ status: 200, data: page(schema.options.aiStatus[1]!) }),
+      transport: async () => ({ status: 200, data: page(STORY_BOARD_STATUS.running) }),
     });
     const sync = new NotionStoryInputSync(
       client,
@@ -288,7 +289,7 @@ describe("what a person's comment asks for", () => {
     await comments.registerPage("page-1", blockId ? [blockId] : []);
     const gateway = new NotionGateway({
       ratePerSecond: 1_000_000,
-      transport: async () => ({ status: 200, data: page(schema.options.aiStatus[1]!) }),
+      transport: async () => ({ status: 200, data: page(STORY_BOARD_STATUS.running) }),
     });
     const sync = new NotionStoryInputSync(client, gateway, emptyApi, comments, store, () => 1_000);
     return { client, store, sync };

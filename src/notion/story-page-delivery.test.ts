@@ -16,6 +16,16 @@ interface FakeBlock {
   [key: string]: unknown;
 }
 
+/** The round toggles, told apart from the one the technical section folds
+ * itself behind by the line a round writes. */
+function roundToggles(blocks: FakeBlock[]): FakeBlock[] {
+  return blocks.filter((item) => {
+    const payload = item[item.type] as { rich_text?: Array<{ plain_text?: string }> } | undefined;
+    const written = payload?.rich_text?.map((run) => run.plain_text ?? "").join("") ?? "";
+    return item.type === "toggle" && /^\u7b2c \d+ \u8f6e/.test(written);
+  });
+}
+
 function plainText(items: unknown): unknown[] {
   if (!Array.isArray(items)) return [];
   return items.map((item) => {
@@ -81,6 +91,24 @@ class FakeNotion {
     return { status: 404, data: {} };
   };
 
+  /** A heading an older build wrote, under the name it used then. */
+  addHeading(parentId: string, title: string): string {
+    const created = this.create({
+      object: "block",
+      type: "heading_2",
+      heading_2: { rich_text: [{ type: "text", text: { content: title } }] },
+    });
+    this.children.get(parentId)!.push(created);
+    return created.id;
+  }
+
+  text(blockId: string): string {
+    const block = [...this.children.values()].flat().find((item) => item.id === blockId);
+    if (!block) throw new Error(`unknown fake block: ${blockId}`);
+    const payload = block[block.type] as { rich_text?: Array<{ plain_text?: string }> } | undefined;
+    return payload?.rich_text?.map((run) => run.plain_text ?? "").join("") ?? "";
+  }
+
   /** Drops a block the way a person deleting it in the app does. */
   remove(blockId: string): void {
     for (const [parent, blocks] of this.children) {
@@ -101,7 +129,9 @@ class FakeNotion {
       id: `block-${this.nextId++}`,
       [type]: payload?.rich_text ? { ...payload, rich_text: plainText(payload.rich_text) } : payload,
     } as FakeBlock;
-    if (type === "child_page") this.children.set(created.id, []);
+    // Every block can hold children in Notion, and this page now puts the
+    // scenario detail, the table and the folds underneath blocks of its own.
+    this.children.set(created.id, []);
     return created;
   }
 
@@ -204,11 +234,11 @@ describe("NotionStoryPageDelivery", () => {
       const current = String(mapping.rows[0]?.notion_block_id);
       specBlockId ??= current;
       expect(current).toBe(specBlockId);
-      if (round === 3) expect(fake.visible("page-1").filter((item) => item.type === "toggle")).toHaveLength(3);
+      if (round === 3) expect(roundToggles(fake.visible("page-1"))).toHaveLength(3);
     }
 
     const page = fake.visible("page-1");
-    expect(page.filter((item) => item.type === "toggle")).toHaveLength(8);
+    expect(roundToggles(page)).toHaveLength(8);
     expect(page.filter((item) => item.id === specBlockId)).toHaveLength(1);
     const rounds = await client.execute(
       "SELECT round, toggle_block_id, archived_page_id FROM notion_verification_rounds ORDER BY round",
@@ -254,12 +284,77 @@ describe("NotionStoryPageDelivery", () => {
     await expect(outbox.replay(delivery)).resolves.toEqual({ sent: 2, failed: 0, failures: [], dead: [] });
 
     const page = fake.visible("page-1");
-    expect(page.filter((item) => item.type === "toggle")).toHaveLength(1);
+    expect(roundToggles(page)).toHaveLength(1);
     const texts = page.map((item) => {
       const payload = item[item.type] as { rich_text?: Array<{ plain_text?: string }> } | undefined;
       return payload?.rich_text?.map((run) => run.plain_text ?? "").join("") ?? "";
     });
     expect(texts.filter((text) => text.startsWith("这张卡停下了："))).toHaveLength(1);
+    client.close();
+  });
+
+
+  it("renames an older page's headings in place and hangs the detail under the blocks a person already reads", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, () => 10);
+    await store.createStory({ id: "S-EPIC1-01", notionPageId: "page-1", title: "Story", requirement: "Requirement" });
+    await store.freezeDefinitionOfDone("S-EPIC1-01", parseDoD(`story_id: S-EPIC1-01
+design_summary: \u4fdd\u5b58\u540e\u80fd\u770b\u5230\u89c4\u5219\u3002
+scenarios:
+  - id: S-EPIC1-01-a
+    title: \u4fdd\u5b58\u89c4\u5219\u5e76\u56de\u663e
+    given: \u7ba1\u7406\u5458\u6253\u5f00\u89c4\u5219\u9875
+    when: \u4fdd\u5b58\u4e00\u6761\u89c4\u5219
+    then: \u5217\u8868\u91cc\u51fa\u73b0\u8fd9\u6761\u89c4\u5219
+    layers: [integration]
+baseline:
+  type: acceptance_test
+acceptance_criteria:
+  - text: \u89c4\u5219\u80fd\u4fdd\u5b58\u3002
+    scenarios: [S-EPIC1-01-a]
+out_of_scope: []
+relies_on: []
+predicted_footprint: [src]
+depends_on: []
+`));
+    await client.execute({
+      sql: `INSERT INTO verify_records (card_id, round, code_session_id, verify_session_id, verdict, failed_scenarios, created_at)
+            VALUES ('S-EPIC1-01', 1, 'code-1', 'verify-1', 'accepted', '[]', 20)`,
+    });
+
+    await client.execute("UPDATE story_specs SET status = 'passed' WHERE story_id = 'S-EPIC1-01'");
+
+    const fake = new FakeNotion("page-1");
+    // The page an older build wrote, under the name it used then.
+    const heading = fake.addHeading("page-1", "\u9700\u6c42\u89c4\u683c");
+    const gateway = new NotionGateway({ transport: fake.transport, ratePerSecond: 1_000_000, mergeWindowMs: 0 });
+    const delivery = new NotionStoryDelivery(
+      new NotionStoryPageDelivery(client, gateway, () => 20),
+      new NotionStoryPropertyDelivery(gateway, client, () => 20),
+    );
+    const outbox = new NotionOutbox(client, () => 20);
+    await new NotionStoryProjection(client, () => 20).enqueue("S-EPIC1-01");
+    await outbox.replay(delivery);
+
+    // The heading keeps its block, so every comment under it keeps its anchor.
+    expect(fake.text(heading)).toBe("\u9a8c\u6536\u573a\u666f");
+    const specBlockId = String((await client.execute(
+      "SELECT notion_block_id FROM story_specs WHERE spec_id = 'S-EPIC1-01-a'",
+    )).rows[0]?.notion_block_id);
+    expect(fake.text(specBlockId)).toBe("\u2705 \u573a\u666f 1 \u00b7 \u4fdd\u5b58\u89c4\u5219\u5e76\u56de\u663e S-EPIC1-01-a");
+    expect(fake.visible(specBlockId).map((item) => fake.text(item.id))).toEqual([
+      "\u524d\u63d0\uff1a\u7ba1\u7406\u5458\u6253\u5f00\u89c4\u5219\u9875",
+      "\u64cd\u4f5c\uff1a\u4fdd\u5b58\u4e00\u6761\u89c4\u5219",
+      "\u7ed3\u679c\uff1a\u5217\u8868\u91cc\u51fa\u73b0\u8fd9\u6761\u89c4\u5219",
+      "\u8bc1\u660e\u65b9\u5f0f\uff1a\u96c6\u6210\u6d4b\u8bd5",
+    ]);
+
+    // The round reads as a table rather than as a paragraph of every scenario.
+    const toggle = String((await client.execute(
+      "SELECT toggle_block_id FROM notion_verification_rounds",
+    )).rows[0]?.toggle_block_id);
+    expect(fake.visible(toggle).map((item) => item.type)).toEqual(["table"]);
     client.close();
   });
 

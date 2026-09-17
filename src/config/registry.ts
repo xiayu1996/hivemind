@@ -515,6 +515,13 @@ export const CONFIG_KEYS = {
     reload: "next-spawn",
     description: "Hosts an E2E run may navigate to. Anything else, including file://, is blocked.",
   }),
+  "decompose.planApproval": def({
+    schema: z.boolean(),
+    default: false,
+    scope: "global",
+    reload: "hot",
+    description: "Whether a person reviews how an Epic was split before its Stories exist. Off by default: attention is the scarce resource, and it is spent where a delivery is judged (Epic acceptance), not on how the work was cut. On, the Epic waits in the board's planned column until somebody drags or comments it through, exactly as it always did.",
+  }),
   "decompose.maxStoriesPerEpic": def({
     schema: positiveInt.max(20),
     default: 4,
