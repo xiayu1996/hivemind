@@ -57,13 +57,15 @@ export const TEMPLATE = `
           </a>
         </li>
       </ul>
+      <p v-if="!listError && tasks.length === 0" class="notice">任务列表里还没有任务。</p>
     </template>
 
     <template v-else-if="route.kind === 'detail'">
       <a class="back" href="/tasks">← 返回任务列表</a>
       <template v-if="pageState.kind === 'ready'">
         <h1 class="task-heading">{{ pageState.detail.taskId }}｜{{ pageState.detail.taskName }}</h1>
-        <ol class="rounds">
+        <p v-if="pageState.detail.rounds.length === 0" class="notice">尚无执行轮次</p>
+        <ol v-else class="rounds">
           <li v-for="round in pageState.detail.rounds" :key="round.round" class="round">
             <div class="round-head">
               <h2>第 {{ round.round }} 轮</h2>
