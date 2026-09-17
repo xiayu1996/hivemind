@@ -77,6 +77,9 @@ function requirementProperties(epicsDataSourceId: string): Properties {
     [names.title]: { title: {} },
     [names.requirementStatus]: { select: { options: selectOptions("requirementStatus") } },
     [names.priority]: { select: { options: selectOptions("priority") } },
+    // Which registered repository the requirement is for. Seeded empty: the
+    // options are the registry's slugs, added as repositories are registered.
+    [names.repository]: { select: { options: [] } },
     [names.epicRelation]: {
       relation: {
         data_source_id: epicsDataSourceId,
@@ -308,6 +311,57 @@ async function retireOptions(
     data_source_id: sourceId,
     properties: { [property]: { select: { options: kept.map((option) => ({ id: option.id })) as never } } },
   });
+}
+
+/**
+ * Adds one select option per registered repository, adding only.
+ *
+ * Deleting an option would blank the property on every page still holding it,
+ * so a repository that leaves the registry keeps its option until a person
+ * removes it on the board.
+ */
+export async function seedRepositoryOptions(
+  client: BootstrapClient,
+  boardDataSourceId: string,
+  slugs: readonly string[],
+): Promise<string[]> {
+  const names = schema.propertyNames;
+  const live = liveOptions(
+    (await client.dataSources.retrieve({ data_source_id: boardDataSourceId })).properties[names.repository],
+  );
+  const missing = slugs.filter((slug) => !live.some((option) => option.name === slug));
+  if (missing.length === 0) return [];
+  await client.dataSources.update({
+    data_source_id: boardDataSourceId,
+    properties: {
+      [names.repository]: {
+        select: {
+          options: [...live.map((option) => ({ id: option.id })), ...missing.map((slug) => ({ name: slug }))] as never,
+        },
+      },
+    },
+  });
+  return missing;
+}
+
+/**
+ * Brings a live Requirements database up to the current schema: the target
+ * repository a person picks when more than one is registered.
+ */
+export async function upgradeRequirementBoard(
+  client: BootstrapClient,
+  requirementsDataSourceId: string,
+  slugs: readonly string[] = [],
+): Promise<void> {
+  const names = schema.propertyNames;
+  const properties = (await client.dataSources.retrieve({ data_source_id: requirementsDataSourceId })).properties;
+  if (!properties[names.repository]) {
+    await client.dataSources.update({
+      data_source_id: requirementsDataSourceId,
+      properties: { [names.repository]: { select: { options: [] } } } as never,
+    });
+  }
+  await seedRepositoryOptions(client, requirementsDataSourceId, slugs);
 }
 
 /**

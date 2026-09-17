@@ -19,6 +19,7 @@ import { renderStopSummary, type StopSummary } from "../src/orchestrator/stop-su
 import { openDb } from "../src/persistence/client.js";
 import { loadCardTurns, summarizeCrossPhaseCache } from "../src/observability/cross-phase-cache.js";
 import { loadCardDossier, renderCardDossier } from "../src/observability/card-dossier.js";
+import { checkoutKey } from "../src/vcs/repository-checkout.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -182,7 +183,7 @@ async function main(): Promise<void> {
       args: [cardId],
     })).rows[0];
     if (!story) throw new Error(`no such Story: ${cardId}`);
-    const repositoryId = optional("--repository-id") ?? String(story.repo ?? "").split("/").at(-1) ?? "";
+    const repositoryId = optional("--repository-id") ?? checkoutKey(String(story.repo ?? ""));
     const sessionRoot = optional("--session-root") ?? join(workRoot, "sessions", repositoryId, cardId);
     const worktree = optional("--worktree") ?? join(workRoot, "worktrees", repositoryId, cardId);
 

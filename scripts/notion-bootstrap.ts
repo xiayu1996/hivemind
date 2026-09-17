@@ -1,5 +1,14 @@
 import { Client } from "@notionhq/client";
-import { bootstrapNotion, bootstrapRequirements, upgradeEpicBoard, upgradeStoryBoard } from "../src/notion/bootstrap.js";
+import {
+  bootstrapNotion,
+  bootstrapRequirements,
+  upgradeEpicBoard,
+  upgradeRequirementBoard,
+  upgradeStoryBoard,
+} from "../src/notion/bootstrap.js";
+import { openDb } from "../src/persistence/client.js";
+import { migrate } from "../src/persistence/migrate.js";
+import { RepositoryRegistry } from "../src/vcs/repository-registry.js";
 import { loadSecretsFile, upsertSecretFile } from "../src/config/secrets-file.js";
 
 function argument(name: string): string | undefined {
@@ -50,6 +59,24 @@ async function main(): Promise<void> {
     if (!storiesDataSourceId) throw new Error("pass --stories-data-source or set HIVEMIND_NOTION_STORIES_DATA_SOURCE_ID");
     await upgradeStoryBoard(client, storiesDataSourceId, argument("--repository-slug"));
     console.log("Stories database upgraded: execution phase words are current and the repository column is deduplicated.");
+    return;
+  }
+
+  // The requirement card gains the target repository a person picks once this
+  // installation serves more than one; the options are the registered slugs.
+  if (process.argv.includes("--upgrade-requirements")) {
+    const requirementsDataSourceId = argument("--requirements-data-source") ??
+      process.env.HIVEMIND_NOTION_REQUIREMENTS_DATA_SOURCE_ID ?? stored.get("HIVEMIND_NOTION_REQUIREMENTS_DATA_SOURCE_ID");
+    if (!requirementsDataSourceId) throw new Error("pass --requirements-data-source or set HIVEMIND_NOTION_REQUIREMENTS_DATA_SOURCE_ID");
+    const handle = openDb(process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db");
+    try {
+      await migrate(handle.client);
+      const slugs = await new RepositoryRegistry(handle.client).slugs();
+      await upgradeRequirementBoard(client, requirementsDataSourceId, slugs);
+      console.log(`Requirements database upgraded: the target repository column offers ${slugs.join(", ") || "no repository yet"}.`);
+    } finally {
+      handle.close();
+    }
     return;
   }
 

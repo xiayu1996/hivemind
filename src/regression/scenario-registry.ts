@@ -88,12 +88,23 @@ export class ScenarioRegistry {
     })), "write");
   }
 
-  async pool(pool: ScenarioPool): Promise<RegisteredScenario[]> {
-    const rows = (await this.client.execute({
+  /**
+   * A pool, optionally narrowed to one repository. A sweep runs in a checkout,
+   * and a scenario from another repository cannot be run there, so the caller
+   * that serves several repositories has to ask per repository.
+   */
+  async pool(pool: ScenarioPool, repo?: string): Promise<RegisteredScenario[]> {
+    const rows = (await this.client.execute(repo === undefined ? {
       sql: `SELECT scenario_id, story_id, epic_id, pool, last_verified_at
               FROM scenario_registry WHERE pool = ?
              ORDER BY last_verified_at IS NOT NULL, last_verified_at, scenario_id`,
       args: [pool],
+    } : {
+      sql: `SELECT r.scenario_id, r.story_id, r.epic_id, r.pool, r.last_verified_at
+              FROM scenario_registry r JOIN stories s ON s.id = r.story_id
+             WHERE r.pool = ? AND s.repo = ?
+             ORDER BY r.last_verified_at IS NOT NULL, r.last_verified_at, r.scenario_id`,
+      args: [pool, repo],
     })).rows;
     return rows.map((row) => ({
       scenarioId: String(row.scenario_id),
