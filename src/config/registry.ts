@@ -508,6 +508,13 @@ export const CONFIG_KEYS = {
     reload: "hot",
     description: "Argv run once per reviewed scenario that declares a seed, in the Story worktree, to put the sample data the scenario's given needs into the running application. It receives the seed text in HIVEMIND_SEED and the scenario id in HIVEMIND_SCENARIO. Empty means scenarios are reviewed against whatever data the application starts with.",
   }),
+  "prototype.root": def({
+    schema: z.string().trim().min(1),
+    default: "docs/prototype",
+    scope: "per-repo",
+    reload: "hot",
+    description: "Where the repository keeps the interface contract a requirement with screens is built against: the token table, the component inventory and the runnable page prototypes. It is read from the branch a round runs on and injected into the phases that build screens, so a repository that keeps it elsewhere says so here rather than having two copies.",
+  }),
   "guard.e2eHostAllowlist": def({
     schema: z.array(z.string()),
     default: ["localhost", "127.0.0.1"],

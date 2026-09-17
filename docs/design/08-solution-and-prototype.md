@@ -87,7 +87,9 @@ docs/prototype/
 - **仓库是真相源**。`assemblePhasePrompt` 的逐字节确定性是不变量（跨机重建、failover、崩溃恢复、provider 前缀缓存都骑在它上面），所以"CODE 开始前去外部服务拉一次"这条路封死。任何外部设计工具只能作为**上游**，通过一次导出落进仓库并被 PR 审计。
 - **tokens.json 用 W3C design-tokens 格式**，原型只消费 token。这样将来要不要接设计工具的 variables 是一次导入导出，而不是重写——把它变成可逆决定（§7）。
 
-**注入**：下游 phase 的全量注入里加一段界面契约——`tokens.json` 全文 + `components.md` 全文 + 页面清单（文件名 + 每页一句话）。页面 HTML 本体不注入（太大），需要时由 DESIGN / CODE 自己读对应文件。所有集合按文件名稳定排序，注入内容只来自这些文件，不读时钟、不取随机数。
+**注入**：下游 phase 的全量注入里加一段界面契约——token 清单 + `components.md` 全文 + 页面清单（文件名 + 每页一句话）。页面 HTML 本体不注入（太大），需要时由 DESIGN / CODE 自己读对应文件。所有集合按稳定键排序，注入内容只来自这些文件，不读时钟、不取随机数。
+
+2026-09-17 修订（实现时）：token 不注入 `tokens.json` 全文，而是解析成按名排序的扁平清单（`name (type): value`）。理由是逐字节确定性：同一张表重排版一次或调换两个组的顺序，全文注入会换一份 prompt，而一个 token 都没变。同理，页面的名称与用途取自页面自己的 `<title>` 与 `<meta name="description">`，两者缺一即整份契约不注入——半张 token 表会让下游把剩下的颜色编出来，比没有契约更糟。**谁把这三件写进仓库尚未定**：SOLUTION 是只读档，见 `docs/plan/tasks.md` 的 MU-02b。
 
 ## 4. 人在 Notion 上怎么预览 / 修改 / 确认
 
