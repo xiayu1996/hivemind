@@ -100,10 +100,10 @@ export const CONFIG_KEYS = {
   // --- retry ceilings (03 doc section 1.5) ---
   "retry.maxInnerLoopRounds": def({
     schema: positiveInt.max(50),
-    default: 6,
+    default: 3,
     scope: "global",
     reload: "hot",
-    description: "Maximum CODE<->VERIFY inner-loop rounds before the card is failed.",
+    description: "Rounds one Story may spend in the CODE<->VERIFY<->MERGE inner loop before it stops and asks a person. A rejected verification costs one; so does a merge whose re-verification failed on something this Story introduced. A crash, an environment-only verification, and a head that was already red cost nothing. Three rounds is what a Story that can be finished normally needs; a card that wants more is telling you something the next round will not fix.",
   }),
   "retry.maxPhaseReentries": def({
     schema: positiveInt.max(20),
@@ -695,7 +695,7 @@ export const CONFIG_KEYS = {
     default: 3,
     scope: "global",
     reload: "hot",
-    description: "How many past rounds the convergence check looks back over to call a loop oscillating rather than merely slow. There is deliberately no matching threshold for stagnation: the invariant is that each round's failure set is a strict subset of the last, so a single round that fails to shrink it already stops the loop.",
+    description: "How many past rounds the convergence check looks back over before it calls a loop oscillating. The invariant is that a round must not fail on a set it has already produced; repeating the round before it is the same rule at a window of one, which is why there is no separate stagnation setting. Kept equal to retry.maxInnerLoopRounds so every round inside one budget is compared.",
   }),
   "cache.keyScope": def({
     schema: z.enum(["card", "repo"]),

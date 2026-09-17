@@ -6,19 +6,25 @@ describe("classifyConvergence", () => {
     expect(classifyConvergence([["S-1", "S-2"]])).toEqual({ classification: "baseline", mayContinue: true });
   });
 
-  it("accepts only a strict proper subset", () => {
+  it("names a shrinking set as converging and an empty one as complete", () => {
     expect(classifyConvergence([["S-1", "S-2"], ["S-2"]])).toEqual({
       classification: "converging", mayContinue: true,
     });
     expect(classifyConvergence([["S-1"], []])).toEqual({ classification: "complete", mayContinue: false });
   });
 
-  it("stops on an unchanged or expanded failure set", () => {
+  it("stops on a repeated failure set", () => {
     expect(classifyConvergence([["S-1"], ["S-1"]])).toEqual({
       classification: "stalled", mayContinue: false,
     });
+  });
+
+  it("keeps going when a round trades one failure for another", () => {
     expect(classifyConvergence([["S-1"], ["S-1", "S-2"]])).toEqual({
-      classification: "expanded", mayContinue: false,
+      classification: "expanded", mayContinue: true,
+    });
+    expect(classifyConvergence([["S-1", "S-2", "S-3"], ["S-4"]])).toEqual({
+      classification: "expanded", mayContinue: true,
     });
   });
 

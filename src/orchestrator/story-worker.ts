@@ -4,6 +4,7 @@ import {
   renderConvergenceReport,
   type ConvergenceClassification,
   type ConvergenceOptions,
+  type ConvergenceResult,
 } from "../pipeline/convergence.js";
 import { evaluateSpecExit, applyDowngrades, renderSpecExitFindings, type SpecExitPorts } from "../pipeline/spec-exit-gate.js";
 import { parseTestContract } from "../pipeline/test-contract.js";
@@ -212,7 +213,7 @@ export class SingleStoryWorker {
     this.convergenceOptions = options.convergence ?? {};
     this.treeSha = options.treeSha;
     this.maxInconclusiveRounds = options.maxInconclusiveRounds ?? 2;
-    this.maxInnerLoopRounds = options.maxInnerLoopRounds ?? 6;
+    this.maxInnerLoopRounds = options.maxInnerLoopRounds ?? 3;
     this.maxRegressionReopens = options.maxRegressionReopens ?? 2;
     if (!Number.isInteger(this.maxInnerLoopRounds) || this.maxInnerLoopRounds < 1) {
       throw new Error("maxInnerLoopRounds must be a positive integer");
@@ -328,12 +329,17 @@ export class SingleStoryWorker {
       // Round numbers keep counting across resumes; the budget does not.
       let round = story.innerLoopRounds;
       if (failureHistory.length >= this.maxInnerLoopRounds) {
-        // The Epic head refused the branch after the loop was already spent:
-        // there is no round left to fix it in, so this is the verification stop.
+        // The Epic head refused the branch after the budget was already spent:
+        // there is no round left to fix it in, so the card stops on the budget.
         const stopRunId = this.createRunId(cardId, "VERIFY", round);
-        await this.store.stopForInput(cardId, story.state, "verify_loop_exceeded", stopRunId);
+        await this.store.stopForInput(cardId, story.state, "retry_limit_exceeded", stopRunId, {
+          convergence: "budget_exhausted",
+          spent: failureHistory.length,
+          budget: this.maxInnerLoopRounds,
+          failed: failureHistory.at(-1) ?? [],
+        });
         await this.projection.enqueue(cardId);
-        return { state: "NEEDS_INPUT", rounds: round, mrUrl: null, stopReason: "verify_loop_exceeded" };
+        return { state: "NEEDS_INPUT", rounds: round, mrUrl: null, stopReason: "retry_limit_exceeded" };
       }
       // `spent` is the budget: only a round that failed in the code costs one.
       let spent = failureHistory.length;
@@ -423,12 +429,21 @@ export class SingleStoryWorker {
           ...new Set(verification.codeFailedScenarios ?? verification.failedScenarios),
         ].toSorted());
         const convergence = classifyConvergence(failureHistory, this.convergenceOptions);
-        if (spent >= this.maxInnerLoopRounds || !convergence.mayContinue) {
-          // Which of the four situations ended the loop is written down, but the
-          // reason stays one of the four the DB accepts.
-          const classification = convergence.mayContinue ? "budget_exhausted" : convergence.classification;
-          await this.store.stopForInput(cardId, "VERIFY", "verify_loop_exceeded", verifyRunId, {
+        if (!convergence.mayContinue || spent >= this.maxInnerLoopRounds) {
+          // Two different stops, told apart because they call for different
+          // decisions. A loop that repeated a round it has already run will
+          // repeat it again however much budget it is given, so it stops on the
+          // loop; a loop that was still producing new sets when the rounds ran
+          // out stops on the budget, and raising the budget is a real option.
+          // The loop stop wins when both are true: the repetition is why
+          // spending the last round was pointless.
+          const stoppedOnLoop = !convergence.mayContinue;
+          const classification = stoppedOnLoop ? convergence.classification : "budget_exhausted";
+          const reason = stoppedOnLoop ? "verify_loop_exceeded" : "retry_limit_exceeded";
+          await this.store.stopForInput(cardId, "VERIFY", reason, verifyRunId, {
             convergence: classification,
+            spent,
+            budget: this.maxInnerLoopRounds,
             failed: failureHistory.at(-1) ?? [],
           });
           await this.projection.enqueue(cardId);
@@ -436,7 +451,7 @@ export class SingleStoryWorker {
             state: "NEEDS_INPUT",
             rounds: round,
             mrUrl: null,
-            stopReason: "verify_loop_exceeded",
+            stopReason: reason,
             convergence: classification,
             stopReport: renderConvergenceReport(cardId, classification, failureHistory),
           };
@@ -528,6 +543,7 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
     let round = story.innerLoopRounds;
     const failureHistory: string[][] = [];
     let inconclusiveStreak = 0;
+    let convergence: ConvergenceResult | null = null;
     for (let spent = 0; spent < this.maxInnerLoopRounds;) {
       const overspent = await this.#costCeilingStop(cardId, "REGRESSION_FIX", round);
       if (overspent) return overspent;
@@ -569,12 +585,21 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
         continue;
       }
       failureHistory.push(failed);
-      if (!classifyConvergence(failureHistory, this.convergenceOptions).mayContinue) break;
+      convergence = classifyConvergence(failureHistory, this.convergenceOptions);
+      if (!convergence.mayContinue) break;
     }
+    // Same split as the inner loop: a repeated failure set is the loop's own
+    // stop, running out of rounds while it still moved is the budget's.
+    const stoppedOnLoop = convergence !== null && !convergence.mayContinue;
     const stopRunId = this.createRunId(cardId, "VERIFY", round);
-    await this.store.stopForInput(cardId, "REGRESSION_FIX", "verify_loop_exceeded", stopRunId);
+    const stopReason = stoppedOnLoop ? "verify_loop_exceeded" : "retry_limit_exceeded";
+    await this.store.stopForInput(cardId, "REGRESSION_FIX", stopReason, stopRunId, {
+      convergence: stoppedOnLoop ? convergence!.classification : "budget_exhausted",
+      budget: this.maxInnerLoopRounds,
+      failed: failureHistory.at(-1) ?? [],
+    });
     await this.projection.enqueue(cardId);
-    return { state: "NEEDS_INPUT", rounds: round, mrUrl: story.mrUrl, stopReason: "verify_loop_exceeded" };
+    return { state: "NEEDS_INPUT", rounds: round, mrUrl: story.mrUrl, stopReason };
   }
 
   /** Runs the DESIGN phase and freezes its DoD. A persisted result frozen

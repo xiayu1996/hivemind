@@ -22,10 +22,12 @@ import { browserLaneEnv } from "./browser-config.js";
  *   button or it does not.
  * - `findings` are the look of it — spacing, alignment, wording, states,
  *   consistency with the rest of the product. They never fail a scenario and
- *   never consume an inner-loop round. Taste does not satisfy
- *   `failed(N) ⊊ failed(N-1)`: a reviewer given the power to reject on it will
- *   reject a different detail every round, which is exactly the structural
- *   failure 03 section 8 removed by collapsing the loop to one judgment. They
+ *   never consume an inner-loop round. Taste does not converge: a reviewer
+ *   given the power to reject on it will reject a different detail every
+ *   round, so the failure set never repeats, the convergence check never
+ *   stops it, and the card only ever runs out of budget - exactly the
+ *   structural failure 03 section 8 removed by collapsing the loop to one
+ *   judgment. They
  *   are reported to a person, who decides whether any of them is worth a card.
  *
  * This is also why `severity` has no blocking level: there is nowhere for one

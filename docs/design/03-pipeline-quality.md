@@ -118,13 +118,13 @@ DECOMPOSE 为每个 Story 产出：
 
 两层兜底，先到先停：
 
-1. **收敛判据（提前停）**：`failed_scenarios(N) ⊊ failed_scenarios(N-1)`（严格真子集）→ 放行续跑；持平、扩大或震荡 → 立即 `verify_loop_exceeded`，不用等上限。
+1. **收敛判据（提前停）**：`failed_scenarios(N)` 不得等于此前任一轮的集合（回看窗口 `retry.oscillationLookback`）→ 放行续跑；与上一轮持平（stalled）或与更早一轮相同（oscillating）→ 立即 `verify_loop_exceeded`，不用等上限。
 2. **可配置硬上限族（最终停）**——全部经 Web 控制台动态配置（05 文档 §4），默认值刻意宽松：
 
 | 键 | 语义 | 默认 |
 |---|---|---|
-| maxInnerLoopRounds | CODE⇄VERIFY 内环总轮次 | 6 |
-| maxPhaseReentries | 单 phase 重入次数（failover/崩溃恢复/跨机重建合并计数） | 3 |
+| maxInnerLoopRounds | CODE⇄VERIFY⇄MERGE 内环总轮次 | 3 |
+| maxPhaseReentries | 单 phase 连续崩溃次数（failover/崩溃恢复/跨机重建合并计数），前进即清零 | 3 |
 | maxContinueRetries | 断线 continue 重试 | 8 |
 | maxRegressionReopens | 同一 Story 被 E2E loop 打回 REGRESSION_FIX 的次数 | 2 |
 | maxInconclusiveRounds | 连续 inconclusive（跑不起来，§9.3）的容忍轮数，超出物化 friction | 2 |
@@ -144,7 +144,17 @@ DECOMPOSE 为每个 Story 产出：
 
 全系统真停点因此为四类：`blocking_question`、`verify_loop_exceeded`（不收敛提前停）、`retry_limit_exceeded`（上限停 + 诊断）、`cost_ceiling_exceeded`（费用停，无诊断）。四者由 `stories.stop_reason` 的 CHECK 强制。
 
-**停点详情必须带收敛分类（2026-09-14）。** `src/pipeline/convergence.ts:37` 早已算出 `stalled` / `oscillating` / `expanded` 三种分类，但 `story-worker.ts:351` 把它们连同"轮次烧满"一起塌缩成同一个 `verify_loop_exceeded`，人看到"验证循环超限"看不出"第 2 轮就原地打转"。停点**类别不变**（仍是四类，不违反 CHECK），但详情里如实写出分类。**"重复几轮算停滞"不参数化**（2026-09-14 复审撤回原方案）：`convergence.ts:38` 现在就是 `same(current, previous) → mayContinue: false`，第一次持平即停，这已经是「两轮完全一样就是缺陷，不等」。把它提成 `stagnantRoundsBeforeStop` 只有两个结果——取 1 等于现状（配置没有作用），取 >1 等于允许持平续跑，而那**直接违反 `failed(N) ⊊ failed(N-1)` 这条架构不变量**。一个只能取现状值的配置项不是灵活性，是误导。`oscillationLookback` 则可以配：震荡停是严格真子集之外的**额外**停点，放宽收紧都不触碰不变量。
+#### 2026-09-17 修订：判据放宽为"不得重复"，轮次预算收紧为 3
+
+严格真子集在实测里停错了卡：S-AGENTRULES-01 第 2 轮修好三个场景、冒出一个新的，被判 `expanded` 当场停下，6 轮预算只用掉 2 轮。真实的修改经常是"换一个失败"而不是"少一个失败"，这类轮次是进展而不是打转。因此：
+
+- 判据只保留 **stalled**（与上一轮相同）与 **oscillating**（与回看窗口内更早一轮相同）两种提前停；**expanded 不再停**，照常消耗一轮继续。判据的真正内容是「下一轮不会是已经跑过的那一轮」。
+- 兜底因此从判据回到轮次预算，预算收紧为 **3**：三轮是一张正常 Story 走完内环所需；要更多轮说明下一轮也解决不了。
+- **CODE⇄VERIFY⇄MERGE 视为同一内环**。VERIFY 拒绝消耗一轮；合流复验失败且归因到本 Story（冲突、或集成树上本 Story 新引入的失败）同样消耗一轮（§8.3）。崩溃、只因环境判不出结论的验证、以及 Epic 头自身已红的复验都不消耗。
+- 两个停点分工：**重复** → `verify_loop_exceeded`（再给轮次也无用，要改的是做法、测试或验收标准）；**预算耗尽但集合仍在变** → `retry_limit_exceeded`（附 `convergence: budget_exhausted`，抬高 `retry.maxInnerLoopRounds` 或人接手都是真选项）。两者同真时以重复为准。
+- `maxPhaseReentries` 不再是内环的一部分，只做崩溃安全网：单 phase 连续崩溃计数，卡一旦系统性前进即清零（§1.5 之外的记账见 orchestrator 派发失败入账）。
+
+**停点详情必须带收敛分类（2026-09-14）。** `src/pipeline/convergence.ts:37` 早已算出 `stalled` / `oscillating` / `expanded` 三种分类，但 `story-worker.ts:351` 把它们连同"轮次烧满"一起塌缩成同一个 `verify_loop_exceeded`，人看到"验证循环超限"看不出"第 2 轮就原地打转"。停点**类别不变**（仍是四类，不违反 CHECK），但详情里如实写出分类。**"重复几轮算停滞"不参数化**（2026-09-14 复审撤回原方案，2026-09-17 仍成立）：持平即停就是「两轮完全一样就是缺陷，不等」。把它提成 `stagnantRoundsBeforeStop` 只有两个结果——取 1 等于现状（配置没有作用），取 >1 等于允许把一轮原样再跑一遍。持平与震荡本是同一条规则的两个窗口，所以只保留 `oscillationLookback` 一个配置项，它等于「回看多少轮找相同集合」。
 
 真正的「停止条件可快速迭代」不靠阈值，靠 04 §5.5 的 invariant 层——新判据是数据不是主流程里的 if 分支，改一条不发版，违反只产生 finding 不阻断。**续跑规则本身是不变量，不参与迭代。** 同理，**不新增任何"为什么没进展"的判断逻辑**：停点交给人，人用 §12 的 `rework` 通道决定是否解冻。（"每轮修一个"拖长的钻空子风险：收敛曲线附在 Notion 卡供人随时叫停 + 上限族最终兜底。）
 
@@ -357,7 +367,7 @@ usage limit、限流、超时、传输中断、OAuth 刷新失败只进熔断器
 
 ### 8.6 收敛判据只看代码层失败
 
-`failed(N) ⊊ failed(N-1)` 的输入必须只含场景级失败。盲审因环境原因（服务未起、端口占用、截图落点错误）给出的 fail 记为 `inconclusive`，不进入 failed 集合，也不消耗轮次；连续两次 inconclusive 才作为系统侧 friction 物化。
+收敛判据的输入必须只含场景级失败。盲审因环境原因（服务未起、端口占用、截图落点错误）给出的 fail 记为 `inconclusive`，不进入 failed 集合，也不消耗轮次；连续两次 inconclusive 才作为系统侧 friction 物化。
 
 ## 9. 增补（2026-09-10）：UI 验收走查独立成道
 
@@ -372,7 +382,7 @@ usage limit、限流、超时、传输中断、OAuth 刷新失败只进熔断器
 | `acceptance`(逐 scenario) | 要的东西在不在、进不进得去、做的是不是那件事 | **能** | 进(缺按钮是代码层失败) |
 | `findings` | 间距对齐、视觉一致性、文案、空/错状态、布局是否站得住 | **不能** | 不进,也不消耗轮次 |
 
-审美不能否决,是结构性决定而不是宽容:`failed(N) ⊊ failed(N-1)` 在品味上不成立——给了否决权的评审每轮会挑出不同的一处细节,这正是 §8 通过把内环收敛成单一判定所消除的那个失效模式。所以 `severity` **没有 blocking 档**:没有地方可去。findings 交给人,由人决定哪一条值得单独开卡。
+审美不能否决,是结构性决定而不是宽容:收敛判据在品味上不成立——给了否决权的评审每轮会挑出不同的一处细节,失败集合永不重复,判据永远放行,卡只会烧完轮次预算,这正是 §8 通过把内环收敛成单一判定所消除的那个失效模式。所以 `severity` **没有 blocking 档**:没有地方可去。findings 交给人,由人决定哪一条值得单独开卡。
 
 ### 9.2 三条边界
 
@@ -382,7 +392,7 @@ usage limit、限流、超时、传输中断、OAuth 刷新失败只进熔断器
 
 ### 9.2a 否决必须回指 DoD（2026-09-10）
 
-走查每条 `failed` 必须带 `cites`：所违反的 scenario `then` 或 `examples` 原句，代码校验引用真存在于 DoD（`splitRefusals`）。引不到的观察**不否决**：记为 finding，同时作为「DoD 修订建议」写到 Notion 卡上，由人批准后成为下一轮 `[answer:]` 任务。理由与 9.1 同源：一个可以凭任何用户语义否决的评审，就是一个每轮加需求、无上限的产品经理，`failed(N) ⊊ failed(N-1)` 对它不成立。DoD 的 `out_of_scope` 与 `relies_on` 随 prompt 下发：前者不得据以否决，后者坏了记 `inconclusive` 并点名依赖而非本卡。
+走查每条 `failed` 必须带 `cites`：所违反的 scenario `then` 或 `examples` 原句，代码校验引用真存在于 DoD（`splitRefusals`）。引不到的观察**不否决**：记为 finding，同时作为「DoD 修订建议」写到 Notion 卡上，由人批准后成为下一轮 `[answer:]` 任务。理由与 9.1 同源：一个可以凭任何用户语义否决的评审，就是一个每轮加需求、无上限的产品经理，收敛判据对它不成立。DoD 的 `out_of_scope` 与 `relies_on` 随 prompt 下发：前者不得据以否决，后者坏了记 `inconclusive` 并点名依赖而非本卡。
 
 ### 9.3 跑不起来不占预算
 

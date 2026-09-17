@@ -55,8 +55,8 @@ flowchart TD
     Cjudge --> V
     V["VERIFY · fresh session 盲审<br/>自己起服务 + playwright-cli 截图<br/>F4 端口/进程/截图落点靠 agent 自觉"]:::llm
     V --> Vcheck["verdict 代码校验<br/>截图存在性 / mtime / host"]
-    Vcheck --> Conv{"收敛判据<br/>failed(N) ⊊ failed(N-1)"}
-    Conv -- "环境故障也算场景失败<br/>F5 expanded → 停" --> NI
+    Vcheck --> Conv{"收敛判据<br/>failed(N) 不得与此前任一轮相同"}
+    Conv -- "stalled / oscillating → 停<br/>预算耗尽 → retry_limit_exceeded" --> NI
     Conv -- converging --> C
     Conv -- accepted --> M
   end
