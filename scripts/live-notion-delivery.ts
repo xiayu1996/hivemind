@@ -12,6 +12,7 @@ import { NotionMediaPipeline } from "../src/notion/media.js";
 import { NotionOutbox } from "../src/notion/outbox.js";
 import { NotionStoryPageDelivery } from "../src/notion/story-page-delivery.js";
 import { NotionEpicPlanDelivery } from "../src/notion/epic-plan-delivery.js";
+import { EpicAcceptance } from "../src/orchestrator/epic-acceptance.js";
 import { NotionRequirementPageDelivery } from "../src/notion/requirement-page-delivery.js";
 import { RequirementPageProjector } from "../src/notion/requirement-projection.js";
 import { RequirementStore } from "../src/orchestrator/requirement-store.js";
@@ -373,9 +374,36 @@ async function epicProbe(
   ], "write");
   await project(2);
 
+  // The batch is up for judgement: the boxes appear once, keep their blocks,
+  // and carry what the person said about a scenario they refused.
+  await new EpicAcceptance(db.client).open(epicId);
+  await project(3);
+  const boxes = (await listChildren(gateway, epicPageId)).filter((block) => block.type === "to_do");
+  if (boxes.length !== 1) throw new Error(`expected one acceptance box, found ${boxes.length}`);
+  const boxId = boxes[0]!.id;
+  const bound = (await db.client.execute({
+    sql: "SELECT notion_block_id FROM epic_acceptance_items WHERE epic_id = ?",
+    args: [epicId],
+  })).rows[0];
+  if (String(bound?.notion_block_id) !== boxId) throw new Error("the acceptance box is not tied to its scenario");
+  await new EpicAcceptance(db.client).recordGap(epicId, "s01", "\u4fdd\u5b58\u540e\u5217\u8868\u6ca1\u5237\u65b0");
+  await db.client.execute({
+    sql: "UPDATE epics SET state = 'EPIC_ACCEPT', mr_url = ? WHERE id = ?",
+    args: [`https://example.test/pull/${day.replaceAll("-", "")}`, epicId],
+  });
+  await project(4);
+  const afterGap = (await listChildren(gateway, epicPageId)).filter((block) => block.type === "to_do");
+  if (afterGap.length !== 1 || afterGap[0]!.id !== boxId) {
+    throw new Error("the acceptance box was rebuilt instead of rewritten");
+  }
+  if (!(afterGap[0]!.text ?? "").includes("\u4fdd\u5b58\u540e\u5217\u8868\u6ca1\u5237\u65b0")) {
+    throw new Error(`the box does not carry what the person said: ${afterGap[0]!.text ?? ""}`);
+  }
+  console.log(`acceptance box kept its block: ${boxId}`);
+
   const blocks = await listChildren(gateway, epicPageId);
   const headings = blocks.filter((block) => block.type === "heading_2").map((block) => block.text ?? "");
-  const expected = ["\u76ee\u6807", "\u62c6\u89e3\u65b9\u6848", "\u4f9d\u8d56", "\u6280\u672f\u7ec6\u8282"];
+  const expected = ["\u76ee\u6807", "\u62c6\u89e3\u65b9\u6848", "\u4f9d\u8d56", "\u9a8c\u6536", "\u6280\u672f\u7ec6\u8282"];
   if (headings.join("|") !== expected.join("|")) {
     throw new Error(`epic headings are wrong or duplicated: ${headings.join(" / ")}`);
   }
