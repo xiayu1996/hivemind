@@ -84,14 +84,30 @@ class FakeNotion {
     });
   }
 
+  /** Blocks a page carried before this projection ever wrote to it. */
+  seed(pageId: string, blocks: ReadonlyArray<[string, string]>): void {
+    for (const [type, content] of blocks) {
+      this.children.get(pageId)!.push(this.create({
+        object: "block",
+        type,
+        [type]: { rich_text: [{ type: "text", text: { content } }] },
+      }));
+    }
+  }
+
   private create(input: Record<string, unknown>): FakeBlock {
     const type = String(input.type);
     const payload = input[type] as Record<string, unknown> | undefined;
-    return {
+    const block = {
       ...input,
       id: `block-${this.nextId++}`,
       [type]: payload?.rich_text ? { ...payload, rich_text: plainText(payload.rich_text) } : payload,
     } as FakeBlock;
+    // Every block can hold children: the page appends a round's questions
+    // under its toggle, and a scenario's three lines under its own item.
+    const nested = (payload?.children ?? []) as Record<string, unknown>[];
+    this.children.set(block.id, nested.map((child) => this.create(child)));
+    return block;
   }
 
   private list(parentId: string) {
@@ -153,53 +169,118 @@ describe("NotionRequirementPageDelivery", () => {
 
   afterEach(() => client.close());
 
-  it("builds the six owned sections and fills them from the record", async () => {
-    await store.openClarifyRound(REQUIREMENT_ID, ["谁会用它？"], "run-ask");
+  it("builds the sections it owns, with the callout above all of them", async () => {
+    await store.openClarifyRound(REQUIREMENT_ID, [
+      { question: "\u8c01\u4f1a\u7528\u5b83\uff1f", options: [{ label: "\u503c\u73ed\u7684\u4eba" }] },
+    ], "run-ask");
     await projector.publish(REQUIREMENT_ID);
     await replay();
 
     const contents = fake.contents(PAGE_ID);
-    expect(contents.slice(0, 2)).toEqual(["元信息", expect.stringContaining("澄清轮次: 1")]);
-    expect(contents).toContain("原始需求");
-    expect(contents).toContain("我想随时知道现在在做什么。");
-    expect(contents).toContain("第 1 轮 问 1: 谁会用它？");
+    // The request stays at the top, and the callout sits right under it saying
+    // what the person has to do next -- both above every heading.
+    expect(contents.slice(0, 2)).toEqual([
+      "\u6211\u60f3\u968f\u65f6\u77e5\u9053\u73b0\u5728\u5728\u505a\u4ec0\u4e48\u3002",
+      "\u56de\u590d\u672c\u9875\u6700\u65b0\u4e00\u6761\u8bc4\u8bba\uff0c\u9009\u5b57\u6bcd\u5373\u53ef\u3002",
+    ]);
+    expect(contents).toContain("\u6f84\u6e05\u8bb0\u5f55");
+    expect(contents).toContain("PRD");
+    expect(contents).toContain("\u4ea4\u4ed8\u7ed3\u679c");
+    // Nothing on the page repeats what the board column already says.
+    expect(contents).not.toContain("\u5143\u4fe1\u606f");
+    expect(contents).not.toContain("\u539f\u59cb\u9700\u6c42");
+
+    const fold = fake.visible(PAGE_ID).find((block) => block.type === "toggle")!;
+    expect(fake.contents(fold.id)).toEqual([
+      "\u95ee 1\u3001\u8c01\u4f1a\u7528\u5b83\uff1f",
+      "A. \u503c\u73ed\u7684\u4eba\n\u5176\u4ed6\uff1a\u4ee5\u4e0a\u90fd\u4e0d\u5408\u9002\uff0c\u76f4\u63a5\u5199\u4f60\u7684\u7b54\u6848",
+    ]);
     expect(fake.pages.get(PAGE_ID)?.[schema.propertyNames.requirementStatus])
       .toEqual({ select: { name: schema.options.requirementStatus[1] } });
 
     const sections = (await client.execute("SELECT section FROM requirement_notion_sections ORDER BY section")).rows;
-    expect(sections.map((row) => row.section)).toEqual(["acceptance", "clarify", "metadata", "original", "prd", "questions"]);
+    expect(sections.map((row) => row.section)).toEqual(["callout", "clarify", "delivery", "prd"]);
   });
 
-  it("adds to the clarification log without ever rewriting what is already there", async () => {
-    await store.openClarifyRound(REQUIREMENT_ID, ["谁会用它？"], "run-ask");
+  it("answers a round in the block it was asked in, and adds the next one after it", async () => {
+    await store.openClarifyRound(REQUIREMENT_ID, [
+      { question: "\u8c01\u4f1a\u7528\u5b83\uff1f", options: [{ label: "\u503c\u73ed\u7684\u4eba" }] },
+    ], "run-ask");
     await projector.publish(REQUIREMENT_ID);
     await replay();
-    const questionBlockId = fake.visible(PAGE_ID)
-      .find((_, index) => fake.contents(PAGE_ID)[index] === "第 1 轮 问 1: 谁会用它？")?.id;
+    const first = fake.visible(PAGE_ID).find((block) => block.type === "toggle")!.id;
 
-    await store.recordClarifyAnswers(REQUIREMENT_ID, 1, ["值班的人"], "run-answer");
+    await store.recordClarifyAnswers(REQUIREMENT_ID, 1, ["A"], "run-answer");
+    await store.openClarifyRound(REQUIREMENT_ID, ["\u591a\u4e45\u5237\u65b0\u4e00\u6b21\uff1f"], "run-ask-2");
     await projector.publish(REQUIREMENT_ID);
     await replay();
 
-    const contents = fake.contents(PAGE_ID);
-    expect(contents).toContain("第 1 轮 问 1: 谁会用它？");
-    expect(contents).toContain("第 1 轮 答 1: 值班的人");
-    expect(fake.visible(PAGE_ID).some((block) => block.id === questionBlockId)).toBe(true);
+    const folds = fake.visible(PAGE_ID).filter((block) => block.type === "toggle");
+    // The round a person answered keeps its block, so a comment they left on
+    // it is still attached to what they were reading.
+    expect(folds.map((block) => block.id)[0]).toBe(first);
+    expect(fake.contents(PAGE_ID).filter((line) => line.startsWith("\u7b2c "))).toEqual([
+      "\u7b2c 1 \u8f6e \u00b7 1 \u9898 \u00b7 \u5df2\u56de\u7b54",
+      "\u7b2c 2 \u8f6e \u00b7 1 \u9898 \u00b7 \u7b49\u4f60\u56de\u7b54",
+    ]);
+    expect(fake.contents(first)).toContain("\u7b54\uff1aA");
   });
 
-  it("ties each checklist box to the scenario it stands for", async () => {
+  it("writes a confirmed PRD once and afterwards only says it is confirmed", async () => {
     await store.transition(REQUIREMENT_ID, "CLARIFY", "PRD_CONFIRM", "system", "run-1");
-    await store.seedAcceptanceItems(REQUIREMENT_ID, [
-      { itemId: "A01", prdScenarioId: `${REQUIREMENT_ID}-s01`, text: "值班的人一眼看到在等谁" },
-    ], "run-seed");
+    await store.saveDraftPrd(REQUIREMENT_ID, JSON.stringify({
+      businessGoal: "\u503c\u73ed\u7684\u4eba\u968f\u65f6\u770b\u5230\u8fdb\u5ea6",
+      nonGoals: ["\u4e0d\u505a\u6743\u9650"],
+      scenarios: [{
+        id: "s01",
+        given: "\u503c\u73ed\u7684\u4eba\u6253\u5f00\u9996\u5c4f",
+        when: "\u5237\u65b0\u9875\u9762",
+        // oxlint-disable-next-line unicorn/no-thenable -- Given/When/Then is the external PRD contract.
+        then: "\u770b\u5230\u5168\u90e8\u5728\u7b49\u4eba\u7684\u5361\u7247",
+      }],
+      openQuestions: [],
+    }), "run-prd");
     await projector.publish(REQUIREMENT_ID);
     await replay();
 
-    const items = await store.acceptanceItems(REQUIREMENT_ID);
-    expect(items[0]?.notionBlockId).toMatch(/^block-/);
-    const box = fake.visible(PAGE_ID).find((block) => block.id === items[0]?.notionBlockId);
-    expect(box?.type).toBe("to_do");
-    expect((box!.to_do as { checked: boolean }).checked).toBe(false);
+    const scenario = fake.visible(PAGE_ID).find((block) => block.type === "numbered_list_item")!;
+    expect(fake.contents(PAGE_ID)).toContain("\u573a\u666f 1 \u00b7 \u770b\u5230\u5168\u90e8\u5728\u7b49\u4eba\u7684\u5361\u7247 s01");
+    expect(fake.contents(scenario.id)).toEqual([
+      "\u524d\u63d0\uff1a\u503c\u73ed\u7684\u4eba\u6253\u5f00\u9996\u5c4f",
+      "\u64cd\u4f5c\uff1a\u5237\u65b0\u9875\u9762",
+      "\u7ed3\u679c\uff1a\u770b\u5230\u5168\u90e8\u5728\u7b49\u4eba\u7684\u5361\u7247",
+    ]);
+
+    await store.confirmPrd(REQUIREMENT_ID, 1, "comment-1", "comment", "run-confirm");
+    await projector.publish(REQUIREMENT_ID);
+    await replay();
+
+    // Confirming adds a banner and nothing else: the words are the ones the
+    // person approved, and the scenario they may have commented on stays put.
+    expect(fake.visible(PAGE_ID).some((block) => block.id === scenario.id)).toBe(true);
+    expect(fake.contents(PAGE_ID)).toContain("\u8fd9\u4efd PRD \u4f60\u5df2\u7ecf\u786e\u8ba4\u8fc7\uff0c\u4e0d\u4f1a\u518d\u88ab\u6539\u5199\u3002");
+  });
+
+  it("puts a heading an older page never had where it belongs, not at the bottom", async () => {
+    // What such a page carries: the person's words, a section that repeated
+    // the board, and the heading this version renames rather than rebuilds.
+    fake.seed(PAGE_ID, [
+      ["paragraph", "\u6211\u60f3\u968f\u65f6\u77e5\u9053\u73b0\u5728\u5728\u505a\u4ec0\u4e48\u3002"],
+      ["heading_2", "\u5143\u4fe1\u606f"],
+      ["paragraph", "\u72b6\u6001: CLARIFY"],
+      ["heading_2", "\u573a\u666f\u5316\u9a8c\u6536\u6e05\u5355"],
+    ]);
+    await projector.publish(REQUIREMENT_ID);
+    await replay();
+
+    expect(fake.contents(PAGE_ID)).toEqual([
+      "\u6211\u60f3\u968f\u65f6\u77e5\u9053\u73b0\u5728\u5728\u505a\u4ec0\u4e48\u3002",
+      "\u56de\u590d\u672c\u9875\u6700\u65b0\u4e00\u6761\u8bc4\u8bba\uff0c\u9009\u5b57\u6bcd\u5373\u53ef\u3002",
+      "\u6f84\u6e05\u8bb0\u5f55",
+      "PRD",
+      "\u4ea4\u4ed8\u7ed3\u679c",
+      "\u573a\u666f\u7531\u627f\u63a5\u5b83\u4eec\u7684 Epic \u9010\u6279\u9a8c\u6536\uff0c\u5168\u90e8\u901a\u8fc7\u540e\u8fd9\u6761\u9700\u6c42\u81ea\u52a8\u7ed3\u6848\u3002",
+    ]);
   });
 
   it("creates the Epic page a decomposition asked for and records its real id", async () => {
@@ -229,7 +310,10 @@ describe("NotionRequirementPageDelivery", () => {
     const created = fake.pages.get(String(epic?.notion_page_id));
     expect(created?.[schema.propertyNames.epicStatus]).toEqual({ select: { name: schema.options.epicStatus[0] } });
     expect(created?.[schema.propertyNames.requirementRelation]).toEqual({ relation: [{ id: PAGE_ID }] });
+    // The callout is created with the page: a block can only be appended
+    // after another one, so this is the only way it sits at the top.
     expect(fake.contents(String(epic?.notion_page_id))).toEqual([
+      "现在没有等你处理的事。",
       "值班的人一眼看到谁在等他",
       "打开首屏就能看到全部在等人回答的卡片。",
     ]);

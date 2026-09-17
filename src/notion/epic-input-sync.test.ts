@@ -41,7 +41,7 @@ function gateway(status: string): NotionGateway {
 
 describe("@scenario S-M2-02-comment Notion sync approval", () => {
   it("ingests an Epic-page approval comment through the active sync path and dispatches once", async () => {
-    const approvals = new PlanApprovalStore(client, () => 1_000);
+    const approvals = new PlanApprovalStore(client, () => 1_000, { planApproval: true });
     await approvals.present({ epicId: "M2", notionPageId: "epic-page", title: "Plan", plan });
     const source: NotionCommentSource = {
       listComments: async () => [{
@@ -62,7 +62,7 @@ describe("@scenario S-M2-02-comment Notion sync approval", () => {
 
 describe("@scenario S-M2-02-drag Notion sync approval", () => {
   it("ingests the Epic status drag through the active sync path", async () => {
-    const approvals = new PlanApprovalStore(client, () => 1_000);
+    const approvals = new PlanApprovalStore(client, () => 1_000, { planApproval: true });
     await approvals.present({ epicId: "M2", notionPageId: "epic-page", title: "Plan", plan });
     const comments = new CommentIngestor(client, { listComments: async () => [] }, { now: () => 1_000 });
     const sync = new NotionEpicInputSync(client, gateway("进行中"), comments, approvals, () => 1_000);
@@ -74,7 +74,7 @@ describe("@scenario S-M2-02-drag Notion sync approval", () => {
 
 describe("@scenario S-M2-02-revise Notion sync approval", () => {
   it("returns an Epic to decomposition when its page receives an unambiguous revision request", async () => {
-    const approvals = new PlanApprovalStore(client, () => 1_000);
+    const approvals = new PlanApprovalStore(client, () => 1_000, { planApproval: true });
     await approvals.present({ epicId: "M2", notionPageId: "epic-page", title: "Plan", plan });
     const comments = new CommentIngestor(client, {
       listComments: async () => [{

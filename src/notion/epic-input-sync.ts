@@ -5,8 +5,12 @@ import type { NotionGateway } from "./gateway.js";
 import { interpretEpicComment, interpretEpicPropertyChange } from "./intent-interpreter.js";
 import { answerBlocker } from "../orchestrator/epic-blocker.js";
 import type { PlanApprovalStore } from "../orchestrator/plan-approval.js";
+import { EpicAcceptance } from "../orchestrator/epic-acceptance.js";
 import type { EpicState } from "../orchestrator/state-machine.js";
 import schema from "./notion-schema.json" with { type: "json" };
+import { z } from "zod";
+
+const toDoSchema = z.object({ to_do: z.object({ checked: z.boolean() }).passthrough() }).passthrough();
 
 export interface EpicPropertyPollResult {
   epicId: string;
@@ -20,6 +24,8 @@ export interface EpicCommentPollResult {
   revised: number;
   /** Blocking questions a person answered, sending the Epic back to decomposition. */
   answered: number;
+  /** Scenarios a person said this batch did not deliver. */
+  gaps: number;
 }
 
 function epicState(value: unknown): EpicState {
@@ -48,6 +54,7 @@ export class NotionEpicInputSync {
     private readonly comments: CommentIngestor,
     private readonly approvals: PlanApprovalStore,
     private readonly now: () => number = Date.now,
+    private readonly acceptance: EpicAcceptance = new EpicAcceptance(client, now),
   ) {}
 
   async pollProperties(pageId: string): Promise<EpicPropertyPollResult> {
@@ -93,7 +100,7 @@ export class NotionEpicInputSync {
   async pollComments(pageId: string): Promise<EpicCommentPollResult> {
     const polled = await this.comments.pollPage(pageId);
     const comments = (await this.client.execute({
-      sql: `SELECT ic.comment_id, ic.body, e.id AS epic_id, e.state
+      sql: `SELECT ic.comment_id, ic.block_id, ic.body, e.id AS epic_id, e.state
             FROM ingested_comments ic
             JOIN epics e ON e.notion_page_id = ic.page_id
             LEFT JOIN epic_approval_events a ON a.event_id = ic.comment_id
@@ -104,6 +111,7 @@ export class NotionEpicInputSync {
     let approved = 0;
     let revised = 0;
     let answered = 0;
+    let gaps = 0;
     for (const comment of comments) {
       const state = epicState(comment.state);
       const epicId = String(comment.epic_id);
@@ -114,6 +122,16 @@ export class NotionEpicInputSync {
         if (await answerBlocker(this.client, epicId, eventId, String(comment.body), this.now)) answered++;
         continue;
       }
+      // A comment written on one of the acceptance boxes is what that box is
+      // for: the person saying what this batch did not deliver.
+      if (state === "EPIC_ACCEPT" && comment.block_id !== null) {
+        const item = (await this.acceptance.items(epicId))
+          .find((candidate) => candidate.notionBlockId === String(comment.block_id) && candidate.status === "open");
+        if (item) {
+          if (await this.acceptance.recordGap(epicId, item.prdScenarioId, String(comment.body))) gaps++;
+          continue;
+        }
+      }
       const intent = interpretEpicComment(state, String(comment.body));
       if (intent.type === "approve_plan") {
         if (await this.approvals.approve({ epicId, eventId, source: "comment" })) approved++;
@@ -121,11 +139,34 @@ export class NotionEpicInputSync {
         if (await this.approvals.requestRevision(epicId, eventId)) revised++;
       }
     }
-    return { ingested: polled.inserted, approved, revised, answered };
+    return { ingested: polled.inserted, approved, revised, answered, gaps };
   }
 
-  async pollContent(_pageId: string): Promise<void> {
-    // Epic plan content is system-projected; human actions arrive via status or comments.
+  /**
+   * The acceptance boxes: a tick is the one verdict that lives in page content
+   * rather than in a comment or a property. An unticked box is the absence of
+   * a verdict, never a rejection -- that has to be said in words.
+   */
+  async pollContent(pageId: string): Promise<{ ticked: number }> {
+    const row = (await this.client.execute({
+      sql: "SELECT id, state FROM epics WHERE notion_page_id = ?",
+      args: [pageId],
+    })).rows[0];
+    if (!row || epicState(row.state) !== "EPIC_ACCEPT") return { ticked: 0 };
+    const epicId = String(row.id);
+    let ticked = 0;
+    for (const item of await this.acceptance.items(epicId)) {
+      if (item.status !== "open" || !item.notionBlockId) continue;
+      const response = await this.gateway.request({
+        method: "GET",
+        path: `/v1/blocks/${encodeURIComponent(item.notionBlockId)}`,
+        priority: "interaction",
+      });
+      const block = toDoSchema.safeParse(response.data);
+      if (!block.success || !block.data.to_do.checked) continue;
+      if (await this.acceptance.applyCheck(epicId, item.notionBlockId)) ticked++;
+    }
+    return { ticked };
   }
 
   private async rememberHumanObservation(epicId: string, observed: string, humanWinsUntil: number): Promise<void> {

@@ -372,6 +372,17 @@
 
 ---
 
+## MS Notion 呈现重做（2026-09-16 增补，排期在 MR 之后）
+
+目标：Notion 是 hivemind 唯一的人机界面，但人打开一张卡读不懂——语言混杂、内部标识外露、区段语义错位、每层复述其他层的状态。重做从「人在这一层做什么决定」倒推三级页面骨架，设计见 01 §2.3 / §8.2。
+
+| ID | 任务 | 输出物 | 验证方式 | 前置 |
+|---|---|---|---|---|
+| MS-02 | 审批粒度与验收层级：`decompose.planApproval` 配置项（默认关，Story 立即建）；验收下沉到 Epic（`epic_acceptance_items` 由 `epic_prd_scenarios` 播种、Epic 页 to_do、缺口在本 Epic 下开补交付 Story、全勾 + MR 合并才 DONE）；需求层改为汇总各 Epic 判定；Story 只在真停下时进「等我处理」，看板去掉「待人确认」列 | `src/orchestrator/epic-acceptance.ts`、`acceptance-checklist.ts`、`plan-approval.ts`、`src/notion/board-status.ts`、01 §2.3/§8.2 | `epic-acceptance.test.ts`（播种、勾选一次、缺口开补交付 Story 并回 EXECUTING、重开时已通过的不再问）；`epic-completion.test.ts`（未判定不 DONE）；`plan-approval.test.ts`（开关两态）；`acceptance-checklist.test.ts`（汇总不再等人）；`story-projection.test.ts`（四类停点各出一条 callout，运行中不出） | MS-01 |
+| MS-01 | Notion 呈现重构：角色驱动的需求/Epic/Story 三级骨架（判断方向的信息排在进度之前、每层只维护自己这一层的状态、不等人时页面不出状态 callout）、agent 产中文业务语言 + 出口 lint、显示词表 `src/notion/display-text.json` 收口全部给人看的枚举 | `src/notion/display-text.{json,ts}`、`rich-text.ts`、三层 page builder 与 delivery、`prompts/phases/shape.md` 与 `design.md`、01 §2.3/§8.2 | `notion-write-language.test.ts` 扫三条投影的全部 outbox payload，裸枚举与英文模板即红；三层 delivery 的原位迁移用例（heading/spec/场景块的 blockId 不重建）；`scripts/live-notion-delivery.ts` 对真实需求/Epic/Story 页各跑一轮，每轮恰好一个 toggle、区段各出现一次、callout 唯一 | MR-37 |
+
+---
+
 ## M3 多机化
 
 目标：capability 队列 + 派单信封 + 心跳失联两段式 + Mac mini 浏览器 e2e worker 接入。

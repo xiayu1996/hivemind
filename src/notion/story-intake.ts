@@ -4,6 +4,7 @@ import type { StoryExecutionStore, StoryIntake } from "../orchestrator/story-exe
 import type { StorySection } from "./blocks/story-page.js";
 import type { NotionGateway } from "./gateway.js";
 import schema from "./notion-schema.json" with { type: "json" };
+import { STORY_BOARD_STATUS } from "./board-status.js";
 
 const richTextItem = z.object({ plain_text: z.string() }).passthrough();
 const titleProperty = z.object({ type: z.literal("title"), title: z.array(richTextItem) }).passthrough();
@@ -59,7 +60,7 @@ export class NotionSdkStoryApi implements NotionStoryApi {
       data_source_id: dataSourceId,
       filter: {
         property: schema.propertyNames.aiStatus,
-        select: { equals: schema.options.aiStatus[0]! },
+        select: { equals: STORY_BOARD_STATUS.queued },
       },
       page_size: 100,
       ...(cursor ? { start_cursor: cursor } : {}),
@@ -103,7 +104,7 @@ export class NotionGatewayStoryApi implements NotionStoryApi {
       body: {
         filter: {
           property: schema.propertyNames.aiStatus,
-          select: { equals: schema.options.aiStatus[0]! },
+          select: { equals: STORY_BOARD_STATUS.queued },
         },
         page_size: 100,
         ...(cursor ? { start_cursor: cursor } : {}),

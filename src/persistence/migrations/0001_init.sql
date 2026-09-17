@@ -80,7 +80,9 @@ CREATE TABLE IF NOT EXISTS requirement_approval_events (
   event_id       TEXT PRIMARY KEY,
   requirement_id TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
   kind           TEXT NOT NULL CHECK (kind IN ('prd_confirm','prd_revision','acceptance','resume_answer')),
-  source         TEXT NOT NULL CHECK (source IN ('comment','drag')),
+  -- `auto` is the system itself: scenario verdicts are made on each Epic, and
+  -- the requirement only copies them in.
+  source         TEXT NOT NULL CHECK (source IN ('comment','drag','auto')),
   created_at     INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_requirement_approval_events ON requirement_approval_events(requirement_id);
@@ -89,7 +91,7 @@ CREATE INDEX IF NOT EXISTS idx_requirement_approval_events ON requirement_approv
 -- updates in place instead of appending a second copy.
 CREATE TABLE IF NOT EXISTS requirement_notion_sections (
   requirement_id  TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
-  section         TEXT NOT NULL CHECK (section IN ('metadata','original','clarify','prd','acceptance','questions')),
+  section         TEXT NOT NULL CHECK (section IN ('callout','clarify','prd','delivery')),
   anchor_block_id TEXT NOT NULL UNIQUE,
   PRIMARY KEY (requirement_id, section)
 );
@@ -101,6 +103,9 @@ CREATE TABLE IF NOT EXISTS epics (
   state             TEXT NOT NULL CHECK (state IN (
                       'INTAKE','DECOMPOSE','PLAN_APPROVAL','EXECUTING','EPIC_ACCEPT','DONE','BLOCKED','FAILED')),
   requirement_id    TEXT REFERENCES requirements(id),
+  -- What this batch is for, in the words the person who asked for it used. The
+  -- Epic page is the only place a reader learns why these Stories are one Epic.
+  business_goal     TEXT,
   repo              TEXT,
   integration_branch TEXT,
   mr_url            TEXT,
@@ -111,12 +116,42 @@ CREATE TABLE IF NOT EXISTS epics (
   updated_at        INTEGER NOT NULL
 );
 
+-- Which Epic carries each PRD scenario. The primary key is the rule: a
+-- scenario is delivered by exactly one batch, so the Epic page can say what it
+-- is answerable for and acceptance has one place to happen.
+CREATE TABLE IF NOT EXISTS epic_prd_scenarios (
+  requirement_id  TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+  epic_id         TEXT NOT NULL REFERENCES epics(id) ON DELETE CASCADE,
+  prd_scenario_id TEXT NOT NULL,
+  PRIMARY KEY (requirement_id, prd_scenario_id)
+);
+CREATE INDEX IF NOT EXISTS idx_epic_prd_scenarios_epic ON epic_prd_scenarios(epic_id);
+
+-- Scenario-level acceptance, judged on the batch that delivered it. One row
+-- per PRD scenario the Epic carries: the person ticks what this delivery got
+-- right, and what they do not tick becomes another Story under the same Epic.
+-- Acceptance lives here rather than on the requirement because a requirement
+-- is delivered in batches, and asking about all of them at the end asks about
+-- work the person judged months apart.
+CREATE TABLE IF NOT EXISTS epic_acceptance_items (
+  epic_id         TEXT NOT NULL REFERENCES epics(id) ON DELETE CASCADE,
+  prd_scenario_id TEXT NOT NULL,
+  text            TEXT NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','accepted','gap')),
+  notion_block_id TEXT UNIQUE,
+  note            TEXT,
+  decided_at      INTEGER,
+  created_at      INTEGER NOT NULL,
+  PRIMARY KEY (epic_id, prd_scenario_id),
+  CHECK ((status = 'open') = (decided_at IS NULL))
+);
+
 -- What the Epic page already shows, per section. It used to be a marker line
 -- printed on the page itself, which every reader had to read past; the page is
 -- for a person, so the replay key lives here instead.
 CREATE TABLE IF NOT EXISTS epic_notion_sections (
   epic_id      TEXT NOT NULL REFERENCES epics(id) ON DELETE CASCADE,
-  section      TEXT NOT NULL CHECK (section IN ('plan','progress')),
+  section      TEXT NOT NULL CHECK (section IN ('plan','page')),
   payload_hash TEXT NOT NULL,
   updated_at   INTEGER NOT NULL,
   PRIMARY KEY (epic_id, section)
@@ -247,7 +282,7 @@ CREATE TABLE IF NOT EXISTS epic_plans (
 CREATE TABLE IF NOT EXISTS epic_approval_events (
   event_id      TEXT PRIMARY KEY,
   epic_id       TEXT NOT NULL REFERENCES epics(id) ON DELETE CASCADE,
-  source        TEXT NOT NULL CHECK (source IN ('comment','drag')),
+  source        TEXT NOT NULL CHECK (source IN ('comment','drag','auto')),
   created_at    INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_epic_approval_events_epic ON epic_approval_events(epic_id);
@@ -301,6 +336,15 @@ CREATE TABLE IF NOT EXISTS story_specs (
   story_id         TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
   seq              INTEGER NOT NULL,
   text              TEXT NOT NULL,
+  -- What the page shows: the scenario's own name and its three parts, in the
+  -- words SHAPE wrote them. Null on a Story frozen before SHAPE was asked for
+  -- them; the page falls back to numbering rather than inventing a name.
+  title             TEXT,
+  given             TEXT,
+  when_             TEXT,
+  then_             TEXT,
+  layers            TEXT,
+  notion_detail_hash TEXT,
   status            TEXT NOT NULL CHECK (status IN ('pending','passed','failed','withdrawn')),
   notion_block_id   TEXT UNIQUE,
   UNIQUE (story_id, seq)
@@ -310,9 +354,12 @@ CREATE INDEX IF NOT EXISTS idx_story_specs_story ON story_specs(story_id, seq);
 CREATE TABLE IF NOT EXISTS notion_sections (
   story_id          TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
   section            TEXT NOT NULL CHECK (section IN (
-                     'metadata','requirement','specification','design','verification','questions')),
+                     'metadata','requirement','specification','design','verification','questions','technical')),
   anchor_block_id    TEXT NOT NULL UNIQUE,
   content_block_id   TEXT,
+  -- What the blocks under this heading were last built from. They are rebuilt
+  -- rather than diffed, so the hash is what stops a rebuild on every cycle.
+  content_hash       TEXT,
   PRIMARY KEY (story_id, section)
 );
 

@@ -26,7 +26,10 @@ import type { ResolvedAgentSpec } from "../runner/agent-spec.js";
 import type { AgentSpawnGrant } from "../runner/spawn-broker.js";
 import {
   lintBusinessLanguage,
+  lintHumanSentence,
   renderBusinessLanguageFindings,
+  renderDesignSummaryFindings,
+  type BusinessLanguageFinding,
 } from "../report/business-language.js";
 import { lastAssistantText } from "../runner/assistant-text.js";
 import { jsonPayloadCandidates } from "../util/json-payload.js";
@@ -405,7 +408,21 @@ export class PiStoryPhasePort implements StoryPhasePort {
         artifacts = await this.enforceCodeExit(input, runner, codeExit, artifacts);
       }
       if (input.phase === "MERGE") {
-        artifacts = await this.rewriteUntilReadable(input, runner, artifacts);
+        artifacts = await this.rewriteUntilReadable(
+          input, runner, artifacts, "delivery-report",
+          (body) => lintBusinessLanguage(body),
+          renderBusinessLanguageFindings,
+        );
+      }
+      // The design summary is the only part of DESIGN a person reads, and they
+      // read it in their own language. The notes for whoever writes the code
+      // are a separate artifact and are not held to this.
+      if (input.phase === "DESIGN") {
+        artifacts = await this.rewriteUntilReadable(
+          input, runner, artifacts, "design-summary",
+          (body) => lintHumanSentence("design_summary", body),
+          renderDesignSummaryFindings,
+        );
       }
       const telemetry: PhaseTelemetryInput = {
         runId: input.runId,
@@ -471,16 +488,19 @@ export class PiStoryPhasePort implements StoryPhasePort {
     input: ManagedPhaseInput,
     runner: PiRunner,
     artifacts: ManagedPhaseResult["artifacts"],
+    kind: string,
+    lint: (body: string) => BusinessLanguageFinding[],
+    render: (findings: readonly BusinessLanguageFinding[]) => string,
   ): Promise<ManagedPhaseResult["artifacts"]> {
     const maxRewrites = this.options.maxReportRewrites ?? DEFAULT_REPORT_REWRITES;
     let current = artifacts;
     for (let attempt = 0; attempt < maxRewrites; attempt++) {
-      const report = current.find((item) => item.kind === "delivery-report")?.body ?? "";
-      const findings = lintBusinessLanguage(report);
+      const report = current.find((item) => item.kind === kind)?.body ?? "";
+      const findings = lint(report);
       if (findings.length === 0) return current;
       const result = await promptWithContinueRetry(
         runner,
-        renderBusinessLanguageFindings(findings),
+        render(findings),
         { maxContinueRetries: this.options.maxContinueRetries ?? 8 },
         this.options.promptTimeoutMs,
       );

@@ -72,6 +72,7 @@ export const epics = sqliteTable("epics", {
   title: text("title").notNull(),
   state: text("state").notNull(),
   requirementId: text("requirement_id"),
+  businessGoal: text("business_goal"),
   repo: text("repo"),
   integrationBranch: text("integration_branch"),
   mrUrl: text("mr_url"),
@@ -81,6 +82,23 @@ export const epics = sqliteTable("epics", {
   createdAt: ms("created_at").notNull(),
   updatedAt: ms("updated_at").notNull(),
 });
+
+export const epicPrdScenarios = sqliteTable("epic_prd_scenarios", {
+  requirementId: text("requirement_id").notNull(),
+  epicId: text("epic_id").notNull(),
+  prdScenarioId: text("prd_scenario_id").notNull(),
+}, (t) => [primaryKey({ columns: [t.requirementId, t.prdScenarioId] })]);
+
+export const epicAcceptanceItems = sqliteTable("epic_acceptance_items", {
+  epicId: text("epic_id").notNull(),
+  prdScenarioId: text("prd_scenario_id").notNull(),
+  text: text("text").notNull(),
+  status: text("status").notNull().default("open"),
+  notionBlockId: text("notion_block_id").unique(),
+  note: text("note"),
+  decidedAt: ms("decided_at"),
+  createdAt: ms("created_at").notNull(),
+}, (t) => [primaryKey({ columns: [t.epicId, t.prdScenarioId] })]);
 
 export const epicNotionSections = sqliteTable("epic_notion_sections", {
   epicId: text("epic_id").notNull(),
@@ -229,6 +247,13 @@ export const storySpecs = sqliteTable("story_specs", {
   storyId: text("story_id").notNull(),
   seq: integer("seq").notNull(),
   text: text("text").notNull(),
+  title: text("title"),
+  given: text("given"),
+  when: text("when_"),
+  // oxlint-disable-next-line unicorn/no-thenable -- Given/When/Then is the external DoD contract.
+  then: text("then_"),
+  layers: text("layers"),
+  notionDetailHash: text("notion_detail_hash"),
   status: text("status").notNull(),
   notionBlockId: text("notion_block_id").unique(),
 }, (t) => [
@@ -241,6 +266,7 @@ export const notionSections = sqliteTable("notion_sections", {
   section: text("section").notNull(),
   anchorBlockId: text("anchor_block_id").notNull().unique(),
   contentBlockId: text("content_block_id"),
+  contentHash: text("content_hash"),
 }, (t) => [uniqueIndex("notion_sections_story_section_unique").on(t.storyId, t.section)]);
 
 export const notionVerificationRounds = sqliteTable("notion_verification_rounds", {

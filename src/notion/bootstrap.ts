@@ -1,5 +1,6 @@
 import type { Client, CreateDatabaseParameters, UpdateDataSourceParameters } from "@notionhq/client";
 import schema from "./notion-schema.json" with { type: "json" };
+import { STORY_BOARD_STATUS } from "./board-status.js";
 
 type BootstrapClient = Pick<Client, "databases" | "dataSources" | "pages">;
 type InitialDataSource = NonNullable<CreateDatabaseParameters["initial_data_source"]>;
@@ -119,7 +120,7 @@ function storyProperties(epicsDataSourceId: string): Properties {
     [names.creator]: { created_by: {} },
     [names.taskId]: { rich_text: {} },
     [names.completionValue]: {
-      formula: { expression: `if(prop("${names.aiStatus}") == "${schema.options.aiStatus[5]}", 1, 0)` },
+      formula: { expression: `if(prop("${names.aiStatus}") == "${STORY_BOARD_STATUS.done}", 1, 0)` },
     },
     [names.lastEdited]: { last_edited_time: {} },
     [names.waitingOnHuman]: {
@@ -326,6 +327,15 @@ export async function upgradeStoryBoard(
     names.phase,
     "phase",
     schema.retiredOptions.phase as Record<string, string | undefined>,
+  );
+  // A Story's own review request is no longer something a person confirms one
+  // card at a time; the review they gate is the Epic's.
+  await retireOptions(
+    client,
+    storiesDataSourceId,
+    names.aiStatus,
+    "aiStatus",
+    schema.retiredOptions.aiStatus as Record<string, string | undefined>,
   );
   // The fingerprint is central truth now. Left on the board it is a column of
   // hashes a person has to look past, and one they can edit.

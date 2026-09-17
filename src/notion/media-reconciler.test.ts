@@ -28,6 +28,10 @@ async function fixture(path: string): Promise<{
           VALUES (?, 1, 'code-1', 'verify-1', 'accepted', '[]', ?, ?, 100)`,
     args: ["S-EPIC1-01", path, JSON.stringify([{ scenarioId: "S-EPIC1-01-a", path: "shot.png" }])],
   }, {
+    sql: `INSERT INTO story_specs (spec_id, story_id, seq, text, title, status)
+          VALUES ('S-EPIC1-01-a', 'S-EPIC1-01', 1, 'saves the rule', '保存规则并回显', 'passed')`,
+    args: [],
+  }, {
     sql: `INSERT INTO notion_verification_rounds
             (story_id, round, toggle_block_id, summary, created_at)
           VALUES ('S-EPIC1-01', 1, 'toggle-1', 'Passed', 100)`,
@@ -58,7 +62,7 @@ describe("NotionMediaReconciler", () => {
     await reconciler.waitForIdle();
     await expect(reconciler.reconcile()).resolves.toEqual({ queued: 0, skipped: 1 });
     expect(upload).toHaveBeenCalledTimes(1);
-    expect(attach).toHaveBeenCalledWith("toggle-1", "upload-1", "S-EPIC1-01-a evidence, round 1");
+    expect(attach).toHaveBeenCalledWith("toggle-1", "upload-1", "场景 1 · 保存规则并回显 · 第 1 轮");
     const row = (await client.execute("SELECT status, upload_id FROM notion_media_delivery")).rows[0];
     expect(row).toMatchObject({ status: "uploaded", upload_id: "upload-1" });
     client.close();
@@ -80,7 +84,7 @@ describe("NotionMediaReconciler", () => {
 
     await reconciler.reconcile();
     await reconciler.waitForIdle();
-    expect(placeholder).toHaveBeenCalledWith("toggle-1", expect.stringContaining("Image unavailable"));
+    expect(placeholder).toHaveBeenCalledWith("toggle-1", expect.stringContaining("截图没传上去"));
     const row = (await client.execute("SELECT status, failure FROM notion_media_delivery")).rows[0];
     expect(row).toMatchObject({ status: "placeholder", failure: expect.stringContaining("ENOENT") });
     client.close();

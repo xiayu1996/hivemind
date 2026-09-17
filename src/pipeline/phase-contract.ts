@@ -25,6 +25,8 @@ export const ARTIFACT_KINDS = [
   "open-questions",
   "assumptions",
   "design-summary",
+  "design-technical",
+  "design-diagram",
   "declarations",
   "test-contract",
   "implementation",
@@ -79,8 +81,17 @@ const dodResult = z.object({
   assumptions: z.array(z.string().trim().min(1)).default([]),
 }).strict();
 
+/**
+ * DESIGN answers two different readers in one pass. The summary is what a
+ * person opens the card to read, so it is Chinese business language and short;
+ * the technical notes are for whoever writes the code, and the page keeps them
+ * folded. Splitting them here is what lets the page show one without the other
+ * instead of asking a projection to guess which half is which.
+ */
 const designResult = z.object({
   design_summary: z.string().trim().min(1),
+  technical_notes: z.string().trim().min(1).optional(),
+  diagram_mermaid: z.string().trim().min(1).optional(),
   declarations: z.array(z.object({
     file: z.string().trim().min(1),
     note: z.string().trim().min(1),
@@ -123,11 +134,13 @@ const CONTRACTS: Record<StoryPhase, PhaseContract> = {
     phase: "DESIGN",
     purpose: PHASE_PURPOSE.DESIGN,
     lane: PHASE_LANE.DESIGN,
-    produces: ["design-summary", "declarations"],
+    produces: ["design-summary", "design-technical", "design-diagram", "declarations"],
     parse(value) {
       const parsed = designResult.parse(value);
       return [
         { kind: "design-summary", body: parsed.design_summary },
+        ...(parsed.technical_notes ? [{ kind: "design-technical" as const, body: parsed.technical_notes }] : []),
+        ...(parsed.diagram_mermaid ? [{ kind: "design-diagram" as const, body: parsed.diagram_mermaid }] : []),
         { kind: "declarations", body: json(parsed.declarations) },
       ];
     },

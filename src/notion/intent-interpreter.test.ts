@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { assertStoryTransition } from "../orchestrator/state-machine.js";
 import schema from "./notion-schema.json" with { type: "json" };
+import { STORY_BOARD_STATUS } from "./board-status.js";
 import {
   HUMAN_WINS_MS,
   interpretComment,
@@ -10,19 +11,18 @@ import {
   shouldSuppressSystemProjection,
 } from "./intent-interpreter.js";
 
-const status = schema.options.aiStatus;
 const requirementStatus = schema.options.requirementStatus;
 
 describe("property intent", () => {
   it("ignores the system shadow value", () => {
     expect(interpretPropertyChange({
-      shadowAiStatus: status[1]!, observedAiStatus: status[1]!, internalState: "CODE", now: 1_000,
+      shadowAiStatus: STORY_BOARD_STATUS.running, observedAiStatus: STORY_BOARD_STATUS.running, internalState: "CODE", now: 1_000,
     })).toEqual({ type: "none" });
   });
 
   it("turns a human drag to the parked column into the highest-priority intent", () => {
     const intent = interpretPropertyChange({
-      shadowAiStatus: status[1]!, observedAiStatus: status[4]!, internalState: "VERIFY", now: 1_000,
+      shadowAiStatus: STORY_BOARD_STATUS.running, observedAiStatus: STORY_BOARD_STATUS.parked, internalState: "VERIFY", now: 1_000,
     });
     expect(intent).toEqual({ type: "park", previousState: "VERIFY", humanWinsUntil: 121_000 });
     expect(() => assertStoryTransition("VERIFY", "HUMAN_PARKED", "human")).not.toThrow();
@@ -30,16 +30,18 @@ describe("property intent", () => {
 
   it("restores the saved state when a human drags a parked card out", () => {
     const intent = interpretPropertyChange({
-      shadowAiStatus: status[4]!, observedAiStatus: status[1]!, internalState: "HUMAN_PARKED",
+      shadowAiStatus: STORY_BOARD_STATUS.parked, observedAiStatus: STORY_BOARD_STATUS.running, internalState: "HUMAN_PARKED",
       parkedPreviousState: "CODE", now: 2_000,
     });
     expect(intent).toEqual({ type: "resume", state: "CODE", humanWinsUntil: 122_000 });
     expect(() => assertStoryTransition("HUMAN_PARKED", "CODE", "human", "CODE")).not.toThrow();
   });
 
+  // The board no longer has a column for confirming a Story's own review
+  // request, so this is a person pulling a card they consider unfinished back.
   it("interprets a drag back to active as continue development", () => {
     expect(interpretPropertyChange({
-      shadowAiStatus: status[3]!, observedAiStatus: status[1]!, internalState: "MERGE", now: 3_000,
+      shadowAiStatus: STORY_BOARD_STATUS.done, observedAiStatus: STORY_BOARD_STATUS.running, internalState: "MERGE", now: 3_000,
     })).toEqual({ type: "continue_development", humanWinsUntil: 123_000 });
   });
 });

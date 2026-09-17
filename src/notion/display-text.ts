@@ -17,7 +17,46 @@ const stopReasons: Record<StoryStopReason, string> = text.stopReasons;
 /** The story page carries one section the pipeline has no state for. */
 export type PageSection = StorySection | "technical";
 
-const sectionTitles: Record<PageSection, { title: string; aliases: readonly string[] }> = text.sections.story;
+interface SectionName { title: string; aliases: readonly string[] }
+
+const sectionTitles: Record<PageSection, SectionName> = text.sections.story;
+
+/** The Epic page's own sections. It shares no heading with the Story page:
+ * what an Epic owns is the batch, not the work inside it. */
+export type EpicPageSection = "goal" | "plan" | "dependencies" | "acceptance" | "technical";
+
+const epicSectionTitles: Record<EpicPageSection, SectionName> = text.sections.epic;
+
+/** The requirement page's sections. The original request is the page's own
+ * preface, not a section: the person wrote it there. */
+export type RequirementPageSection = "clarify" | "prd" | "delivery";
+
+const requirementSectionTitles: Record<RequirementPageSection, SectionName> = text.sections.requirement;
+
+export function requirementSectionTitle(section: RequirementPageSection): string {
+  return requirementSectionTitles[section].title;
+}
+
+export function requirementSectionForTitle(heading: string): RequirementPageSection | undefined {
+  const wanted = heading.trim();
+  for (const [section, names] of Object.entries(requirementSectionTitles) as Array<[RequirementPageSection, SectionName]>) {
+    if (names.title === wanted || names.aliases.includes(wanted)) return section;
+  }
+  return undefined;
+}
+
+export function epicSectionTitle(section: EpicPageSection): string {
+  return epicSectionTitles[section].title;
+}
+
+/** Recognises an Epic heading whichever version of the page wrote it. */
+export function epicSectionForTitle(heading: string): EpicPageSection | undefined {
+  const wanted = heading.trim();
+  for (const [section, names] of Object.entries(epicSectionTitles) as Array<[EpicPageSection, SectionName]>) {
+    if (names.title === wanted || names.aliases.includes(wanted)) return section;
+  }
+  return undefined;
+}
 
 export const DISPLAY_TIME_ZONE = text.timeZone;
 export const ICONS = text.icons;
@@ -88,6 +127,15 @@ export interface WaitingText {
  * state, waiting and cost are board columns already, and a page that repeats
  * them costs attention without adding anything (design 01 section 2.3).
  */
+/**
+ * What the callout says when nothing is waiting. The block itself stays: a
+ * Notion block can only be appended after another one, so a callout archived
+ * on a quiet day comes back at the bottom of the page rather than at the top.
+ */
+export function quietText(): WaitingText {
+  return text.quiet;
+}
+
 export function waitingText(level: "story" | "epic" | "requirement", situation: string): WaitingText | undefined {
   const table = text.waiting[level] as Record<string, WaitingText | undefined>;
   return table[situation];

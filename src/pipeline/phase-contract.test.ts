@@ -71,3 +71,24 @@ describe("what a phase accepts back from a session", () => {
     expect(() => phaseContract("MERGE").parse({})).toThrow();
   });
 });
+
+describe("DESIGN writes for two readers", () => {
+  it("keeps the summary a person reads apart from the notes whoever writes the code reads", () => {
+    const artifacts = phaseContract("DESIGN").parse({
+      design_summary: "配好之后，每张卡都按你选的那家模型跑。",
+      technical_notes: "ModelPolicy.resolve is the only entry point; the runner passes the tier through.",
+      diagram_mermaid: "graph TD; A-->B;",
+      declarations: [],
+    });
+    expect(artifacts.map((artifact) => artifact.kind))
+      .toEqual(["design-summary", "design-technical", "design-diagram", "declarations"]);
+  });
+
+  it("leaves out what DESIGN did not write, rather than storing an empty artifact", () => {
+    const artifacts = phaseContract("DESIGN").parse({
+      design_summary: "配好之后，每张卡都按你选的那家模型跑。",
+      declarations: [],
+    });
+    expect(artifacts.map((artifact) => artifact.kind)).toEqual(["design-summary", "declarations"]);
+  });
+});

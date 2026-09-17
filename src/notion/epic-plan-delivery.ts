@@ -4,10 +4,17 @@ import type { NotionGateway } from "./gateway.js";
 import type { NotionOutboxDelivery, NotionOutboxRecord } from "./outbox.js";
 import { COMMENT_EPIC_PAGE } from "../orchestrator/epic-blocker.js";
 import { SYNC_EPIC_STATUS } from "../orchestrator/epic-status-projection.js";
-import { SYNC_EPIC_PAGE, renderEpicProgress, type EpicPagePayload } from "../orchestrator/epic-page-projection.js";
+import {
+  SYNC_EPIC_PAGE,
+  renderEpicPage,
+  type EpicPagePayload,
+  type RenderedAcceptance,
+} from "../orchestrator/epic-page-projection.js";
+import { EpicAcceptance } from "../orchestrator/epic-acceptance.js";
 import pageText from "../orchestrator/epic-page-text.json" with { type: "json" };
 import schema from "./notion-schema.json" with { type: "json" };
-import { bullet as richBullet, code, runs, t } from "./rich-text.js";
+import { bullet as richBullet, code, heading2, pageMention, runs, t, type Block } from "./rich-text.js";
+import { epicSectionForTitle, epicSectionTitle, quietText, sectionTitle } from "./display-text.js";
 
 const planSchema = z.object({
   epicId: z.string().min(1),
@@ -29,19 +36,26 @@ const statusSchema = z.object({
 
 const pageSchema = z.object({
   epicId: z.string().min(1),
+  state: z.string().min(1),
   status: z.enum(schema.options.epicStatus),
   mrUrl: z.string().nullable(),
   targetBranch: z.string().min(1),
   integrationBranch: z.string().nullable(),
-  blockedReason: z.string().nullable(),
+  businessGoal: z.string().nullable(),
+  prdScenarios: z.array(z.object({ id: z.string().min(1), text: z.string() })),
   stories: z.array(z.object({
     id: z.string().min(1),
     title: z.string(),
-    state: z.string().min(1),
-    stopReason: z.string().nullable(),
-    mrUrl: z.string().nullable(),
+    pageId: z.string().nullable(),
+    dependsOn: z.array(z.string()),
   })),
-});
+  acceptance: z.array(z.object({
+    prdScenarioId: z.string().min(1),
+    text: z.string(),
+    status: z.enum(["open", "accepted", "gap"]),
+    note: z.string().nullable(),
+  })).default([]),
+}) as unknown as z.ZodType<EpicPagePayload>;
 
 const commentSchema = z.object({
   epicId: z.string().min(1),
@@ -74,8 +88,12 @@ function heading(content: string): unknown {
   return { object: "block", type: "heading_2", heading_2: { rich_text: [text(content)] } };
 }
 
-function bullet(content: string): unknown {
-  return { object: "block", type: "bulleted_list_item", bulleted_list_item: { rich_text: [text(content)] } };
+function calloutBlock(quiet: { icon: string; color: string; action: string }): unknown {
+  return {
+    object: "block",
+    type: "callout",
+    callout: { rich_text: [text(quiet.action)], icon: { type: "emoji", emoji: quiet.icon }, color: quiet.color },
+  };
 }
 
 function plainText(value: unknown): string {
@@ -106,7 +124,7 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
     if (record.operation === SYNC_EPIC_PAGE) {
       const payload = pageSchema.parse(record.payload);
       const pageId = String((await this.epicRow(payload.epicId)).notion_page_id);
-      return this.sectionApplied(payload.epicId, "progress", pageId, record.payloadHash);
+      return this.sectionApplied(payload.epicId, "page", pageId, record.payloadHash);
     }
     if (record.operation === COMMENT_EPIC_PAGE) return this.commentPresent(commentSchema.parse(record.payload));
     if (record.operation === "create_story_page") {
@@ -129,9 +147,10 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
   }
 
   /**
-   * The page a person opens to see where the Epic stands: the board column,
-   * the review request link, and one line per Story. The progress section is
-   * rewritten in place under its heading; the plan above it is left alone.
+   * The page a person opens to decide whether this batch is what they asked
+   * for: what it carries, how it was cut up, and how to review it. Where each
+   * Story stands is deliberately absent -- that is the board's job, and a page
+   * that repeated it would be wrong within the minute.
    */
   private async syncPage(payload: EpicPagePayload, payloadHash: string): Promise<void> {
     const epic = await this.epicRow(payload.epicId);
@@ -154,46 +173,212 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
     });
     if (!humanWins) await this.rememberStatus(payload.epicId, payload.status);
 
-    const stale = await this.progressSectionBlocks(pageId);
-    // A page written by an older projection still shows its replay key as a
-    // line of text, and the plan's key sits outside the progress section. This
-    // is the write that takes both away.
-    for (const blockId of await this.legacyMarkerBlocks(pageId)) {
-      if (!stale.includes(blockId)) stale.push(blockId);
-    }
+    const rendered = renderEpicPage(payload);
+    let blocks = await this.children(pageId);
+    // The sections this projection owns are rebuilt whole, so everything they
+    // currently hold goes first -- together with the progress section an older
+    // build wrote, which this page no longer has, and the replay markers older
+    // builds printed as text.
+    const stale = new Set<string>([
+      ...this.ownedSectionBlocks(blocks),
+      ...this.sectionBlocks(blocks, pageText.legacyProgressHeading),
+      ...blocks
+        .filter((block) => LEGACY_MARKER_PREFIXES.some((prefix) => plainText(block.paragraph).startsWith(prefix)))
+        .map((block) => String(block.id)),
+    ]);
     for (const blockId of stale) {
       await this.gateway.request({ method: "DELETE", path: `/v1/blocks/${encoded(blockId)}`, priority: "projection" });
     }
-    const progress = renderEpicProgress(payload);
-    await this.gateway.request({
+    if (stale.size > 0) blocks = blocks.filter((block) => !stale.has(String(block.id)));
+
+    const calloutId = await this.writeCallout(pageId, blocks, rendered.callout);
+    await this.writeSections(pageId, blocks, rendered, calloutId, payload.epicId);
+    await this.mentionStoryPages(blocks, payload);
+    await this.rememberSection(payload.epicId, "page", payloadHash);
+  }
+
+  /** The callout keeps its block: it can only be appended after another one,
+   * so archiving it on a quiet day would bring it back at the bottom. */
+  private async writeCallout(
+    pageId: string,
+    blocks: Array<Record<string, unknown>>,
+    callout: { content: string; icon: string; color: string },
+  ): Promise<string | undefined> {
+    const existing = blocks.find((block) => String(block.type) === "callout");
+    const body = {
+      rich_text: t(callout.content),
+      icon: { type: "emoji", emoji: callout.icon },
+      color: callout.color,
+    };
+    if (existing) {
+      if (plainText(existing.callout) !== callout.content) {
+        await this.gateway.request({
+          method: "PATCH",
+          path: `/v1/blocks/${encoded(String(existing.id))}`,
+          priority: "projection",
+          body: { callout: body },
+        });
+      }
+      return String(existing.id);
+    }
+    const [created] = await this.append(
+      pageId,
+      [{ object: "block", type: "callout", callout: body }],
+      blocks[0] ? String(blocks[0].id) : undefined,
+    );
+    return created;
+  }
+
+  /**
+   * Each section lands where a reader expects it. Two of them are not rebuilt:
+   * the plan a person approved, and the acceptance boxes they tick and comment
+   * on. Notion can only append after a block, so the rebuilt sections are
+   * anchored on whatever the page already carries before them.
+   */
+  private async writeSections(
+    pageId: string,
+    blocks: Array<Record<string, unknown>>,
+    rendered: ReturnType<typeof renderEpicPage>,
+    calloutId: string | undefined,
+    epicId: string,
+  ): Promise<void> {
+    const owned = new Map(rendered.sections.map((entry) => [entry.section, entry.blocks]));
+    let anchor: string | undefined = calloutId ?? (blocks[0] ? String(blocks[0].id) : undefined);
+    for (const section of ["goal", "plan", "dependencies", "acceptance", "technical"] as const) {
+      if (section === "plan") {
+        anchor = this.sectionBlocks(blocks, epicSectionTitle("plan")).at(-1) ?? anchor;
+        continue;
+      }
+      if (section === "acceptance") {
+        anchor = await this.writeAcceptance(pageId, blocks, rendered.acceptance, anchor, epicId) ?? anchor;
+        continue;
+      }
+      const children = owned.get(section) ?? [];
+      if (children.length === 0) continue;
+      const created = await this.append(pageId, [heading2(t(epicSectionTitle(section))), ...children], anchor);
+      anchor = created.at(-1) ?? anchor;
+    }
+  }
+
+  /**
+   * The acceptance boxes are written once and afterwards only rewritten: the
+   * tick is the person's answer and lives on the block, together with whatever
+   * they wrote under it. Rebuilding the section would throw both away.
+   */
+  private async writeAcceptance(
+    pageId: string,
+    blocks: Array<Record<string, unknown>>,
+    acceptance: RenderedAcceptance | null,
+    anchor: string | undefined,
+    epicId: string,
+  ): Promise<string | undefined> {
+    if (!acceptance) return undefined;
+    const store = new EpicAcceptance(this.client, this.now);
+    const bound = new Map((await store.items(epicId))
+      .flatMap((item) => item.notionBlockId ? [[item.prdScenarioId, item.notionBlockId] as const] : []));
+    const present = new Set(this.sectionBlocks(blocks, epicSectionTitle("acceptance")));
+    const existing = new Map([...bound].filter(([, blockId]) => present.has(blockId)));
+
+    if (existing.size === 0) {
+      const created = await this.append(pageId, [
+        heading2(t(epicSectionTitle("acceptance"))),
+        { object: "block", type: "paragraph", paragraph: { rich_text: t(acceptance.intro) } } as unknown as Block,
+        ...acceptance.items.map((item) => ({
+          object: "block",
+          type: "to_do",
+          // The tick belongs to the person; a projection only creates the box.
+          to_do: { rich_text: t(item.line), checked: item.checked },
+        }) as unknown as Block),
+      ], anchor);
+      for (const [index, item] of acceptance.items.entries()) {
+        const blockId = created[index + 2];
+        if (blockId) await store.bindBlock(epicId, item.prdScenarioId, blockId);
+      }
+      return created.at(-1);
+    }
+
+    let last = anchor;
+    for (const item of acceptance.items) {
+      const blockId = existing.get(item.prdScenarioId);
+      if (!blockId) continue;
+      last = blockId;
+      const current = blocks.find((block) => String(block.id) === blockId);
+      if (current && plainText(current.to_do) === item.line) continue;
+      await this.gateway.request({
+        method: "PATCH",
+        path: `/v1/blocks/${encoded(blockId)}`,
+        priority: "projection",
+        // Only the words are rewritten: `checked` is the person's own answer.
+        body: { to_do: { rich_text: t(item.line) } },
+      });
+    }
+    return last;
+  }
+
+  private async append(pageId: string, children: Block[], after?: string): Promise<string[]> {
+    const response = await this.gateway.request({
       method: "PATCH",
       path: `/v1/blocks/${encoded(pageId)}/children`,
       priority: "projection",
-      body: {
-        children: [
-          heading(pageText.heading),
-          ...progress.lead.map((line) => paragraph(line)),
-          ...progress.stories.map((line) => bullet(line)),
-        ],
-      },
+      body: { children, ...(after ? { after } : {}) },
     });
-    await this.rememberSection(payload.epicId, "progress", payloadHash);
+    return z.object({ results: z.array(z.object({ id: z.string() }).passthrough()) })
+      .parse(response.data).results.map((block) => block.id);
   }
 
-  private async legacyMarkerBlocks(pageId: string): Promise<string[]> {
-    return (await this.children(pageId))
-      .filter((block) => LEGACY_MARKER_PREFIXES.some((prefix) => plainText(block.paragraph).startsWith(prefix)))
-      .map((block) => String(block.id));
+  /**
+   * A Story line in the approved plan becomes a link once the Story has a
+   * page. The block is rewritten rather than replaced: a person may have
+   * commented on the line they approved.
+   */
+  private async mentionStoryPages(
+    blocks: Array<Record<string, unknown>>,
+    payload: EpicPagePayload,
+  ): Promise<void> {
+    const planBlocks = new Set(this.sectionBlocks(blocks, epicSectionTitle("plan")));
+    for (const story of payload.stories) {
+      if (!story.pageId) continue;
+      const line = blocks.find((block) => planBlocks.has(String(block.id))
+        && String(block.type) === "bulleted_list_item"
+        && plainText(block.bulleted_list_item).includes(story.id));
+      if (!line) continue;
+      const current = plainText(line.bulleted_list_item);
+      if (!current.includes(story.id)) continue;
+      await this.gateway.request({
+        method: "PATCH",
+        path: `/v1/blocks/${encoded(String(line.id))}`,
+        priority: "projection",
+        body: { bulleted_list_item: { rich_text: runs(t(`${story.title} `), pageMention(story.pageId)) } },
+      });
+    }
   }
 
-  /** The progress heading and every block after it up to the next heading. */
-  private async progressSectionBlocks(pageId: string): Promise<string[]> {
+  /**
+   * Every block under a heading this projection rebuilds, the heading
+   * included. Two sections are not among them: the plan a person approved, and
+   * the acceptance boxes they tick and write under.
+   */
+  private ownedSectionBlocks(blocks: Array<Record<string, unknown>>): string[] {
     const ids: string[] = [];
     let inside = false;
-    for (const block of await this.children(pageId)) {
-      const type = String(block.type ?? "");
-      if (type === "heading_2") {
-        inside = plainText(block.heading_2) === pageText.heading;
+    for (const block of blocks) {
+      if (String(block.type ?? "") === "heading_2") {
+        const section = epicSectionForTitle(plainText(block.heading_2));
+        inside = section !== undefined && section !== "plan" && section !== "acceptance";
+        if (!inside) continue;
+      }
+      if (inside) ids.push(String(block.id));
+    }
+    return ids;
+  }
+
+  /** A named heading and every block after it up to the next heading. */
+  private sectionBlocks(blocks: Array<Record<string, unknown>>, title: string): string[] {
+    const ids: string[] = [];
+    let inside = false;
+    for (const block of blocks) {
+      if (String(block.type ?? "") === "heading_2") {
+        inside = plainText(block.heading_2) === title;
         if (!inside) continue;
       }
       if (inside) ids.push(String(block.id));
@@ -229,7 +414,7 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
    */
   private async sectionApplied(
     epicId: string,
-    section: "plan" | "progress",
+    section: "plan" | "page",
     pageId: string,
     payloadHash: string,
   ): Promise<boolean> {
@@ -245,7 +430,7 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
     return present;
   }
 
-  private async rememberSection(epicId: string, section: "plan" | "progress", payloadHash: string): Promise<void> {
+  private async rememberSection(epicId: string, section: "plan" | "page", payloadHash: string): Promise<void> {
     await this.client.execute({
       sql: `INSERT INTO epic_notion_sections (epic_id, section, payload_hash, updated_at)
             VALUES (?, ?, ?, ?)
@@ -349,8 +534,7 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
   private async presentPlan(record: NotionOutboxRecord): Promise<void> {
     const plan = planSchema.parse(record.payload);
     const children = [
-      heading("拆解方案"),
-      paragraph(plan.businessGoal),
+      heading(epicSectionTitle("plan")),
       // The name reads as the name; the id follows it as a handle, in code
       // style, which is also how a person quotes it back in a comment.
       ...plan.stories.map((story) => richBullet(runs(t(story.title), t(" "), code(story.id)))),
@@ -395,7 +579,14 @@ export class NotionEpicPlanDelivery implements NotionOutboxDelivery {
       body: {
         parent: { type: "data_source_id", data_source_id: this.storiesDataSourceId },
         properties,
-        children: [heading("需求描述"), paragraph(String(story.requirement))],
+        // The callout is created with the page: a block can only be appended
+        // after another one, so the only way it sits at the top is to be there
+        // from the start.
+        children: [
+          calloutBlock(quietText()),
+          heading(sectionTitle("requirement")),
+          paragraph(String(story.requirement)),
+        ],
       },
     });
     const pageId = z.object({ id: z.string().min(1) }).parse(created.data).id;

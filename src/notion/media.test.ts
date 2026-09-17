@@ -52,10 +52,10 @@ describe("NotionMediaPipeline", () => {
     });
     await expect(queued.completion).resolves.toEqual({
       kind: "placeholder",
-      text: "Image unavailable; see evidence ev-2",
+      text: "截图没传上去，原件存在证据目录 ev-2",
       attached: true,
       reason: "Notion unavailable",
     });
-    expect(placeholders).toEqual(["Image unavailable; see evidence ev-2"]);
+    expect(placeholders).toEqual(["截图没传上去，原件存在证据目录 ev-2"]);
   });
 });

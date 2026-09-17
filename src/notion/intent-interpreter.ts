@@ -1,6 +1,7 @@
 import type { RequirementState } from "../orchestrator/requirement-machine.js";
 import type { EpicState, StoryState } from "../orchestrator/state-machine.js";
 import schema from "./notion-schema.json" with { type: "json" };
+import { STORY_BOARD_STATUS } from "./board-status.js";
 
 export const HUMAN_WINS_MS = 120_000;
 
@@ -36,8 +37,8 @@ export type EpicCommentIntent = { type: "approve_plan" } | { type: "request_revi
 export function interpretPropertyChange(input: PropertyChangeInput): PropertyIntent {
   if (input.observedAiStatus === input.shadowAiStatus) return { type: "none" };
   const humanWinsUntil = input.now + HUMAN_WINS_MS;
-  const parkedColumn = schema.options.aiStatus[4]!;
-  const activeColumn = schema.options.aiStatus[1]!;
+  const parkedColumn = STORY_BOARD_STATUS.parked;
+  const activeColumn = STORY_BOARD_STATUS.running;
 
   if (input.observedAiStatus === parkedColumn && input.internalState !== "HUMAN_PARKED") {
     return { type: "park", previousState: input.internalState, humanWinsUntil };

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { StorySection } from "../notion/blocks/story-page.js";
 import type { Client } from "@libsql/client";
 import {
   assertStoryTransition,
@@ -643,7 +644,7 @@ export class StoryExecutionStore {
       if (!declared.has(id)) throw new Error(`verification references undeclared scenario: ${id}`);
     }
     const failedSet = new Set(failed);
-    const passed = verified.filter((id) => !failedSet.has(id));
+    const passedSet = new Set(verified.filter((id) => !failedSet.has(id)));
     const specStatus = {
       sql: `UPDATE story_specs
             SET status = CASE WHEN spec_id IN (${failed.length > 0 ? failed.map(() => "?").join(",") : "NULL"})
@@ -665,7 +666,7 @@ export class StoryExecutionStore {
         frozenVersions.dodVersion ?? "",
         versions.get(scenarioId) ?? "",
         treeSha,
-        failed.includes(scenarioId) ? "failed" : passed.includes(scenarioId) ? "passed" : "inconclusive",
+        failedSet.has(scenarioId) ? "failed" : passedSet.has(scenarioId) ? "passed" : "inconclusive",
         input.evidenceDir ?? null,
         time,
       ],
@@ -1010,7 +1011,7 @@ export class StoryExecutionStore {
 
   async registerNotionSection(
     cardId: string,
-    section: "requirement" | "specification" | "design" | "verification" | "questions",
+    section: StorySection,
     anchorBlockId: string,
   ): Promise<void> {
     await this.client.execute({
@@ -1031,13 +1032,18 @@ export class StoryExecutionStore {
     });
     if (Number(existing.rows[0]?.count) > 0) throw new Error(`Story DoD is already frozen: ${cardId}`);
     const statements = definition.scenarios.map((scenario, index) => ({
-      sql: `INSERT INTO story_specs (spec_id, story_id, seq, text, status)
-            VALUES (?, ?, ?, ?, 'pending')`,
+      sql: `INSERT INTO story_specs (spec_id, story_id, seq, text, title, given, when_, then_, layers, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
       args: [
         scenario.id,
         cardId,
         index + 1,
         `Given ${scenario.given}; when ${scenario.when}; then ${scenario.then}`,
+        scenario.title ?? null,
+        scenario.given,
+        scenario.when,
+        scenario.then,
+        JSON.stringify(scenario.layers),
       ],
     }));
     const time = this.now();

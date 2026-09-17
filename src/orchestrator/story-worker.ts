@@ -8,7 +8,13 @@ import {
 import { evaluateSpecExit, applyDowngrades, renderSpecExitFindings, type SpecExitPorts } from "../pipeline/spec-exit-gate.js";
 import { parseTestContract } from "../pipeline/test-contract.js";
 import { costCeilingVerdict, renderCostCeilingReport, type CardSpend } from "../pipeline/cost-ceiling.js";
-import { DoDValidationError, parseDoD, type DefinitionOfDone } from "../pipeline/dod.js";
+import {
+  DoDValidationError,
+  lintDoDLanguage,
+  parseDoD,
+  renderDoDLanguageFindings,
+  type DefinitionOfDone,
+} from "../pipeline/dod.js";
 import { assemblePhasePrompt, type PhaseInput } from "../pipeline/phase-input.js";
 import {
   StoryExecutionStore,
@@ -673,6 +679,22 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
       await this.store.recordOpenQuestions(cardId, questions);
       try {
         const definitionOfDone = parseDoD(artifact(shaped, "dod"));
+        // The contract a person judges the card by is written for them. A DoD
+        // in English or in implementation words is sent back to the same
+        // session, which costs a retry rather than a person's attention.
+        const language = lintDoDLanguage(definitionOfDone);
+        if (language.length > 0) {
+          // Counted so the rule is judged on evidence: a gate that never fires
+          // says the prompt is already enough, and one that fires every card
+          // says the prompt is not the layer to fix it in.
+          await this.friction?.record({
+            cardId,
+            runId,
+            kind: "dod_language_rejected",
+            detail: language.map((finding) => `${finding.where} ${finding.what}`).join("; "),
+          });
+          throw new DoDValidationError(renderDoDLanguageFindings(language));
+        }
         const frozen = await this.store.findFrozenDefinitionOfDone(cardId);
         if (frozen) {
           await this.store.refreezeDefinitionOfDone(cardId, definitionOfDone);

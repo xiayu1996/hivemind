@@ -21,18 +21,12 @@ export interface RequirementCommentPollResult {
   ingested: number;
   prdConfirmed: boolean;
   revisionRequested: boolean;
-  gapsRecorded: number;
   /** A person answered a stopped requirement; the loop may pick it up again. */
   resumed: boolean;
 }
 
-export interface RequirementContentPollResult {
-  ticked: number;
-}
-
 const pageSchema = z.object({ properties: z.record(z.string(), z.unknown()) }).passthrough();
 const selectSchema = z.object({ select: z.object({ name: z.string() }).nullable() });
-const toDoSchema = z.object({ to_do: z.object({ checked: z.boolean() }).passthrough() }).passthrough();
 
 function runId(requirementId: string): string {
   return `requirement:${requirementId}`;
@@ -40,8 +34,9 @@ function runId(requirementId: string): string {
 
 /**
  * Reads what a person did on their requirement page and turns it into the
- * three inputs the product manager layer accepts from them: a verdict on the
- * PRD, a verdict on each acceptance scenario, and parking. Clarification
+ * two inputs the product manager layer accepts from them: a verdict on the
+ * PRD, and parking. Scenario verdicts are made on each Epic, where the person
+ * saw the delivery, and this layer only ever reads them back. Clarification
  * answers are not read here; the clarification channel owns those. The one
  * exception is a stopped requirement: whatever a person writes after the stop
  * is the answer the system stopped for, and reading it here is what lets the
@@ -135,12 +130,10 @@ export class NotionRequirementInputSync {
       sql: "SELECT anchor_block_id FROM requirement_notion_sections WHERE requirement_id = ?",
       args: [requirementId],
     })).rows.map((row) => String(row.anchor_block_id));
-    const boxes = (await this.store.acceptanceItems(requirementId))
-      .flatMap((item) => item.notionBlockId ? [item.notionBlockId] : []);
-    await this.comments.registerPage(pageId, [...anchors, ...boxes]);
+    await this.comments.registerPage(pageId, anchors);
     const polled = await this.comments.pollPage(pageId);
     const result: RequirementCommentPollResult = {
-      ingested: polled.inserted, prdConfirmed: false, revisionRequested: false, gapsRecorded: 0, resumed: false,
+      ingested: polled.inserted, prdConfirmed: false, revisionRequested: false, resumed: false,
     };
 
     if (requirement.stopReason) {
@@ -178,40 +171,6 @@ export class NotionRequirementInputSync {
       return result;
     }
 
-    if (requirement.state === "ACCEPTANCE") {
-      const items = await this.store.acceptanceItems(requirementId);
-      for (const comment of await this.unclaimedComments(pageId, 0)) {
-        if (!comment.blockId) continue;
-        const item = items.find((candidate) => candidate.notionBlockId === comment.blockId && candidate.status === "open");
-        if (!item) continue;
-        if (await this.checklist.recordGap(requirementId, item.itemId, comment.body, comment.id, "comment")) {
-          result.gapsRecorded++;
-          item.status = "gap";
-        }
-      }
-    }
-    return result;
-  }
-
-  /** A ticked box is the one input that lives in page content rather than in
-   * a comment or a property. */
-  async pollContent(requirementId: string): Promise<RequirementContentPollResult> {
-    const requirement = await this.store.getRequirement(requirementId);
-    const result: RequirementContentPollResult = { ticked: 0 };
-    if (requirement.state !== "ACCEPTANCE") return result;
-    for (const item of await this.store.acceptanceItems(requirementId)) {
-      if (item.status !== "open" || !item.notionBlockId) continue;
-      const response = await this.gateway.request({
-        method: "GET",
-        path: `/v1/blocks/${encodeURIComponent(item.notionBlockId)}`,
-        priority: "interaction",
-      });
-      const block = toDoSchema.safeParse(response.data);
-      if (!block.success || !block.data.to_do.checked) continue;
-      if (await this.checklist.applyCheck(requirementId, item.notionBlockId, true, `notion-tick:${item.notionBlockId}`, "drag")) {
-        result.ticked++;
-      }
-    }
     return result;
   }
 
