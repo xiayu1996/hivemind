@@ -85,7 +85,12 @@ export class PiModelCatalog implements ModelCatalog {
       windowsHide: true,
       maxBuffer: 4 * 1024 * 1024,
     });
-    return parseModelTable(result.stdout);
+    // pi matches its `--list-models` argument against model ids as well as
+    // providers, so a provider whose ids are namespaced under another's name
+    // (command-code serves `deepseek/...`) leaks into that other provider's
+    // listing. The catalogue answers for one provider, so the rows that belong
+    // to another are dropped here; `staticCatalog` keeps the same contract.
+    return parseModelTable(result.stdout).filter((model) => model.provider === provider);
   }
 }
 
