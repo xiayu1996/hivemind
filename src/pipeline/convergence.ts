@@ -6,10 +6,10 @@ export type ConvergenceClassification =
   | "stalled"
   | "expanded"
   | "oscillating"
-  /** Never returned by the classifier: the loop was still shrinking its failure
-   * set when it ran out of rounds. It is named here so a stop point can say
-   * which of the four situations ended the loop, all under the one stop reason
-   * the database accepts. */
+  /** Never returned by the classifier: the loop was still producing new failure
+   * sets when it ran out of rounds. It is named here so a stop point can say
+   * which situation ended the loop, all under the stop reasons the database
+   * accepts. */
   | "budget_exhausted";
 
 export interface ConvergenceResult {
@@ -34,21 +34,27 @@ function properSubset(candidate: readonly string[], previous: readonly string[])
 export interface ConvergenceOptions {
   /**
    * How many earlier rounds an identical failure set is looked for in before
-   * the loop is called oscillating.
-   *
-   * There is deliberately no matching threshold for stagnation. A round that
-   * fails to shrink the set already violates the architecture invariant that
-   * failed(N) is a strict proper subset of failed(N-1), so "allow it to stand
-   * still for a few rounds" is not a setting anybody may have: set to one it
-   * is today's behaviour, set higher it breaks the invariant. Oscillation is
-   * an extra stop beyond the invariant, so its window is configurable.
+   * the loop is called oscillating. One means only the round immediately
+   * before, which is the stagnation case; larger windows also catch a loop
+   * that returns to a set it left.
    */
   oscillationLookback?: number;
 }
 
 const DEFAULT_OSCILLATION_LOOKBACK = 3;
 
-/** The inner loop continues only when failed(N) is a strict proper subset. */
+/**
+ * The inner loop continues unless this round's failure set repeats one it has
+ * already produced.
+ *
+ * The bar used to be the strict proper subset failed(N) ⊂ failed(N-1), which
+ * stopped a round that fixed three scenarios and broke a fourth. Real work
+ * trades one failure for another and still finishes, so a set that merely
+ * changed now buys a round out of the budget instead of ending the card; the
+ * round ceiling is what bounds the spend. Repetition is still fatal: a set
+ * identical to one already seen means the next round would replay a round
+ * that has been run.
+ */
 export function classifyConvergence(
   history: readonly (readonly string[])[],
   options: ConvergenceOptions = {},
@@ -66,16 +72,16 @@ export function classifyConvergence(
     return { classification: "oscillating", mayContinue: false };
   }
   if (properSubset(current, previous)) return { classification: "converging", mayContinue: true };
-  return { classification: "expanded", mayContinue: false };
+  return { classification: "expanded", mayContinue: true };
 }
 
 /**
  * What a person reads on a card the verification loop stopped.
  *
- * The four situations end the same way and are not the same problem: a loop
- * that went in circles from round two needs a different decision from one that
- * was still shrinking when the budget ran out, and reading "verification loop
- * exceeded" alone tells nobody which happened.
+ * The situations end the same way and are not the same problem: a loop that
+ * went in circles from round two needs a different decision from one that was
+ * still making progress when the budget ran out, and reading "verification
+ * loop exceeded" alone tells nobody which happened.
  */
 export function renderConvergenceReport(
   cardId: string,
@@ -87,8 +93,7 @@ export function renderConvergenceReport(
   const headline: Record<string, string> = {
     stalled: "the same checks failed two rounds running, so another round would repeat the last one",
     oscillating: "an earlier round failed on exactly these checks, so the work is going in circles",
-    expanded: "this round broke checks the round before it had passing",
-    budget_exhausted: "the failing set was still shrinking when the card ran out of rounds",
+    budget_exhausted: "the failing set was still moving when the card ran out of rounds",
   };
   const lines = [
     `${cardId} stopped: ${headline[classification] ?? "the verification loop ended without an accepted result"}`,
@@ -104,7 +109,7 @@ export function renderConvergenceReport(
   lines.push(
     "",
     classification === "budget_exhausted"
-      ? "Progress was real, so more rounds may finish it. Resuming grants a new budget."
+      ? "The card ran out of rounds while the set was still moving. Resuming grants a new budget; raise retry.maxInnerLoopRounds if this keeps happening."
       : "More rounds of the same will not help. Decide what changes: the approach, the tests, or the acceptance bar itself.",
     "",
   );

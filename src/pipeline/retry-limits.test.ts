@@ -11,7 +11,7 @@ describe("retryLimits", () => {
     const config = await ConfigStore.load(client);
 
     await expect(retryLimits(config)).resolves.toEqual({
-      maxInnerLoopRounds: 6,
+      maxInnerLoopRounds: 3,
       maxPhaseReentries: 3,
       maxContinueRetries: 8,
       maxRegressionReopens: 2,
@@ -19,8 +19,8 @@ describe("retryLimits", () => {
       oscillationLookback: 3,
     });
 
-    await config.set("retry.maxInnerLoopRounds", 3, "test");
-    await expect(retryLimits(config)).resolves.toMatchObject({ maxInnerLoopRounds: 3 });
+    await config.set("retry.maxInnerLoopRounds", 5, "test");
+    await expect(retryLimits(config)).resolves.toMatchObject({ maxInnerLoopRounds: 5 });
     client.close();
   });
 });

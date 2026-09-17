@@ -362,6 +362,63 @@ describe("SingleStoryWorker", () => {
     ]);
   });
 
+  it("spends a round and keeps going when a round trades one failure for another", async () => {
+    // Round 2 fixes scenario a and breaks b. The old rule read that as
+    // expansion and stopped a card that was two thirds of the way done.
+    const outcomes = [
+      { verdict: "rejected" as const, failedScenarios: ["S-EPIC1-01-a"] },
+      { verdict: "rejected" as const, failedScenarios: ["S-EPIC1-01-b"] },
+      { verdict: "accepted" as const, failedScenarios: [] },
+    ];
+    const verifier: StoryVerifyPort = {
+      run: async (input) => {
+        const outcome = outcomes[input.round - 1]!;
+        return { sessionId: `session-verify-${input.round}`, artifact: JSON.stringify(outcome), ...outcome };
+      },
+    };
+    const worker = new SingleStoryWorker(
+      store,
+      { run: designAndCode },
+      verifier,
+      { deliver: async () => ({ mrUrl: null }) },
+      { enqueue: async () => undefined },
+    );
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED", rounds: 3 });
+  });
+
+  it("stops on the budget, not the loop, when the failure set keeps moving to the last round", async () => {
+    const outcomes = [
+      ["S-EPIC1-01-a"],
+      ["S-EPIC1-01-b"],
+      ["S-EPIC1-01-a", "S-EPIC1-01-b"],
+    ];
+    const verifier: StoryVerifyPort = {
+      run: async (input) => ({
+        sessionId: `verify-${input.round}`,
+        verdict: "rejected",
+        failedScenarios: outcomes[input.round - 1]!,
+        artifact: "Still failing",
+      }),
+    };
+    const worker = new SingleStoryWorker(store, { run: designAndCode }, verifier, {
+      deliver: async () => { throw new Error("delivery must not run"); },
+    }, { enqueue: async () => undefined }, { runId: (_cardId, phase, round) => `run-${phase}-${round}` });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({
+      state: "NEEDS_INPUT",
+      rounds: 3,
+      stopReason: "retry_limit_exceeded",
+      convergence: "budget_exhausted",
+    });
+    const stopped = JSON.parse(String((await client.execute(
+      "SELECT data FROM event_log WHERE type = 'story.stopped' ORDER BY id DESC LIMIT 1",
+    )).rows[0]?.data)) as { reason: string; convergence: string; spent: number; budget: number };
+    expect(stopped).toMatchObject({
+      reason: "retry_limit_exceeded", convergence: "budget_exhausted", spent: 3, budget: 3,
+    });
+  });
+
   it("stops at the only verification stop when the failure set stalls", async () => {
     const phases = {
       run: async (input: ManagedPhaseInput) => frontPhase(input) ?? {
@@ -439,7 +496,7 @@ describe("SingleStoryWorker", () => {
       state: "NEEDS_INPUT",
       rounds: 6,
       mrUrl: null,
-      stopReason: "verify_loop_exceeded",
+      stopReason: "retry_limit_exceeded",
     });
   });
 

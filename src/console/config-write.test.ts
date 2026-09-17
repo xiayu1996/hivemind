@@ -38,7 +38,7 @@ describe("M2-13 console configuration write plane", () => {
     const keys = response.json() as Array<{ key: string; schema: unknown; dangerous: boolean; overridden: boolean }>;
 
     const rounds = keys.find((entry) => entry.key === "retry.maxInnerLoopRounds");
-    expect(rounds).toMatchObject({ dangerous: false, overridden: false, value: 6, scope: "global", reload: "hot" });
+    expect(rounds).toMatchObject({ dangerous: false, overridden: false, value: 3, scope: "global", reload: "hot" });
     expect(JSON.stringify(rounds?.schema)).toContain("integer");
     expect(keys.some((entry) => entry.dangerous)).toBe(true);
     await app.close();
@@ -54,7 +54,7 @@ describe("M2-13 console configuration write plane", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({ key: "retry.maxInnerLoopRounds", previous: 6, next: 4, version: 1 });
+    expect(response.json()).toMatchObject({ key: "retry.maxInnerLoopRounds", previous: 3, next: 4, version: 1 });
     const events = (await client.execute("SELECT type, data FROM event_log WHERE type = 'config.changed'")).rows;
     expect(events).toHaveLength(1);
     expect(String(events[0]?.data)).toContain("ryan");

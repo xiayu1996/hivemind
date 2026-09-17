@@ -29,7 +29,7 @@ describe("defaults are the fallback truth", () => {
     await client.execute("DELETE FROM config_entries");
     await store.reload();
 
-    expect(store.get("retry.maxInnerLoopRounds")).toBe(6);
+    expect(store.get("retry.maxInnerLoopRounds")).toBe(3);
     expect(store.isOverridden("retry.maxInnerLoopRounds")).toBe(false);
   });
 
@@ -62,7 +62,7 @@ describe("overlay precedence", () => {
       args: ["retry.maxInnerLoopRounds", JSON.stringify(-5), Date.now()],
     });
     const store = await ConfigStore.load(client);
-    expect(store.get("retry.maxInnerLoopRounds")).toBe(6);
+    expect(store.get("retry.maxInnerLoopRounds")).toBe(3);
   });
 
   it("ignores a row for a key that no longer exists in code", async () => {
@@ -93,7 +93,7 @@ describe("validation", () => {
     const store = await ConfigStore.load(client);
     await expect(store.set("retry.maxInnerLoopRounds", 0, "ryan")).rejects.toThrow(ConfigValidationError);
     await expect(store.set("retry.maxInnerLoopRounds", "six", "ryan")).rejects.toThrow(ConfigValidationError);
-    expect(store.get("retry.maxInnerLoopRounds")).toBe(6);
+    expect(store.get("retry.maxInnerLoopRounds")).toBe(3);
   });
 
   it("rejects an unknown key", async () => {

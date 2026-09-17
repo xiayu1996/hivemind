@@ -117,7 +117,7 @@
 |---|---|---|---|---|
 | M1-23 | ✅ Epic/Story 两层状态机（单机版）：迁移表 + 合法性校验 + HUMAN_PARKED 最高优先级 | `src/orchestrator/state-machine.ts` | 全迁移表单测；非法迁移抛错；PARKED 状态下任何系统迁移被拒 | M1-02 |
 | M1-24 | ✅ DoD 契约：YAML schema + 全局 scenario_id 规则（S-EPIC12-03）+ 五层测试矩阵声明 + L3 映射完整性扫描（测试标记 vs DoD diff） | `src/pipeline/dod.ts` | schema 单测；扫描单测：缺 scenario_id 标记 → VERIFY 直接 fail | M1-01 |
-| M1-25 | ✅ 收敛判据纯函数：`failed_scenarios(N) ⊊ failed_scenarios(N-1)` 严格真子集 + 持平/扩大/震荡分类 | `src/pipeline/convergence.ts` | 表驱动单测（空集/首轮/震荡序列/持平） | M1-01 |
+| M1-25 | ✅ 收敛判据纯函数：`failed_scenarios(N)` 不得与此前任一轮相同（2026-09-17 由严格真子集放宽，见 MT-01）+ 持平/扩大/震荡分类 | `src/pipeline/convergence.ts` | 表驱动单测（空集/首轮/震荡序列/持平） | M1-01 |
 | M1-26 | ✅ verdict L3 代码校验：URL host 白名单、截图真实存在且 mtime 在本轮窗口、结果从轨迹提取非自报、红绿证据双通道挖掘（git 历史 + 轨迹；挖不到 → 盲审升级） | `src/pipeline/verdict.ts` | 伪造 verdict fixture（自报通过但轨迹无证据/截图 mtime 过期）全部被拒 | M1-24 |
 | M1-27 | ⛔️ 已撤销（MQ-04，见 03 §8.1）completion verifier：每 phase 出口独立小脑单次调用判 done 真伪，fail-closed，否决理由注回同轮 | `src/pipeline/completion-verifier.ts` | fail-closed 单测 + `smoke-completion-verifier.ts` 真实 pi fresh session 通过 | M1-05 |
 | M1-28 | ✅ VERIFY 盲审执行器：独立 session（DB CHECK 强制）+ 只读+测试+浏览器工具面 | `src/verify/` | DB CHECK 触发用例 + `smoke-blind-verify.ts` 真实 pi fresh session/轨迹证据通过 | M1-11, M1-26 |
@@ -187,7 +187,7 @@
 | M2-09 | ⚠️ RegressionScheduler 双池：活跃 epic 池（epic HEAD）+ main 历史全集池（低频）；事件触发 + 空闲 LRU 轮询 + 让位前台任务 | `src/regression/scheduler.ts` | 排程纯函数 7 条单测（事件触发不让位、空闲让位前台、epic 池优先、批量上限、两池各自时钟）；合入即把该 Epic 场景的验证时间清空，因此「合入后自动排一轮」不靠事件队列而靠状态；扫描在独立进程 `regression:run` 里跑。仍开放：常驻 loop 的真实长跑未做 | M2-08 |
 | M2-10 | ✅ 样本级统计判定 + 失败签名：单次失败标 suspect 连排 N 次复测、窗口失败率超阈值才立卡、`(scenario_id, failure_signature)` 唯一索引去重 | `src/regression/verdict.ts` + `store.ts` | 10+7 条单测：30% flaky（10 次 3 失败）保持 suspect 不立卡；确定性失败立卡且重复失败不重复立卡；签名归一掉路径/行号/耗时/哈希，同一破坏跨机同签名；每次失败签名各不相同时不立卡（避免噪声成卡） | M2-09 |
 | M2-11 | ⚠️ 归因二分 + REGRESSION_FIX：新失败在合入序列上二分定位引入 Story → 该 Story 重开内环，队列最高优先级 | `src/regression/attribution.ts` + `attribution-runner.ts` | 12 条单测：首/中/末位引入均定位正确、64 长序列只花 8 次探测、序列前既存的失败不甩锅、tip 复现不了不认领；命中后该 Story 转 REGRESSION_FIX 且 priority 置 0 插队。合入序列取自 `actual_footprint_captures`（集成是 ff，故 Story 修订号即当时的 epic head）。仍开放：真实 git 检出探测的活体演练未跑 | M2-10 |
-| M2-12 | ⚠️ 重试上限族接入：maxInnerLoopRounds(6) / maxPhaseReentries(3) / maxContinueRetries(8) / maxRegressionReopens(2) 全部 config 化热更；到限 → `retry_limit_exceeded` 真停点 + 卡置失败 + 诊断报告（需求侧 vs 系统侧两分法）+ Notion @创建人附收敛曲线 | `src/pipeline/retry-limits.ts` | 四个上限统一从 config 读（此前 inner loop 硬编码 6、continue 硬编码 8，改配置无效）；停卡时生成报告：逐轮失败数曲线 + 需求侧/系统侧判定（同一批场景零进展判需求侧；通过后又失败判系统侧；证据不足一律判系统侧，避免把人指向错的地方），报告随 needs_input 走旁路通道。仍开放：逐个上限的故障注入演练、friction 物化（M4-10） | M1-25, M1-07 |
+| M2-12 | ⚠️ 重试上限族接入：maxInnerLoopRounds(3，2026-09-17 由 6 收紧) / maxPhaseReentries(3) / maxContinueRetries(8) / maxRegressionReopens(2) 全部 config 化热更；到限 → `retry_limit_exceeded` 真停点 + 卡置失败 + 诊断报告（需求侧 vs 系统侧两分法）+ Notion @创建人附收敛曲线 | `src/pipeline/retry-limits.ts` | 四个上限统一从 config 读（此前 inner loop 硬编码 6、continue 硬编码 8，改配置无效）；停卡时生成报告：逐轮失败数曲线 + 需求侧/系统侧判定（同一批场景零进展判需求侧；通过后又失败判系统侧；证据不足一律判系统侧，避免把人指向错的地方），报告随 needs_input 走旁路通道。仍开放：逐个上限的故障注入演练、friction 物化（M4-10） | M1-25, M1-07 |
 | M2-13 | ✅ 控制台动态配置写面：zod schema 生成表单 + config_history 全量留痕 + 一键回滚 + `config.changed` EventLog 事件 + 高危键二次确认 | `src/console/config-writer.ts` + server 路由 | 7 条单测：表单 schema 由 registry 的 zod 直接生成（控制台无法表达 registry 会拒的值）；改值/回滚各留 `config.changed` 事件；非法值 422；高危键（dangerous）需二次确认；未挂 writer 时控制台仍全只读 | M1-36, M2-12 |
 | M2-15 | ✅ `resolveModel(purpose)` 单入口：purpose → 档位（大脑/中脑/小脑）→ provider model id 全部 config 化；启动校验模型 id 存在于目标 provider 目录 | `src/runner/model-policy.ts` | 单测全映射表；`assertModelPolicy` 启动逐个核对真实 provider 目录（已对 pi 0.84.3 实测：默认 tierMap 三档全部命中）；**用类型代替 grep gate**——`RunnerSpawnOptions.model` 收紧为只能由 `resolveModel` 产出的 branded 类型，直传字符串通不过编译；完成度裁判改走 cheap 档 | M1-03 |
 | M2-16 | ✅ usage-limit 解析移植进 `src/`：reset 分钟数**锚定事件自身时间戳**；`≤ model.deferIfResetWithinMin` 走等待，`>` 走切换；绝不静默重试 | `src/runner/usage-limit.ts` | `poc/codex-oauth` 的 8 条用例迁移为 11 条单测并删除 poc 副本；锚点参数**无默认值**，防止锚到读取时刻；积压 20 分钟的事件算出的窗口仍正确 | M0-12 |
@@ -322,7 +322,7 @@
 | MR-18 | ✅ `codeExit.projectChecks` 新形态：`when` / `requires` / `assertCleanPaths` + 顶层 `protectedPaths` | `src/config/registry.ts`、`src/pipeline/code-exit-gate.ts` | 改文档类文件不触发全量测试；已有快照被意外改动时报出；无快照目录的仓库跳过而不是报错 | MR-17 |
 | MR-19 | ✅ 豁免路径：`downgraded_to` 同步更新 DoD `layers`（03 §12.2 第 7 项） | `src/pipeline/dod.ts`、`spec-exit-gate.ts` | 降级后该 scenario 由 VERIFY 证明；单测证明无「没人证」的路径 | MR-16 |
 | MR-20 | ✅ **REGRESSION_FIX 前置窄版 SPECIFY**（03 §12.4）。**复用已有红测试时跳过的只是"写测试"，不跳过 SPECIFY** | `src/pipeline/phase-contract.ts`、`src/regression/` | 回归卡先产 `mode: narrow` 的 test-contract；复用路径仍须**在当前树上证红**、比对 `expected_failure`、冻结 `specify_commit`，并用 `reuse.covered_by` 点名复用哪条；**跳过整个 SPECIFY 的旧路径被判为不合法**（CODE 出口第 5 项的基准会因此不存在） | MR-16 |
-| MR-21 | ✅ 停点原因带收敛分类上浮（03 §1.5）。**`stagnantRoundsBeforeStop` 不做**——取 1 等于现状、取 >1 违反 `failed(N) ⊊ failed(N-1)` 不变量；只保留 `retry.oscillationLookback`（震荡停是不变量之外的额外停点，可配） | `src/pipeline/convergence.ts`、`story-worker.ts`、`registry.ts` | 单测：`stalled` / `oscillating` / `expanded` / `budget_exhausted` 在停点详情里各自可区分；改 `oscillationLookback` 只影响震荡分类、**不允许任何持平轮续跑**；**四类真停点数量不变**，DB CHECK 不放宽 | MR-02 |
+| MR-21 | ✅ 停点原因带收敛分类上浮（03 §1.5）。**`stagnantRoundsBeforeStop` 不做**——取 1 等于现状、取 >1 等于允许把一轮原样再跑一遍；持平与震荡是同一条规则的两个窗口，只保留 `retry.oscillationLookback` | `src/pipeline/convergence.ts`、`story-worker.ts`、`registry.ts` | 单测：`stalled` / `oscillating` / `expanded` / `budget_exhausted` 在停点详情里各自可区分；改 `oscillationLookback` 只影响回看窗口、**不允许任何持平轮续跑**；**四类真停点数量不变**，DB CHECK 不放宽 | MR-02 |
 
 ### MR-C SHAPE 与人在环
 
@@ -380,6 +380,23 @@
 |---|---|---|---|---|
 | MS-02 | 审批粒度与验收层级：`decompose.planApproval` 配置项（默认关，Story 立即建）；验收下沉到 Epic（`epic_acceptance_items` 由 `epic_prd_scenarios` 播种、Epic 页 to_do、缺口在本 Epic 下开补交付 Story、全勾 + MR 合并才 DONE）；需求层改为汇总各 Epic 判定；Story 只在真停下时进「等我处理」，看板去掉「待人确认」列 | `src/orchestrator/epic-acceptance.ts`、`acceptance-checklist.ts`、`plan-approval.ts`、`src/notion/board-status.ts`、01 §2.3/§8.2 | `epic-acceptance.test.ts`（播种、勾选一次、缺口开补交付 Story 并回 EXECUTING、重开时已通过的不再问）；`epic-completion.test.ts`（未判定不 DONE）；`plan-approval.test.ts`（开关两态）；`acceptance-checklist.test.ts`（汇总不再等人）；`story-projection.test.ts`（四类停点各出一条 callout，运行中不出） | MS-01 |
 | MS-01 | Notion 呈现重构：角色驱动的需求/Epic/Story 三级骨架（判断方向的信息排在进度之前、每层只维护自己这一层的状态、不等人时页面不出状态 callout）、agent 产中文业务语言 + 出口 lint、显示词表 `src/notion/display-text.json` 收口全部给人看的枚举 | `src/notion/display-text.{json,ts}`、`rich-text.ts`、三层 page builder 与 delivery、`prompts/phases/shape.md` 与 `design.md`、01 §2.3/§8.2 | `notion-write-language.test.ts` 扫三条投影的全部 outbox payload，裸枚举与英文模板即红；三层 delivery 的原位迁移用例（heading/spec/场景块的 blockId 不重建）；`scripts/live-notion-delivery.ts` 对真实需求/Epic/Story 页各跑一轮，每轮恰好一个 toggle、区段各出现一次、callout 唯一 | MR-37 |
+
+---
+
+## MT 流程去脆弱化（2026-09-17 增补，排期在 MS 之后）
+
+目标：需求→Epic→Story 闭环只在真正值得人看的地方停下。live 库里唯一走完全程的 Story 停了 5 次、花 6.8 USD，没有一次是四类真停点想表达的意思：崩溃被当成重试、出口拒绝被当成崩溃、换掉一批失败被当成不收敛、合流复验跑在不含本 Story 的树上并无界打回、停点只给人一个词。逐条根因与决策见 03 §1.5 的 2026-09-17 修订与 §8.3。
+
+| ID | 任务 | 输出物 | 验证方式 | 前置 |
+|---|---|---|---|---|
+| MT-01 | 收敛判据放宽为「不得重复」+ 内环预算收紧为 3 + 停点拆分（重复停 `verify_loop_exceeded`、预算耗尽停 `retry_limit_exceeded`，详情带 `convergence`/`spent`/`budget`） | `src/pipeline/convergence.ts`、`story-worker.ts`、`config/registry.ts`、03 §1.5、AGENTS.md | `convergence.test.ts`（持平/震荡停、换一批失败续跑）；`story-worker.test.ts`（换失败三轮后 DELIVERED；集合一直变到第三轮停 `retry_limit_exceeded budget_exhausted`） | M1-25 |
+| MT-02 | 派发失败入账：子进程崩溃写 `story.dispatch_failed`（带脱敏错误文案与类别），`phase_reentries` 改为按 phase 计、系统性前进即清零 | `src/orchestrator/dispatch-failure.ts`、`story-execution-store.ts`、`state-machine.ts`、`scripts/run-local-orchestrator.ts` | `dispatch-failure.test.ts`（决策表 + 事件与脱敏）；`story-execution-store.test.ts`（前进清零、打回保留） | MT-01 |
+| MT-03 | 合流复验跑在 rebase 后的 Story 树上 + `when` 相关性筛选 + 失败测试名提取 + 三类归因（story_regression / baseline_failing / environment） | `src/vcs/merge-flow.ts`、`subset-verifier.ts`、`check-failures.ts`、`pipeline/code-exit-gate.ts`、`scripts/run-story.ts` | `merge-flow.test.ts`（verifier 在 rebase 之后、ff 之前，candidate 是 story worktree）；`subset-verifier.test.ts`（base 仅失败时重跑、三类归因、不相关检查跳过）；`check-failures.test.ts`（真实载荷 fixture 恰得失败测试名） | MT-01 |
+| MT-04 | 归因到 Story 的合流打回走状态机并消耗一轮：`story.transition` + `spent` 事件，预算由 `getInnerLoopSpend` 统一口径；打回原因把失败测试名排在最前喂给 CODE | `story-execution-store.ts`、`story-worker.ts`、`pipeline/phase-input.ts` | `story-worker.test.ts`（打回计一轮、到限停在 CODE）；`phase-input.test.ts`（`[rejected:MERGE]` 以测试名开头） | MT-03 |
+| MT-05 | Epic 头自身红：Story 留在 MERGE 不消耗轮次，Epic 转 BLOCKED 写明失败测试，头修好后自动恢复 | `src/orchestrator/epic-integration.ts`、`epic-escalation.ts`、`epic-head-recheck.ts`、`vcs/epic-branch-refresh.ts`、03 §8.3/§11 | `epic-integration.test.ts`、`epic-head-recheck.test.ts`、`epic-escalation.test.ts`（head failing 不可被"回答"）、smoke 的 baseline-failing 段 | MT-03 |
+| MT-06 | 停点汇总落库 + 停点钩子：`stories.stop_summary` 跨轮聚合（逐轮失败、合流打回、崩溃、费用、诊断、下一步），`StoryStopSink` 分发给告警与 friction，Story 页四类停点都附汇总 | `src/orchestrator/stop-summary.ts`、`story-stop-sink.ts`、`story-execution-store.ts`、`src/notion/story-projection.ts`、`display-text.json` | `stop-summary.test.ts`、`story-stop-sink.test.ts`、`story-projection.test.ts`、`notion-write-language.test.ts` | MT-04 |
+| MT-07 | SPECIFY 出口拒绝改为会话内回喂（通用 `PhaseExitGate`，与 CODE 出口同构），耗尽 `specifyExit.maxRounds` 才算一次重入并记 friction | `src/orchestrator/story-worker.ts`、`src/runner/pi-phase-port.ts`、`config/registry.ts` | `pi-phase-port.test.ts`（一次拒绝后通过 → 两次 prompt）；`story-worker.test.ts`（超限才失败） | MT-02 |
+| MT-08 | 仓库注册表 + 多仓派发：只凭 git clone URL 自举，`repositories` 表 + `ensureCheckout` + 需求看板「目标仓库」+ 逐仓派发，删掉 `--repository-path/--repository-id` 硬编码 | `src/vcs/repository-checkout.ts`、`repository-registry.ts`、`src/orchestrator/repository-dispatch.ts`、`scripts/repository-add.ts`、`run-local-orchestrator.ts`、`run-requirement-loop.ts`、`preflight.ts`、`deploy/linux/install.sh`、runbook | `repository-checkout.test.ts`（slug 推导与拒绝、假 git 下 clone/fetch/竞态、一条真 git）；`repository-registry.test.ts`；`repository-dispatch.test.ts`（只派已注册仓、双仓首批各一）；`requirement-intake.test.ts`（未注册则 skip 不入库） | MT-02 |
 
 ---
 
