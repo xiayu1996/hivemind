@@ -140,6 +140,13 @@ export async function createConsoleServer(
       root: uiRoot,
       prefix: "/ui/",
     });
+    // A bundle built from these sources writes its entry as /assets/...; the
+    // sources themselves are referenced as /ui/... . Both layouts answer, so
+    // whichever one a deployment has built is the one the page loads.
+    const assets = join(uiRoot, "assets");
+    if (existsSync(assets)) {
+      await app.register(fastifyStatic, { root: assets, prefix: "/assets/", decorateReply: false });
+    }
     const vueBundle = await readFile(vueBrowserBundlePath(), "utf8");
     app.get("/vendor/vue.js", async (_request, reply) => reply.type("text/javascript").send(vueBundle));
     // Every page is the same shell: the browser routes from the path it was
