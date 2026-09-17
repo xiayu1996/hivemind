@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { createConsoleServer, listenConsole, type ConsoleDataSource } from "./server.js";
 
+// @scenario S-TRACE02-01-empty
+// @scenario S-TRACE02-01-statuses
+// @scenario S-TRACE02-01-timeline
 const data: ConsoleDataSource = {
   nodes: async () => [{ hostId: "windows-1", status: "healthy" }],
   tasks: async () => [{ id: "story-1", events: [{ type: "turn_end" }], traceHtml: "<div>trace</div>" }],
@@ -9,6 +12,7 @@ const data: ConsoleDataSource = {
   stats: async () => ({ footprintDeviation: { stories: 0, deviationRate: 0, unpredictedStoryRate: 0, perStory: [] } }),
   providers: async () => [{ provider: "openai-codex", state: "closed" }],
   queue: async () => ({ waiting: [{ id: "story-2" }], running: [], providerSlots: [] }),
+  taskExecutionDetail: async () => null,
 };
 
 describe("read-only console", () => {

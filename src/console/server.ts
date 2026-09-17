@@ -2,8 +2,9 @@ import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import type { TaskExecutionDetailDataSource } from "./task-execution-detail.js";
 
-export interface ConsoleDataSource {
+export interface ConsoleDataSource extends TaskExecutionDetailDataSource {
   nodes(): Promise<unknown[]>;
   tasks(): Promise<unknown[]>;
   costs(): Promise<unknown[]>;
