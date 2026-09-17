@@ -31,6 +31,7 @@ import { ModelPolicy } from "../src/runner/model-policy.js";
 import { resolveAgentSpec } from "../src/runner/agent-spec.js";
 import { cacheRetentionEnv } from "../src/runner/cache-retention.js";
 import { CostLedger } from "../src/observability/cost-ledger.js";
+import { RepositoryRegistry } from "../src/vcs/repository-registry.js";
 import { CANONICAL_CAPTURE_ENV } from "../src/observability/capture-contract.js";
 import { needsApiKeyEnv, providerKeyEnv } from "../src/runner/provider-env.js";
 import { defaultModelCatalog } from "../src/runner/catalog.js";
@@ -60,7 +61,7 @@ async function main(): Promise<void> {
   if (!requirementsDataSourceId) throw new Error("HIVEMIND_NOTION_REQUIREMENTS_DATA_SOURCE_ID is missing");
   if (!epicsDataSourceId) throw new Error("HIVEMIND_NOTION_EPICS_DATA_SOURCE_ID is missing");
 
-  const repositorySlug = optional("--repository-slug");
+  const workRoot = resolve(optional("--work-root") ?? join(ROOT, "data", "work"));
   const intervalMs = Number(optional("--interval-ms") ?? "30000");
   const once = process.argv.includes("--once");
   if (!Number.isInteger(intervalMs) || intervalMs < 1_000) throw new Error("--interval-ms must be at least 1000");
@@ -74,6 +75,9 @@ async function main(): Promise<void> {
   const config = await ConfigStore.load(handle.client);
   const gateway = new NotionGateway({ transport: createNotionHttpTransport({ token }) });
   const store = new RequirementStore(handle.client);
+  const registry = new RepositoryRegistry(handle.client);
+  // One line per card, not one per cycle.
+  const reportedSkips = new Set<string>();
   const outbox = new NotionOutbox(handle.client);
   const projector = new RequirementPageProjector(store, outbox);
   const delivery = new NotionRequirementPageDelivery(handle.client, gateway, epicsDataSourceId);
@@ -125,7 +129,9 @@ async function main(): Promise<void> {
     },
     extensions: [resolve(ROOT, "extensions", "canonical-capture.ts")],
     promptRoot: resolve(ROOT, "prompts"),
-    cwd: resolve(optional("--repository-path") ?? ROOT),
+    // The product manager reads requirements, never a tree; it runs above the
+    // checkouts so a second registered repository needs no second process.
+    cwd: join(workRoot, "repos"),
     // Clarification, the PRD and the requirement split all spend on the brain
     // tier. None of it used to be recorded, so the only visible cost of a
     // requirement was the part that happened after it was already agreed.
@@ -180,13 +186,21 @@ async function main(): Promise<void> {
 
   const pass = async (): Promise<void> => {
     await config.reload();
-    for (const intake of await ingestRequirements(
+    const intake = await ingestRequirements(
       store,
       gateway,
       requirementsDataSourceId,
-      repositorySlug,
-    )) {
-      console.log(`took in requirement ${intake.id}: ${intake.title}`);
+      await registry.slugs(),
+    );
+    for (const taken of intake.ingested) {
+      console.log(`took in requirement ${taken.id}: ${taken.title}`);
+    }
+    for (const skipped of intake.skipped) {
+      // Once per card, not once per cycle: the card stays on the board until a
+      // person fills the property in, and a line every cycle would bury the log.
+      if (reportedSkips.has(skipped.notionPageId)) continue;
+      reportedSkips.add(skipped.notionPageId);
+      console.log(`left requirement "${skipped.title}" on the board: it ${skipped.reason}`);
     }
     await readHumanInput();
 

@@ -29,6 +29,9 @@ import { EpicIntegrator } from "../src/orchestrator/epic-integration.js";
 import { EpicMergeFlow } from "../src/vcs/merge-flow.js";
 import { publishEpicBranch } from "../src/vcs/epic-branch.js";
 import { testSubsetVerifier } from "../src/vcs/subset-verifier.js";
+import { runProjectCheck } from "../src/vcs/project-check-runner.js";
+import { escalateParkedStories } from "../src/orchestrator/epic-escalation.js";
+import { recheckEpicHeads } from "../src/orchestrator/epic-head-recheck.js";
 
 const execFileAsync = promisify(execFile);
 const REPO = fileURLToPath(new URL("..", import.meta.url));
@@ -38,6 +41,10 @@ const MOCK_EXTENSION = join(REPO, "poc", "rpc-context", "mock-provider-extension
 const GUARD_EXTENSION = join(REPO, "extensions", "hive-guard.ts");
 const CANONICAL_EXTENSION = join(REPO, "extensions", "canonical-capture.ts");
 const CARD_ID = "S-MOCK-01";
+// The second and third cards land on an Epic head that is red for two
+// different reasons: one the head's own, one the Story's.
+const BASELINE_CARD = "S-MOCK-02";
+const REGRESSION_CARD = "S-MOCK-03";
 const EPIC_ID = "E-MOCK-1";
 const BRANCH = "story/mock-01";
 // The repository's own check, run on the integration branch before a Story is
@@ -46,6 +53,39 @@ const PROJECT_CHECKS = [{ name: "tests", command: ["node", "--test", "tests/*.te
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
   return (await execFileAsync("git", args, { cwd, windowsHide: true })).stdout;
+}
+
+/** The JSON payload of the newest matching event, or null. */
+function eventData(result: { rows: Array<Record<string, unknown>> }): Record<string, any> | null {
+  const row = result.rows[0];
+  return row ? JSON.parse(String(row.data)) as Record<string, any> : null;
+}
+
+async function epicState(client: { execute: (sql: string) => Promise<{ rows: Array<Record<string, unknown>> }> }): Promise<string> {
+  return String((await client.execute(`SELECT state FROM epics WHERE id = '${EPIC_ID}'`)).rows[0]?.state ?? "");
+}
+
+/**
+ * What SPECIFY and CODE leave behind on a real card: a branch off the Epic
+ * head with a test naming the scenario, a red commit and a green one. The mock
+ * provider writes no code, so the tree has to be staged the way a real run
+ * would have left it.
+ */
+async function stageStory(worktree: string, cardId: string, branch: string, startPoint: string): Promise<void> {
+  await git(worktree, "switch", "-c", branch, startPoint);
+  // main carries no tests directory; the branch this Story is cut from decides
+  // whether it is there.
+  await mkdir(join(worktree, "tests"), { recursive: true });
+  const file = `tests/${branch.replace("/", "-")}.test.js`;
+  await writeFile(join(worktree, file), [
+    `// @scenario ${cardId}-unit`,
+    "const { test } = require(\"node:test\");",
+    `test("@scenario ${cardId}-unit passes on observed evidence", () => {});`,
+    "",
+  ].join("\n"), "utf8");
+  await git(worktree, "add", file);
+  await git(worktree, "commit", "-m", `test(${cardId}-unit): red`);
+  await git(worktree, "commit", "--allow-empty", "-m", `feat(${cardId}-unit): green`);
 }
 
 async function waitForMock(): Promise<void> {
@@ -222,20 +262,9 @@ async function main(): Promise<void> {
       store,
       new EpicMergeFlow(
         processGitCommand,
-        testSubsetVerifier(
-          {
-            run: async (check, cwd) => {
-              const [command, ...args] = check.command;
-              try {
-                await execFileAsync(command!, args, { cwd, windowsHide: true });
-                return { passed: true, detail: "" };
-              } catch (cause) {
-                return { passed: false, detail: (cause as Error).message };
-              }
-            },
-          },
-          PROJECT_CHECKS,
-        ),
+        // The production runner, so the failure names the merge writes down are
+        // the ones extracted from the runner's own output.
+        testSubsetVerifier({ run: async (check, cwd) => runProjectCheck(cwd, check) }, PROJECT_CHECKS),
         { storyWorktree: worktree, integrationWorktree, mainBranch: "main" },
       ),
     );
@@ -321,6 +350,131 @@ async function main(): Promise<void> {
     }
     console.log("PASS: the delivered card went back through narrow SPECIFY, REGRESSION_FIX and VERIFY to DELIVERED");
     console.log("PASS: the fix landed on the Epic head on origin, re-verified by the repository's own check");
+
+    // A Story that cannot land because the branch it is landing on is broken.
+    // The failing test is committed to the Epic head, so it fails on the Story
+    // and on the head alike, and nothing the Story does can change that.
+    await writeFile(join(integrationWorktree, "tests", "baseline.test.js"), [
+      "const { test } = require(\"node:test\");",
+      "test(\"the epic head is red\", () => { throw new Error(\"the epic head is red\"); });",
+      "",
+    ].join("\n"), "utf8");
+    await git(integrationWorktree, "add", "tests/baseline.test.js");
+    await git(integrationWorktree, "commit", "-m", "test: break the Epic head");
+    // Cut from main, not from the broken head: the Story's own tree is clean,
+    // so its CODE exit passes and the only thing that fails is the merge.
+    await stageStory(worktree, BASELINE_CARD, "story/mock-02", "main");
+    await store.createStory({
+      id: BASELINE_CARD,
+      epicId: EPIC_ID,
+      notionPageId: "local-smoke-page-2",
+      title: "Land while the Epic head is broken",
+      requirement: "Prove that a Story is not blamed for a check its Epic head already fails.",
+      repo: "example/hivemind-smoke",
+      branch: "story/mock-02",
+    });
+
+    const held = await worker.run(BASELINE_CARD);
+    if (held.state !== "MERGE" || held.stopReason !== null) {
+      throw new Error(`a Story held by a red Epic head must wait in MERGE: ${JSON.stringify(held)}`);
+    }
+    const baselineEvent = eventData(await client.execute(
+      "SELECT data FROM event_log WHERE type = 'merge.baseline_failing' ORDER BY seq DESC LIMIT 1",
+    ));
+    const headEvent = eventData(await client.execute(
+      "SELECT data FROM event_log WHERE type = 'epic.head_failing' ORDER BY seq DESC LIMIT 1",
+    ));
+    if (!JSON.stringify(baselineEvent?.failures ?? []).includes("epic head is red")
+      || !JSON.stringify(headEvent?.failures ?? []).includes("epic head is red")) {
+      throw new Error(`the failing check was not attributed to the Epic head: ${JSON.stringify([baselineEvent, headEvent])}`);
+    }
+    await escalateParkedStories(client);
+    if (await epicState(client) !== "BLOCKED") throw new Error("a failing Epic head must block its Epic");
+    console.log("PASS: a Story whose Epic head is failing waits in MERGE and blocks the Epic instead of being sent back to CODE");
+
+    // Somebody repairs the head. Nothing announces that, so the recheck is
+    // what has to notice, and the Story lands unchanged afterwards.
+    await git(integrationWorktree, "rm", "-q", "tests/baseline.test.js");
+    await git(integrationWorktree, "commit", "-m", "test: repair the Epic head");
+    const rechecked = await recheckEpicHeads({
+      client,
+      checks: { run: async (check, cwd) => runProjectCheck(cwd, PROJECT_CHECKS.find((entry) => entry.name === check)!) },
+      worktreePath: () => integrationWorktree,
+      headSha: async () => (await git(integrationWorktree, "rev-parse", "HEAD")).trim(),
+      intervalMs: 0,
+    });
+    if (!rechecked.some((outcome) => outcome.outcome === "recovered")) {
+      throw new Error(`the repaired Epic head was not noticed: ${JSON.stringify(rechecked)}`);
+    }
+    await escalateParkedStories(client);
+    if (await epicState(client) !== "EXECUTING") throw new Error("a repaired Epic head must unblock its Epic");
+    const landed = await worker.run(BASELINE_CARD);
+    if (landed.state !== "DELIVERED") throw new Error(`the held Story did not land once the head was green: ${landed.state}`);
+    console.log("PASS: the repaired head was noticed and the held Story landed unchanged");
+
+    // The other side of the same check: a Story that breaks the tree itself
+    // pays for it, once, and then stops with what failed written down.
+    await stageStory(worktree, REGRESSION_CARD, "story/mock-03", "main");
+    // Green on its own and red on the integrated tree, which is the only shape
+    // that reaches the merge re-verification: a test that failed in the Story's
+    // own worktree would never have got past the CODE exit.
+    await writeFile(join(worktree, "tests", "regression.test.js"), [
+      "const { test } = require(\"node:test\");",
+      "const { existsSync } = require(\"node:fs\");",
+      "const { join } = require(\"node:path\");",
+      "test(\"this story breaks the tree\", () => {",
+      "  if (existsSync(join(__dirname, \"story-mock-02.test.js\"))) throw new Error(\"this story breaks the tree\");",
+      "});",
+      "",
+    ].join("\n"), "utf8");
+    await git(worktree, "add", "tests/regression.test.js");
+    await git(worktree, "commit", "-m", "feat: break the tree from the Story");
+    await store.createStory({
+      id: REGRESSION_CARD,
+      epicId: EPIC_ID,
+      notionPageId: "local-smoke-page-3",
+      title: "Break the tree on the way in",
+      requirement: "Prove that a Story which breaks the integrated tree is sent back to CODE and charged a round.",
+      repo: "example/hivemind-smoke",
+      branch: "story/mock-03",
+    });
+    const bounded = new SingleStoryWorker(store, phases, verifier, delivery, new NotionStoryProjection(client), {
+      integration,
+      // One round, so the first bounce is also the last.
+      maxInnerLoopRounds: 1,
+    });
+    const stopped = await bounded.run(REGRESSION_CARD);
+    const stoppedStory = await store.getStory(REGRESSION_CARD);
+    const stopEvent = eventData(await client.execute({
+      sql: "SELECT data FROM event_log WHERE card_id = ? AND type = 'story.stopped' ORDER BY seq DESC LIMIT 1",
+      args: [REGRESSION_CARD],
+    }));
+    // Stopped for a person, out of the phase the bounce sent it back to.
+    if (stopped.stopReason !== "retry_limit_exceeded" || stoppedStory.state !== "NEEDS_INPUT"
+      || stopEvent?.from !== "CODE" || stopEvent.spent !== 1) {
+      throw new Error(`a Story that broke the tree must stop for a person out of CODE: ${JSON.stringify([stopped, stoppedStory.state, stopEvent])}`);
+    }
+    const bounce = eventData(await client.execute(
+      "SELECT data FROM event_log WHERE type = 'merge.verification_failed' ORDER BY seq DESC LIMIT 1",
+    ));
+    if (bounce?.attribution !== "story_regression" || bounce.spent !== true) {
+      throw new Error(`the bounce was not attributed to the Story and charged: ${JSON.stringify(bounce)}`);
+    }
+    const transitions = await client.execute({
+      sql: `SELECT data FROM event_log WHERE card_id = ? AND type = 'story.transition' ORDER BY seq`,
+      args: [REGRESSION_CARD],
+    });
+    if (!transitions.rows.some((transition) => {
+      const data = JSON.parse(String(transition.data)) as { from?: string; to?: string };
+      return data.from === "MERGE" && data.to === "CODE";
+    })) {
+      throw new Error("the bounce did not go through the state machine");
+    }
+    const summary = await store.stopSummary(REGRESSION_CARD);
+    if (!JSON.stringify(summary?.mergeBounces ?? []).includes("breaks the tree")) {
+      throw new Error(`the stop summary does not name the failing test: ${JSON.stringify(summary?.mergeBounces)}`);
+    }
+    console.log("PASS: a Story that broke the integrated tree was sent back to CODE, charged one round, and stopped naming the failing test");
   } finally {
     client?.close();
     mock.kill("SIGKILL");

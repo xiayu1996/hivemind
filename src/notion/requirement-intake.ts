@@ -33,6 +33,42 @@ export function requirementIdFor(notionPageId: string): string {
   return `R-${createHash("sha256").update(notionPageId).digest("hex").slice(0, 12)}`;
 }
 
+function selectName(value: unknown): string | null {
+  const parsed = z.object({ select: z.object({ name: z.string() }).nullable() }).safeParse(value);
+  return parsed.success ? parsed.data.select?.name ?? null : null;
+}
+
+export type RequirementRepositoryResolution =
+  | { kind: "repository"; slug: string }
+  | { kind: "skip"; reason: string };
+
+/**
+ * Which registered repository a requirement card is for.
+ *
+ * A card whose repository cannot be resolved is left on the board rather than
+ * taken in with a guess: a requirement that went to the wrong repository is
+ * decomposed, branched and reviewed there before anyone notices, while a card
+ * that waits costs a person one property.
+ */
+export function resolveRequirementRepository(
+  selected: string | null,
+  registered: readonly string[],
+): RequirementRepositoryResolution {
+  if (selected) {
+    if (registered.includes(selected)) return { kind: "repository", slug: selected };
+    return { kind: "skip", reason: `names the repository ${selected}, which is not registered here` };
+  }
+  if (registered.length === 1) return { kind: "repository", slug: registered[0]! };
+  if (registered.length === 0) return { kind: "skip", reason: "no repository is registered yet" };
+  return { kind: "skip", reason: "names no target repository, and this installation serves more than one" };
+}
+
+export interface RequirementIntakeResult {
+  ingested: RequirementIntake[];
+  /** Cards left on the board, with what a person has to fix. */
+  skipped: { notionPageId: string; title: string; reason: string }[];
+}
+
 /**
  * Brings freshly written requirement cards into the central database. Unlike an
  * Epic, a requirement with an empty body is still workable: asking what it means
@@ -42,8 +78,8 @@ export async function ingestRequirements(
   store: RequirementStore,
   gateway: NotionGateway,
   requirementsDataSourceId: string,
-  repositorySlug?: string,
-): Promise<RequirementIntake[]> {
+  registeredRepositories: readonly string[] = [],
+): Promise<RequirementIntakeResult> {
   const response = await gateway.request({
     method: "POST",
     path: `/v1/data_sources/${encodeURIComponent(requirementsDataSourceId)}/query`,
@@ -57,24 +93,34 @@ export async function ingestRequirements(
     },
   });
   const pages = listSchema.parse(response.data).results;
-  const ingested: RequirementIntake[] = [];
+  const result: RequirementIntakeResult = { ingested: [], skipped: [] };
 
   for (const page of pages) {
     const pageId = String(page.id ?? "");
     const properties = (page.properties ?? {}) as Record<string, unknown>;
     const title = titleText(properties[schema.propertyNames.title]);
     if (!pageId || !title) continue;
+    const repository = resolveRequirementRepository(
+      selectName(properties[schema.propertyNames.repository]),
+      registeredRepositories,
+    );
+    if (repository.kind === "skip") {
+      // Not written to the database at all: the next cycle reads the card
+      // again, so the person filling the property in is all it takes.
+      result.skipped.push({ notionPageId: pageId, title, reason: repository.reason });
+      continue;
+    }
     const body = await readPageText(gateway, pageId);
     const intake: RequirementIntake = {
       id: requirementIdFor(pageId),
       notionPageId: pageId,
       title,
       originalRequest: body || title,
-      ...(repositorySlug ? { repo: repositorySlug } : {}),
+      repo: repository.slug,
     };
-    if (await store.createRequirement(intake)) ingested.push(intake);
+    if (await store.createRequirement(intake)) result.ingested.push(intake);
   }
-  return ingested;
+  return result;
 }
 
 async function readPageText(gateway: NotionGateway, pageId: string): Promise<string> {

@@ -23,6 +23,8 @@ import { assertProviderRetriesDisabled } from "../src/runner/failover.js";
 import { assertModelPolicy, ModelPolicy } from "../src/runner/model-policy.js";
 import { defaultModelCatalog } from "../src/runner/catalog.js";
 import { defaultPiBinary, pinnedPiVersion } from "../src/runner/pi-binary.js";
+import { checkoutPath, redactRemoteUrl } from "../src/vcs/repository-checkout.js";
+import { RepositoryRegistry } from "../src/vcs/repository-registry.js";
 
 const execFileAsync = promisify(execFile);
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -69,8 +71,8 @@ async function output(binary: string, args: string[], cwd?: string): Promise<str
  */
 async function main(): Promise<void> {
   const secretsPath = join(homedir(), ".hivemind", "secrets.env");
+  const workRoot = resolve(optional("--work-root") ?? join(ROOT, "data", "work"));
   const piBinary = defaultPiBinary();
-  const repositoryPath = resolve(optional("--repository-path") ?? ROOT);
 
   await attempt("Node.js 26 or newer", async () => {
     const major = Number(process.versions.node.split(".")[0]);
@@ -248,10 +250,32 @@ async function main(): Promise<void> {
     return name;
   });
 
-  await attempt("repository checkout has an origin", async () => {
-    const remote = await output("git", ["remote", "get-url", "origin"], repositoryPath);
-    return `${repositoryPath} -> ${remote}`;
+  const registered = await new RepositoryRegistry(handle.client).list().catch(() => []);
+  await attempt("at least one repository is registered", async () => {
+    if (registered.length === 0) {
+      throw new Error("run `npx tsx scripts/repository-add.ts <git-url>`; hivemind works in registered repositories only");
+    }
+    return registered.map((repository) => repository.slug).join(", ");
   });
+  for (const repository of registered) {
+    // Reachability, proved by asking the remote rather than by reading a
+    // stored path: the credentials, not the disk, are what a card needs.
+    await attempt(`${repository.slug} is reachable`, async () => {
+      const head = await output("git", [
+        "ls-remote", "--heads", repository.remoteUrl, `refs/heads/${repository.defaultBranch}`,
+      ]).catch((error: unknown) => {
+        throw new Error(redactRemoteUrl((error as Error).message.split("\n")[0] ?? "git ls-remote failed"));
+      });
+      const sha = head.split(/\s/)[0] ?? "";
+      if (!sha) throw new Error(`the remote has no branch named ${repository.defaultBranch}`);
+      return `${repository.defaultBranch}@${sha.slice(0, 12)}`;
+    });
+    await attempt(`${repository.slug} is checked out on this host`, async () => {
+      const path = checkoutPath(workRoot, repository.slug);
+      await stat(join(path, ".git"));
+      return path;
+    }, "WARN");
+  }
 
   if (process.platform === "linux") {
     await attempt("systemd runs as PID 1 (needed for the service units)", async () => {

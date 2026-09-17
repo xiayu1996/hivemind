@@ -73,7 +73,6 @@ import { registerNotionWebhookRoute } from "../src/notion/webhook-route.js";
 import { IntegrationDispatchStore } from "../src/orchestrator/integration-dispatch.js";
 import { EpicAcceptance } from "../src/orchestrator/epic-acceptance.js";
 import { PlanApprovalStore } from "../src/orchestrator/plan-approval.js";
-import { dispatchableStories, planRepositoryStoryExecution } from "../src/orchestrator/scheduler.js";
 import { DispatchQueue } from "../src/queue/dispatch.js";
 import { CostLedger } from "../src/observability/cost-ledger.js";
 import { CANONICAL_CAPTURE_ENV } from "../src/observability/capture-contract.js";
@@ -90,6 +89,9 @@ import { assertSchemaCurrent } from "../src/persistence/schema-fingerprint.js";
 import { createWorktree, locateWorktree, worktreeLayout } from "../src/vcs/worktree.js";
 import { publishEpicBranch } from "../src/vcs/epic-branch.js";
 import { processGitCommand } from "../src/vcs/story-delivery.js";
+import { checkoutKey, checkoutPath, ensureCheckout, processRemoteGit, remoteDefaultBranch } from "../src/vcs/repository-checkout.js";
+import { RepositoryRegistry } from "../src/vcs/repository-registry.js";
+import { planDispatchAcrossRepositories } from "../src/orchestrator/repository-dispatch.js";
 import { runProjectCheck } from "../src/vcs/project-check-runner.js";
 import { recheckEpicHeads } from "../src/orchestrator/epic-head-recheck.js";
 import { unrecoveredHeadFailures } from "../src/orchestrator/epic-head-failure.js";
@@ -110,12 +112,6 @@ async function repositoryContextFiles(repositoryPath: string): Promise<ExplicitC
 function optional(name: string): string | undefined {
   const index = process.argv.indexOf(name);
   return index >= 0 ? process.argv[index + 1] : undefined;
-}
-
-function required(name: string): string {
-  const value = optional(name);
-  if (!value) throw new Error(`${name} is required`);
-  return value;
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -144,6 +140,14 @@ const step = async (name: string, run: () => Promise<void>): Promise<void> => {
   }
 };
 
+/**
+ * The single path segment every per-repository directory is keyed by:
+ * worktrees, sessions and evidence all sit under it.
+ */
+function repositoryIdFor(slug: string): string {
+  return checkoutKey(slug);
+}
+
 async function main(): Promise<void> {
   const stored = await loadSecretsFile();
   const token = process.env.NOTION_TOKEN ?? stored.get("NOTION_TOKEN");
@@ -159,29 +163,6 @@ async function main(): Promise<void> {
   const alerts = new AlertRouter(alertChannels);
   const secretsPath = defaultSecretsPath();
 
-  const repositoryPath = resolve(required("--repository-path"));
-  const repositoryId = required("--repository-id");
-  // The Epic's integration branch goes to origin the moment its Stories exist:
-  // every Story's draft MR targets it and delivery reads it from origin.
-  const publishEpicBranchFor = async (epicId: string): Promise<void> => {
-    try {
-      const result = await publishEpicBranch({ git: processGitCommand, repositoryPath, epicId });
-      if (result.pushed) console.log(`Published ${result.branch} to origin`);
-    } catch (error) {
-      console.error(`Publishing epic/${epicId} failed; delivery will retry before the first Story worktree is cut:`, (error as Error).message);
-    }
-  };
-  // Cards declare the target repository as an owner/name slug; only cards
-  // matching this checkout's origin are dispatched by this instance.
-  const remoteUrl = (await execFileAsync("git", ["remote", "get-url", "origin"], {
-    cwd: repositoryPath,
-    windowsHide: true,
-  })).stdout.trim();
-  const withoutSuffix = remoteUrl.replace(/\.git$/, "");
-  const slugMatch = /[/:]([^/:]+)\/([^/]+)$/.exec(withoutSuffix);
-  if (!slugMatch) throw new Error(`cannot derive an owner/name slug from origin remote: ${remoteUrl}`);
-  const repositorySlug = `${slugMatch[1]}/${slugMatch[2]}`;
-  console.log(`Managing repository ${repositorySlug} (id ${repositoryId})`);
   // The chain and the tier map decide which provider serves a card; the flags
   // stay as an operator override for a single run.
   const providerOverride = optional("--provider");
@@ -189,7 +170,7 @@ async function main(): Promise<void> {
   const workRoot = resolve(optional("--work-root") ?? join(ROOT, "data", "work"));
   // The branch the repository integrates into; regression sweeps of the main
   // pool run against it, and Epic worktrees are cut from it.
-  const targetBranchDefault = optional("--target-branch") ?? "main";
+  const boardTargetBranch = optional("--target-branch") ?? "main";
   const intervalMs = Number(optional("--interval-ms") ?? "10000");
   const once = process.argv.includes("--once");
   if (!Number.isInteger(intervalMs) || intervalMs < 1_000) throw new Error("--interval-ms must be at least 1000");
@@ -205,10 +186,67 @@ async function main(): Promise<void> {
     transport: createNotionHttpTransport({ token }),
   });
   const store = new StoryExecutionStore(handle.client);
+  const repositories = new RepositoryRegistry(handle.client);
+  // Self-registration from the flags, for a host that has only ever been told
+  // a URL (or an operator's existing checkout, whose origin is the same fact
+  // written down differently). Registration is idempotent, so this is also the
+  // upgrade path.
+  const bootstrapPath = optional("--repository-path");
+  const bootstrapUrl = optional("--repository-url") ?? (bootstrapPath
+    ? (await processRemoteGit.run(["remote", "get-url", "origin"], resolve(bootstrapPath))).stdout.trim()
+    : undefined);
+  if (bootstrapUrl) {
+    const registration = await repositories.register({
+      remoteUrl: bootstrapUrl,
+      defaultBranch: optional("--default-branch") ?? await remoteDefaultBranch(bootstrapUrl),
+      registeredBy: `orchestrator@${hostname()}`,
+    });
+    if (registration.created) console.log(`Registered ${registration.repository.slug}`);
+  }
+  const registered = await repositories.list();
+  // Fail fast rather than idle forever: a host with no repository has nothing
+  // it could ever dispatch, and the reason has to be readable at startup.
+  if (registered.length === 0) {
+    throw new Error("no repository is registered; run `npx tsx scripts/repository-add.ts <git-url>` first");
+  }
+  console.log(`Managing repositories: ${registered.map((repository) => repository.slug).join(", ")}`);
+  // Repositories this cycle may work in. A checkout that could not be brought
+  // up to date is dropped for the cycle, never for good.
+  let servable = registered;
+  const checkoutOf = (slug: string): string => checkoutPath(workRoot, slug);
+  const repoOf = async (table: "stories" | "epics", id: string): Promise<string> => {
+    const row = (await handle.client.execute({ sql: `SELECT repo FROM ${table} WHERE id = ?`, args: [id] })).rows[0];
+    const slug = String(row?.repo ?? "");
+    if (!slug) throw new Error(`${id} declares no repository`);
+    return slug;
+  };
   // Per-repository keys (the gate commands, the hotspot paths) are stored
-  // under the card slug, so the store has to be told which repository this
-  // instance manages or those keys silently read as their defaults.
-  const config = await ConfigStore.load(handle.client, { repository: repositorySlug });
+  // under the card slug, so each repository needs its own view of the
+  // configuration or those keys silently read as their defaults.
+  const configs = new Map<string, ConfigStore>();
+  const configFor = async (slug: string): Promise<ConfigStore> => {
+    let scoped = configs.get(slug);
+    if (!scoped) {
+      scoped = await ConfigStore.load(handle.client, { repository: slug });
+      configs.set(slug, scoped);
+    }
+    await scoped.reload();
+    return scoped;
+  };
+  // The global view, for the keys that are not a repository's business (the
+  // schedule limits this host applies, the console, the provider policy).
+  const config = await ConfigStore.load(handle.client);
+  // The Epic's integration branch goes to origin the moment its Stories exist:
+  // every Story's draft MR targets it and delivery reads it from origin.
+  const publishEpicBranchFor = async (epicId: string): Promise<void> => {
+    try {
+      const repositoryPath = checkoutOf(await repoOf("epics", epicId));
+      const result = await publishEpicBranch({ git: processGitCommand, repositoryPath, epicId });
+      if (result.pushed) console.log(`Published ${result.branch} to origin`);
+    } catch (error) {
+      console.error(`Publishing epic/${epicId} failed; delivery will retry before the first Story worktree is cut:`, (error as Error).message);
+    }
+  };
   const providerHealth = new LibsqlProviderHealthStore(handle.client);
   const piBinary = defaultPiBinary();
   const credentialFilePath = join(homedir(), ".pi", "agent", "auth.json");
@@ -336,7 +374,7 @@ async function main(): Promise<void> {
     // The Epic page is where a person sees the review request and each
     // Story's state; it is derived from the database every cycle and only
     // travels when something on it changed.
-    await enqueueEpicPages(handle.client, targetBranchDefault);
+    await enqueueEpicPages(handle.client, boardTargetBranch);
     const stories = (await handle.client.execute("SELECT id FROM stories ORDER BY id")).rows;
     for (const story of stories) await projection.enqueue(String(story.id));
     // The requirement loop shares this outbox; each side replays only its own rows.
@@ -412,11 +450,24 @@ async function main(): Promise<void> {
   });
 
   let running = false;
+  // One line, not one per cycle.
+  let reportedNoBoardRepository = false;
   // Epics waiting to be split are the only source of new Stories; without this
   // the approval gate has nothing to gate and the board's Epics never move.
   const decomposeWaitingEpic = async (): Promise<void> => {
     if (!epicsDataSourceId) return;
-    const waiting = await ingestEpicsForDecomposition(handle.client, gateway, epicsDataSourceId, repositorySlug);
+    // An Epic written straight on the board carries no repository of its own.
+    // With one registered there is nothing to choose; with several, guessing
+    // would decompose somebody's work against the wrong tree, so the card waits
+    // for a requirement (which does carry one) or for a person.
+    const boardRepository = servable.length === 1 ? servable[0]!.slug : null;
+    if (!boardRepository && !reportedNoBoardRepository) {
+      reportedNoBoardRepository = true;
+      console.log("Epics created on the board are left alone: this installation serves more than one repository");
+    }
+    const waiting = boardRepository
+      ? await ingestEpicsForDecomposition(handle.client, gateway, epicsDataSourceId, boardRepository)
+      : [];
     const pending = (await handle.client.execute(
       "SELECT id FROM epics WHERE state IN ('INTAKE', 'DECOMPOSE') ORDER BY updated_at",
     )).rows;
@@ -437,18 +488,29 @@ async function main(): Promise<void> {
       console.warn(`no provider can decompose ${epic.id} right now`);
       return;
     }
+    const epicSlug = await repoOf("epics", epic.id);
+    const epicConfig = await configFor(epicSlug);
+    const repositoryPath = checkoutOf(epicSlug);
+    const repositoryId = repositoryIdFor(epicSlug);
+    // The tree the split is read from has to be the tree it will be built in.
+    await ensureCheckout({
+      url: (await repositories.get(epicSlug))!.remoteUrl,
+      slug: epicSlug,
+      defaultBranch: (await repositories.get(epicSlug))!.defaultBranch,
+      workRoot,
+    }, { refresh: true });
     await config.reload();
-    const decompositionLimits = { maxStories: config.get("decompose.maxStoriesPerEpic") };
+    const decompositionLimits = { maxStories: epicConfig.get("decompose.maxStoriesPerEpic") };
     const decomposer = new EpicDecomposer(
       handle.client,
       new PlanApprovalStore(handle.client, Date.now, {
         limits: decompositionLimits,
-        planApproval: config.get("decompose.planApproval"),
+        planApproval: epicConfig.get("decompose.planApproval"),
         onApproved: publishEpicBranchFor,
       }),
       new PiDecomposePort({
         binary: piBinary,
-        spec: await resolveAgentSpec({ config, policy: modelPolicy }, "decompose", provider),
+        spec: await resolveAgentSpec({ config: epicConfig, policy: modelPolicy }, "decompose", provider),
         // The requirement lane spends on the brain tier; without this its cost
         // is simply missing, and a card's bill reads as the execution half
         // only.
@@ -547,6 +609,10 @@ async function main(): Promise<void> {
       const branch = String(row.branch);
       const targetBranch = row.target_branch ? String(row.target_branch) : "main";
       if (!row.repo) throw new Error(`Story ${cardId} does not declare a repository`);
+      const slug = String(row.repo);
+      const repositoryPath = checkoutOf(slug);
+      const repositoryId = repositoryIdFor(slug);
+      const targetBranchDefault = (await repositories.get(slug))?.defaultBranch ?? "main";
       const layout = worktreeLayout(workRoot);
       // A Story inside an Epic lands on the Epic branch, which needs a worktree
       // of its own: the Story's own worktree is mid-rebase during the merge.
@@ -667,8 +733,22 @@ async function main(): Promise<void> {
   const maintainEpics = async (): Promise<void> => {
     const layout = worktreeLayout(workRoot);
     await config.reload();
+    // Which repository each Epic belongs to, read once: every path below is
+    // derived from it, and an Epic is not moved between repositories.
+    const epicRepositories = new Map((await handle.client.execute("SELECT id, repo FROM epics")).rows
+      .map((row) => [String(row.id), String(row.repo ?? "")]));
+    const slugOfEpic = (epicId: string): string => epicRepositories.get(epicId) || servable[0]!.slug;
+    // Which repository a worktree belongs to, so a check run in it reads that
+    // repository's own declared commands.
+    const owners = new Map<string, string>();
+    const epicWorktree = (epicId: string): string => {
+      const slug = slugOfEpic(epicId);
+      const path = locateWorktree(repositoryIdFor(slug), `epic-${epicId}`, layout).worktreePath;
+      owners.set(path, slug);
+      return path;
+    };
     const freshness = new EpicBranchFreshness(handle.client, {
-      worktreePath: (epicId) => locateWorktree(repositoryId, `epic-${epicId}`, layout).worktreePath,
+      worktreePath: epicWorktree,
       intervalMs: config.get("schedule.epicBranchFreshnessMs"),
     });
     for (const result of await freshness.tick()) {
@@ -684,14 +764,15 @@ async function main(): Promise<void> {
       client: handle.client,
       checks: {
         run: async (check, cwd) => {
-          const declared = config.get("codeExit.projectChecks").find((entry) => entry.name === check);
+          const scoped = await configFor(owners.get(cwd) ?? servable[0]!.slug);
+          const declared = scoped.get("codeExit.projectChecks").find((entry) => entry.name === check);
           if (!declared) return { passed: false, detail: `the repository no longer declares a check named ${check}` };
           return runProjectCheck(cwd, declared);
         },
       },
-      worktreePath: (epicId) => locateWorktree(repositoryId, `epic-${epicId}`, layout).worktreePath,
+      worktreePath: epicWorktree,
       headSha: async (epicId) => (await processGitCommand.run(
-        locateWorktree(repositoryId, `epic-${epicId}`, layout).worktreePath,
+        epicWorktree(epicId),
         ["rev-parse", "HEAD"],
       )).trim(),
       intervalMs: config.get("regression.epicPoolIntervalMs"),
@@ -721,7 +802,8 @@ async function main(): Promise<void> {
     })).rows[0];
     if (!finished) return;
     const epicId = String(finished.id);
-    const worktreePath = locateWorktree(repositoryId, `epic-${epicId}`, layout).worktreePath;
+    const worktreePath = epicWorktree(epicId);
+    const targetBranchDefault = (await repositories.get(slugOfEpic(epicId)))?.defaultBranch ?? "main";
     // An Epic whose review request cannot be opened must not take the rest of
     // the cycle down with it: every other Story would stop being dispatched
     // for a reason that has nothing to do with them.
@@ -755,7 +837,15 @@ async function main(): Promise<void> {
   // flight; a merge invalidates its Epic's scenarios, which is what turns an
   // integration into an immediate sweep rather than an event queue.
   const registry = new ScenarioRegistry(handle.client);
+  /** One sweep per cycle, in whichever repository has work for it first. */
   const regressionSweep = async (): Promise<void> => {
+    for (const repository of servable) {
+      if (await sweepRepository(repository.slug, repository.defaultBranch)) return;
+    }
+  };
+  const sweepRepository = async (slug: string, targetBranchDefault: string): Promise<boolean> => {
+    const repositoryId = repositoryIdFor(slug);
+    const repositoryPath = checkoutOf(slug);
     await config.reload();
     // Scenarios an Epic's review request is waiting on. Without this the gate
     // asks for evidence that only an idle host would ever produce, and a
@@ -776,8 +866,8 @@ async function main(): Promise<void> {
     const plan = planRegressionSweep({
       now: Date.now(),
       foregroundBusy: inFlight.size > 0,
-      epicScenarios: await registry.pool("epic"),
-      mainScenarios: await registry.pool("main"),
+      epicScenarios: await registry.pool("epic", slug),
+      mainScenarios: await registry.pool("main", slug),
       triggered: awaitedByDelivery,
       policy: {
         epicPoolIntervalMs: config.get("regression.epicPoolIntervalMs"),
@@ -785,11 +875,11 @@ async function main(): Promise<void> {
         batchSize: config.get("regression.batchSize"),
       },
     });
-    if (!plan) return;
+    if (!plan) return false;
 
     const layout = worktreeLayout(workRoot);
     const epicId = plan.pool === "epic"
-      ? (await registry.pool("epic")).find((scenario) => plan.scenarioIds.includes(scenario.scenarioId))?.epicId ?? null
+      ? (await registry.pool("epic", slug)).find((scenario) => plan.scenarioIds.includes(scenario.scenarioId))?.epicId ?? null
       : null;
     const sweepCard = plan.pool === "epic" && epicId ? `epic-${epicId}` : "regression-main";
     const branch = plan.pool === "epic" && epicId ? `epic/${epicId}` : targetBranchDefault;
@@ -824,7 +914,7 @@ async function main(): Promise<void> {
 
     const chain = providerOverride ? [providerOverride] : await modelPolicy.providersFor("verify");
     const provider = usableProviders(chain, await providerHealth.snapshot(), Date.now())[0];
-    if (!provider) return;
+    if (!provider) return false;
     const model = modelOverride ?? (await modelPolicy.resolve("verify", provider)).id;
 
     const npm = process.platform === "win32" ? "npm.cmd" : "npm";
@@ -854,12 +944,34 @@ async function main(): Promise<void> {
       // The sweep printed something other than its JSON summary; the raw line
       // above is the record, and there is nothing further to read from it.
     }
+    return true;
   };
 
   const cycle = async (): Promise<void> => {
     if (running) return;
     running = true;
     try {
+      // First: everything below works in a checkout, and a repository whose
+      // checkout could not be brought up cannot serve a card this cycle. A new
+      // registration is picked up here, without a restart.
+      await step("repository checkouts", async () => {
+        const ready: typeof servable = [];
+        for (const repository of await repositories.list()) {
+          try {
+            await ensureCheckout({
+              url: repository.remoteUrl,
+              slug: repository.slug,
+              defaultBranch: repository.defaultBranch,
+              workRoot,
+            }, { refresh: true });
+            ready.push(repository);
+          } catch (error) {
+            await reportP0(`${repository.slug} cannot be checked out on this host`, error);
+          }
+        }
+        servable = ready;
+      });
+      if (servable.length === 0) return;
       await step("intake sync", syncIntake);
       await step("projection reconciliation", reconcileProjections);
       await step("epic decomposition", decomposeWaitingEpic);
@@ -882,10 +994,12 @@ async function main(): Promise<void> {
         }
       });
 
+      const slugs = servable.map((repository) => repository.slug);
       const rows = (await handle.client.execute({
         sql: `SELECT id, state, epic_id, repo, branch, target_branch, depends_on, predicted_footprint
-                FROM stories WHERE repo = ? ORDER BY priority ASC, created_at ASC`,
-        args: [repositorySlug],
+                FROM stories WHERE repo IN (${slugs.map(() => "?").join(", ")})
+               ORDER BY priority ASC, created_at ASC`,
+        args: slugs,
       })).rows;
       const byId = new Map(rows.map((row) => [String(row.id), row]));
       // A Story waiting on an Epic head that is still failing would run the
@@ -894,22 +1008,33 @@ async function main(): Promise<void> {
       // recheck above is what looks at it, at a rate it decides.
       const headFailures = await unrecoveredHeadFailures(handle.client);
       // Footprints decide what may run beside what; priority only decides the
-      // order within a batch that is already free of conflicts.
-      const plan = await planRepositoryStoryExecution(config, dispatchableStories(rows.filter((row) => !(
-        String(row.state) === "MERGE" && headFailures.has(String(row.epic_id ?? ""))
-      )).map((row) => ({
-        id: String(row.id),
-        state: String(row.state),
-        dependsOn: JSON.parse(String(row.depends_on ?? "[]")) as string[],
-        predictedFootprint: JSON.parse(String(row.predicted_footprint ?? "[]")) as string[],
+      // order within a batch that is already free of conflicts. Each repository
+      // is planned against its own hotspot paths, because a hotspot is a path
+      // in one repository's tree.
+      const plan = planDispatchAcrossRepositories(await Promise.all(slugs.map(async (slug) => ({
+        slug,
+        hotspotPaths: (await configFor(slug)).get("schedule.hotspotPaths"),
+        stories: rows.filter((row) => String(row.repo) === slug && !(
+          String(row.state) === "MERGE" && headFailures.has(String(row.epic_id ?? ""))
+        )).map((row) => ({
+          id: String(row.id),
+          state: String(row.state),
+          dependsOn: JSON.parse(String(row.depends_on ?? "[]")) as string[],
+          predictedFootprint: JSON.parse(String(row.predicted_footprint ?? "[]")) as string[],
+        })),
       }))));
-      if (plan.kind === "dependency_cycle") {
-        throw new Error(`Story dependencies form a cycle: ${plan.cycle.join(" -> ")}`);
+      for (const cycleFound of plan.cycles) {
+        // Reported per repository rather than raised: another repository's
+        // Stories have nothing to do with this graph.
+        await reportP0(
+          `Story dependencies form a cycle in ${cycleFound.slug}`,
+          new Error(cycleFound.cycle.join(" -> ")),
+        );
       }
-      if (plan.kind === "unschedulable") {
-        console.warn(`Stories cannot be scheduled and are waiting on something outside the set: ${plan.stranded.join(", ")}`);
+      for (const held of plan.stranded) {
+        console.warn(`${held.slug}: Stories waiting on something outside the set: ${held.cardIds.join(", ")}`);
       }
-      const batch = (plan.batches[0] ?? []).filter((cardId) => !inFlight.has(cardId));
+      const batch = plan.batch.map((entry) => entry.cardId).filter((cardId) => !inFlight.has(cardId));
       if (batch.length === 0) return;
 
       // One account per vendor: the window and the concurrency limit belong to
@@ -1046,7 +1171,7 @@ async function main(): Promise<void> {
         hostId: hostname(),
         status: "healthy",
         node: process.version,
-        repository: repositoryId,
+        repository: servable.map((repository) => repository.slug).join(","),
       }], () => ({
         ...projections.fleet(),
         invariantFindings: projections.findings(),

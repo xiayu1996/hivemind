@@ -26,6 +26,8 @@ const PATTERNS: readonly { pattern: RegExp; format: (match: RegExpMatchArray) =>
   },
   // node:test TAP: "not ok 3 - name"
   { pattern: /^\s*not ok \d+ - (.+?)\s*$/gm, format: (match) => match[1]! },
+  // node:test spec reporter (its default without a TTY): "\u2716 name (0.7ms)"
+  { pattern: /^\s*\u2716\s+(.+?)\s+\(\d[\d.]*ms\)\s*$/gm, format: (match) => match[1]! },
   // jest: "\u25cf suite \u203a case"
   { pattern: /^\s*\u25cf\s+(?!Console)(.+?)\s*$/gm, format: (match) => match[1]! },
   // tsc: "src/x.ts(12,3): error TS2339: ..."

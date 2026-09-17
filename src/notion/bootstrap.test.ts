@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { Client } from "@notionhq/client";
 import schema from "./notion-schema.json" with { type: "json" };
-import { bootstrapNotion, bootstrapRequirements, upgradeEpicBoard, upgradeStoryBoard } from "./bootstrap.js";
+import {
+  bootstrapNotion,
+  bootstrapRequirements,
+  seedRepositoryOptions,
+  upgradeEpicBoard,
+  upgradeRequirementBoard,
+  upgradeStoryBoard,
+} from "./bootstrap.js";
 
 describe("bootstrapNotion", () => {
   it("creates Epics before the databases that relate to it, then adds rollups", async () => {
@@ -176,5 +183,59 @@ describe("bootstrapNotion", () => {
     expect(added).toContain("验证");
     expect(moved).toEqual([{ page: "page-1", to: "验证" }]);
     expect(live.map((option) => option.name)).toEqual(schema.options.phase);
+  });
+});
+
+function boardWith(options: Array<{ id: string; name: string }>, updates: Array<Record<string, unknown>>) {
+  return {
+    databases: { create: async () => { throw new Error("nothing is created"); }, retrieve: async () => { throw new Error("unexpected"); } },
+    dataSources: {
+      retrieve: async () => ({ properties: { [schema.propertyNames.repository]: { select: { options } } } }),
+      update: async (input: Record<string, unknown>) => { updates.push(input); return { id: "ds-1" }; },
+    },
+  } as unknown as Pick<Client, "databases" | "dataSources" | "pages">;
+}
+
+describe("seedRepositoryOptions", () => {
+  it("adds a newly registered repository as an option, keeping the ones already there", async () => {
+    const updates: Array<Record<string, unknown>> = [];
+    const client = boardWith([{ id: "o-1", name: "acme/widget" }], updates);
+
+    await expect(seedRepositoryOptions(client, "requirements-ds", ["acme/widget", "acme/gadget"]))
+      .resolves.toEqual(["acme/gadget"]);
+    const sent = (updates[0]!.properties as any)[schema.propertyNames.repository].select.options;
+    // An option that is dropped blanks the property on every page holding it,
+    // so the ones already there travel by id.
+    expect(sent).toEqual([{ id: "o-1" }, { name: "acme/gadget" }]);
+  });
+
+  it("writes nothing when the board already offers every registered repository", async () => {
+    const updates: Array<Record<string, unknown>> = [];
+    const client = boardWith([{ id: "o-1", name: "acme/widget" }], updates);
+
+    await expect(seedRepositoryOptions(client, "requirements-ds", ["acme/widget"])).resolves.toEqual([]);
+    expect(updates).toEqual([]);
+  });
+
+  it("adds the target repository column to a Requirements board that predates it", async () => {
+    const updates: Array<Record<string, unknown>> = [];
+    let properties: Record<string, unknown> = {};
+    const client = {
+      databases: { create: async () => { throw new Error("nothing is created"); }, retrieve: async () => { throw new Error("unexpected"); } },
+      dataSources: {
+        retrieve: async () => ({ properties }),
+        update: async (input: any) => {
+          updates.push(input);
+          properties = { ...properties, ...input.properties };
+          return { id: "ds-1" };
+        },
+      },
+    } as unknown as Pick<Client, "databases" | "dataSources" | "pages">;
+
+    await upgradeRequirementBoard(client, "requirements-ds", ["acme/widget"]);
+
+    expect((updates[0]!.properties as any)[schema.propertyNames.repository]).toEqual({ select: { options: [] } });
+    expect((updates[1]!.properties as any)[schema.propertyNames.repository].select.options)
+      .toEqual([{ name: "acme/widget" }]);
   });
 });

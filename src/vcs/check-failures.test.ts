@@ -22,6 +22,19 @@ describe("extractCheckFailures", () => {
       .toEqual(["subtracts", "divides"]);
   });
 
+  it("reads the node:test spec reporter, which is what it writes without a terminal", () => {
+    const output = [
+      "\u2716 the epic head is red (0.71ms)",
+      "\u2714 @scenario S-MOCK-02-unit passes on observed evidence (0.65ms)",
+      "\u2139 fail 1",
+      "\u2716 failing tests:",
+      "",
+      "test at tests/baseline.test.js:2:1",
+      "\u2716 the epic head is red (0.71ms)",
+    ].join("\n");
+    expect(extractCheckFailures("tests", output)).toEqual(["the epic head is red"]);
+  });
+
   it("reads a jest summary", () => {
     expect(extractCheckFailures("test", "  \u25cf Coupon \u203a applies the discount\n    expect(received)"))
       .toEqual(["Coupon \u203a applies the discount"]);

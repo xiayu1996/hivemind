@@ -44,6 +44,18 @@ describe("ScenarioRegistry", () => {
     ]);
   });
 
+  it("narrows a pool to one repository, because a sweep runs in one checkout", async () => {
+    await seedStory("S-M2-01", "CODE", ["S-M2-01-a"]);
+    await seedStory("S-M2-02", "CODE", ["S-M2-02-a"]);
+    await client.execute("UPDATE stories SET repo = 'acme/widget' WHERE id = 'S-M2-01'");
+    await client.execute("UPDATE stories SET repo = 'acme/gadget' WHERE id = 'S-M2-02'");
+    await registry.registerStory("S-M2-01");
+    await registry.registerStory("S-M2-02");
+
+    await expect(registry.pool("epic", "acme/widget")).resolves.toMatchObject([{ scenarioId: "S-M2-01-a" }]);
+    await expect(registry.pool("epic")).resolves.toHaveLength(2);
+  });
+
   it("does not forget when a scenario was last verified if the Story registers again", async () => {
     await seedStory("S-M2-01", "CODE", ["S-M2-01-a"]);
     await registry.registerStory("S-M2-01");

@@ -7,6 +7,26 @@
 --   * every table that a worker writes goes through the orchestrator API, so there
 --     is exactly one writer process per row
 
+-- Every repository this installation may work in. A clone URL plus whatever
+-- credentials the machine already has is the whole registration: the checkout
+-- path is derived per machine (work_root/repos/<checkout_key>) and deliberately
+-- not stored, because a path is single-machine state and hivemind is multi-node
+-- from day one.
+CREATE TABLE IF NOT EXISTS repositories (
+  slug            TEXT PRIMARY KEY
+                  CHECK (slug LIKE '%/%' AND slug NOT LIKE '%/%/%'
+                         AND instr(slug, '/') > 1 AND instr(slug, '/') < length(slug)
+                         AND slug NOT LIKE '% %'),
+  remote_url      TEXT NOT NULL UNIQUE CHECK (remote_url <> '' AND remote_url NOT LIKE '% %'),
+  default_branch  TEXT NOT NULL DEFAULT 'main' CHECK (default_branch <> '' AND default_branch NOT LIKE '% %'),
+  -- The single path segment the checkout lives under. Unique so two owners of
+  -- a same-named repository are refused at registration rather than silently
+  -- sharing one tree.
+  checkout_key    TEXT NOT NULL UNIQUE CHECK (checkout_key = substr(slug, instr(slug, '/') + 1)),
+  registered_by   TEXT NOT NULL,
+  registered_at   INTEGER NOT NULL
+);
+
 -- A fuzzy requirement's whole lifecycle, from the ten-sentence card a human
 -- creates to scenario-level acceptance. Epics born from it link back through
 -- epics.requirement_id; acceptance is gated on every linked Epic being DONE.

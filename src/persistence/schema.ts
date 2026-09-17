@@ -6,6 +6,15 @@ import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from
 
 const ms = (name: string) => integer(name, { mode: "number" });
 
+export const repositories = sqliteTable("repositories", {
+  slug: text("slug").primaryKey(),
+  remoteUrl: text("remote_url").notNull().unique(),
+  defaultBranch: text("default_branch").notNull().default("main"),
+  checkoutKey: text("checkout_key").notNull().unique(),
+  registeredBy: text("registered_by").notNull(),
+  registeredAt: ms("registered_at").notNull(),
+});
+
 export const requirements = sqliteTable("requirements", {
   id: text("id").primaryKey(),
   notionPageId: text("notion_page_id").notNull().unique(),
