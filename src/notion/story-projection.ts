@@ -4,11 +4,11 @@ import { NotionOutbox, payloadHash } from "./outbox.js";
 import type { DesiredStoryPage } from "./blocks/story-page.js";
 import schema from "./notion-schema.json" with { type: "json" };
 import { STORY_BOARD_STATUS } from "./board-status.js";
-import { storyIcon, stopReasonWord, waitingText } from "./display-text.js";
+import { storyIcon, stopReasonWord, stopSummaryLine, waitingText } from "./display-text.js";
+import type { StopSummary } from "../orchestrator/stop-summary.js";
 import { laneWord, type DesiredRound, type DesiredSpec } from "./blocks/story-render.js";
 import { scenarioTitle } from "../pipeline/dod.js";
 import { lintHumanSentence } from "../report/business-language.js";
-import { diagnoseRetryLimit } from "../pipeline/retry-limits.js";
 
 interface VerificationBody {
   reasons?: Array<{ scenarioId: string; reason: string; detail?: string }>;
@@ -210,33 +210,59 @@ export class NotionStoryProjection implements StoryProjectionPort {
   }
 
   /**
-   * Which side a spent verification budget points at, in the words of the
-   * person who has to act on it. The diagnosis itself is the pipeline's; only
-   * its rendering lives here, because the English report it writes for the log
+   * What the rounds since a person last acted added up to, in their words.
+   *
+   * The pieces are collected when the card stops, not read back from four
+   * tables here: by the time a person opens the page the run is long over, and
+   * the summary is what the alert and the friction record were written from
+   * too. Only the rendering lives here, because the English report those read
    * is not what a person reads on a page.
    */
-  private async loopDiagnosis(cardId: string): Promise<string[]> {
-    const history = (await this.client.execute({
-      sql: "SELECT failed_scenarios FROM verify_records WHERE card_id = ? ORDER BY round",
+  private async stopSummaryLines(cardId: string): Promise<string[]> {
+    const row = (await this.client.execute({
+      sql: "SELECT stop_summary FROM stories WHERE id = ? AND stop_reason IS NOT NULL",
       args: [cardId],
-    })).rows.map((row) => JSON.parse(String(row.failed_scenarios)) as string[]);
-    const diagnosis = diagnoseRetryLimit(history);
+    })).rows[0];
+    const raw = value(row?.stop_summary);
+    if (!raw) return [];
+    const summary = JSON.parse(raw) as StopSummary;
     const names = await this.scenarioNames(cardId);
     const name = (id: string): string => names.get(id) ?? id;
-    const lines = [
-      diagnosis.side === "requirement"
-        ? "\u591a\u534a\u662f\u9700\u6c42\u8fd9\u8fb9\u7684\u4e8b\uff1a\u6bcf\u4e00\u8f6e\u90fd\u5361\u5728\u540c\u4e00\u6279\u573a\u666f\u4e0a\uff0c\u6ca1\u6709\u5f80\u524d\u8d70\u3002"
-        : "\u591a\u534a\u662f\u6267\u884c\u8fd9\u8fb9\u7684\u4e8b\uff1a\u5931\u8d25\u7684\u573a\u666f\u4e00\u76f4\u5728\u53d8\uff0c\u6ca1\u6709\u7a33\u4e0b\u6765\u3002",
-    ];
-    if (diagnosis.curve.length > 0) {
-      lines.push(`\u6bcf\u8f6e\u6ca1\u8fc7\u7684\u573a\u666f\u6570\uff1a${diagnosis.curve.join(" \u2192 ")}`);
+    const lines: string[] = [];
+
+    if (summary.diagnosis) {
+      lines.push(stopSummaryLine(summary.diagnosis.side === "requirement" ? "requirementSide" : "systemSide"));
+      if (summary.diagnosis.curve.length > 0) {
+        lines.push(stopSummaryLine("curve", { curve: summary.diagnosis.curve.join(" \u2192 ") }));
+      }
+      if (summary.diagnosis.persistent.length > 0) {
+        lines.push(stopSummaryLine("neverPassed", { scenarios: summary.diagnosis.persistent.map(name).join("\u3001") }));
+      }
+      if (summary.diagnosis.regressed.length > 0) {
+        lines.push(stopSummaryLine("regressed", { scenarios: summary.diagnosis.regressed.map(name).join("\u3001") }));
+      }
     }
-    if (diagnosis.persistent.length > 0) {
-      lines.push(`\u4ece\u6ca1\u901a\u8fc7\u7684\uff1a${diagnosis.persistent.map(name).join("\u3001")}`);
+    for (const bounce of summary.mergeBounces) {
+      lines.push(bounce.attribution === "conflict"
+        ? stopSummaryLine("mergeConflict")
+        : stopSummaryLine("mergeBounce", { failures: bounce.failures.join("\u3001") || bounce.check || "" }));
     }
-    if (diagnosis.regressed.length > 0) {
-      lines.push(`\u901a\u8fc7\u540e\u53c8\u574f\u4e86\u7684\uff1a${diagnosis.regressed.map(name).join("\u3001")}`);
+    for (const baseline of summary.baselineFailures) {
+      lines.push(stopSummaryLine("baselineFailing", {
+        check: baseline.check,
+        failures: baseline.failures.join("\u3001"),
+      }));
     }
+    for (const refusal of summary.refusals) {
+      lines.push(stopSummaryLine("refusal", { reason: refusal.reason }));
+    }
+    if (summary.dispatchFailures.length > 0) {
+      lines.push(stopSummaryLine("dispatchFailed", { count: String(summary.dispatchFailures.length) }));
+    }
+    if (summary.budget > 0) {
+      lines.push(stopSummaryLine("budget", { spent: String(summary.spent), budget: String(summary.budget) }));
+    }
+    if (summary.costUsd > 0) lines.push(stopSummaryLine("spend", { amount: summary.costUsd.toFixed(2) }));
     return lines;
   }
 
@@ -260,19 +286,33 @@ export class NotionStoryProjection implements StoryProjectionPort {
       if (suggestion) lines.push(`   \u5efa\u8bae\u7684\u7b54\u6cd5\uff1a${suggestion}`);
       lines.push(`   \u56de\u7b54\u65f6\u5199\u300c${String(row.question_key)}\uff1a<\u4f60\u7684\u56de\u7b54>\u300d`);
     }
-    if (stopReason === "verify_loop_exceeded") lines.push(...await this.loopDiagnosis(cardId));
+    // Every stop carries it, not only a spent verification loop: a card that
+    // crashed its way to a ceiling, or one that ran out of money, is just as
+    // unreadable as one word.
+    if (stopReason) lines.push(...await this.stopSummaryLines(cardId));
     lines.push(action);
     return lines.join("\n");
   }
 
-  /** How many rounds a person's last action has bought so far, and out of how many. */
+  /** How many rounds a person's last action has bought so far, and out of how
+   * many. Merge bounces count: they come out of the same budget. */
   private async budgetLine(cardId: string, since: number): Promise<string> {
-    const spent = Number((await this.client.execute({
-      sql: `SELECT COUNT(*) AS n FROM verify_records
-            WHERE card_id = ? AND verdict = 'rejected' AND created_at > ?`,
-      args: [cardId, since],
-    })).rows[0]?.n ?? 0);
-    return `本段预算 ${Math.min(spent, this.innerLoopRounds)}/${this.innerLoopRounds}`;
+    const [verifications, bounces] = await this.client.batch([
+      {
+        sql: `SELECT COUNT(*) AS n FROM verify_records
+              WHERE card_id = ? AND verdict = 'rejected' AND created_at > ?`,
+        args: [cardId, since],
+      },
+      {
+        sql: `SELECT COUNT(*) AS n FROM event_log
+              WHERE card_id = ? AND ts > ?
+                AND type IN ('merge.verification_failed', 'merge.conflict')
+                AND json_extract(data, '$.spent') = 1`,
+        args: [cardId, since],
+      },
+    ], "read");
+    const spent = Number(verifications!.rows[0]?.n ?? 0) + Number(bounces!.rows[0]?.n ?? 0);
+    return `\u672c\u6bb5\u9884\u7b97 ${Math.min(spent, this.innerLoopRounds)}/${this.innerLoopRounds}`;
   }
 
   /**

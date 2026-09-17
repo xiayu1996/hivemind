@@ -15,6 +15,7 @@ import { execFile } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { renderStopSummary, type StopSummary } from "../src/orchestrator/stop-summary.js";
 import { openDb } from "../src/persistence/client.js";
 import { loadCardTurns, summarizeCrossPhaseCache } from "../src/observability/cross-phase-cache.js";
 import { loadCardDossier, renderCardDossier } from "../src/observability/card-dossier.js";
@@ -176,7 +177,7 @@ async function main(): Promise<void> {
   const handle = openDb(dbUrl);
   try {
     const story = (await handle.client.execute({
-      sql: `SELECT state, phase, repo, branch, inner_loop_rounds, phase_reentries, stop_reason
+      sql: `SELECT state, phase, repo, branch, inner_loop_rounds, phase_reentries, stop_reason, stop_summary
             FROM stories WHERE id = ?`,
       args: [cardId],
     })).rows[0];
@@ -188,6 +189,12 @@ async function main(): Promise<void> {
     const round = Number(optional("--round") ?? story.inner_loop_rounds);
     console.log(`${cardId}  state=${String(story.state)}  round=${round}/${Number(story.inner_loop_rounds)}`
       + `  reentries=${Number(story.phase_reentries)}  stop=${String(story.stop_reason ?? "-")}`);
+    // A card that stopped is the case somebody opens this for, so the whole
+    // summary is printed before the round detail rather than left to be dug
+    // out of the event log.
+    if (story.stop_reason !== null && story.stop_summary !== null) {
+      console.log(`\n${renderStopSummary(JSON.parse(String(story.stop_summary)) as StopSummary)}`);
+    }
 
     const runs = (await handle.client.execute({
       sql: `SELECT run_id, phase, status, session_id, failure, started_at, ended_at

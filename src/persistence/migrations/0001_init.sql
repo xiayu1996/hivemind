@@ -188,6 +188,11 @@ CREATE TABLE IF NOT EXISTS stories (
   -- What the board was last written with. It lived on the page as a property
   -- a person could see and edit; central truth is the only place it belongs.
   notion_property_fingerprint TEXT,
+  -- Everything the rounds since the last human action added up to, written
+  -- when the card stops and cleared when a person restarts it. The pieces are
+  -- all derivable from the event log, but nobody reading a stopped card should
+  -- have to derive them, and the projection needs them in one read.
+  stop_summary      TEXT CHECK (stop_summary IS NULL OR json_valid(stop_summary)),
   human_wins_until  INTEGER,
   last_human_action_at INTEGER,
   created_at        INTEGER NOT NULL,

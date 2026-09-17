@@ -8,9 +8,7 @@ import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
 import { alertChannelsFromConfig } from "../src/alert/config.js";
 import { AlertRouter } from "../src/alert/index.js";
-import { alertNeedsInput } from "../src/alert/story-alerts.js";
 import { assertOutOfBandChannel } from "../src/alert/required-channel.js";
-import { diagnoseRetryLimit, renderRetryReport } from "../src/pipeline/retry-limits.js";
 import { ScenarioRegistry } from "../src/regression/scenario-registry.js";
 import { planRegressionSweep } from "../src/regression/scheduler.js";
 import { defaultSecretsPath, loadSecretsFile, upsertSecretFile } from "../src/config/secrets-file.js";
@@ -18,6 +16,13 @@ import { ConfigStore } from "../src/config/store.js";
 import { breakerPolicy, intakeHalted, usableProviders } from "../src/runner/circuit-breaker.js";
 import { classifyError } from "../src/runner/classify.js";
 import { settleDispatchFailure } from "../src/orchestrator/dispatch-failure.js";
+import { renderStopSummary } from "../src/orchestrator/stop-summary.js";
+import {
+  AlertStopSink,
+  FrictionStopSink,
+  notifyStoryStopped,
+  type StoryStopSink,
+} from "../src/orchestrator/story-stop-sink.js";
 import { assertProviderRetriesDisabled } from "../src/runner/failover.js";
 import { probeProviderReadiness, refreshProviderCredentials } from "../src/runner/auth-probe.js";
 import { assertCredentialRefreshCoverage } from "../src/runner/auth-refresh.js";
@@ -624,6 +629,7 @@ async function main(): Promise<void> {
             break;
           case "park":
             console.warn(`Story ${cardId} parked after ${decision.attempt} failed attempt(s) in ${decision.state}`);
+            await announceStop(cardId);
             break;
         }
         throw error;
@@ -631,19 +637,23 @@ async function main(): Promise<void> {
       if (result.stdout.trim()) console.log(result.stdout.trim());
       await reconcileProjections();
       const completed = await store.getStory(cardId);
-      if (completed.state === "NEEDS_INPUT") {
-        // A spent budget is only actionable with the curve that spent it and a
-        // verdict on which side to look at.
-        const report = renderRetryReport(
-          cardId,
-          completed.stopReason ?? "needs_input",
-          diagnoseRetryLimit(await store.getVerificationFailureHistory(cardId)),
-        );
-        console.warn(report);
-        if (!(await alertNeedsInput(alerts, completed, report))) {
-          console.error(`Story ${cardId} stopped for input but no out-of-band channel took the alert`);
-        }
-      }
+      if (completed.state === "NEEDS_INPUT") await announceStop(cardId);
+  };
+
+  // Everything that wants to know a card stopped hears the same summary: the
+  // console, the out-of-band alert, and the friction record the reflection
+  // pipeline reads. They used to be three independent renderings of a history
+  // only one of them could see.
+  const stopSinks: StoryStopSink[] = [
+    new AlertStopSink(alerts),
+    new FrictionStopSink({ record: (input) => store.recordFriction(input) }),
+  ];
+  const announceStop = async (cardId: string): Promise<void> => {
+    const summary = await store.stopSummary(cardId);
+    if (!summary) return;
+    console.warn(renderStopSummary(summary));
+    const { failed } = await notifyStoryStopped(stopSinks, summary);
+    for (const failure of failed) console.error(`Story ${cardId} stopped but a sink refused it: ${failure}`);
   };
 
   // The platform CLI is looked up once; an Epic that reaches review with no

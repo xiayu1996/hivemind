@@ -203,5 +203,19 @@
     "icon": "🧭",
     "color": "gray_background",
     "action": "现在没有等你处理的事。"
+  },
+  "stopSummary": {
+    "requirementSide": "多半是需求这边的事：每一轮都卡在同一批场景上，没有往前走。",
+    "systemSide": "多半是执行这边的事：没过的场景一直在变，没有稳下来。",
+    "curve": "每轮没过的场景数：{curve}",
+    "neverPassed": "从没通过的：{scenarios}",
+    "regressed": "通过后又坏了的：{scenarios}",
+    "mergeBounce": "合入时被打回：{failures} 没通过。",
+    "mergeConflict": "合入时和 Epic 分支冲突了，要人看一眼怎么合。",
+    "baselineFailing": "Epic 分支上「{check}」本来就没通过（{failures}），这不是这张卡的问题。",
+    "refusal": "有一轮的产出被出口检查挡下：{reason}",
+    "dispatchFailed": "有 {count} 次运行还没产出就断了。",
+    "spend": "这张卡到目前花了 {amount} 美元。",
+    "budget": "这段已经用掉 {spent}/{budget} 轮。"
   }
 }
