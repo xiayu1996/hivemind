@@ -49,30 +49,30 @@ describe("decideDispatchFailure", () => {
   });
 });
 
+const CONFIG = { reload: async () => undefined, get: () => 3 };
+
+async function storeWithCard() {
+  const client = createClient({ url: ":memory:" });
+  await migrate(client);
+  const store = new StoryExecutionStore(client, (() => {
+    let time = 1_000;
+    return () => time++;
+  })());
+  await store.createStory({
+    id: "S-EPIC1-01",
+    notionPageId: "page-1",
+    title: "Crashed run",
+    requirement: "A run that died leaves a record.",
+  });
+  await store.transition("S-EPIC1-01", "QUEUED", "SHAPE", "system", "run-shape");
+  return { client, store };
+}
+
 describe("settleDispatchFailure", () => {
-  const config = { reload: async () => undefined, get: () => 3 };
-
-  async function storeWithCard() {
-    const client = createClient({ url: ":memory:" });
-    await migrate(client);
-    const store = new StoryExecutionStore(client, (() => {
-      let time = 1_000;
-      return () => time++;
-    })());
-    await store.createStory({
-      id: "S-EPIC1-01",
-      notionPageId: "page-1",
-      title: "Crashed run",
-      requirement: "A run that died leaves a record.",
-    });
-    await store.transition("S-EPIC1-01", "QUEUED", "SHAPE", "system", "run-shape");
-    return { client, store };
-  }
-
   it("records the failure and leaves the card where it was", async () => {
     const { client, store } = await storeWithCard();
     const decision = await settleDispatchFailure({
-      store, config, cardId: "S-EPIC1-01", stopping: false, error: new Error("worker exited with code 1"),
+      store, config: CONFIG, cardId: "S-EPIC1-01", stopping: false, error: new Error("worker exited with code 1"),
     });
 
     expect(decision).toMatchObject({ kind: "reenter", state: "SHAPE", attempt: 1, budget: 3 });
@@ -86,7 +86,7 @@ describe("settleDispatchFailure", () => {
     const { client, store } = await storeWithCard();
     for (let attempt = 1; attempt <= 3; attempt++) {
       await settleDispatchFailure({
-        store, config, cardId: "S-EPIC1-01", stopping: false, error: new Error("worker exited with code 1"),
+        store, config: CONFIG, cardId: "S-EPIC1-01", stopping: false, error: new Error("worker exited with code 1"),
       });
     }
 
@@ -105,7 +105,7 @@ describe("settleDispatchFailure", () => {
   it("spends no budget on a shutdown", async () => {
     const { client, store } = await storeWithCard();
     const decision = await settleDispatchFailure({
-      store, config, cardId: "S-EPIC1-01", stopping: true, error: new Error("terminated"),
+      store, config: CONFIG, cardId: "S-EPIC1-01", stopping: true, error: new Error("terminated"),
     });
 
     expect(decision).toEqual({ kind: "cancelled" });

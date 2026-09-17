@@ -21,7 +21,7 @@ describe("EpicMergeFlow", () => {
       if (args[0] === "show-ref") throw new Error("missing ref");
       return "";
     }) };
-    const verify = vi.fn(async (scenarioIds: readonly string[]) => ({ passed: true as const, scenarioIds }));
+    const verify = vi.fn(async ({ scenarioIds }: { scenarioIds: readonly string[] }) => ({ passed: true as const, scenarioIds }));
     const flow = new EpicMergeFlow(git, verify, { storyWorktree: "story", integrationWorktree: "integration", mainBranch: "main" });
 
     await expect(flow.merge({ epicId: "E-1", story, integratedStories: [] })).resolves.toEqual({
@@ -47,7 +47,7 @@ describe("EpicMergeFlow", () => {
       if (args.join(" ") === "rev-parse HEAD" && cwd === "story") return `${revisions.shift() ?? "bbb222"}\n`;
       return "";
     }) };
-    const verify = vi.fn(async (scenarioIds: readonly string[]) => ({ passed: true as const, scenarioIds }));
+    const verify = vi.fn(async ({ scenarioIds }: { scenarioIds: readonly string[] }) => ({ passed: true as const, scenarioIds }));
     const flow = new EpicMergeFlow(git, verify, { storyWorktree: "story", integrationWorktree: "integration" });
 
     const result = await flow.merge({ epicId: "E-1", story, integratedStories: [] });
@@ -102,7 +102,7 @@ describe("EpicMergeFlow", () => {
       if (args.join(" ") === "branch --show-current") return cwd === "story" ? story.branch : "epic/E-1";
       return "";
     }) };
-    const verify = vi.fn(async (scenarioIds: readonly string[]) => ({ passed: true as const, scenarioIds }));
+    const verify = vi.fn(async ({ scenarioIds }: { scenarioIds: readonly string[] }) => ({ passed: true as const, scenarioIds }));
     const flow = new EpicMergeFlow(git, verify, { storyWorktree: "story", integrationWorktree: "integration" });
 
     await expect(flow.merge({
@@ -126,7 +126,7 @@ describe("EpicMergeFlow", () => {
       if (args.join(" ") === "branch --show-current") return cwd === "story" ? story.branch : "epic/E-1";
       return "";
     }) };
-    const verify = vi.fn(async (scenarioIds: readonly string[]) => {
+    const verify = vi.fn(async ({ scenarioIds }: { scenarioIds: readonly string[] }) => {
       order.push("verify");
       return { passed: true as const, scenarioIds };
     });
@@ -145,5 +145,78 @@ describe("EpicMergeFlow", () => {
     expect(at("rebase")).toBeLessThan(at("publish"));
     expect(at("publish")).toBeLessThan(at("verify"));
     expect(at("verify")).toBeLessThan(at("merge --ff-only"));
+  });
+
+  it("re-verifies the rebased Story tree, not the Epic head it is about to land on", async () => {
+    const order: string[] = [];
+    const git = { run: vi.fn(async (cwd: string, args: string[]) => {
+      order.push(`${cwd}:${args.join(" ")}`);
+      if (args.join(" ") === "branch --show-current") return cwd === "story" ? story.branch : "epic/E-1";
+      if (args.join(" ") === "rev-parse HEAD") return cwd === "story" ? "cafe1\n" : "beef2\n";
+      if (args[0] === "diff" && args[1] === "--name-only") return "src/vcs/merge-flow.ts\n";
+      return "";
+    }) };
+    let seen: { candidate: { cwd: string; revision: string }; base: { cwd: string; revision: string }; changedPaths: readonly string[] } | undefined;
+    const verify = vi.fn(async (request: typeof seen & object) => {
+      order.push("verify");
+      seen = request;
+      return { passed: true as const, scenarioIds: story.scenarioIds };
+    });
+    const flow = new EpicMergeFlow(git, verify, { storyWorktree: "story", integrationWorktree: "integration" });
+
+    await expect(flow.merge({ epicId: "E-1", story, integratedStories: [] })).resolves.toMatchObject({ kind: "merged" });
+    // The integration worktree still holds the Epic head at this point, so
+    // checks run there answer whether the Epic head is green - a question the
+    // Story cannot change however many rounds it spends on it.
+    expect(seen?.candidate).toEqual({ cwd: "story", revision: "cafe1" });
+    expect(seen?.base).toEqual({ cwd: "integration", revision: "beef2" });
+    expect(seen?.changedPaths).toEqual(["src/vcs/merge-flow.ts"]);
+    const at = (step: string) => order.findIndex((entry) => entry.includes(step));
+    expect(at("rebase")).toBeLessThan(at("verify"));
+    expect(at("verify")).toBeLessThan(at("merge --ff-only"));
+  });
+
+  it("refuses the merge when the Epic head moved under the re-verification", async () => {
+    const baseRevisions = ["beef2", "d00d3"];
+    const git = { run: vi.fn(async (cwd: string, args: string[]) => {
+      if (args.join(" ") === "branch --show-current") return cwd === "story" ? story.branch : "epic/E-1";
+      if (args.join(" ") === "rev-parse HEAD") {
+        return cwd === "story" ? "cafe1\n" : `${baseRevisions.shift() ?? "d00d3"}\n`;
+      }
+      return "";
+    }) };
+    const verify = vi.fn(async ({ scenarioIds }: { scenarioIds: readonly string[] }) => ({ passed: true as const, scenarioIds }));
+    const flow = new EpicMergeFlow(git, verify, { storyWorktree: "story", integrationWorktree: "integration" });
+
+    const result = await flow.merge({ epicId: "E-1", story, integratedStories: [] });
+    expect(result.kind).toBe("verification_failed");
+    expect((result as { reason?: string }).reason).toContain("Epic head moved");
+    expect(git.run.mock.calls.some(([, args]) => args[0] === "merge")).toBe(false);
+  });
+
+  it("carries the attribution and the failing test names on a refusal", async () => {
+    const git = { run: vi.fn(async (cwd: string, args: string[]) => {
+      if (args.join(" ") === "branch --show-current") return cwd === "story" ? story.branch : "epic/E-1";
+      if (args.join(" ") === "rev-parse HEAD") return cwd === "story" ? "cafe1\n" : "beef2\n";
+      return "";
+    }) };
+    const verify = vi.fn(async ({ scenarioIds }: { scenarioIds: readonly string[] }) => ({
+      passed: false as const,
+      scenarioIds,
+      reasons: ["npm test fails with this Story on top of beef2"],
+      attribution: "story_regression" as const,
+      failures: ["src/coupon.test.ts > applies the discount"],
+      failedChecks: ["npm test"],
+    }));
+    const flow = new EpicMergeFlow(git, verify, { storyWorktree: "story", integrationWorktree: "integration" });
+
+    await expect(flow.merge({ epicId: "E-1", story, integratedStories: [] })).resolves.toMatchObject({
+      kind: "verification_failed",
+      attribution: "story_regression",
+      failures: ["src/coupon.test.ts > applies the discount"],
+      failedChecks: ["npm test"],
+      baseRevision: "beef2",
+      candidateRevision: "cafe1",
+    });
   });
 });

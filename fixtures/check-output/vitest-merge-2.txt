@@ -1,0 +1,50 @@
+rc/runner/activity.test.ts (4 tests) 3ms
+ ✓ src/runner/auth-probe.test.ts (1 test) 2ms
+ ✓ src/alert/config.test.ts (2 tests) 4ms
+ ✓ src/pipeline/convergence.test.ts (5 tests) 2ms
+ ✓ src/runner/cache-retention.test.ts (1 test) 3ms
+ ✓ src/runner/pi-binary.test.ts (4 tests) 2ms
+
+ Test Files  1 failed | 161 passed (162)
+      Tests  1 failed | 1322 passed (1323)
+   Start at  01:31:44
+   Duration  10.02s (transform 2.36s, setup 0ms, collect 11.56s, tests 15.01s, environment 18ms, prepare 8.24s)
+
+fatal: path 'src/coupon.ts' exists on disk, but not in 'bf99e3b3e8c1ede8c4eaad39e95839624355fa6b'
+stderr | src/vcs/story-delivery.test.ts > GitMrStoryDelivery for a Story that no Epic MR covers > opens nothing for a branch the target branch already contains
+Story S-EPIC1-01: epic/EPIC1 already contains story/epic1-01; no review request to open
+
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/runner/catalog-snapshot.test.ts > recorded catalogues match the pinned pi > deepseek
+AssertionError: expected [ Array(5) ] to deeply equal [ Array(4) ]
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[33m@@ -29,6 +29,14 @@[39m
+[2m      "images": false,[22m
+[2m      "maxOutput": 384000,[22m
+[2m      "provider": "deepseek",[22m
+[2m      "thinking": true,[22m
+[2m    },[22m
+[31m+   {[39m
+[31m+     "contextWindow": 1000000,[39m
+[31m+     "id": "deepseek/deepseek-v4.1-flash",[39m
+[31m+     "images": true,[39m
+[31m+     "maxOutput": 65500,[39m
+[31m+     "provider": "command-code",[39m
+[31m+     "thinking": true,[39m
+[31m+   },[39m
+[2m  ][22m
+
+ ❯ src/runner/catalog-snapshot.test.ts:58:8
+     56|     expect(recorded.piVersion).toBe(pinnedPiVersion());
+     57|     expect(live.toSorted((left, right) => left.id.localeCompare(right.…
+     58|       .toEqual(recorded.models);
+       |        ^
+     59|     // Each provider costs one real pi spawn, which can queue behind a…
+     60|     // process holding pi's credential lock; the default 5s is not eno…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯

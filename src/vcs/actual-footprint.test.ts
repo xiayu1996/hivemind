@@ -20,10 +20,11 @@ describe("S-M2-07-record actual footprint capture", () => {
       calls.push({ cwd, args });
       if (args.join(" ") === "branch --show-current") return cwd === "story" ? story.branch : "epic/E-1";
       if (args.join(" ") === "rev-parse HEAD") return cwd === "integration" ? "base-revision\n" : "story-revision\n";
+      if (args[0] === "diff" && args[1] === "--name-only") return "src/vcs/merge-flow.ts\n";
       if (args[0] === "diff") return "M\0src/vcs/merge-flow.ts\0R100\0src/old/file.ts\0src/console/server.ts\0D\0README.md\0";
       return "";
     }) };
-    const flow = new EpicMergeFlow(git, async (scenarioIds) => ({ passed: true, scenarioIds }), {
+    const flow = new EpicMergeFlow(git, async ({ scenarioIds }) => ({ passed: true, scenarioIds }), {
       storyWorktree: "story",
       integrationWorktree: "integration",
       actualFootprints: store,

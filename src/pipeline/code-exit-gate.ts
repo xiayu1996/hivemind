@@ -173,6 +173,31 @@ export interface CodeExitCollectInput {
   frozenTestCommit?: string | undefined;
 }
 
+/** A declared check paired with whether this round's changes make it relevant. */
+export interface SelectedProjectCheck {
+  check: ProjectCheck;
+  relevant: boolean;
+}
+
+/**
+ * The declared checks in the order they run, each marked relevant or not for a
+ * set of changed paths.
+ *
+ * Shared by the CODE exit gate and the merge re-verification so the two ask the
+ * same question of the same round: a documentation-only change that the exit
+ * gate let through on relevance used to be handed the full suite again at
+ * merge, where an unrelated failure could send it back to CODE.
+ */
+export function selectProjectChecks(
+  checks: readonly ProjectCheck[],
+  changedPaths: readonly string[],
+): SelectedProjectCheck[] {
+  return orderProjectChecks(checks).map((check) => ({
+    check,
+    relevant: !check.when || changedPaths.some((path) => matchesAnyGlob(path, check.when!)),
+  }));
+}
+
 /**
  * Declaration order, with every prerequisite ahead of the check that names it.
  * A cycle keeps the declared order: a repository that declares one has a
@@ -241,8 +266,8 @@ export async function collectCodeExitFacts(input: CodeExitCollectInput): Promise
   const evidence = redGreenFromCommits(commitMessages, input.trajectory ?? []);
   const projectChecks: ProjectCheckResult[] = [];
   const failedChecks = new Set<string>();
-  for (const check of orderProjectChecks(input.projectChecks)) {
-    if (check.when && !changed.some((path) => matchesAnyGlob(path, check.when!))) {
+  for (const { check, relevant } of selectProjectChecks(input.projectChecks, changed)) {
+    if (!relevant) {
       projectChecks.push({ name: check.name, passed: true, detail: "", skipped: "not-relevant" });
       continue;
     }

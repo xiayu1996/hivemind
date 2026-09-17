@@ -224,10 +224,10 @@ async function main(): Promise<void> {
         processGitCommand,
         testSubsetVerifier(
           {
-            run: async (check) => {
+            run: async (check, cwd) => {
               const [command, ...args] = check.command;
               try {
-                await execFileAsync(command!, args, { cwd: integrationWorktree, windowsHide: true });
+                await execFileAsync(command!, args, { cwd, windowsHide: true });
                 return { passed: true, detail: "" };
               } catch (cause) {
                 return { passed: false, detail: (cause as Error).message };

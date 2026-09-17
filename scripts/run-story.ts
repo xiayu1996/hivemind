@@ -130,20 +130,38 @@ function safeSegment(value: string): string {
   return safe;
 }
 
-/** Runs one declared check where the merge is being verified. */
+/**
+ * Runs one declared check in the tree the caller names. Which tree that is
+ * carries the whole meaning of the answer, so it is never defaulted here: the
+ * re-verification runs the same check twice, once on the rebased Story and
+ * once on the Epic head without it.
+ *
+ * A check that never started is reported apart from one that ran and failed:
+ * a missing binary says nothing about the code and must not cost the Story a
+ * round. The output is kept whole for the failure extractor, which reads the
+ * summary at its head, and truncated only for what reaches a prompt.
+ */
 async function runCheck(
   cwd: string,
   check: { name: string; command: readonly string[] },
-): Promise<{ passed: boolean; detail: string }> {
+): Promise<{ passed: boolean; detail: string; spawnError?: boolean }> {
   const [command, ...args] = check.command;
   try {
     const done = await execFileAsync(command!, args, { cwd, windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
     return { passed: true, detail: done.stdout.trim().slice(-2000) };
   } catch (cause) {
     const output = `${(cause as { stdout?: string }).stdout ?? ""}${(cause as { stderr?: string }).stderr ?? ""}`.trim();
-    return { passed: false, detail: (output === "" ? (cause as Error).message : output).slice(-2000) };
+    if (output === "" && (cause as { code?: unknown }).code !== undefined
+        && typeof (cause as { code?: unknown }).code !== "number") {
+      // ENOENT, EACCES and friends: the process never ran.
+      return { passed: false, spawnError: true, detail: (cause as Error).message };
+    }
+    return { passed: false, detail: (output === "" ? (cause as Error).message : output).slice(-CHECK_OUTPUT_LIMIT) };
   }
 }
+
+/** Enough to hold a runner's failure summary and the first failure's detail. */
+const CHECK_OUTPUT_LIMIT = 8000;
 
 async function git(worktreePath: string, args: readonly string[]): Promise<string> {
   const result = await execFileAsync("git", [...args], {
@@ -494,11 +512,12 @@ async function main(): Promise<void> {
           store,
           new EpicMergeFlow(
             processGitCommand,
-            // Deterministic re-verification: the repository's own checks, run on
-            // the integration branch. The browser sweep that used to run here
-            // belongs to the regression loop (03 section 8.3).
+            // Deterministic re-verification: the repository's own checks, run
+            // on whichever tree the flow names - the rebased Story, and the
+            // Epic head when the first run failed. The browser sweep that used
+            // to run here belongs to the regression loop (03 section 8.3).
             testSubsetVerifier(
-              { run: (check) => runCheck(integrationWorktree, check) },
+              { run: (check, cwd) => runCheck(cwd, check) },
               config.get("codeExit.projectChecks"),
             ),
             { storyWorktree: worktreePath, integrationWorktree, mainBranch: targetBranch },
