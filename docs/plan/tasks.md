@@ -400,6 +400,21 @@
 
 ---
 
+## MU 方案关与界面契约（2026-09-17 增补，排期在 MT 之后）
+
+目标：让"这事该用什么技术做""这一版界面长什么样"有一层能决定。实测形状：一条 web 后台需求拆出的 14 张卡里 10 张指向同一个不存在的前端目录，第一张进 CODE 的卡自造了一套无构建工具、`.js` 与 `.ts` 同名并存的骨架，第二张卡准备在另一条 Epic 分支上再造一次；全链路没有一处描述界面，唯一碰界面的 UI 走查永不否决。设计见 08，修订 03 §7.1 与 §9.2。
+
+| ID | 任务 | 输出物 | 验证方式 | 前置 |
+|---|---|---|---|---|
+| MU-01 | 需求状态机加 `SOLUTION`（PRD 确认之后、拆解之前）+ `requirement_solutions` revision 表 + SOLUTION phase 与 prompt（大脑档）+ 确定性停人条件（`stackChanges` 或界面契约非空即必须人批）+ 产物注入下游 | `src/orchestrator/requirement-machine.ts`、`solution-runner.ts`、`prompts/pm/solution.md`、`0001_init.sql`、`schema.ts`、08 §2 | `requirement-machine.test.ts`（新转移与非法转移）；`solution-runner.test.ts`（两类触发条件各停/各不停，模型自称不用审也照停）；`phase-input.test.ts`（注入段逐字节确定） | MT-01 |
+| MU-02 | 界面契约三件套：`docs/prototype/` 的 `tokens.json`（W3C design-tokens）+ `components.md` + 可运行页面原型；原型由既有浏览器道自动截图；注入内容按文件名稳定排序 | `src/orchestrator/interface-contract.ts`、`prompts/pm/solution.md`、`config/registry.ts`（`prototype.root`） | `interface-contract.test.ts`（token 解析、缺项拒收、注入排序稳定）；原型截图落证据目录的用例 | MU-01 |
+| MU-03 | Notion 方案区段：改了什么 / 方案摘要 / 页面清单 / 逐页四态截图 toggle / 待定分叉 to_do / 可点原型 embed / 确认清单；`approve_solution` 与 `request_solution_revision` 意图；看板新增「方案待确认」列 | `src/notion/blocks/requirement-page.ts`、`requirement-projection.ts`、`requirement-input-sync.ts`、`intent-interpreter.ts`、`display-text.json`、`board-status.ts` | `notion-write-language.test.ts`（裸枚举/英文模板即红）；`requirement-input-sync.test.ts`（勾选回读改状态）；`intent-interpreter.test.ts`（两类新意图）；原位迁移用例（改版不重建 blockId） | MU-01 |
+| MU-04 | 反向兜底：SHAPE 出口在界面契约为空但 DoD 含 `ui`/`e2e` 场景时拒绝并打回 SOLUTION；CODE 出口拒绝卡自行改依赖清单并升级为方案修订；界面契约根目录在目标分支不存在时本轮只派一张卡 | `src/orchestrator/story-worker.ts`、`pipeline/code-exit-gate.ts`、`orchestrator/scheduler.ts` | `story-worker.test.ts`（打回并记 friction）；`code-exit-gate.test.ts`（依赖清单被改即拒）；`scheduler.test.ts`（空目录时批次大小为 1） | MU-02 |
+| MU-05 | VERIFY 结构层判据：SHAPE 为 `ui`/`e2e` 场景产出 `visible[]` 落 `story_specs.visible_json`；VERIFY 后由代码读 aria 快照断言，缺一条即该场景 failed | `prompts/phases/shape.md`、`src/verify/snapshot-assert.ts`、`0001_init.sql` | `snapshot-assert.test.ts`（以本次真实证据的 404 快照与第二轮页面快照为 fixture，前者必须 fail、后者必须 pass） | MU-02 |
+| MU-06 | VERIFY 契约层判据：`page.evaluate()` 抽计算样式与 token 表比对、组件清单外的组件记违例；`uiContract.enforce` 三态（off/warn/block），默认 warn | `src/verify/token-conformance.ts`、`config/registry.ts`、03 §9.2 | `token-conformance.test.ts`（token 内/外值、三态开关行为）；一条真实需求跑完后再决定是否置 block | MU-05 |
+
+---
+
 ## M3 多机化
 
 目标：capability 队列 + 派单信封 + 心跳失联两段式 + Mac mini 浏览器 e2e worker 接入。

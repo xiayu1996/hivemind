@@ -312,7 +312,9 @@ stateDiagram-v2
     CLARIFY --> CLARIFY : PM 按主题分批提问（只谈业务场景，不谈实现）⇄ 人回评
     CLARIFY --> PRD_CONFIRM : PM 判信息充分，PRD 写入需求页
     PRD_CONFIRM --> CLARIFY : 人提修改意见（回灌重写）
-    PRD_CONFIRM --> DECOMPOSING : 人批准 PRD（人工 gate，与 PLAN_APPROVAL 同构）
+    PRD_CONFIRM --> SOLUTION : 人批准 PRD（人工 gate，与 PLAN_APPROVAL 同构）
+    SOLUTION --> SOLUTION : 方案与界面契约回灌重写 ⇄ 人回评（见 08）
+    SOLUTION --> DECOMPOSING : 无技术栈改动且不涉界面则自动通过，否则人批准（见 08 §2.2）
     DECOMPOSING --> EXECUTING : 拆出 1..N Epic，每个 Epic 正文自足、直接过既有 INTAKE
     EXECUTING --> ACCEPTANCE : 全部 Epic DONE
     ACCEPTANCE --> DONE : 场景化验收清单全部勾选
@@ -400,7 +402,7 @@ usage limit、限流、超时、传输中断、OAuth 刷新失败只进熔断器
 
 - **只在功能道已经 accepted 的轮次跑**。已经要打回 CODE 的一轮不需要第二个意见,花一个大脑档多模态 turn 去确认一个已知失败是纯浪费。
 - **只看 `ui` / `e2e` 层的 scenario**。没有界面的 scenario 没有可看的东西。
-- **原型图是参考不是判据**。原型画在实现之前,不要求像素级一致,与它的差异最多是一条 finding;只有需求用文字写明"必须与原型一致",差异才算功能验收不通过。
+- ~~**原型图是参考不是判据**~~ **（2026-09-17 修订，见 08 §6）**：原型改为进仓库的可运行契约（`tokens.json` + 组件清单 + 页面原型），判据分三层——结构层（该场景声明要看见的角色与文本是否出现在 aria 快照里）与契约层（色值/字号/间距是否全部来自 token 表）**能**否决，因为两者都是有限可枚举、可收敛的;观感仍然**永不**否决。**像素级一致仍然不做**，理由与 9.1 同源:它是无限精度的判据,失败集合永不重复。
 
 ### 9.2a 否决必须回指 DoD（2026-09-10）
 

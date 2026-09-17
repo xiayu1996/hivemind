@@ -16,7 +16,7 @@
 ## 2. 承载与技术形态
 
 - **部署**：orchestrator（Linux）同进程挂载——Fastify 静态托管 SPA + 同一套 REST API；仅内网可达（Tailscale 网段），不暴露公网；可选简单 token 鉴权（单用户场景不引入账号体系）。**不给它单独的 systemd unit**（2026-09-14 落地时确认）：控制台的写面改的就是 orchestrator 正在读的那份配置，同进程意味着热更语义不需要跨进程通知；拆成第二个 unit 只会多一份要对齐的环境、一条会与主进程各说各话的配置视图。开关与地址走 `console.enabled` / `console.host` / `console.port`，关掉它不影响任何一张卡。
-- **前端**：Vue 3 + Vite 轻 SPA（与既有项目技术栈一致，维护心智统一）；图表用 ECharts；不引重型 admin 框架。队列页直读中央 DB 的可派发集与租约状态（2026-09-14：原为 Bull Board iframe，随 BullMQ 撤销，见 02 §1.2）。
+- **前端**：**2026-09-17 起由界面契约决定，不再在本文预先写死**（见 08）。手写的 Vue SPA 已删除，控制台的服务端在 `serveUi` 为假时只提供 `/api/*`；新的前端由需求自己长出来，形态、依赖与质量门禁由那条需求的方案关（08 §2）决定并经人确认。原文保留作为当时的选择记录：Vue 3 + Vite 轻 SPA，图表用 ECharts，不引重型 admin 框架。队列页直读中央 DB 的可派发集与租约状态（2026-09-14：原为 Bull Board iframe，随 BullMQ 撤销，见 02 §1.2）。
 - **数据源**：全部来自中央 libsql 的既有表与投影（cost_entries / EventLog / 投影缓存 / worker 注册表 / config_entries），控制台**只是读面 + 配置写面，不新增执行语义**。
 
 ## 3. 页面模块
