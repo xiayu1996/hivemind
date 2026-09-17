@@ -117,6 +117,29 @@ describe("optional sections", () => {
   });
 });
 
+describe("interface contract", () => {
+  const contract = {
+    tokens: [
+      { name: "color.brand.primary", type: "color", value: "#2F6FED" },
+      { name: "space.gutter", type: "dimension", value: "16px" },
+    ],
+    components: "# 组件清单\n\n卡片：一张任务的摘要。",
+    pages: [{ file: "pages/board.html", name: "任务看板", purpose: "看到哪些卡在等自己" }],
+  };
+
+  it("puts the screens a round may build with ahead of what it owes anybody", () => {
+    const prompt = assemblePhasePrompt({ ...base, interfaceContract: contract });
+    expect(prompt.indexOf("## Interface contract")).toBeLessThan(prompt.indexOf("## What this round must do"));
+    expect(prompt).toContain("- color.brand.primary (color): #2F6FED");
+    expect(prompt).toContain("- pages/board.html - 任务看板: 看到哪些卡在等自己");
+    expect(prompt).toContain("卡片：一张任务的摘要。");
+  });
+
+  it("says nothing at all for a card whose repository has no screens", () => {
+    expect(assemblePhasePrompt(base)).not.toContain("## Interface contract");
+  });
+});
+
 describe("what this round must do", () => {
   it("puts the round's tasks before the history and tags each one", () => {
     const prompt = assemblePhasePrompt({

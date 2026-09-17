@@ -1,4 +1,5 @@
 import type { PipelinePhase } from "./phase.js";
+import { renderInterfaceContract, type InterfaceContract } from "./interface-contract.js";
 
 /** Declared once in `phase.ts`; kept as an alias so call sites reading a
  * pipeline phase do not have to know which machine declared it. */
@@ -74,6 +75,9 @@ export interface PhaseInput {
   scenarioFailures?: ScenarioFailure[];
   /** Open regression cards this round must close; only REGRESSION_FIX carries them. */
   regressions?: RegressionCardRef[];
+  /** The screens the requirement was approved with, read from the branch this
+   * round runs on. Absent for a requirement that has none. */
+  interfaceContract?: InterfaceContract;
 }
 
 export interface PhaseRejection {
@@ -118,6 +122,11 @@ export function assemblePhasePrompt(input: PhaseInput): string {
     const rows = sortBy(input.specs, (s) => s.id).map((s) => `- ${s.id} [${s.status}] ${s.text}`);
     parts.push(`## Specification\n\n${rows.join("\n")}`);
   }
+
+  // Before the round's own tasks: it is a constraint on everything below it,
+  // and a round that read what it owed somebody before reading what it is
+  // allowed to build with answers the first and violates the second.
+  if (input.interfaceContract) parts.push(renderInterfaceContract(input.interfaceContract));
 
   // Everything this round is answerable for comes before the history, and
   // carries a tag. A round that read 18KB of its own earlier artifacts before

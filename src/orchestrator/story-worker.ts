@@ -18,6 +18,7 @@ import {
   type DefinitionOfDone,
 } from "../pipeline/dod.js";
 import { assemblePhasePrompt, type PhaseInput } from "../pipeline/phase-input.js";
+import type { InterfaceContract } from "../pipeline/interface-contract.js";
 import {
   StoryExecutionStore,
   type StoryPhase,
@@ -166,6 +167,11 @@ export interface StoryWorkerOptions {
    * to a tree, so nothing is carried forward and every round re-verifies in
    * full -- which is the behaviour a caller with no worktree should get. */
   treeSha?: () => Promise<string>;
+  /** The interface contract on the branch this card runs on, read once per
+   * phase. Every phase that puts something on a screen is built against it, so
+   * it is injected wherever it exists; a card in a repository with no screens
+   * never sees the section. */
+  interfaceContract?: () => Promise<InterfaceContract | null>;
   runId?: (cardId: string, phase: StoryPhase, round: number) => string;
 }
 
@@ -238,6 +244,7 @@ export class SingleStoryWorker {
   private readonly specifyGate: StorySpecifyGate | undefined;
   private readonly convergenceOptions: ConvergenceOptions;
   private readonly treeSha: (() => Promise<string>) | undefined;
+  private readonly interfaceContract: (() => Promise<InterfaceContract | null>) | undefined;
 
   constructor(
     private readonly store: StoryExecutionStore,
@@ -253,6 +260,7 @@ export class SingleStoryWorker {
     this.specifyGate = options.specify;
     this.convergenceOptions = options.convergence ?? {};
     this.treeSha = options.treeSha;
+    this.interfaceContract = options.interfaceContract;
     this.maxInconclusiveRounds = options.maxInconclusiveRounds ?? 2;
     this.maxInnerLoopRounds = options.maxInnerLoopRounds ?? 3;
     this.specifyExitRounds = options.specifyExitRounds ?? 3;
@@ -937,6 +945,15 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
     return [...settled.outstanding];
   }
 
+  /** Adds the screens the requirement was approved with. The prompt itself
+   * reads no files: the contract is data by the time it reaches the assembly,
+   * which is what keeps an identical input producing identical bytes. */
+  private async withInterfaceContract(context: PhaseInput): Promise<PhaseInput> {
+    if (!this.interfaceContract) return context;
+    const contract = await this.interfaceContract();
+    return contract ? { ...context, interfaceContract: contract } : context;
+  }
+
   async runPhase(
     cardId: string,
     phase: Exclude<StoryPhase, "VERIFY">,
@@ -946,7 +963,7 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
   ): Promise<ManagedPhaseResult> {
     const persisted = await this.store.getCompletedPhase(cardId, phase, round);
     if (persisted) return persisted;
-    const context = await this.store.buildPhaseInput(cardId, phase, round);
+    const context = await this.withInterfaceContract(await this.store.buildPhaseInput(cardId, phase, round));
     const prompt = assemblePhasePrompt(context);
     // The attempt number comes from the store, not from a counter in this
     // process: a re-entry after a crash is a new attempt on the same slot, and
@@ -975,7 +992,7 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
     codeSessionId: string,
     definitionOfDone: DefinitionOfDone,
   ): Promise<ManagedVerifyResult> {
-    const context = await this.store.buildPhaseInput(cardId, "VERIFY", round);
+    const context = await this.withInterfaceContract(await this.store.buildPhaseInput(cardId, "VERIFY", round));
     const prompt = assemblePhasePrompt(context);
     const { attempt } = await this.store.beginPhase({ runId, cardId, phase: "VERIFY", round, prompt });
     try {

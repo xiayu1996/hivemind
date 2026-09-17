@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { homedir, hostname } from "node:os";
 import { join, resolve } from "node:path";
+import { readInterfaceContract } from "../src/pipeline/interface-contract.js";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { CANONICAL_CAPTURE_ENV } from "../src/observability/capture-contract.js";
@@ -506,6 +507,17 @@ async function main(): Promise<void> {
         specifyExitRounds: config.get("specifyExit.maxRounds"),
         convergence: { oscillationLookback: limits.oscillationLookback },
         treeSha: () => currentTreeSha(worktreePath),
+        // Read per phase off the worktree, so a card picks up a contract that
+        // changed on the branch between two of its own rounds. A half-written
+        // one is left out rather than injected: a phase told to build against
+        // a table that is missing half its colours invents the rest.
+        interfaceContract: async () => {
+          const read = await readInterfaceContract(join(worktreePath, config.get("prototype.root")));
+          if (read.kind === "incomplete") {
+            console.warn(`interface contract ignored: ${read.reasons.join("; ")}`);
+          }
+          return read.kind === "present" ? read.contract : null;
+        },
         specify: {
           // The tree the phase entered on, not a DESIGN commit: a card
           // re-entered by hand, and a delivered card running a narrow
