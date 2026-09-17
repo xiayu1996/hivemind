@@ -1,7 +1,10 @@
 import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   getTaskExecutionDetail,
   taskExecutionDetailRoute,
@@ -33,6 +36,40 @@ export interface ConsoleServerOptions {
   serveUi?: boolean;
   /** The one write surface. Without it the console stays entirely read-only. */
   configWriter?: ConsoleConfigWritePort;
+}
+
+const requireFromConsole = createRequire(import.meta.url);
+
+/**
+ * Where the browser interface is served from.
+ *
+ * A built bundle wins when one exists, but the pages are plain ES modules and
+ * are served from the worktree when it does not: the console is mounted by
+ * whatever process holds the central store, and a page that only exists after
+ * somebody ran a build is a page that is missing on the machine that needs it.
+ */
+export function resolveConsoleUiRoot(requested: string): string {
+  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  const candidates = [...new Set([
+    resolve(requested),
+    resolve("console-ui/dist"),
+    resolve("console-ui"),
+    resolve(join(moduleDir, "..", "..", "console-ui")),
+  ])];
+  const found = candidates.find((candidate) => existsSync(join(candidate, "index.html")));
+  if (found === undefined) {
+    throw new Error(`console UI entry missing: no index.html under ${candidates.join(", ")}`);
+  }
+  return found;
+}
+
+/**
+ * Vue's browser build, read from this installation's own dependencies. The
+ * console is an intranet page that has to render on a host with no route out,
+ * so nothing it needs may come from a CDN.
+ */
+function vueBrowserBundlePath(): string {
+  return requireFromConsole.resolve("vue/dist/vue.esm-browser.prod.js");
 }
 
 /** Builds the read-only intranet console. */
@@ -98,11 +135,15 @@ export async function createConsoleServer(
   }
 
   if (options.serveUi !== false) {
-    const uiRoot = resolve(options.uiRoot ?? "console-ui/dist");
+    const uiRoot = resolveConsoleUiRoot(options.uiRoot ?? "console-ui/dist");
     await app.register(fastifyStatic, {
-      root: join(uiRoot, "assets"),
-      prefix: "/assets/",
+      root: uiRoot,
+      prefix: "/ui/",
     });
+    const vueBundle = await readFile(vueBrowserBundlePath(), "utf8");
+    app.get("/vendor/vue.js", async (_request, reply) => reply.type("text/javascript").send(vueBundle));
+    // Every page is the same shell: the browser routes from the path it was
+    // opened with, so a deep link and a click land on the same view.
     const index = await readFile(join(uiRoot, "index.html"), "utf8");
     app.get("/", async (_request, reply) => reply.type("text/html").send(index));
     for (const route of ["/nodes", "/tasks", "/tasks/:taskId", "/costs", "/config", "/stats", "/providers", "/queue"]) {

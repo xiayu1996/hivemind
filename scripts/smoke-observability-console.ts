@@ -1,7 +1,6 @@
 import { createClient } from "@libsql/client";
 import { deepStrictEqual } from "node:assert";
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { hostname, platform, release } from "node:os";
 import { join } from "node:path";
@@ -151,9 +150,9 @@ async function main(): Promise<void> {
     const uiRoot = join(REPO, "console-ui", "dist");
     app = await createConsoleServer(source, {
       uiRoot,
-      // The web interface is being rebuilt from the board; until it is there,
-      // the console is its read API and nothing else.
-      serveUi: existsSync(join(uiRoot, "index.html")),
+      // The pages are served from the worktree when no bundle was built; the
+      // server resolves which one exists, so the console always has a page.
+      serveUi: true,
       configWriter: new ConsoleConfigWriter(await ConfigStore.load(client), client),
     });
     const address = await listenConsole(app, { host: "127.0.0.1", port: CONSOLE_PORT });

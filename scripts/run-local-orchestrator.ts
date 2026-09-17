@@ -1179,7 +1179,9 @@ async function main(): Promise<void> {
       })),
       {
         uiRoot,
-        serveUi: await exists(join(uiRoot, "index.html")),
+        // The pages are served from the worktree when no bundle was built; the
+        // server resolves which one exists, so the console always has a page.
+        serveUi: true,
         configWriter: new ConsoleConfigWriter(config, handle.client),
       },
     );
