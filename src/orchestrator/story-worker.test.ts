@@ -866,8 +866,13 @@ describe("SingleStoryWorker inside an Epic", () => {
     const { phases, verifier, delivery, projection } = ports();
     const integration = {
       integrate: vi.fn(async (cardId: string, runId: string) => {
-        await store.recordIntegrationRejection(cardId, runId, "npm test fails on the Epic head without this Story", {
-          attribution: "baseline_failing", failures: ["src/runner/catalog-snapshot.test.ts > deepseek"],
+        await store.recordBaselineFailure({
+          cardId,
+          runId,
+          check: "npm test",
+          failures: ["src/runner/catalog-snapshot.test.ts > deepseek"],
+          headSha: "beef2",
+          reason: "npm test fails on the Epic head without this Story",
         });
         return {
           kind: "verification_failed",
@@ -881,9 +886,11 @@ describe("SingleStoryWorker inside an Epic", () => {
     });
 
     // The same failure that stops the card above leaves it alone here: no
-    // amount of work on this Story turns the Epic head green.
-    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "CODE", stopReason: null });
+    // amount of work on this Story turns the Epic head green, so it waits in
+    // MERGE rather than buying CODE turns.
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "MERGE", stopReason: null });
     await expect(store.getInnerLoopSpend("S-EPIC1-01")).resolves.toBe(0);
+    await expect(store.getStory("S-EPIC1-01")).resolves.toMatchObject({ state: "MERGE" });
   });
 
   it("hands a check that never ran to the crash safety net instead of the card", async () => {

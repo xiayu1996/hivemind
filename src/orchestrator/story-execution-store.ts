@@ -1018,6 +1018,42 @@ export class StoryExecutionStore {
   }
 
   /**
+   * The same check fails on the Epic head without this Story.
+   *
+   * The Story stays in MERGE: it is not wrong, and sending it back to CODE
+   * would buy model turns to fix something that is not on its branch. The
+   * failure is recorded against the Epic instead, which is what blocks the
+   * Epic and what a recheck clears once the head is green again.
+   */
+  async recordBaselineFailure(input: {
+    cardId: string;
+    runId: string;
+    check: string;
+    failures: readonly string[];
+    headSha: string;
+    reason: string;
+  }): Promise<void> {
+    const row = (await this.client.execute({
+      sql: "SELECT epic_id FROM stories WHERE id = ?",
+      args: [input.cardId],
+    })).rows[0];
+    const epicId = String(row?.epic_id ?? "");
+    if (!epicId) throw new Error(`Story ${input.cardId} belongs to no Epic`);
+    const time = this.now();
+    const epicRunId = `epic:${epicId}`;
+    const detail = { check: input.check, failures: input.failures, headSha: input.headSha };
+    await this.client.batch([
+      eventStatement(input.runId, input.cardId, "MERGE", "merge.baseline_failing", { reason: input.reason, ...detail, spent: false }, time),
+      {
+        sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
+              VALUES (?, (SELECT COALESCE(MAX(seq), -1) + 1 FROM event_log WHERE run_id = ?),
+                      NULL, NULL, 'epic.head_failing', ?, ?)`,
+        args: [epicRunId, epicRunId, time, JSON.stringify({ storyId: input.cardId, ...detail })],
+      },
+    ], "write");
+  }
+
+  /**
    * Rounds this Story has spent since a person last acted on it.
    *
    * CODE, VERIFY and MERGE are one loop, so a merge the Story's own work broke

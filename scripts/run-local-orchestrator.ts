@@ -85,6 +85,9 @@ import { assertSchemaCurrent } from "../src/persistence/schema-fingerprint.js";
 import { createWorktree, locateWorktree, worktreeLayout } from "../src/vcs/worktree.js";
 import { publishEpicBranch } from "../src/vcs/epic-branch.js";
 import { processGitCommand } from "../src/vcs/story-delivery.js";
+import { runProjectCheck } from "../src/vcs/project-check-runner.js";
+import { recheckEpicHeads } from "../src/orchestrator/epic-head-recheck.js";
+import { unrecoveredHeadFailures } from "../src/orchestrator/epic-head-failure.js";
 
 const execFileAsync = promisify(execFile);
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -664,6 +667,31 @@ async function main(): Promise<void> {
       }
     }
 
+    // An Epic head that failed a check is usually repaired somewhere else
+    // entirely - on main, in another Epic, or by hand on the host - so nothing
+    // announces the fix and somebody has to look again.
+    for (const outcome of await recheckEpicHeads({
+      client: handle.client,
+      checks: {
+        run: async (check, cwd) => {
+          const declared = config.get("codeExit.projectChecks").find((entry) => entry.name === check);
+          if (!declared) return { passed: false, detail: `the repository no longer declares a check named ${check}` };
+          return runProjectCheck(cwd, declared);
+        },
+      },
+      worktreePath: (epicId) => locateWorktree(repositoryId, `epic-${epicId}`, layout).worktreePath,
+      headSha: async (epicId) => (await processGitCommand.run(
+        locateWorktree(repositoryId, `epic-${epicId}`, layout).worktreePath,
+        ["rev-parse", "HEAD"],
+      )).trim(),
+      intervalMs: config.get("regression.epicPoolIntervalMs"),
+    })) {
+      if (outcome.outcome === "recovered") console.log(`Epic ${outcome.epicId} head is green again; it continues`);
+      if (outcome.outcome === "still_failing") {
+        console.warn(`Epic ${outcome.epicId} head still fails: ${outcome.failures.join(", ")}`);
+      }
+    }
+
     for (const outcome of await new EpicCompletion(handle.client, await mergeRequests()).tick()) {
       if (outcome.kind === "done") console.log(`Epic ${outcome.epicId} is done: its review request landed`);
       if (outcome.kind === "unreadable") console.warn(`Epic ${outcome.epicId} review state unreadable: ${outcome.reason}`);
@@ -850,9 +878,16 @@ async function main(): Promise<void> {
         args: [repositorySlug],
       })).rows;
       const byId = new Map(rows.map((row) => [String(row.id), row]));
+      // A Story waiting on an Epic head that is still failing would run the
+      // whole merge again, re-run the repository's suite, and write down the
+      // same refusal - once per cycle, for as long as the head stays red. The
+      // recheck above is what looks at it, at a rate it decides.
+      const headFailures = await unrecoveredHeadFailures(handle.client);
       // Footprints decide what may run beside what; priority only decides the
       // order within a batch that is already free of conflicts.
-      const plan = await planRepositoryStoryExecution(config, dispatchableStories(rows.map((row) => ({
+      const plan = await planRepositoryStoryExecution(config, dispatchableStories(rows.filter((row) => !(
+        String(row.state) === "MERGE" && headFailures.has(String(row.epic_id ?? ""))
+      )).map((row) => ({
         id: String(row.id),
         state: String(row.state),
         dependsOn: JSON.parse(String(row.depends_on ?? "[]")) as string[],
