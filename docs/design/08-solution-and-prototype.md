@@ -155,6 +155,11 @@ docs/prototype/
 - **不做像素比对**（§6）。
 - **骨架不单独成卡**（§5）。
 - **方案关不新增停点**（§2）：等人仍停在 SOLUTION 状态内，四类真停点不变。
+- **需求层不建 Story 层那套执行机制**（2026-09-18 增补，MC-03 盘点时定）。需求层没有 `phase_runs`、没有 checkpoint 与崩溃恢复、不进 `cost.perCardUsdCeiling`，这是选择而不是欠债：
+  - **没有 phase_runs**：这一层没有内环，也没有要归因的重试。一次 `advance` 要么产出一版落进 `requirement_prds` / `requirement_solutions` 的 revision，要么什么都不写；revision 表本身就是这层的运行史，再记一遍 phase run 只是同一件事的第二份账。
+  - **没有 checkpoint**：草稿只在被接受时才落库，所以一次跑死的 PM 会话什么都没留下，下一周期从同一个输入重跑即可——重跑是幂等的，这正是崩溃恢复要换来的东西，代价却是零。
+  - **不进费用上限**：单卡上限管的是"不封顶的敞口"，而这一层的每条路径都被离散预算封住了——澄清 `requirement.maxClarifyRounds` 轮，起草 `requirement.maxDraftAttempts` 次，一个周期每条需求只推进一次。没有一个能无限转的循环，上限也就没有东西可挡。真花掉的 token 照常记进 `cost_entries`（run_id 为 `requirement:<id>`），所以它可被观察、可被事后追。
+  这三条都以"这一层没有内环"为前提。哪天需求层长出一个会自己转的循环，这一节就要重写。
 
 ## 8. 数据模型与配置
 

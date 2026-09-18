@@ -140,6 +140,13 @@ export const CONFIG_KEYS = {
     reload: "hot",
     description: "Question batches the product manager may put to a person before the requirement stops for a human decision.",
   }),
+  "requirement.maxDraftAttempts": def({
+    schema: positiveInt.max(5),
+    default: 2,
+    scope: "global",
+    reload: "hot",
+    description: "How many times the product manager may rewrite a PRD or a solution its own contract refused, inside one advance. The second attempt is told what was wrong with the first; a third that still cannot satisfy a deterministic contract is asking a person, not trying again. This is the requirement layer's equivalent of retry.maxInnerLoopRounds - the Story lane's budgets do not apply here, because the requirement layer has no phase runs and no inner loop.",
+  }),
   "requirement.maxQuestionsPerRound": def({
     schema: positiveInt.max(20),
     default: 6,

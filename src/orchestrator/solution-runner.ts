@@ -7,6 +7,7 @@ import {
   type SolutionBody,
   type SolutionCandidate,
 } from "./requirement-solution.js";
+import { draftUntilUsable, requirementRunId as runId, stopOnUnusableDraft } from "./requirement-draft.js";
 import type { RequirementStore } from "./requirement-store.js";
 
 export interface SolutionRequest {
@@ -34,8 +35,6 @@ export type SolutionOutcome =
   | { kind: "confirmed"; revision: number; source: "auto" | "human" }
   | { kind: "stopped"; reason: string };
 
-const MAX_ATTEMPTS = 2;
-
 /**
  * Decides what a requirement will be built with, once, before it is split into
  * Epics. Nothing below this has the scope: the PRD and the decomposition are
@@ -52,6 +51,7 @@ export class SolutionRunner {
     private readonly store: RequirementStore,
     private readonly port: SolutionPort,
     private readonly publisher: RequirementPagePublisher,
+    private readonly attempts = 2,
   ) {}
 
   async advance(requirementId: string): Promise<SolutionOutcome> {
@@ -75,62 +75,66 @@ export class SolutionRunner {
     }
     const body = JSON.parse(prd.body) as { businessGoal: string; nonGoals: string[]; scenarios: PrdScenario[] };
     const revisionFeedback = await this.store.solutionRevisionFeedback(requirementId);
-    const rejections: string[] = [];
-
-    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      const candidate = await this.port.run({
-        requirementId,
-        title: requirement.title,
-        repository: requirement.repo ?? "",
-        businessGoal: body.businessGoal,
-        nonGoals: body.nonGoals,
-        scenarios: body.scenarios,
-        revisionFeedback,
-        previousRejections: [...rejections],
-      });
-      const evaluated = evaluateSolution(candidate);
-      if (evaluated.kind !== "accepted") {
-        rejections.push(...evaluated.reasons);
-        continue;
-      }
-      const solution: SolutionBody = {
-        approach: evaluated.approach,
-        stackChanges: evaluated.stackChanges,
-        openDecisions: evaluated.openDecisions,
-        qualityGates: evaluated.qualityGates,
-        interface: evaluated.interface,
+    const drafted = await draftUntilUsable<SolutionBody>({
+      attempts: this.attempts,
+      run: async (previousRejections) => {
+        const candidate = await this.port.run({
+          requirementId,
+          title: requirement.title,
+          repository: requirement.repo ?? "",
+          businessGoal: body.businessGoal,
+          nonGoals: body.nonGoals,
+          scenarios: body.scenarios,
+          revisionFeedback,
+          previousRejections,
+        });
+        const evaluated = evaluateSolution(candidate);
+        return evaluated.kind === "accepted"
+          ? {
+            kind: "accepted",
+            value: {
+              approach: evaluated.approach,
+              stackChanges: evaluated.stackChanges,
+              openDecisions: evaluated.openDecisions,
+              qualityGates: evaluated.qualityGates,
+              interface: evaluated.interface,
+            },
+          }
+          : { kind: "rejected", reasons: evaluated.reasons };
+      },
+    });
+    if (drafted.kind === "unusable") {
+      return {
+        kind: "stopped",
+        reason: await stopOnUnusableDraft({
+          store: this.store, publisher: this.publisher, requirementId,
+          state: "SOLUTION", what: "solution", reasons: drafted.reasons,
+        }),
       };
-      const revision = await this.store.saveDraftSolution(
-        requirementId,
-        JSON.stringify(solution),
-        runId(requirementId),
-      );
-      if (solutionNeedsApproval(solution)) {
-        await this.publisher.publish(requirementId);
-        return { kind: "drafted", revision, awaiting: approvalReasons(solution) };
-      }
-      // Nothing here is a person's call, so waiting for one would only add
-      // latency. The confirmation is still recorded, with `auto` as its source,
-      // so the page and the audit trail say who let it through.
-      await this.store.confirmSolution(
-        requirementId,
-        revision,
-        `solution-auto:${requirementId}:${revision}`,
-        "auto",
-        runId(requirementId),
-      );
-      await this.store.transition(requirementId, "SOLUTION", "DECOMPOSING", "system", runId(requirementId));
-      await this.publisher.publish(requirementId);
-      return { kind: "confirmed", revision, source: "auto" };
     }
 
-    const reason = `solution was unusable: ${rejections.join("; ")}`;
-    await this.store.stopForHumanInput(requirementId, "SOLUTION", runId(requirementId), reason);
+    const solution = drafted.value;
+    const revision = await this.store.saveDraftSolution(
+      requirementId,
+      JSON.stringify(solution),
+      runId(requirementId),
+    );
+    if (solutionNeedsApproval(solution)) {
+      await this.publisher.publish(requirementId);
+      return { kind: "drafted", revision, awaiting: approvalReasons(solution) };
+    }
+    // Nothing here is a person's call, so waiting for one would only add
+    // latency. The confirmation is still recorded, with `auto` as its source,
+    // so the page and the audit trail say who let it through.
+    await this.store.confirmSolution(
+      requirementId,
+      revision,
+      `solution-auto:${requirementId}:${revision}`,
+      "auto",
+      runId(requirementId),
+    );
+    await this.store.transition(requirementId, "SOLUTION", "DECOMPOSING", "system", runId(requirementId));
     await this.publisher.publish(requirementId);
-    return { kind: "stopped", reason };
+    return { kind: "confirmed", revision, source: "auto" };
   }
-}
-
-function runId(requirementId: string): string {
-  return `requirement:${requirementId}`;
 }

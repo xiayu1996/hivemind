@@ -1,5 +1,6 @@
 import type { ClarifyRound, RequirementPagePublisher } from "./clarify-loop.js";
 import { evaluatePrd, type PrdCandidate } from "./requirement-artifacts.js";
+import { draftUntilUsable, requirementRunId as runId, stopOnUnusableDraft } from "./requirement-draft.js";
 import type { RequirementStore } from "./requirement-store.js";
 
 export interface PrdRequest {
@@ -23,8 +24,6 @@ export type PrdOutcome =
   | { kind: "confirmed"; revision: number }
   | { kind: "stopped"; reason: string };
 
-const MAX_ATTEMPTS = 2;
-
 /**
  * Writes the PRD and then gets out of the way. Approval is a person's act:
  * nothing here advances the requirement on its own, and a confirmed PRD is
@@ -35,6 +34,7 @@ export class PrdRunner {
     private readonly store: RequirementStore,
     private readonly port: PrdPort,
     private readonly publisher: RequirementPagePublisher,
+    private readonly attempts = 2,
   ) {}
 
   async advance(requirementId: string): Promise<PrdOutcome> {
@@ -56,42 +56,47 @@ export class PrdRunner {
 
     const history = await this.store.clarifyHistory(requirementId);
     const revisionFeedback = await this.store.prdRevisionFeedback(requirementId);
-    const rejections: string[] = [];
-    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      const candidate = await this.port.run({
-        requirementId,
-        title: requirement.title,
-        originalRequest: requirement.originalRequest,
-        history,
-        revisionFeedback,
-        previousRejections: [...rejections],
-      });
-      const evaluated = evaluatePrd(requirementId, candidate);
-      if (evaluated.kind === "accepted") {
-        const body = {
-          businessGoal: evaluated.businessGoal,
-          nonGoals: evaluated.nonGoals,
-          scenarios: evaluated.scenarios,
-          openQuestions: evaluated.openQuestions,
-        };
-        const revision = await this.store.saveDraftPrd(
+    const drafted = await draftUntilUsable({
+      attempts: this.attempts,
+      run: async (previousRejections) => {
+        const candidate = await this.port.run({
           requirementId,
-          JSON.stringify(body),
-          runId(requirementId),
-        );
-        await this.publisher.publish(requirementId);
-        return { kind: "drafted", revision };
-      }
-      rejections.push(...evaluated.reasons);
+          title: requirement.title,
+          originalRequest: requirement.originalRequest,
+          history,
+          revisionFeedback,
+          previousRejections,
+        });
+        const evaluated = evaluatePrd(requirementId, candidate);
+        return evaluated.kind === "accepted"
+          ? {
+            kind: "accepted",
+            value: {
+              businessGoal: evaluated.businessGoal,
+              nonGoals: evaluated.nonGoals,
+              scenarios: evaluated.scenarios,
+              openQuestions: evaluated.openQuestions,
+            },
+          }
+          : { kind: "rejected", reasons: evaluated.reasons };
+      },
+    });
+    if (drafted.kind === "unusable") {
+      return {
+        kind: "stopped",
+        reason: await stopOnUnusableDraft({
+          store: this.store, publisher: this.publisher, requirementId,
+          state: "PRD_CONFIRM", what: "PRD", reasons: drafted.reasons,
+        }),
+      };
     }
 
-    const reason = `PRD was unusable: ${rejections.join("; ")}`;
-    await this.store.stopForHumanInput(requirementId, "PRD_CONFIRM", runId(requirementId), reason);
+    const revision = await this.store.saveDraftPrd(
+      requirementId,
+      JSON.stringify(drafted.value),
+      runId(requirementId),
+    );
     await this.publisher.publish(requirementId);
-    return { kind: "stopped", reason };
+    return { kind: "drafted", revision };
   }
-}
-
-function runId(requirementId: string): string {
-  return `requirement:${requirementId}`;
 }
