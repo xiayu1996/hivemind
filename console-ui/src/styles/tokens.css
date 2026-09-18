@@ -1,0 +1,58 @@
+/* The interface contract's token table, as the variables every page uses.
+ * A value that is not in the table is not a page's to invent. */
+:root {
+  color-scheme: light;
+  --color-page: #f4f7fa;
+  --color-surface: #ffffff;
+  --color-text: #172b3a;
+  --color-text-muted: #526477;
+  --color-border: #cbd5df;
+  --color-action: #173f63;
+  --color-attention: #a75b00;
+  --color-danger: #b42318;
+  --color-success: #18794e;
+  --color-focus: #0b6bcb;
+  --color-surface-attention: #fff4df;
+  --color-surface-danger: #fff0ef;
+  --color-surface-success: #eaf7f0;
+  --color-surface-selected: #e9f1f8;
+
+  --font-interface: "IBM Plex Sans", "Segoe UI", sans-serif;
+  --font-numeric: "IBM Plex Mono", "SFMono-Regular", monospace;
+
+  --size-caption: 12px;
+  --size-body: 14px;
+  --size-body-large: 16px;
+  --size-heading-small: 18px;
+  --size-heading-page: 26px;
+  --size-metric: 30px;
+
+  --weight-regular: 400;
+  --weight-medium: 550;
+  --weight-strong: 700;
+
+  --radius-control: 6px;
+  --radius-panel: 10px;
+  --radius-pill: 999px;
+
+  --space-inline-tight: 4px;
+  --space-control-gap: 8px;
+  --space-content-gap: 12px;
+  --space-section-gap: 20px;
+  --space-page-gutter: 28px;
+  --space-page-gutter-mobile: 16px;
+
+  --shadow-raised: 0 2px 8px #172b3a14;
+
+  --layer-base: 0;
+  --layer-sticky: 10;
+  --layer-navigation: 20;
+}
+
+body {
+  margin: 0;
+  background: var(--color-page);
+  color: var(--color-text);
+  font-family: var(--font-interface);
+  font-size: var(--size-body);
+}

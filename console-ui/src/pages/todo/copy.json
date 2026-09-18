@@ -80,5 +80,5 @@
   "awaitingBody": "处理结果已经提交，但对应的 Notion 条目还没有确认保存。这件待办仍未处理，确认之后才会继续。",
   "retryableBody": "对应的 Notion 条目没有确认保存。可以检查保存结果，原样重试这件待办的结果。",
   "checkSave": "检查保存结果",
-  "notionTargetTemplate": "{prefix}已保留到对应的{destination}“{title}”。"
+  "notionTargetTemplate": "{prefix}已保留到对应的 {destination}“{title}”。"
 }

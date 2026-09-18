@@ -141,8 +141,68 @@ export interface TodoPagePort {
   checkSave(todoId: string): Promise<TodoSubmitResultDto>;
 }
 
-export function createTodoHttpPort(fetchImpl?: typeof fetch): TodoPagePort {
-  throw new Error("the todo http port is not implemented yet");
+export function createTodoHttpPort(fetchImpl: typeof fetch = fetch): TodoPagePort {
+  async function readOne(todoId: string): Promise<TodoReadResultDto> {
+    const response = await fetchImpl(todoDetailApiPath(todoId));
+    // A gone todo is not a failed read: the page says the same thing about it
+    // as it does about an empty list, and never invents a handling status.
+    if (response.status === 404) return { kind: "none" };
+    if (!response.ok) return { kind: "failed" };
+    return { kind: "pending", todo: (await response.json()) as TodoDetailDto };
+  }
+
+  async function decision(path: string, init: RequestInit): Promise<TodoSubmitResultDto> {
+    const response = await fetchImpl(path, init);
+    const body = (await response.json().catch(() => null)) as {
+      readonly ok?: boolean;
+      readonly state?: TodoDecisionStateDto;
+      readonly issues?: readonly TodoValidationIssueDto[];
+    } | null;
+    if (response.status >= 200 && response.status < 300 && body?.ok === true && body.state) {
+      return { kind: "recorded", state: body.state };
+    }
+    if (response.status === 422) return { kind: "invalid", issues: body?.issues ?? [] };
+    if (response.status === 404) return { kind: "gone" };
+    return { kind: "failed" };
+  }
+
+  return {
+    async read(todoId) {
+      try {
+        if (todoId !== null) return await readOne(todoId);
+        const response = await fetchImpl(todoListApiPath());
+        if (!response.ok) return { kind: "failed" };
+        const list = (await response.json()) as TodoListDto;
+        return list.openTodoId === null ? { kind: "none" } : await readOne(list.openTodoId);
+      } catch {
+        // A request that never arrived is a read that failed, not a ledger
+        // with nothing in it: the screen must never call the two the same.
+        return { kind: "failed" };
+      }
+    },
+    async submit(todoId, submission) {
+      try {
+        return await decision(todoDecisionApiPath(todoId), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(submission),
+        });
+      } catch {
+        return { kind: "failed" };
+      }
+    },
+    async checkSave(todoId) {
+      try {
+        return await decision(todoSaveCheckApiPath(todoId), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        });
+      } catch {
+        return { kind: "failed" };
+      }
+    },
+  };
 }
 
 /** Mirrors `TODO_LIST_PATH`, `TODO_DETAIL_PATH`, `TODO_DECISION_PATH` and
@@ -208,14 +268,69 @@ export function initialTodoView(todoId: string | null): TodoViewState {
   return { status: "idle", todoId, requestId: 0, todo: null, submission: null, issues: [], decision: null };
 }
 export function reduceTodoView(state: TodoViewState, action: TodoViewAction): TodoViewState {
-  throw new Error(`reducing ${action.type} from ${state.status} is not implemented yet`);
+  switch (action.type) {
+    case "load":
+      // Content already on screen stays put while the read runs: a refresh that
+      // blanks the page makes a person re-read what they were deciding.
+      return { ...state, status: "loading", todoId: action.todoId, requestId: state.requestId + 1, issues: [] };
+    case "loaded": {
+      if (action.requestId < state.requestId) return state;
+      if (action.result.kind === "pending") {
+        const decision = action.result.todo.decision;
+        return {
+          ...state,
+          requestId: action.requestId,
+          todoId: action.result.todo.todoId,
+          todo: action.result.todo,
+          decision,
+          status: decision === null ? "ready" : decision.status === "processed" ? "processed" : "awaiting_notion",
+          issues: [],
+        };
+      }
+      if (action.result.kind === "none") {
+        return { ...state, requestId: action.requestId, status: "none", todo: null, decision: null, issues: [] };
+      }
+      return { ...state, requestId: action.requestId, status: "error", issues: [] };
+    }
+    case "submit":
+      return { ...state, status: "submitting", requestId: action.requestId, submission: action.submission, issues: [] };
+    case "submitted": {
+      if (action.requestId < state.requestId) return state;
+      if (action.result.kind === "recorded") {
+        return {
+          ...state,
+          requestId: action.requestId,
+          decision: action.result.state,
+          status: action.result.state.status === "processed" ? "processed" : "awaiting_notion",
+        };
+      }
+      if (action.result.kind === "invalid") {
+        return { ...state, requestId: action.requestId, status: "ready", issues: action.result.issues };
+      }
+      if (action.result.kind === "gone") {
+        return { ...state, requestId: action.requestId, status: "none", todo: null, decision: null, issues: [] };
+      }
+      return { ...state, requestId: action.requestId, status: "error", issues: [] };
+    }
+    case "check":
+      return { ...state, status: "submitting", requestId: action.requestId, issues: [] };
+  }
 }
 
 /** An empty form for this todo, of the kind the todo declares. What the person
  * types is added to it; nothing here is preselected, and a todo with a
  * recommended option still opens with nothing chosen. */
 export function emptySubmission(todo: TodoDetailDto, submittedBy: string): TodoSubmissionDto {
-  throw new Error(`an empty submission for ${todo.todoId} is not implemented yet`);
+  if (todo.kind === "answer") return { kind: "answer", answer: "", submittedBy };
+  // The approval's conclusion is the screen's own radio state, which starts
+  // with nothing chosen; only the free-text note lives in this default.
+  if (todo.kind === "approve") return { kind: "approve", conclusion: "approve", note: "", submittedBy };
+  return {
+    kind: "choose",
+    answers: todo.questions.map((question) => ({ questionIndex: question.index, optionLetter: null, text: "" })),
+    note: "",
+    submittedBy,
+  };
 }
 
 /** How often the screen reads again while it is open: the requirement's own
@@ -231,28 +346,41 @@ export function todoKindLabel(kind: TodoKindDto): string {
  * heading rather than the raw id, so a server that learns a new section type
  * cannot leak it into a person's page. */
 export function sectionHeading(id: TodoSectionIdDto | string): string {
-  throw new Error(`the heading for section ${id} is not implemented yet`);
+  return (copy.sectionHeadings as Record<string, string | undefined>)[id] ?? "";
 }
 
 /** 等待 18 分钟, from the todo's own `waitingSince`. */
 export function formatWaiting(waitingSince: number, now: number): string {
-  throw new Error(`formatting a wait since ${waitingSince} at ${now} is not implemented yet`);
+  const minutes = Math.max(0, Math.floor((now - waitingSince) / 60_000));
+  if (minutes < 60) return `等待 ${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `等待 ${hours} 小时`;
+  return `等待 ${Math.floor(hours / 24)} 天`;
+}
+
+function fill(template: string, values: Record<string, string>): string {
+  return template.replaceAll(/\{(\w+)\}/g, (_, key: string) => values[key] ?? "");
 }
 
 /** 结果会保留到对应的 Notion 需求“R-…”, the line beside the form that says
  * where the decision goes before the person commits to it. */
 export function formatNotionTargetLine(todo: TodoDetailDto): string {
-  throw new Error(`the notion target line for ${todo.todoId} is not implemented yet`);
+  const destination = copy.destinationValues[todo.notionTarget.kind];
+  return `结果会保留到对应的${destination}“${todo.notionTarget.title}”。`;
 }
 
 /** 答复已保留到对应的 Notion 任务“…” after a confirmed save. */
 export function formatProcessedLine(todo: TodoDetailDto): string {
-  throw new Error(`the processed line for ${todo.todoId} is not implemented yet`);
+  return fill(copy.notionTargetTemplate, {
+    prefix: copy.savedPrefixes[todo.kind],
+    destination: copy.destinationValues[todo.notionTarget.kind],
+    title: todo.notionTarget.title,
+  });
 }
 
 /** The words a validation issue turns into. */
 export function validationMessage(issue: TodoValidationIssueDto): string {
-  throw new Error(`the message for ${issue} is not implemented yet`);
+  return copy.validation[issue];
 }
 
 export const TODO_COPY: {

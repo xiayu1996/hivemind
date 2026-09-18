@@ -22,7 +22,8 @@
     "orchestrator:run": "tsx scripts/run-local-orchestrator.ts",
     "requirements:run": "tsx scripts/run-requirement-loop.ts",
     "preflight": "tsx scripts/preflight.ts",
-    "health": "tsx scripts/health-check.ts"
+    "health": "tsx scripts/health-check.ts",
+    "build:console": "vite build --config vite.config.ts"
   },
   "dependencies": {
     "@fastify/static": "^10.1.3",
