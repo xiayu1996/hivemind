@@ -540,7 +540,7 @@ MU-09 拆开的那一项（2026-09-18，MU-03 做完后复核）：“仓库首�
 | W-05 ⬜ | 两版原型的 design lint finding 一字不差 | finding 只记 friction，从不进下一轮 prompt。不否决是对的（审美不能否决），不告诉是错的 | 待做：把上一轮 finding 作为**不否决的提示**注入重画 |
 | W-07 ✅ | 每个 phase 读的路径都带 `worktree/` 前缀，是模型自己摸出来的；SPECIFY 花十四分钟写完测试契约被以「没有测试」拒了三次 | session 头里的 `cwd` 写的是 session root（放会话文件的地方，没有仓库），pi 拿它当会话工作目录。模型写的测试落在出口不看的那棵树里；session root 下还长出第二棵 git worktree，挂在进程启动时所在的 checkout 上 | 头里改写这次 spawn 真正运行的目录；错位的 worktree 已移除 |
 | W-08 ✅ | 「no session file」对每张卡的每一轮都出现，排障只能靠翻库和猜 | `inspect-round` 按一个已不存在的布局找会话（`<root>/<runId>/*.jsonl`，实际是 `<root>/<card>/<phase>/r<round>-a<n>.jsonl`），并且传了一个它从没取出来的 round | 按实际布局找，取最后一次 attempt。W-07 花一整夜才找到，就是因为这条先坏了 |
-| W-09 ⬜ | 失败那一轮的 tokens 记成 0、费用 0，而它真跑了 837 秒 | 待查：失败路径上 usage 没有入账 | 待做。敞口看不见就等于没有敞口护栏 |
+| W-09 ✅ | 失败那一轮的 tokens 记成 0、费用 0，而它真跑了 837 秒 | 记账写在出口检查之后，出口一拒绝就抛错走人；会话内回喂的那几轮 prompt 也从来不在这一轮的账上 | 记账移到抛错也走得到的地方，只记一次；回喂的 usage 逐轮累加进来。费用上限是唯一的敞口护栏，漏账就是护栏上的洞 |
 | W-06 ⬜ | 人只能从 worktree 的 `file://` 路径看原型，背离「只在 Notion 上完成」 | 截图能力（`prototype-screenshots.ts`，四态）与 Notion 上传能力（`sdk-adapters.ts` 的 multipart + `file_upload`，Story 侧已在生产用）都在仓库里，**两者之间没有接线**；MU-09 记的「gateway 没有 multipart 通道」是错的 | 待定：Ryan 倾向接 Cloudflare 一类免费服务给可点原型；截图进 Notion 是另一半，两件事不互斥 |
 
 ---

@@ -385,6 +385,41 @@ describe("PiStoryPhasePort", () => {
     })).rejects.toBeInstanceOf(PhaseExitNotMetError);
   });
 
+  it("bills a round that ended in a refusal, handbacks and all", async () => {
+    // The per-card ceiling is the only guard on an open-ended spend, so a round
+    // that failed and billed nothing is a hole in it: one SPECIFY spent
+    // fourteen minutes and was recorded at zero.
+    temporary = await mkdtemp(join(tmpdir(), "hivemind-pi-phase-"));
+    const billed: { usage: unknown }[] = [];
+    const port = new PiStoryPhasePort({
+      binary: "pi",
+      resolveSpec: async () => ({ spec: await testAgentSpec(), release: async () => undefined }),
+      worktreePath: resolve("."),
+      promptRoot: resolve("prompts"),
+      sessionRoot: join(temporary, "sessions"),
+      evidencePath: join(temporary, "evidence"),
+      auditPath: join(temporary, "audit.jsonl"),
+      guardExtension: resolve("extensions/hive-guard.ts"),
+      canonicalCaptureExtension: resolve("extensions/canonical-capture.ts"),
+      createRunner: () => fakeRunner(JSON.stringify({ test_contract_yaml: "story_id: S-EPIC1-01" })),
+      readProviderPayloads: async () => [{ model: "mock-1", messages: [] }],
+      recordCost: async (input) => { billed.push({ usage: input.result.usage }); },
+    });
+
+    await expect(port.run({
+      ...phaseInput("SPECIFY"),
+      exitGates: [{
+        name: "specify-exit", maxRounds: 3, exhausted: "fail",
+        evaluate: async () => ({ passed: false, findings: "still not red" }),
+      }],
+    })).rejects.toBeInstanceOf(PhaseExitNotMetError);
+
+    // Once, for the first prompt plus the two handbacks the exit spent before
+    // it gave up: one row rather than three, and never none.
+    expect(billed).toHaveLength(1);
+    expect(billed[0]!.usage).toMatchObject({ input: usage.input * 3, costUsd: usage.costUsd * 3 });
+  });
+
   it("asks MERGE to rewrite a report whose business section reads like a transcript", async () => {
     temporary = await mkdtemp(join(tmpdir(), "hivemind-pi-phase-"));
     const replies = [
