@@ -20,8 +20,9 @@ import { needsApiKeyEnv, providerKeyEnv } from "../src/runner/provider-env.js";
 import { reapStalePiAuthLock } from "../src/runner/auth-lock.js";
 import { probeCredentialRoundTrip } from "../src/runner/credential-roundtrip.js";
 import { judgeApprovals, type ApprovalSubject } from "../src/judge/approval-intent.js";
+import { judgeBusinessLanguage } from "../src/judge/business-language.js";
 import { judgeEnvironmentReasons } from "../src/judge/environment-reasons.js";
-import { approvalJudgeSetup, environmentJudgeSetup, judgeConfigFrom } from "../src/judge/settings.js";
+import { approvalJudgeSetup, businessLanguageJudgeSetup, environmentJudgeSetup, judgeConfigFrom } from "../src/judge/settings.js";
 import { assertErrorFixtureCoverage } from "../src/runner/error-fixtures.js";
 import { assertProviderRetriesDisabled } from "../src/runner/failover.js";
 import { assertModelPolicy, ModelPolicy } from "../src/runner/model-policy.js";
@@ -83,6 +84,19 @@ function knownApproval(): { comment: string; subject: ApprovalSubject } {
   const approval = recorded.exchanges.find((exchange) => exchange.want === "approval");
   if (!approval) throw new Error("the recorded judge exchanges carry no approval case");
   return { comment: approval.request.state.comment, subject: approval.subject };
+}
+
+/** One real line of each kind, from the recorded exchange: the construction
+ * the word table cannot see, and the product whose own subject matter is
+ * technical, which must not be refused a second time. */
+function knownDecompositionLines(): { refuse: string; pass: string } {
+  const recorded = JSON.parse(
+    readFileSync(new URL("../fixtures/judge/decomposition-lines.json", import.meta.url), "utf8"),
+  ) as { exchanges: { want: string; note: string; request: { state: { sentence: string } } }[] };
+  const refuse = recorded.exchanges.find((exchange) => exchange.want === "implementation");
+  const pass = recorded.exchanges.find((exchange) => exchange.note.includes("subject matter is technical"));
+  if (!refuse || !pass) throw new Error("the recorded judge exchanges are missing a decomposition case");
+  return { refuse: refuse.request.state.sentence, pass: pass.request.state.sentence };
 }
 
 let judgeProbe: number | undefined;
@@ -300,6 +314,27 @@ async function main(): Promise<void> {
         throw new Error(`the recorded approval did not reach the ${settings.threshold} threshold; the whitelist still answers, but the judge is adding nothing`);
       }
       return `${judgement.moved[0]!.probability.toFixed(2)} against a ${settings.threshold} threshold`;
+    }, "WARN");
+    // The third question. Both directions are checked: the line it has to
+    // refuse and the line it must not, because this question can only add
+    // refusals and an invented one blocks an Epic.
+    await attempt("judge still reads a known implementation line as one", async () => {
+      const { settings } = businessLanguageJudgeSetup(judgeConfigFrom(judgeConfig), stored);
+      if (!settings) return "off; the word table answers alone";
+      const lines = knownDecompositionLines();
+      const judgement = await judgeBusinessLanguage(settings.judge, [
+        { field: "probe refuse", line: 1, text: lines.refuse },
+        { field: "probe pass", line: 1, text: lines.pass },
+      ], { model: settings.model, threshold: settings.threshold });
+      if (judgement.error) throw new Error(judgement.error);
+      const refused = new Set(judgement.moved.map((entry) => entry.text));
+      if (!refused.has(lines.refuse)) {
+        throw new Error(`the recorded implementation line did not reach the ${settings.threshold} threshold; the table still answers, but the judge is adding nothing`);
+      }
+      if (refused.has(lines.pass)) {
+        throw new Error("the judge refused a line whose subject matter is legitimately technical; that refusal would block an Epic");
+      }
+      return `refused one and passed one against a ${settings.threshold} threshold`;
     }, "WARN");
     for (const purpose of ["product_manager", "decompose", "code", "verify"] as const) {
       await attempt(`a provider serves the ${purpose} tier`, async () => {

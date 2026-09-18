@@ -1,4 +1,10 @@
 import type { Client } from "@libsql/client";
+import {
+  judgeBusinessLanguage,
+  renderRefusedLines,
+  type BusinessLanguageJudgeSettings,
+  type JudgedLine,
+} from "../judge/business-language.js";
 import { evaluateDecomposition, type DecompositionCandidate, type DecompositionLimits } from "./decompose.js";
 import { blockerAnswers, blockingQuestionStatement, withBlockerAnswers } from "./epic-blocker.js";
 import type { HumanQuestion } from "./human-question.js";
@@ -43,6 +49,13 @@ export class EpicDecomposer {
     private readonly now: () => number = Date.now,
     /** The Story-count ceiling, from `decompose.maxStoriesPerEpic`. */
     private readonly limits: DecompositionLimits = {},
+    /** Left out where there is no credential; the word table then answers alone. */
+    private readonly languageJudge: BusinessLanguageJudgeSettings | undefined = undefined,
+    /** How often the word table missed construction language, so the question
+     * earns its place on measurement rather than on the argument that made it. */
+    private readonly recordFriction:
+      | ((input: { cardId: string; runId: string; kind: string; detail: string }) => Promise<void>)
+      | undefined = undefined,
   ) {}
 
   async decompose(epic: EpicIntake): Promise<DecomposeOutcome> {
@@ -72,6 +85,15 @@ export class EpicDecomposer {
         return { kind: "blocking_question", question: evaluated.question };
       }
       if (evaluated.kind === "accepted") {
+        // Only what the word table let through is put to the judge, and only a
+        // refusal is added. It runs here rather than inside
+        // `evaluateDecomposition` because that function is pure and synchronous
+        // and everything else in the system depends on it staying that way.
+        const refused = await this.judgeLanguage(epic.id, candidate);
+        if (refused.length > 0) {
+          rejections.push(...refused);
+          continue;
+        }
         await this.approvals.present({
           epicId: epic.id,
           notionPageId: epic.notionPageId,
@@ -85,6 +107,53 @@ export class EpicDecomposer {
 
     await this.block(epic.id, `decomposition rejected: ${rejections.join("; ")}`);
     return { kind: "rejected", reasons: rejections };
+  }
+
+  /**
+   * The lines a person will read, put to the judge one at a time. The word
+   * table has already refused what it recognises, and those lines are not
+   * asked about: it is the floor, so every refusal it makes today it still
+   * makes. A judge that is missing, slow or unsure adds nothing, which is
+   * today's behaviour.
+   *
+   * The refusals join `previousRejections`, so the next attempt is told what
+   * was wrong in the same breath as the table's own reasons. They are never
+   * persisted, so no prompt is ever rebuilt from a judged answer.
+   */
+  private async judgeLanguage(epicId: string, candidate: DecompositionCandidate): Promise<string[]> {
+    const settings = this.languageJudge;
+    if (!settings?.judge) return [];
+    const lines: JudgedLine[] = [{ field: "business goal", line: 1, text: candidate.businessGoal }];
+    for (const story of candidate.stories) {
+      const prefix = `Story ${story.id}`;
+      lines.push(
+        { field: `${prefix} title`, line: 1, text: story.title },
+        { field: `${prefix} requirement`, line: 1, text: story.requirement },
+        { field: `${prefix} user entry point`, line: 1, text: story.userEntryPoint },
+        { field: `${prefix} verification path`, line: 1, text: story.verificationPath },
+      );
+      for (const scenario of story.scenarios) {
+        const field = `${prefix} scenario ${scenario.id}`;
+        lines.push(
+          { field: `${field} given`, line: 1, text: scenario.given },
+          { field: `${field} when`, line: 1, text: scenario.when },
+          { field: `${field} then`, line: 1, text: scenario.then },
+        );
+      }
+    }
+    const judgement = await judgeBusinessLanguage(settings.judge, lines, {
+      model: settings.model,
+      threshold: settings.threshold,
+    });
+    if (judgement.moved.length > 0) {
+      await this.recordFriction?.({
+        cardId: epicId,
+        runId: `epic:${epicId}`,
+        kind: "decompose_language_judged",
+        detail: renderRefusedLines(judgement.moved),
+      });
+    }
+    return judgement.issues.map((issue) => `${issue.field} line ${issue.line} ${issue.reason}`);
   }
 
   private async enterDecompose(epicId: string): Promise<void> {

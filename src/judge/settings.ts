@@ -1,5 +1,6 @@
 import type { ConfigStore } from "../config/store.js";
 import type { ApprovalJudgeSettings } from "./approval-intent.js";
+import type { BusinessLanguageJudgeSettings } from "./business-language.js";
 import type { EnvironmentJudgement, EnvironmentJudgeSettings } from "./environment-reasons.js";
 import { HttpSystemOne, type SystemOne } from "./system-one.js";
 
@@ -16,6 +17,8 @@ export interface JudgeConfig {
   environmentThreshold: number;
   /** How sure it has to be that a comment approves what is on the page. */
   approvalThreshold: number;
+  /** How sure it has to be that a line of a plan is about construction. */
+  businessLanguageThreshold: number;
 }
 
 /** The keys read in one place, so a caller cannot pick up one question's
@@ -28,6 +31,7 @@ export function judgeConfigFrom(config: ConfigStore): JudgeConfig {
     timeoutMs: config.get("judge.timeoutMs"),
     environmentThreshold: config.get("judge.environmentThreshold"),
     approvalThreshold: config.get("judge.approvalThreshold"),
+    businessLanguageThreshold: config.get("judge.businessLanguageThreshold"),
   };
 }
 
@@ -96,4 +100,16 @@ export function describeJudgeSetup(setup: JudgeSetup): string | null {
   return setup.kind === "no_credential"
     ? `judge is enabled but ${setup.key} is missing from the secrets file; the pattern tables answer alone`
     : "judge is answering the questions that declare a deterministic fallback";
+}
+
+export function businessLanguageJudgeSetup(
+  config: JudgeConfig,
+  secrets: ReadonlyMap<string, string>,
+): { setup: JudgeSetup; settings?: BusinessLanguageJudgeSettings } {
+  const setup = judgeSetup(config, secrets);
+  if (setup.kind !== "ready") return { setup };
+  return {
+    setup,
+    settings: { judge: setup.judge, model: setup.model, threshold: config.businessLanguageThreshold },
+  };
 }

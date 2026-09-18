@@ -634,6 +634,13 @@ export const CONFIG_KEYS = {
     reload: "hot",
     description: "How sure the judge has to be that a comment approves what is on the page before that comment counts as the approval. High because the two mistakes are not comparable: a missed approval costs one redraft and the person says it again, while an invented one lets unapproved content go on to be built and loses what the person actually asked for. Measured 2026-09-18 over thirty real phrasings: approvals scored 0.83 to 0.96, agreement carrying any request 0.02 to 0.17, and bare praise -- which is the class this bar exists to exclude -- 0.55 to 0.76.",
   }),
+  "judge.businessLanguageThreshold": def({
+    schema: z.number().min(0.5).max(1),
+    default: 0.75,
+    scope: "global",
+    reload: "hot",
+    description: "How sure the judge has to be that a line of a decomposition describes how the system is built before that line is refused. High because the two mistakes are not comparable: a refusal it misses costs what happens today -- one line on a page that reads like construction -- while a refusal it invents can block the Epic, since the decomposer has only two attempts. Measured 2026-09-18 over eighteen real wordings, twice: construction the word table misses scored 0.85 to 0.96, and lines that must pass 0.03 to 0.30, including the ones the table itself wrongly refuses.",
+  }),
   "judge.environmentThreshold": def({
     schema: z.number().min(0.5).max(1),
     default: 0.7,

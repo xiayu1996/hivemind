@@ -1,0 +1,175 @@
+{
+  "capturedAt": "2026-09-18",
+  "endpoint": "https://api.typesafe.ai/v1/systemone",
+  "note": "Real exchanges for the decomposition language question, one line per request as the decomposer sends them. The six are the classes the threshold has to tell apart: construction the seventeen-word table cannot see, in Chinese and in English; ordinary outcomes and rules; and a product whose own subject matter is technical, which the table itself wrongly refuses and which this question must at least not refuse a second time.",
+  "exchanges": [
+    {
+      "want": "implementation",
+      "note": "construction with none of the seventeen words",
+      "request": {
+        "model": "jev-latest",
+        "state": {
+          "sentence": "引入缓存层以降低响应延迟"
+        },
+        "questions": {
+          "is_implementation": {
+            "type": "noul",
+            "instructions": "The text at `sentence` is one line of a plan that a person will read on their project page. Does it describe how the system is built internally, rather than what a person can do or get?",
+            "criteria": {
+              "true": "The sentence is about construction: code, functions, components, modules, classes, databases, schemas, tables, queries, APIs, endpoints, libraries, frameworks, caches, queues, threads, file paths, build steps, tests, or deployment. It is also about construction when it names an internal technique chosen for an internal effect -- adding a layer, a cache, an index, a job, a retry -- even where it goes on to state the benefit.",
+              "false": "The sentence is about a person and what they can do, see, get or decide: an outcome, a rule they are subject to, a step they take, or something that appears on a screen. It stays about the person when the product's own subject matter is technical -- an integration, an interface other developers call, an import or export format -- as long as it says what someone can do with that thing rather than how it is built. A sentence that is merely vague, incomplete or badly written is not about construction."
+            }
+          }
+        }
+      },
+      "response": {
+        "answers": {
+          "is_implementation": {
+            "type": "noul",
+            "noul": 0.96
+          }
+        }
+      }
+    },
+    {
+      "want": "implementation",
+      "note": "an index chosen for an internal effect",
+      "request": {
+        "model": "jev-latest",
+        "state": {
+          "sentence": "给工单表加一个索引，让列表页打开更快"
+        },
+        "questions": {
+          "is_implementation": {
+            "type": "noul",
+            "instructions": "The text at `sentence` is one line of a plan that a person will read on their project page. Does it describe how the system is built internally, rather than what a person can do or get?",
+            "criteria": {
+              "true": "The sentence is about construction: code, functions, components, modules, classes, databases, schemas, tables, queries, APIs, endpoints, libraries, frameworks, caches, queues, threads, file paths, build steps, tests, or deployment. It is also about construction when it names an internal technique chosen for an internal effect -- adding a layer, a cache, an index, a job, a retry -- even where it goes on to state the benefit.",
+              "false": "The sentence is about a person and what they can do, see, get or decide: an outcome, a rule they are subject to, a step they take, or something that appears on a screen. It stays about the person when the product's own subject matter is technical -- an integration, an interface other developers call, an import or export format -- as long as it says what someone can do with that thing rather than how it is built. A sentence that is merely vague, incomplete or badly written is not about construction."
+            }
+          }
+        }
+      },
+      "response": {
+        "answers": {
+          "is_implementation": {
+            "type": "noul",
+            "noul": 0.95
+          }
+        }
+      }
+    },
+    {
+      "want": "implementation",
+      "note": "the same in English",
+      "request": {
+        "model": "jev-latest",
+        "state": {
+          "sentence": "Extract the shared logic into a reusable layer so later work does not repeat it."
+        },
+        "questions": {
+          "is_implementation": {
+            "type": "noul",
+            "instructions": "The text at `sentence` is one line of a plan that a person will read on their project page. Does it describe how the system is built internally, rather than what a person can do or get?",
+            "criteria": {
+              "true": "The sentence is about construction: code, functions, components, modules, classes, databases, schemas, tables, queries, APIs, endpoints, libraries, frameworks, caches, queues, threads, file paths, build steps, tests, or deployment. It is also about construction when it names an internal technique chosen for an internal effect -- adding a layer, a cache, an index, a job, a retry -- even where it goes on to state the benefit.",
+              "false": "The sentence is about a person and what they can do, see, get or decide: an outcome, a rule they are subject to, a step they take, or something that appears on a screen. It stays about the person when the product's own subject matter is technical -- an integration, an interface other developers call, an import or export format -- as long as it says what someone can do with that thing rather than how it is built. A sentence that is merely vague, incomplete or badly written is not about construction."
+            }
+          }
+        }
+      },
+      "response": {
+        "answers": {
+          "is_implementation": {
+            "type": "noul",
+            "noul": 0.96
+          }
+        }
+      }
+    },
+    {
+      "want": "business",
+      "note": "an outcome a person can see",
+      "request": {
+        "model": "jev-latest",
+        "state": {
+          "sentence": "值班的人打开看板就知道现在哪张卡在等他回答"
+        },
+        "questions": {
+          "is_implementation": {
+            "type": "noul",
+            "instructions": "The text at `sentence` is one line of a plan that a person will read on their project page. Does it describe how the system is built internally, rather than what a person can do or get?",
+            "criteria": {
+              "true": "The sentence is about construction: code, functions, components, modules, classes, databases, schemas, tables, queries, APIs, endpoints, libraries, frameworks, caches, queues, threads, file paths, build steps, tests, or deployment. It is also about construction when it names an internal technique chosen for an internal effect -- adding a layer, a cache, an index, a job, a retry -- even where it goes on to state the benefit.",
+              "false": "The sentence is about a person and what they can do, see, get or decide: an outcome, a rule they are subject to, a step they take, or something that appears on a screen. It stays about the person when the product's own subject matter is technical -- an integration, an interface other developers call, an import or export format -- as long as it says what someone can do with that thing rather than how it is built. A sentence that is merely vague, incomplete or badly written is not about construction."
+            }
+          }
+        }
+      },
+      "response": {
+        "answers": {
+          "is_implementation": {
+            "type": "noul",
+            "noul": 0.05
+          }
+        }
+      }
+    },
+    {
+      "want": "business",
+      "note": "a rule a person is subject to",
+      "request": {
+        "model": "jev-latest",
+        "state": {
+          "sentence": "同一个人一天最多提交三次，超过就提示他明天再来"
+        },
+        "questions": {
+          "is_implementation": {
+            "type": "noul",
+            "instructions": "The text at `sentence` is one line of a plan that a person will read on their project page. Does it describe how the system is built internally, rather than what a person can do or get?",
+            "criteria": {
+              "true": "The sentence is about construction: code, functions, components, modules, classes, databases, schemas, tables, queries, APIs, endpoints, libraries, frameworks, caches, queues, threads, file paths, build steps, tests, or deployment. It is also about construction when it names an internal technique chosen for an internal effect -- adding a layer, a cache, an index, a job, a retry -- even where it goes on to state the benefit.",
+              "false": "The sentence is about a person and what they can do, see, get or decide: an outcome, a rule they are subject to, a step they take, or something that appears on a screen. It stays about the person when the product's own subject matter is technical -- an integration, an interface other developers call, an import or export format -- as long as it says what someone can do with that thing rather than how it is built. A sentence that is merely vague, incomplete or badly written is not about construction."
+            }
+          }
+        }
+      },
+      "response": {
+        "answers": {
+          "is_implementation": {
+            "type": "noul",
+            "noul": 0.06
+          }
+        }
+      }
+    },
+    {
+      "want": "business",
+      "note": "a product whose subject matter is technical",
+      "request": {
+        "model": "jev-latest",
+        "state": {
+          "sentence": "合作方可以用我们提供的接口查询他自己的订单状态"
+        },
+        "questions": {
+          "is_implementation": {
+            "type": "noul",
+            "instructions": "The text at `sentence` is one line of a plan that a person will read on their project page. Does it describe how the system is built internally, rather than what a person can do or get?",
+            "criteria": {
+              "true": "The sentence is about construction: code, functions, components, modules, classes, databases, schemas, tables, queries, APIs, endpoints, libraries, frameworks, caches, queues, threads, file paths, build steps, tests, or deployment. It is also about construction when it names an internal technique chosen for an internal effect -- adding a layer, a cache, an index, a job, a retry -- even where it goes on to state the benefit.",
+              "false": "The sentence is about a person and what they can do, see, get or decide: an outcome, a rule they are subject to, a step they take, or something that appears on a screen. It stays about the person when the product's own subject matter is technical -- an integration, an interface other developers call, an import or export format -- as long as it says what someone can do with that thing rather than how it is built. A sentence that is merely vague, incomplete or badly written is not about construction."
+            }
+          }
+        }
+      },
+      "response": {
+        "answers": {
+          "is_implementation": {
+            "type": "noul",
+            "noul": 0.09
+          }
+        }
+      }
+    }
+  ]
+}

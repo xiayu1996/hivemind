@@ -36,7 +36,7 @@ import { defaultModelCatalog } from "../src/runner/catalog.js";
 import { LibsqlProviderHealthStore } from "../src/runner/provider-health-store.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
 import { CommentIngestor } from "../src/notion/comment-ingest.js";
-import { approvalJudgeSetup, judgeConfigFrom } from "../src/judge/settings.js";
+import { approvalJudgeSetup, businessLanguageJudgeSetup, judgeConfigFrom } from "../src/judge/settings.js";
 import { NotionEpicInputSync } from "../src/notion/epic-input-sync.js";
 import { NotionGateway, NotionGatewayError } from "../src/notion/gateway.js";
 import { NotionMediaReconciler } from "../src/notion/media-reconciler.js";
@@ -551,6 +551,8 @@ async function main(): Promise<void> {
       }),
       Date.now,
       decompositionLimits,
+      businessLanguageJudgeSetup(judgeConfigFrom(epicConfig), stored).settings,
+      (input) => store.recordFriction(input),
     );
     const outcome = await decomposer.decompose(epic);
     console.log(`Epic ${epic.id} decomposition: ${outcome.kind}`);
