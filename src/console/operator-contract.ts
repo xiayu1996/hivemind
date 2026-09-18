@@ -603,6 +603,42 @@ function renderTodoBody(
     + "</div>";
 }
 
+function renderRoundPanel(round: OperatorRound, current: boolean): string {
+  const rows = [
+    `<li>${fill(copy.detail.trigger, { value: escapeHtml(round.trigger) })}</li>`,
+    `<li>${fill(copy.detail.phase, { value: escapeHtml(round.phase) })}</li>`,
+    `<li>${round.result === null ? copy.detail.resultMissing : fill(copy.detail.result, { value: escapeHtml(round.result) })}</li>`,
+    `<li>${round.blocker === null ? copy.detail.blockerMissing : fill(copy.detail.blocker, { value: escapeHtml(round.blocker) })}</li>`,
+    `<li class="money">${fill(current ? copy.detail.roundCost : copy.detail.recordedCost, { amount: usd(round.costUsd) })}</li>`,
+  ].join("");
+  const heading = current
+    ? fill(copy.detail.currentRoundLabel, { number: String(round.number) })
+    : fill(copy.detail.historicalRoundLabel, { number: String(round.number) });
+  return `<section class="panel"><h2>${heading}</h2><ul class="stack">${rows}</ul></section>`;
+}
+
+/** Exceeding the per-card ceiling is reported and never called a pause: the
+ * work keeps running, and saying otherwise would be a lie about the system. */
+function renderCostPanel(detail: OperatorDetail): string {
+  const limit = detail.costLimit.kind === "exceeded"
+    ? `<div class="notice danger"><p><span class="status danger">${copy.detail.exceeded}</span> ${copy.detail.continues}</p></div>`
+    : "";
+  return `<aside class="stack"><section class="panel">`
+    + `<p class="money">${fill(copy.detail.totalCost, { amount: usd(detail.totalCostUsd) })}</p>`
+    + "</section>"
+    + limit
+    + "</aside>";
+}
+
+function renderDetailBody(detail: OperatorDetail): string {
+  const subject = `${subjectKindWord(detail.subject.kind)} · ${escapeHtml(detail.stateLabel)}`;
+  return backLink()
+    + `<header class="page-head"><div><h1>${escapeHtml(detail.subject.title)}</h1><p>${subject}</p></div></header>`
+    + `<div class="split"><div>${renderRoundPanel(detail.currentRound, true)}</div>`
+    + renderCostPanel(detail)
+    + "</div>";
+}
+
 export function renderOperatorAccessPage(): string {
   const denied = copy.access;
   return documentHtml({
@@ -651,9 +687,14 @@ export function renderOperatorDetailPage(
   state: ConsolePageState<OperatorDetailResult>,
   selectedRound?: number,
 ): string {
-  void state;
   void selectedRound;
-  return "";
+  const value = state.kind === "ready" || state.kind === "waiting" ? state.value : state.previous;
+  const body = value?.kind === "available" ? renderDetailBody(value.detail) : "";
+  return shell({
+    title: copy.titles.detail,
+    current: "overview",
+    body,
+  });
 }
 
 /** Registers the console routes behind one read port and one command port. */
@@ -706,5 +747,17 @@ export async function registerOperatorConsoleRoutes(
     const { todoId } = request.params as { todoId: string };
     const state = await loadPageState(() => dependencies.reads.todo(todoId));
     return sendHtml(reply, renderOperatorTodoPage(state));
+  });
+
+  app.get("/operator/subjects/:subjectKind/:subjectId", async (request, reply) => {
+    if (!(await allow(request, reply))) return reply;
+    const { subjectKind, subjectId } = request.params as { subjectKind: string; subjectId: string };
+    const requested = Number((request.query as { round?: string }).round);
+    const selectedRound = Number.isInteger(requested) && requested > 0 ? requested : undefined;
+    const state = await loadPageState(() => dependencies.reads.detail({
+      kind: subjectKind as OperatorSubjectKind,
+      id: subjectId,
+    }));
+    return sendHtml(reply, renderOperatorDetailPage(state, selectedRound));
   });
 }
