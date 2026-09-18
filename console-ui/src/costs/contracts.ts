@@ -76,9 +76,54 @@ export function formatDailyCostScope(timeZone: string): string {
   return `按 ${timeZone} 自然日 · 美元`;
 }
 
+/** One day's row as shown next to its amount: the pair a narrow viewport keeps together. */
+export interface DailyCostRow {
+  date: string;
+  amount: string;
+  count: number;
+}
+
+/** One entry of the bottom navigation a narrow viewport shows. */
+export interface CostsNavigationLink {
+  label: string;
+  href: string;
+  current: boolean;
+}
+
+/** The copy a page state shows, split into what it announces and what it explains. */
+export interface CostsStateCopy {
+  heading: string;
+  body: string;
+}
+
 /** Dollars to two decimals, for example `$3.50`. */
 export function formatUsd(costUsd: number): string {
   return `$${costUsd.toFixed(2)}`;
+}
+
+/** The bottom navigation a narrow viewport shows, one entry per destination. */
+export function costsNavigation(): readonly CostsNavigationLink[] {
+  return [];
+}
+
+/** The copy for a read that has not returned yet, named for its zone. */
+export function loadingCostCopy(_selection: DailyCostViewSelection): CostsStateCopy {
+  return { heading: "", body: "" };
+}
+
+/** Date-plus-amount rows, one per day, in ascending date order. */
+export function dailyCostRows(_snapshot: DailyCostViewSnapshot): readonly DailyCostRow[] {
+  return [];
+}
+
+/** The daily-cost panel as markup: one row per day, date and amount together. */
+export function renderDailyCostPanel(_snapshot: DailyCostViewSnapshot): string {
+  return "";
+}
+
+/** The bottom navigation as markup, with the current destination marked. */
+export function renderMobileNavigation(): string {
+  return "";
 }
 
 /**
