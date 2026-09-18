@@ -74,11 +74,21 @@ function sectionMap(prompt: string): PromptSection[] {
   const sections: PromptSection[] = [];
   let heading = "(before the first heading)";
   let chars = 0;
+  let sawTitle = false;
   for (const line of prompt.split("\n")) {
-    if (line.startsWith("#")) {
+    // `assemblePhasePrompt` writes exactly one `# ` -- the task title -- and
+    // everything else at `## ` or `### `. Any other line starting with a hash
+    // is injected content: a components document's own headings, or a YAML
+    // comment at the top of a test contract. Counting those as sections read
+    // the contract's 7.5KB against the model's comment and left
+    // "### SPECIFY / test-contract" showing 0.0KB, which is the tool lying in
+    // the direction that costs the most.
+    const title: boolean = !sawTitle && line.startsWith("# ");
+    if (title || line.startsWith("## ") || line.startsWith("### ")) {
       sections.push({ heading, chars });
       heading = line;
       chars = 0;
+      if (title) sawTitle = true;
       continue;
     }
     chars += line.length + 1;
