@@ -311,6 +311,9 @@ export function buildCostSnapshot(
     .map((entry) => ({ entry, localDate: localDateIn(query.timeZone, entry.occurredAt) }))
     .filter(({ entry, localDate }) => {
       if (localDate < query.startDateInclusive || localDate > query.endDateInclusive) return false;
+      if (query.requirementId !== undefined && entry.requirementId !== query.requirementId) return false;
+      if (query.provider !== undefined && entry.provider !== query.provider) return false;
+      if (query.modelId !== undefined && entry.modelId !== query.modelId) return false;
       return true;
     })
     .map(({ entry, localDate }): CostLineItem => ({
