@@ -417,6 +417,14 @@ export const requirementCostEntries = sqliteTable("requirement_cost_entries", {
   index("idx_requirement_cost_entries_requirement").on(t.requirementId, t.occurredAtMs, t.id),
 ]);
 
+export const requirementCostLimits = sqliteTable("requirement_cost_limits", {
+  requirementId: text("requirement_id").primaryKey(),
+  limitUsdCents: integer("limit_usd_cents").notNull(),
+  version: integer("version").notNull(),
+  updatedBy: text("updated_by").notNull(),
+  updatedAt: ms("updated_at").notNull(),
+});
+
 export const configEntries = sqliteTable("config_entries", {
   scopeId: text("scope_id").notNull().default("global"),
   key: text("key").notNull(),

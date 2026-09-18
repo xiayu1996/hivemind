@@ -809,3 +809,16 @@ CREATE TABLE IF NOT EXISTS requirement_cost_entries (
 );
 CREATE INDEX IF NOT EXISTS idx_requirement_cost_entries_requirement
   ON requirement_cost_entries(requirement_id, occurred_at_ms, id);
+
+-- One cumulative ceiling per requirement, in exact cents. It is an alert line,
+-- not a stop: crossing it never pauses a Story or creates a human action, so no
+-- execution state is derived from this table. The version makes a save a
+-- compare-and-set, and the scope is one requirement, so two requirements never
+-- contend while two stale forms for the same one produce a single winner.
+CREATE TABLE IF NOT EXISTS requirement_cost_limits (
+  requirement_id  TEXT PRIMARY KEY REFERENCES requirements(id) ON DELETE CASCADE,
+  limit_usd_cents INTEGER NOT NULL CHECK (limit_usd_cents >= 0),
+  version         INTEGER NOT NULL CHECK (version > 0),
+  updated_by      TEXT NOT NULL,
+  updated_at      INTEGER NOT NULL
+);
