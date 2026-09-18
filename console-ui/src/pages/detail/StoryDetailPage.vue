@@ -168,8 +168,10 @@ function costValue(round: number): string {
 
     <p v-if="isLoading" class="read-state" role="status">{{ STORY_DETAIL_COPY.loading }}</p>
 
-    <div v-if="failed" class="notice danger" role="alert">
-      <h2>{{ STORY_DETAIL_COPY.failed }}</h2>
+    <div v-if="failed" class="notice danger">
+      <!-- The message is the alert node's own text, not a child heading's:
+           the structural layer reads role and text off one node. -->
+      <p class="notice-message" role="alert">{{ STORY_DETAIL_COPY.failed }}</p>
       <button type="button" @click="read">{{ STORY_DETAIL_COPY.retry }}</button>
     </div>
 
@@ -318,6 +320,11 @@ function costValue(round: number): string {
   background: var(--color-surface-danger);
   padding: 12px 14px;
 }
+.notice-message {
+  margin: 0;
+  font-size: var(--font-heading-small);
+  font-weight: var(--weight-medium);
+}
 .notice.danger button {
   margin-top: var(--space-content-gap);
   min-height: 44px;
@@ -365,6 +372,7 @@ function costValue(round: number): string {
 }
 @media (max-width: 760px) {
   .mobile-nav {
+    display: block;
     position: fixed;
     left: 0;
     right: 0;
