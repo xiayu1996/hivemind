@@ -509,10 +509,11 @@ export function createRoleConfigurationPort(seed: ConsoleRoleConfigurationSeed):
       const versions = history.get(role);
       const current = versions?.at(-1);
       if (!current || !versions) return null;
+      const previous = versions.length >= 2 ? versions[versions.length - 2] ?? null : null;
       return {
         current,
-        previous: null,
-        differences: [],
+        previous,
+        differences: previous ? diffConfigurations(current.configuration, previous.configuration) : [],
         availableProviders: seed.availableProviders,
       };
     },
@@ -569,8 +570,31 @@ export function createRoleConfigurationPort(seed: ConsoleRoleConfigurationSeed):
       return result;
     },
 
-    async restoreRole() {
-      return { status: "invalid", issues: [] };
+    async restoreRole(command) {
+      const replayed = mutations.get(command.idempotencyKey);
+      if (replayed) return replayed;
+      const versions = versionsOf(command.role);
+      const currentVersion = versions.at(-1)?.version ?? 0;
+      if (currentVersion !== command.expectedCurrentVersion) {
+        return {
+          status: "conflict",
+          currentVersion,
+          detail: `Current version is ${currentVersion}, expected ${command.expectedCurrentVersion}`,
+        };
+      }
+      const source = versions.find((candidate) => candidate.version === command.sourceVersion);
+      if (!source) return { status: "invalid", issues: [] };
+      const version: RoleConfigurationVersion = {
+        version: currentVersion + 1,
+        configuration: source.configuration,
+        createdAt: seed.now(),
+        createdBy: command.updatedBy,
+        restoredFromVersion: command.sourceVersion,
+      };
+      versions.push(version);
+      const result: RoleMutationResult = { status: "saved", current: version };
+      mutations.set(command.idempotencyKey, result);
+      return result;
     },
 
     async readMutation(idempotencyKey) {
