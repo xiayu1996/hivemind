@@ -67,13 +67,84 @@ export type DailyCostReadResult =
   | { kind: "invalid"; code: DailyCostInvalidCode; message: string }
   | { kind: "failed"; message: string };
 
+const LOCAL_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+/**
+ * A fixed instant for reading a zone's standard offset. The catalog label is a
+ * hint next to the id, so it must not drift with the moment the page is opened.
+ */
+const OFFSET_REFERENCE_MS = Date.UTC(2025, 0, 1);
+
+const dateFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function dateFormatter(timeZone: string): Intl.DateTimeFormat {
+  const cached = dateFormatters.get(timeZone);
+  if (cached) return cached;
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    calendar: "gregory",
+    numberingSystem: "latn",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  dateFormatters.set(timeZone, formatter);
+  return formatter;
+}
+
+/** The zone-local calendar date an instant falls on, as `YYYY-MM-DD`. */
+function localDateOf(ts: number, timeZone: string): string {
+  const parts = dateFormatter(timeZone).formatToParts(new Date(ts));
+  const part = (type: "year" | "month" | "day"): string =>
+    parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+/** A calendar-valid local date plus its parts, or null for anything else. */
+function parseLocalDate(value: string): { year: number; month: number; day: number } | null {
+  const match = LOCAL_DATE_PATTERN.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const probe = new Date(Date.UTC(year, month - 1, day));
+  if (probe.getUTCFullYear() !== year || probe.getUTCMonth() !== month - 1 || probe.getUTCDate() !== day) {
+    return null;
+  }
+  return { year, month, day };
+}
+
+/**
+ * `UTC+8`, `UTC+5:30`, `UTC-5`: the zone's offset at the reference instant, in
+ * the shape a person reads next to the id. Fixed offsets carried by a zone id
+ * are the runtime's, never parsed from the text a caller passed in.
+ */
+function zoneOffsetLabel(id: string): string {
+  if (id === "UTC") return "UTC+0";
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: id, timeZoneName: "longOffset" })
+    .formatToParts(new Date(OFFSET_REFERENCE_MS));
+  const name = parts.find((part) => part.type === "timeZoneName")?.value ?? "";
+  const match = /^GMT([+-])(\d{1,2})(?::(\d{2}))?$/.exec(name);
+  if (!match) return "UTC+0";
+  const [, sign, hours, minutes] = match;
+  const hour = Number(hours);
+  const minute = Number(minutes ?? "0");
+  return `UTC${sign}${hour}${minute === 0 ? "" : `:${String(minute).padStart(2, "0")}`}`;
+}
+
+/** Dollars rounded to the cent, so a sum is formatted from a settled number. */
+function roundUsd(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 /**
  * Every zone the runtime supports plus `UTC`, sorted, each with its option
  * text. DST rules for those zones come from the runtime's IANA database, so a
  * 23- or 25-hour day still has one local date.
  */
 export function listDailyCostTimeZones(): readonly DailyCostTimeZoneOption[] {
-  return [];
+  return [...new Set([...Intl.supportedValuesOf("timeZone"), "UTC"])]
+    .toSorted()
+    .map((id) => ({ id, label: `${id} (${zoneOffsetLabel(id)})` }));
 }
 
 /**
@@ -82,10 +153,28 @@ export function listDailyCostTimeZones(): readonly DailyCostTimeZoneOption[] {
  * `UTC-08:00` are rejected: they are not regions and carry no DST rules.
  */
 export function validateDailyCostSelection(
-  _selection: DailyCostSelection,
-  _supportedTimeZones: ReadonlySet<string>,
+  selection: DailyCostSelection,
+  supportedTimeZones: ReadonlySet<string>,
 ): DailyCostSelection {
-  return _selection;
+  if (!supportedTimeZones.has(selection.timeZone)) {
+    throw new DailyCostSelectionError(
+      "invalid_time_zone",
+      `the runtime does not know the time zone ${selection.timeZone}`,
+    );
+  }
+  if (parseLocalDate(selection.startDate) === null) {
+    throw new DailyCostSelectionError("invalid_date", `startDate is not a calendar date: ${selection.startDate}`);
+  }
+  if (parseLocalDate(selection.endDate) === null) {
+    throw new DailyCostSelectionError("invalid_date", `endDate is not a calendar date: ${selection.endDate}`);
+  }
+  if (selection.startDate > selection.endDate) {
+    throw new DailyCostSelectionError(
+      "invalid_date_range",
+      `startDate ${selection.startDate} is after endDate ${selection.endDate}`,
+    );
+  }
+  return selection;
 }
 
 /**
@@ -94,10 +183,27 @@ export function validateDailyCostSelection(
  * returns days in ascending order with no rows for date gaps.
  */
 export function aggregateDailyCosts(
-  _entries: readonly DailyCostEntry[],
-  _selection: DailyCostSelection,
+  entries: readonly DailyCostEntry[],
+  selection: DailyCostSelection,
 ): readonly DailyCostDay[] {
-  return [];
+  const seen = new Set<number>();
+  const days = new Map<string, DailyCostDay>();
+  for (const entry of entries) {
+    if (seen.has(entry.id)) throw new Error(`the ledger holds cost entry ${entry.id} twice`);
+    seen.add(entry.id);
+    if (!Number.isFinite(entry.costUsd)) {
+      throw new Error(`cost entry ${entry.id} carries a non-finite amount`);
+    }
+    const date = localDateOf(entry.ts, selection.timeZone);
+    if (date < selection.startDate || date > selection.endDate) continue;
+    const current = days.get(date) ?? { date, costUsd: 0, count: 0 };
+    current.costUsd += entry.costUsd;
+    current.count += 1;
+    days.set(date, current);
+  }
+  return [...days.values()]
+    .map((day) => ({ date: day.date, costUsd: roundUsd(day.costUsd), count: day.count }))
+    .toSorted((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 }
 
 /**
@@ -105,10 +211,12 @@ export function aggregateDailyCosts(
  * recorded at or after it in the same run snapshot.
  */
 export function pendingBillingFromLatest(
-  _latestTurnTs: number | null,
-  _latestCostTs: number | null,
+  latestTurnTs: number | null,
+  latestCostTs: number | null,
 ): DailyCostPendingBilling {
-  return "settled";
+  if (latestTurnTs === null) return "settled";
+  if (latestCostTs !== null && latestCostTs >= latestTurnTs) return "settled";
+  return "pending_latest_usage";
 }
 
 export interface DailyCostReadPort {
@@ -130,10 +238,60 @@ export class LibsqlDailyCostReadPort implements DailyCostReadPort {
     return Promise.resolve(listDailyCostTimeZones());
   }
 
-  readDailyCosts(selection: DailyCostSelection): Promise<DailyCostReadResult> {
-    return Promise.resolve({
-      kind: "failed",
-      message: `daily costs for ${selection.timeZone} are not available yet`,
-    });
+  async readDailyCosts(selection: DailyCostSelection): Promise<DailyCostReadResult> {
+    const supported = new Set(listDailyCostTimeZones().map((zone) => zone.id));
+    try {
+      validateDailyCostSelection(selection, supported);
+    } catch (cause) {
+      if (cause instanceof DailyCostSelectionError) {
+        return { kind: "invalid", code: cause.code, message: cause.message };
+      }
+      return { kind: "failed", message: cause instanceof Error ? cause.message : String(cause) };
+    }
+
+    try {
+      const costRows = (await this.client.execute(
+        "SELECT id, ts, cost_usd, is_subscription FROM cost_entries ORDER BY ts",
+      )).rows;
+      const turnRows = (await this.client.execute("SELECT ts FROM turn_usage ORDER BY ts")).rows;
+
+      const entries: DailyCostEntry[] = costRows.map((row) => ({
+        id: Number(row.id),
+        ts: Number(row.ts),
+        costUsd: Number(row.cost_usd),
+        isSubscription: Number(row.is_subscription) === 1,
+      }));
+      const days = aggregateDailyCosts(entries, selection);
+
+      const inRange = (ts: number): boolean => {
+        const date = localDateOf(ts, selection.timeZone);
+        return date >= selection.startDate && date <= selection.endDate;
+      };
+      let latestCostTs: number | null = null;
+      for (const entry of entries) {
+        if (!inRange(entry.ts)) continue;
+        if (latestCostTs === null || entry.ts > latestCostTs) latestCostTs = entry.ts;
+      }
+      let latestTurnTs: number | null = null;
+      for (const row of turnRows) {
+        const ts = Number(row.ts);
+        if (!inRange(ts)) continue;
+        if (latestTurnTs === null || ts > latestTurnTs) latestTurnTs = ts;
+      }
+
+      const totalUsd = roundUsd(days.reduce((sum, day) => sum + day.costUsd, 0));
+      return {
+        kind: "ok",
+        snapshot: {
+          selection,
+          days,
+          totalUsd,
+          pendingBilling: pendingBillingFromLatest(latestTurnTs, latestCostTs),
+          generatedAt: this.now(),
+        },
+      };
+    } catch (cause) {
+      return { kind: "failed", message: cause instanceof Error ? cause.message : String(cause) };
+    }
   }
 }
