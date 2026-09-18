@@ -54,8 +54,8 @@ describe("SolutionRunner", () => {
   let store: RequirementStore;
   let published: string[];
 
-  function runner(port: SolutionPort): SolutionRunner {
-    return new SolutionRunner(store, port, { publish: async (id: string) => { published.push(id); } });
+  function runner(port: SolutionPort, attempts?: number): SolutionRunner {
+    return new SolutionRunner(store, port, { publish: async (id: string) => { published.push(id); } }, attempts);
   }
 
   beforeEach(async () => {
@@ -136,6 +136,17 @@ describe("SolutionRunner", () => {
     expect(port.requests[1]?.revisionFeedback).toEqual(["不要引入新的构建工具"]);
     expect(port.requests[1]?.repository).toBe("owner/repo");
     await expect(store.getSolution(REQUIREMENT_ID, 1)).resolves.toMatchObject({ status: "superseded" });
+  });
+
+  it("rewrites as many times as the configured budget, and no more", async () => {
+    const unusable: SolutionCandidate = { approach: { summary: "", alternatives: [] } };
+    const port = new ScriptedPort([unusable, unusable, unusable]);
+
+    await expect(runner(port, 3).advance(REQUIREMENT_ID)).resolves.toMatchObject({ kind: "stopped" });
+    expect(port.requests).toHaveLength(3);
+    // Each attempt is told what the last one got wrong; starting from the same
+    // blank page twice is not a second attempt.
+    expect(port.requests[1]?.previousRejections.length).toBeGreaterThan(0);
   });
 
   it("stops for a person when the solution keeps coming back unusable", async () => {

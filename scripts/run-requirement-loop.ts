@@ -153,8 +153,9 @@ async function main(): Promise<void> {
     maxRounds: config.get("requirement.maxClarifyRounds"),
     maxQuestionsPerRound: config.get("requirement.maxQuestionsPerRound"),
   });
-  const prd = new PrdRunner(store, pm, projector);
-  const solution = new SolutionRunner(store, pm, projector);
+  const draftAttempts = config.get("requirement.maxDraftAttempts");
+  const prd = new PrdRunner(store, pm, projector, draftAttempts);
+  const solution = new SolutionRunner(store, pm, projector, draftAttempts);
   const decomposer = new RequirementDecomposer(handle.client, store, pm, projector);
   const acceptance = new AcceptanceChecklist(handle.client, store, projector);
   const humanInput = new NotionRequirementInputSync(handle.client, gateway, comments, store, acceptance);
