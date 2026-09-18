@@ -59,6 +59,14 @@ export const requirementSolutions = sqliteTable("requirement_solutions", {
   confirmedAt: ms("confirmed_at"),
 }, (t) => [primaryKey({ columns: [t.requirementId, t.revision] })]);
 
+export const requirementPrototypes = sqliteTable("requirement_prototypes", {
+  requirementId: text("requirement_id").notNull(),
+  revision: integer("revision").notNull(),
+  body: text("body").notNull(),
+  mrUrl: text("mr_url"),
+  createdAt: ms("created_at").notNull(),
+}, (t) => [primaryKey({ columns: [t.requirementId, t.revision] })]);
+
 export const requirementAcceptanceItems = sqliteTable("requirement_acceptance_items", {
   requirementId: text("requirement_id").notNull(),
   itemId: text("item_id").notNull(),

@@ -41,6 +41,13 @@ export interface SolutionRevision {
   status: "draft" | "confirmed" | "superseded";
 }
 
+export interface PrototypeRevision {
+  revision: number;
+  body: string;
+  /** Where a person can read the screens, once they are up for review. */
+  mrUrl: string | null;
+}
+
 export interface AcceptanceItem {
   itemId: string;
   prdScenarioId: string;
@@ -592,6 +599,51 @@ export class RequirementStore {
     ], "write");
     if (update?.rowsAffected !== 1) throw new Error(`solution revision ${revision} of ${id} is not a draft`);
     return true;
+  }
+
+  /**
+   * Records the interface contract drawn for one solution revision.
+   *
+   * Keyed by that revision, and replaced rather than appended when the same
+   * revision is drawn again: a round that was sent back to redraw produced one
+   * prototype, not two, and the person confirms a solution together with the
+   * screens it goes with.
+   */
+  async saveSolutionPrototype(
+    id: string,
+    revision: number,
+    body: string,
+    mrUrl: string | null,
+    runId: string,
+  ): Promise<void> {
+    JSON.parse(body) as unknown;
+    const time = this.now();
+    await this.client.batch([
+      {
+        sql: `INSERT INTO requirement_prototypes (requirement_id, revision, body, mr_url, created_at)
+              VALUES (?, ?, ?, ?, ?)
+              ON CONFLICT (requirement_id, revision)
+              DO UPDATE SET body = excluded.body, mr_url = excluded.mr_url, created_at = excluded.created_at`,
+        args: [id, revision, body, mrUrl, time],
+      },
+      eventStatement(runId, id, "requirement.prototype_drawn", { revision, mrUrl }, time),
+    ], "write");
+  }
+
+  /** The prototype drawn for a solution revision, or null when there is none:
+   * a requirement that touches no screen never draws one. */
+  async getSolutionPrototype(id: string, revision: number): Promise<PrototypeRevision | null> {
+    const row = (await this.client.execute({
+      sql: `SELECT body, mr_url FROM requirement_prototypes
+            WHERE requirement_id = ? AND revision = ?`,
+      args: [id, revision],
+    })).rows[0];
+    if (!row) return null;
+    return {
+      revision,
+      body: stringValue(row.body, "prototype body"),
+      mrUrl: row.mr_url === null ? null : stringValue(row.mr_url, "prototype merge request url"),
+    };
   }
 
   /** Everything a person has asked to change about the solution, oldest first. */

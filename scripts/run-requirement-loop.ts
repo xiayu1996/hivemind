@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
 import { hostname } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,6 +25,13 @@ import { PiPmPort } from "../src/orchestrator/pi-pm-port.js";
 import { PrdRunner } from "../src/orchestrator/prd-runner.js";
 import { RequirementDecomposer } from "../src/orchestrator/requirement-decompose.js";
 import { SolutionRunner } from "../src/orchestrator/solution-runner.js";
+import { PiPrototypePort } from "../src/orchestrator/pi-prototype-port.js";
+import { PrototypeRunner } from "../src/orchestrator/prototype-runner.js";
+import { GitPrototypeDelivery, prototypeBranch } from "../src/vcs/prototype-delivery.js";
+import { playwrightPrototypeInspector } from "../src/verify/prototype-inspector.js";
+import { checkoutPath } from "../src/vcs/repository-checkout.js";
+import { createWorktree, locateWorktree, worktreeLayout } from "../src/vcs/worktree.js";
+import { discoverMRPort } from "../src/vcs/mr/adapters.js";
 import { RequirementStore } from "../src/orchestrator/requirement-store.js";
 import { openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
@@ -156,7 +163,91 @@ async function main(): Promise<void> {
   });
   const draftAttempts = config.get("requirement.maxDraftAttempts");
   const prd = new PrdRunner(store, pm, projector, draftAttempts);
-  const solution = new SolutionRunner(store, pm, projector, draftAttempts);
+  // The drawing session is the one product-manager phase that writes, so it
+  // needs a tree of its own: a worktree of the target repository on a branch
+  // named after the requirement, fenced to the contract directory, reused
+  // across redraws so the second attempt starts from what the first left.
+  const prototypeLayout = worktreeLayout(workRoot);
+  const prototypeRunner = new PrototypeRunner(
+    store,
+    {
+      run: async (input) => {
+        const repository = await registry.get(input.repository);
+        if (!repository) throw new Error(`repository ${input.repository} is not registered`);
+        const branch = prototypeBranch(input.requirementId);
+        const existing = locateWorktree("prototype", input.requirementId, prototypeLayout);
+        const worktreePath = (await stat(existing.worktreePath).then(() => true, () => false))
+          ? existing.worktreePath
+          : (await createWorktree({
+            repositoryPath: checkoutPath(workRoot, repository.slug),
+            repositoryId: "prototype",
+            cardId: input.requirementId,
+            branch,
+            startPoint: `origin/${repository.defaultBranch}`,
+          }, prototypeLayout)).worktreePath;
+        const drawingSpec = await resolveAgentSpec(
+          { config, policy },
+          "decompose",
+          (await policy.providersFor("decompose"))[0]!,
+        );
+        return new PiPrototypePort({
+          binary: piBinary,
+          spec: drawingSpec,
+          promptRoot: resolve(ROOT, "prompts"),
+          worktreePath,
+          contractRoot: input.contractRoot,
+          auditPath: join(evidenceRoot, `${input.requirementId}-prototype-audit.jsonl`),
+          maxRounds: config.get("prototype.maxRounds"),
+          inspector: playwrightPrototypeInspector,
+          extensions: [
+            resolve(ROOT, "extensions", "hive-guard.ts"),
+            resolve(ROOT, "extensions", "canonical-capture.ts"),
+          ],
+          env: {
+            ...providerEnv,
+            [CANONICAL_CAPTURE_ENV]: join(evidenceRoot, "prototype-requests.jsonl"),
+          },
+          recordUsage: async ({ usage, spec: used }) => {
+            await ledger.record({
+              runId: `pm-prototype-${Date.now()}`,
+              purpose: "product_manager",
+              tier: used.tier,
+              provider: used.model.provider,
+              modelId: used.model.id,
+              hostId: hostname(),
+              isSubscription: !used.metered,
+            }, usage);
+          },
+        }).run(input);
+      },
+    },
+    {
+      publish: async (input) => {
+        const requirement = await store.getRequirement(input.requirementId);
+        const repository = requirement.repo ? await registry.get(requirement.repo) : null;
+        if (!repository) return null;
+        const worktreePath = locateWorktree("prototype", input.requirementId, prototypeLayout).worktreePath;
+        return new GitPrototypeDelivery(await discoverMRPort(), {
+          worktreePath,
+          contractRoot: (await ConfigStore.load(handle.client, { repository: repository.slug }))
+            .get("prototype.root"),
+          repository: repository.slug,
+          targetBranch: repository.defaultBranch,
+        }).publish(input);
+      },
+    },
+    projector,
+  );
+  const solution = new SolutionRunner(store, pm, projector, {
+    attempts: draftAttempts,
+    prototype: {
+      runner: prototypeRunner,
+      // Per repository: a repository that keeps its contract elsewhere says so
+      // in its own scope, and this layer serves every registered one.
+      contractRoot: async (repository) =>
+        (await ConfigStore.load(handle.client, { repository })).get("prototype.root"),
+    },
+  });
   const decomposer = new RequirementDecomposer(handle.client, store, pm, projector);
   const acceptance = new AcceptanceChecklist(handle.client, store, projector);
   const judged = approvalJudgeSetup(judgeConfigFrom(config), stored);

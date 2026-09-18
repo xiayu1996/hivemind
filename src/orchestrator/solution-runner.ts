@@ -8,6 +8,7 @@ import {
   type SolutionCandidate,
 } from "./requirement-solution.js";
 import { draftUntilUsable, requirementRunId as runId, stopOnUnusableDraft } from "./requirement-draft.js";
+import type { PrototypeRunner } from "./prototype-runner.js";
 import type { RequirementStore } from "./requirement-store.js";
 
 export interface SolutionRequest {
@@ -46,13 +47,28 @@ export type SolutionOutcome =
  * nothing and touches no screen carries no decision worth a person's time, and
  * stopping it would spend the one resource this whole layer exists to protect.
  */
+export interface SolutionRunnerOptions {
+  attempts?: number;
+  /** Draws the screens this solution decided on, before anybody reads either.
+   * Absent on an installation that cannot reach a repository to draw into. */
+  prototype?: {
+    runner: PrototypeRunner;
+    /** Where the repository keeps its interface contract. */
+    contractRoot: (repository: string) => Promise<string>;
+  };
+}
+
 export class SolutionRunner {
   constructor(
     private readonly store: RequirementStore,
     private readonly port: SolutionPort,
     private readonly publisher: RequirementPagePublisher,
-    private readonly attempts = 2,
+    private readonly options: SolutionRunnerOptions = {},
   ) {}
+
+  private get attempts(): number {
+    return this.options.attempts ?? 2;
+  }
 
   async advance(requirementId: string): Promise<SolutionOutcome> {
     const requirement = await this.store.getRequirement(requirementId);
@@ -119,6 +135,24 @@ export class SolutionRunner {
       JSON.stringify(solution),
       runId(requirementId),
     );
+    // The screens are drawn before the approach is read, because they are one
+    // decision: a person who approves "a web back office on the existing
+    // stack" without seeing the screens has approved a sentence. A drawing
+    // that never passed its own checks stops the requirement here rather than
+    // sending the approach on alone (design 08 section 3.1).
+    if (this.options.prototype && solution.interface) {
+      const drawn = await this.options.prototype.runner.draw({
+        requirementId,
+        title: requirement.title,
+        repository: requirement.repo ?? "",
+        businessGoal: body.businessGoal,
+        scenarios: body.scenarios,
+        solution,
+        revision,
+        contractRoot: await this.options.prototype.contractRoot(requirement.repo ?? ""),
+      });
+      if (drawn.kind === "stopped") return { kind: "stopped", reason: drawn.reason };
+    }
     if (solutionNeedsApproval(solution)) {
       await this.publisher.publish(requirementId);
       return { kind: "drafted", revision, awaiting: approvalReasons(solution) };

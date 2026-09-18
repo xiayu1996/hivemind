@@ -522,12 +522,19 @@ export const CONFIG_KEYS = {
     reload: "hot",
     description: "Where the repository keeps the interface contract a requirement with screens is built against: the token table, the component inventory and the runnable page prototypes. It is read from the branch a round runs on and injected into the phases that build screens, so a repository that keeps it elsewhere says so here rather than having two copies.",
   }),
+  "prototype.maxRounds": def({
+    schema: positiveInt.max(6),
+    default: 3,
+    scope: "global",
+    reload: "hot",
+    description: "How many times the drawing session may be handed its own exit findings before the requirement stops for a person. The findings are deterministic and shrink -- a page either shows the role and text it claimed or it does not -- so a small budget is enough for the ones that can be fixed, and a drawing that cannot satisfy them in three rounds is telling us the page list or the direction is wrong, which is a person's call and not the drawing's.",
+  }),
   "uiContract.enforce": def({
     schema: z.enum(["off", "warn", "block"]),
     default: "warn",
     scope: "global",
     reload: "hot",
-    description: "How much power the interface contract layer has: whether every colour and size on a screen came from the token table. `warn` records the findings and lets the round through, `block` fails the scenarios that carry them, `off` does not look. It starts at warn deliberately (design 08 section 6): the criterion is finite and can converge, but giving it a veto before one requirement's worth of real findings has been read risks spending a card's whole budget on a rule nobody has checked the shape of yet. It governs the prototype's own exit as well, so a prototype is held to what the code after it will be held to.",
+    description: "How much power the interface contract layer has: whether every colour and size on a screen came from the token table. `warn` records the findings and lets the round through, `block` fails the scenarios that carry them, `off` does not look. It starts at warn deliberately (design 08 section 6): the criterion is finite and can converge, but giving it a veto before one requirement's worth of real findings has been read risks spending a card's whole budget on a rule nobody has checked the shape of yet. It governs the delivered screens only: the prototype's own exit always blocks on the token table, because a prototype exists to be the thing later rounds are measured against and one that quietly contains values from nowhere makes that measurement meaningless.",
   }),
   "guard.e2eHostAllowlist": def({
     schema: z.array(z.string()),

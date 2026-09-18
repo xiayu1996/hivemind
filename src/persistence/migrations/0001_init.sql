@@ -96,6 +96,19 @@ CREATE TABLE IF NOT EXISTS requirement_solutions (
   CHECK (status <> 'draft' OR confirmed_at IS NULL)
 );
 
+-- The interface contract drawn for one solution revision, and the merge request
+-- that carries it into the repository. Keyed by that revision: a solution the
+-- person sent back for changes gets a new prototype, and the old one stays
+-- readable beside the draft it belonged to.
+CREATE TABLE IF NOT EXISTS requirement_prototypes (
+  requirement_id  TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+  revision        INTEGER NOT NULL CHECK (revision > 0),
+  body            TEXT NOT NULL CHECK (json_valid(body)),
+  mr_url          TEXT,
+  created_at      INTEGER NOT NULL,
+  PRIMARY KEY (requirement_id, revision)
+);
+
 -- Scenario-level acceptance: one row per PRD scenario, judged by the human in
 -- business language. A gap spawns incremental work instead of reopening code.
 CREATE TABLE IF NOT EXISTS requirement_acceptance_items (

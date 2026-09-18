@@ -1,0 +1,209 @@
+import { join } from "node:path";
+import { z } from "zod";
+import { assembleGuardPolicy, POLICY_ENV_VAR, serializeGuardPolicy } from "../guard/policy.js";
+import { prototypeFencePatterns } from "../guard/prototype-fence.js";
+import { readInterfaceContract } from "../pipeline/interface-contract.js";
+import { loadPmPromptLayers } from "../pipeline/prompt-loader.js";
+import { lastAssistantText } from "../runner/assistant-text.js";
+import type { ResolvedAgentSpec } from "../runner/agent-spec.js";
+import { promptWithContinueRetry } from "../runner/continue-retry.js";
+import { RpcPiRunner, type RpcRunnerConfig } from "../runner/rpc-runner.js";
+import type { PiRunner, PromptResult } from "../runner/types.js";
+import { jsonPayloadCandidates } from "../util/json-payload.js";
+import { evaluatePrototypeExit, PROTOTYPE_STATES } from "../verify/prototype-exit.js";
+import { inspectPrototypePages, type PrototypeInspectorPort } from "../verify/prototype-inspector.js";
+import type { PrototypePort, PrototypeRequest, PrototypeResult } from "./prototype-runner.js";
+import { requirementRunId } from "./requirement-draft.js";
+
+/**
+ * The session that draws the interface contract, and the checks it has to pass
+ * before anyone reads it (design 08 section 3.2).
+ *
+ * It is the one product-manager phase that writes: its output is files in a
+ * repository rather than a text. The guard fences those writes to the contract
+ * directory, and the exit opens every page in a browser and judges what is
+ * actually on it -- the two layers that will later judge the built screens,
+ * applied first to the thing they will be judged against.
+ *
+ * Findings go back into the same session, as everywhere else: a page that is
+ * missing a button is a work item for the drawing, not a verdict on the
+ * requirement, and a new session would have to re-read everything this one
+ * already knows.
+ */
+
+const claimSchema = z.object({
+  file: z.string().trim().min(1),
+  scenarios: z.array(z.string().trim().min(1)).min(1),
+  visible: z.array(z.object({
+    role: z.string().trim().min(1),
+    text: z.string().trim().min(1),
+  }).strict()).min(1),
+}).strict();
+
+const prototypeSchema = z.object({
+  pages: z.array(claimSchema).min(1),
+  concerns: z.array(z.string()).optional(),
+}).strict();
+
+export class PrototypeExitNotMetError extends Error {
+  constructor(readonly findings: readonly string[]) {
+    super(`原型出口检查没过：${findings.join("；")}`);
+    this.name = "PrototypeExitNotMetError";
+  }
+}
+
+export interface PiPrototypePortOptions {
+  binary: string;
+  spec: ResolvedAgentSpec;
+  promptRoot: string;
+  /** The checkout the contract is written into; also the session's cwd, so it
+   * can read the repository it is drawing for. */
+  worktreePath: string;
+  /** Contract directory relative to the worktree, as configured. */
+  contractRoot: string;
+  auditPath: string;
+  /** How many times the drawing may be handed its findings before the
+   * requirement stops for a person. */
+  maxRounds: number;
+  /** Opens the drawn pages. Closed by this port when it is done with them. */
+  inspector: () => Promise<PrototypeInspectorPort & { close(): Promise<void> }>;
+  createRunner?: (config: RpcRunnerConfig) => PiRunner;
+  extensions?: string[];
+  env?: Record<string, string>;
+  recordUsage?: (input: { usage: PromptResult["usage"]; spec: ResolvedAgentSpec }) => Promise<void>;
+}
+
+export class PiPrototypePort implements PrototypePort {
+  constructor(private readonly options: PiPrototypePortOptions) {}
+
+  async run(input: PrototypeRequest): Promise<PrototypeResult> {
+    const layers = await loadPmPromptLayers(this.options.promptRoot, "PROTOTYPE");
+    const runId = requirementRunId(input.requirementId);
+    const policy = assembleGuardPolicy({
+      phase: "PROTOTYPE",
+      cardId: input.requirementId,
+      runId,
+      worktreePath: this.options.worktreePath,
+      auditPath: this.options.auditPath,
+      fencedPatterns: prototypeFencePatterns(this.options.contractRoot),
+    });
+    const runner = (this.options.createRunner ?? ((config) => new RpcPiRunner(config)))({
+      binary: this.options.binary,
+      provider: this.options.spec.model.provider,
+      model: this.options.spec.model,
+      cwd: this.options.worktreePath,
+      tools: [...this.options.spec.tools],
+      skillDiscovery: "explicit",
+      skills: [...this.options.spec.skills],
+      contextFiles: "explicit",
+      ...(this.options.extensions ? { extensions: this.options.extensions } : {}),
+      env: { ...this.options.env, [POLICY_ENV_VAR]: serializeGuardPolicy(policy) },
+      systemPrompt: { mode: "replace", text: layers.combined },
+    });
+
+    try {
+      await runner.start();
+      await runner.setAutoRetry(false);
+      let answer = await this.ask(runner, prototypePrompt(input, this.options.contractRoot));
+      for (let attempt = 1; ; attempt++) {
+        const findings = answer === null
+          ? ["最后一条消息里没有按约定输出 JSON 对象"]
+          : await this.evaluate(input, answer);
+        if (findings.length === 0 && answer !== null) {
+          return { pages: answer.pages, concerns: answer.concerns ?? [] };
+        }
+        if (attempt >= this.options.maxRounds) throw new PrototypeExitNotMetError(findings);
+        answer = await this.ask(runner, handback(findings));
+      }
+    } finally {
+      await runner.stop().catch(() => undefined);
+    }
+  }
+
+  /** One turn, and the contract it has to answer in. A reply that is not the
+   * contract is handed back like any other finding rather than thrown: the
+   * session that wrote the files is the cheapest one to ask again. */
+  private async ask(runner: PiRunner, prompt: string): Promise<z.infer<typeof prototypeSchema> | null> {
+    const result = await promptWithContinueRetry(runner, prompt, { maxContinueRetries: 8 });
+    if (result.failure) throw new Error(result.failure.errorMessage);
+    await this.options.recordUsage?.({ usage: result.usage, spec: this.options.spec });
+    const raw = lastAssistantText(await runner.getMessages());
+    for (const payload of jsonPayloadCandidates(raw)) {
+      const parsed = prototypeSchema.safeParse(payload);
+      if (parsed.success) return parsed.data;
+    }
+    return null;
+  }
+
+  /** Reads the contract off disk and opens every page, then judges both. */
+  private async evaluate(
+    input: PrototypeRequest,
+    answer: z.infer<typeof prototypeSchema>,
+  ): Promise<string[]> {
+    const root = join(this.options.worktreePath, this.options.contractRoot);
+    const read = await readInterfaceContract(root);
+    const contractPages = read.kind === "present" ? read.contract.pages.map((page) => page.file) : [];
+    const contractReasons = read.kind === "present"
+      ? []
+      : read.kind === "absent"
+      ? [`${this.options.contractRoot} 下什么都没有`]
+      : read.reasons;
+
+    const inspector = await this.options.inspector();
+    try {
+      const evidence = await inspectPrototypePages({ root, pages: contractPages, port: inspector });
+      return evaluatePrototypeExit({
+        claims: answer.pages,
+        evidence,
+        contractPages,
+        scenarios: input.scenarios.map((scenario) => scenario.id),
+        tokens: read.kind === "present" ? read.contract.tokens : [],
+        contractReasons,
+      });
+    } finally {
+      await inspector.close().catch(() => undefined);
+    }
+  }
+}
+
+function handback(findings: readonly string[]): string {
+  return [
+    "出口检查在你写的契约上跑了一轮，下面这些没过：",
+    findings.map((finding) => `- ${finding}`).join("\n"),
+    "逐条改完，再按同样的格式输出一次 JSON。不要换方向，不要新增页面清单以外的页面。",
+  ].join("\n\n") + "\n";
+}
+
+function prototypePrompt(input: PrototypeRequest, contractRoot: string): string {
+  const parts = [
+    `需求 id: ${input.requirementId}`,
+    `需求标题: ${input.title}`,
+    `目标仓库: ${input.repository}`,
+    `契约目录: ${contractRoot}`,
+    `## 已确认的业务目标\n\n${input.businessGoal.trim()}`,
+    `## 已确认的做法\n\n${input.approach.trim()}`,
+    `## 页面清单（${input.interface.kind}）\n\n${
+      input.interface.pages.map((page) => `- ${page.name}: ${page.purpose}`).join("\n")
+    }`,
+    `## 每页要承接的场景\n\n${
+      input.scenarios.map((scenario) =>
+        // oxlint-disable-next-line unicorn/no-thenable -- Given/When/Then is the external PRD contract.
+        `- ${scenario.id}: 给定 ${scenario.given}，当 ${scenario.when}，则 ${scenario.then}`
+      ).join("\n")
+    }`,
+  ];
+  if (input.revisionFeedback.length > 0) {
+    parts.push(`## 提需求的人要求修改的地方\n\n必须逐条落进新版原型:\n\n${
+      input.revisionFeedback.map((entry) => `- ${entry}`).join("\n")
+    }`);
+  }
+  parts.push([
+    `只能写 ${contractRoot} 目录，写别处会被拒绝。每页必须能以 ?state= 取 ${
+      PROTOTYPE_STATES.join(" / ")
+    } 切到四个各自完整的页面。`,
+    "最后只输出一个 JSON 对象，不要附加解释。字段:",
+    'pages[{file, scenarios[], visible[{role, text}]}], concerns[]',
+    "file 相对契约目录写（如 pages/board.html）；visible 是这页上必须看得见的角色与文本，出口会对着可访问性树逐条核对。",
+  ].join("\n"));
+  return `${parts.join("\n\n")}\n`;
+}

@@ -20,6 +20,7 @@ const PM_FILES: Record<PmPhase, string> = {
   CLARIFY: "clarify.md",
   PRD: "prd.md",
   SOLUTION: "solution.md",
+  PROTOTYPE: "prototype.md",
   REQUIREMENT_DECOMPOSE: "decompose.md",
   // The UI acceptance lane is a product manager reading a delivered screen, so
   // it inherits the PM baseline (business language, no implementation talk)

@@ -4,6 +4,7 @@ import { migrate } from "../persistence/migrate.js";
 import type { SolutionCandidate } from "./requirement-solution.js";
 import { RequirementStore } from "./requirement-store.js";
 import { SolutionRunner, type SolutionPort, type SolutionRequest } from "./solution-runner.js";
+import type { PrototypeOutcome, PrototypeRunner } from "./prototype-runner.js";
 
 const REQUIREMENT_ID = "R-abc123def456";
 
@@ -17,6 +18,23 @@ function keepsTheStack(): SolutionCandidate {
     openDecisions: [],
     qualityGates: [],
     interface: null,
+  };
+}
+
+function needsScreens(): SolutionCandidate {
+  return {
+    ...keepsTheStack(),
+    interface: { kind: "web", pages: [{ name: "\u4efb\u52a1\u770b\u677f", purpose: "\u770b\u4eca\u5929\u8981\u505a\u4ec0\u4e48" }] },
+  };
+}
+
+/** Stands in for the drawing session: the runner only has to decide whether it
+ * is asked and what a refusal does. */
+function drawing(outcome: PrototypeOutcome) {
+  const seen: unknown[] = [];
+  return {
+    seen,
+    runner: { draw: async (input: unknown) => { seen.push(input); return outcome; } } as unknown as PrototypeRunner,
   };
 }
 
@@ -55,7 +73,12 @@ describe("SolutionRunner", () => {
   let published: string[];
 
   function runner(port: SolutionPort, attempts?: number): SolutionRunner {
-    return new SolutionRunner(store, port, { publish: async (id: string) => { published.push(id); } }, attempts);
+    return new SolutionRunner(
+      store,
+      port,
+      { publish: async (id: string) => { published.push(id); } },
+      attempts === undefined ? {} : { attempts },
+    );
   }
 
   beforeEach(async () => {
@@ -120,6 +143,46 @@ describe("SolutionRunner", () => {
     }]));
 
     await expect(run.advance(REQUIREMENT_ID)).resolves.toMatchObject({ awaiting: ["open_decisions"] });
+    await expect(store.getRequirement(REQUIREMENT_ID)).resolves.toMatchObject({ state: "SOLUTION" });
+  });
+
+  it("draws the screens before the approach is read, for a solution that has any", async () => {
+    const drawn = drawing({ kind: "drawn", revision: 1, concerns: [], mrUrl: "https://example.invalid/mr/1" });
+    const run = new SolutionRunner(
+      store,
+      new ScriptedPort([needsScreens()]),
+      { publish: async (id: string) => { published.push(id); } },
+      { prototype: { runner: drawn.runner, contractRoot: async () => "docs/prototype" } },
+    );
+
+    await expect(run.advance(REQUIREMENT_ID)).resolves.toMatchObject({ awaiting: ["interface"] });
+    expect(drawn.seen).toHaveLength(1);
+    expect(drawn.seen[0]).toMatchObject({ revision: 1, contractRoot: "docs/prototype", repository: "owner/repo" });
+  });
+
+  it("does not draw anything for a solution with no screens", async () => {
+    const drawn = drawing({ kind: "skipped", reason: "no interface" });
+    const run = new SolutionRunner(
+      store,
+      new ScriptedPort([keepsTheStack()]),
+      { publish: async (id: string) => { published.push(id); } },
+      { prototype: { runner: drawn.runner, contractRoot: async () => "docs/prototype" } },
+    );
+
+    await expect(run.advance(REQUIREMENT_ID)).resolves.toMatchObject({ kind: "confirmed" });
+    expect(drawn.seen).toEqual([]);
+  });
+
+  it("does not send an approach on alone when its screens could not be drawn", async () => {
+    const drawn = drawing({ kind: "stopped", reason: "\u754c\u9762\u539f\u578b\u6ca1\u753b\u6210" });
+    const run = new SolutionRunner(
+      store,
+      new ScriptedPort([needsScreens()]),
+      { publish: async (id: string) => { published.push(id); } },
+      { prototype: { runner: drawn.runner, contractRoot: async () => "docs/prototype" } },
+    );
+
+    await expect(run.advance(REQUIREMENT_ID)).resolves.toMatchObject({ kind: "stopped" });
     await expect(store.getRequirement(REQUIREMENT_ID)).resolves.toMatchObject({ state: "SOLUTION" });
   });
 

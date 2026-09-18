@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { CONTRACT_PROPERTIES } from "./ui-contract.js";
-import { collectPageStyles, type StyleCollectorPort } from "./ui-contract-collector.js";
+import {
+  collectPageStyles,
+  collectStylesExpression,
+  type StyleCollectorPort,
+} from "./ui-contract-collector.js";
 
 function port(pages: Record<string, { rootFontSizePx: number; usages: [] } | Error>): StyleCollectorPort {
   return {
@@ -59,5 +63,15 @@ describe("collectPageStyles", () => {
     });
 
     expect(seen).toEqual(["a.html", "b.html", "c.html"]);
+  });
+});
+
+describe("collectStylesExpression", () => {
+  it("hands the browser a call, not a function: an expression that is a function returns nothing", () => {
+    const expression = collectStylesExpression({ properties: ["color"], maxElements: 10 });
+
+    expect(expression.startsWith("((input)")).toBe(true);
+    expect(expression.endsWith('({"properties":["color"],"maxElements":10})')).toBe(true);
+    expect(() => new Function(`return ${expression}`)).not.toThrow();
   });
 });
