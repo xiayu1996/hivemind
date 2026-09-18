@@ -57,10 +57,10 @@ describe("daily cost page states", () => {
 
     const rows = panel.split('<div class="bar-row" data-date=').slice(1);
     expect(rows).toHaveLength(2);
-    expect(rows[0]).toContain('data-date="2025-06-20"');
+    expect(rows[0]).toContain('"2025-06-20"');
     expect(rows[0]).toContain("06-20");
     expect(rows[0]).toContain("$1.20");
-    expect(rows[1]).toContain('data-date="2025-06-21"');
+    expect(rows[1]).toContain('"2025-06-21"');
     expect(rows[1]).toContain("06-21");
     expect(rows[1]).toContain("$2.30");
 

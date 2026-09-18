@@ -103,27 +103,63 @@ export function formatUsd(costUsd: number): string {
 
 /** The bottom navigation a narrow viewport shows, one entry per destination. */
 export function costsNavigation(): readonly CostsNavigationLink[] {
-  return [];
+  return [
+    { label: "总览", href: "overview.html", current: false },
+    { label: "费用", href: "costs.html", current: true },
+    { label: "配置", href: "roles.html", current: false },
+    { label: "记录", href: "records.html", current: false },
+  ];
 }
 
 /** The copy for a read that has not returned yet, named for its zone. */
-export function loadingCostCopy(_selection: DailyCostViewSelection): CostsStateCopy {
-  return { heading: "", body: "" };
+export function loadingCostCopy(selection: DailyCostViewSelection): CostsStateCopy {
+  return {
+    heading: "正在汇总费用",
+    body: `正在按 ${selection.timeZone} 自然日汇总历史使用、价格版本和美元金额，请稍候。`,
+  };
 }
 
 /** Date-plus-amount rows, one per day, in ascending date order. */
-export function dailyCostRows(_snapshot: DailyCostViewSnapshot): readonly DailyCostRow[] {
-  return [];
+export function dailyCostRows(snapshot: DailyCostViewSnapshot): readonly DailyCostRow[] {
+  return snapshot.days.map((day) => ({
+    date: day.date,
+    amount: formatUsd(day.costUsd),
+    count: day.count,
+  }));
 }
 
-/** The daily-cost panel as markup: one row per day, date and amount together. */
-export function renderDailyCostPanel(_snapshot: DailyCostViewSnapshot): string {
-  return "";
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+/**
+ * The daily-cost panel as markup: one row per day, the date and its amount
+ * inside the same row, so a narrow viewport keeps them paired.
+ */
+export function renderDailyCostPanel(snapshot: DailyCostViewSnapshot): string {
+  const rows = dailyCostRows(snapshot).map((row) =>
+    `<div class="bar-row" data-date="${escapeHtml(row.date)}">`
+    + `<span class="number">${escapeHtml(row.date.slice(5))}</span>`
+    + `<div class="bar-track"></div>`
+    + `<strong class="money">${escapeHtml(row.amount)}</strong></div>`,
+  ).join("");
+  return `<section class="panel" aria-labelledby="daily-title">`
+    + `<div class="section-head"><div><h2 id="daily-title">每日费用</h2>`
+    + `<p>${escapeHtml(snapshot.scope)}</p></div></div>`
+    + `<div class="bar-list">${rows}</div></section>`;
 }
 
 /** The bottom navigation as markup, with the current destination marked. */
 export function renderMobileNavigation(): string {
-  return "";
+  const links = costsNavigation().map((link) =>
+    `<a class="mobile-link" href="${escapeHtml(link.href)}"${link.current ? ' aria-current="page"' : ""}>`
+    + `${escapeHtml(link.label)}</a>`,
+  ).join("");
+  return `<nav class="mobile-nav" aria-label="手机导航">${links}</nav>`;
 }
 
 /**
