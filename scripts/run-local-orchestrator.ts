@@ -603,7 +603,20 @@ async function main(): Promise<void> {
         recordFriction: (input) => store.recordFriction(input),
       },
     );
-    const outcome = await decomposer.decompose(epic);
+    // The provider was chosen from the breaker but nothing here reported back
+    // to it, so a spent account stayed "usable" and every cycle spawned into
+    // the same refusal. Only a failure the error catalogue recognises says
+    // anything about the provider: a defect of ours is UNKNOWN and must not
+    // open a breaker. With this written down, the next cycle skips the open
+    // provider and takes the next one in the chain.
+    const outcome = await decomposer.decompose(epic).catch(async (cause: unknown) => {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      if (classifyError(message).class !== "UNKNOWN") {
+        await providerHealth.recordFailure(provider, message, await breakerPolicy(epicConfig))
+          .catch(() => undefined);
+      }
+      throw cause;
+    });
     console.log(`Epic ${epic.id} decomposition: ${outcome.kind}`);
     if (outcome.kind !== "presented") {
       await alerts.send({
@@ -1049,8 +1062,28 @@ async function main(): Promise<void> {
       if (servable.length === 0) return;
       await step("intake sync", syncIntake);
       await step("projection reconciliation", reconcileProjections);
-      await step("epic decomposition", decomposeWaitingEpic);
-      await step("epic maintenance", maintainEpics);
+      // Reported, not raised, for the same reason the regression sweep is: one
+      // Epic that cannot be split has nothing to do with the Stories already
+      // split out of the others. Raising it ended the cycle before dispatch,
+      // so a single spent account stopped every Story on the host and kept
+      // stopping it, one silent cycle at a time.
+      await step("epic decomposition", async () => {
+        try {
+          await decomposeWaitingEpic();
+        } catch (error) {
+          await reportP0("epic decomposition failed", error);
+        }
+      });
+      // Same reason again: Epic upkeep is background work about Epics, and a
+      // branch or a head recheck it cannot finish says nothing about the
+      // Stories waiting to be dispatched below it.
+      await step("epic maintenance", async () => {
+        try {
+          await maintainEpics();
+        } catch (error) {
+          await reportP0("epic maintenance failed", error);
+        }
+      });
       // Before dispatch, not after. Called after, it saw the Stories this very
       // cycle had just put in flight and gave way to them; and the cycle
       // returns early when there is nothing to dispatch, which is exactly when
