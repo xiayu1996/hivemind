@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>访问验证｜Hivemind</title><meta name="description" content="确认当前设备是否连接允许访问 Hivemind 后台的家庭或办公网络。"><link rel="stylesheet" href="../shared.css"><script src="../state.js" defer></script></head>
+<body><main>
+<section class="state-view" id="state-default"><header class="page-head"><div><h1>访问验证</h1><p>Hivemind 后台仅供本人从家庭或办公网络访问。</p></div></header><div class="state-page"><div class="state-card"><span class="status danger">无法访问</span><h2>当前设备无法进入后台</h2><p>当前设备未连接允许访问的家庭或办公网络，因此不能查看任何后台内容。连接其中一个网络后重新检查。</p><button class="retry">重新检查网络</button></div></div></section>
+<section class="state-view" id="state-empty" hidden><header class="page-head"><div><h1>访问验证</h1><p>检查当前设备是否可以进入后台。</p></div></header><div class="state-page"><div class="state-card"><h2>尚未发现可访问的后台</h2><p>请先连接家庭或办公网络，再重新检查可用的 Hivemind 后台。</p><button class="retry">重新检查网络</button></div></div></section>
+<section class="state-view" id="state-loading" hidden><header class="page-head"><div><h1>访问验证</h1></div></header><div class="state-page"><div class="state-card" aria-live="polite"><div class="spinner" aria-hidden="true"></div><h2>正在检查访问条件</h2><p>正在确认当前设备是否连接允许访问后台的家庭或办公网络，请稍候。</p></div></div></section>
+<section class="state-view" id="state-error" hidden><header class="page-head"><div><h1>访问验证</h1></div></header><div class="state-page"><div class="state-card"><h2>无法完成访问检查</h2><p>目前无法确认当前设备所在的网络。检查网络连接后重试；确认通过前不会展示后台内容。</p><button class="retry">重新检查网络</button></div></div></section>
+<section class="state-view" id="state-waiting" hidden><header class="page-head"><div><h1>访问验证</h1></div></header><div class="state-page"><div class="state-card"><h2>正在等待后台响应</h2><p>当前设备已经连接家庭或办公网络，但后台尚未响应；页面会继续检查，你也可以稍后重试。</p><button class="secondary retry">再次检查</button></div></div></section>
+</main></body></html>
