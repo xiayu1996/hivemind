@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import copy from "./operator-copy.json" with { type: "json" };
 
@@ -301,7 +302,7 @@ const STYLES = [
   ".row{display:flex;gap:var(--space-content-gap);align-items:center;justify-content:space-between}",
   ".stack{display:grid;gap:var(--space-content-gap);list-style:none}",
   ".actions{display:flex;gap:var(--space-control-gap);flex-wrap:wrap;align-items:center}",
-  ".divider{border:0;border-top:1px solid var(--color-border);margin:16px 0}",
+  ".divider{border:0;border-color:var(--color-border);border-top:1px solid var(--color-border);margin:16px 0}",
   ".tabs{display:flex;gap:var(--space-control-gap);overflow:auto;padding-bottom:4px}",
   ".tab{min-height:44px;padding:12px;border:1px solid var(--color-border);border-radius:var(--radius-control);background-color:var(--color-surface);color:var(--color-text);white-space:nowrap}",
   ".tab[aria-current=\"true\"]{background-color:var(--color-surface-selected);border-color:var(--color-action);color:var(--color-action);font-weight:var(--weight-strong)}",
@@ -549,12 +550,37 @@ function renderTodoFields(
     + `<div class="actions"><button class="primary-action" type="submit"${disabled}>${submitLabel(copy.todo.submitChoice)}</button></div>`;
 }
 
-function renderTodoHead(todo: OperatorTodo): string {
+function noticeBlock(options: {
+  tone: "" | "attention" | "danger" | "success";
+  heading: string;
+  body?: string;
+  retry?: boolean;
+}): string {
+  const tone = options.tone === "" ? "" : ` ${options.tone}`;
+  return `<div class="notice${tone} section"><h2>${escapeHtml(options.heading)}</h2>`
+    + (options.body ? `<p>${escapeHtml(options.body)}</p>` : "")
+    + (options.retry
+      ? `<form class="actions" method="get" action=""><button class="secondary" type="submit">${copy.states.retryRead}</button></form>`
+      : "")
+    + "</div>";
+}
+
+function refreshingNote(label: string, refreshing: boolean): string {
+  return refreshing ? `<div class="refresh">${label}</div>` : "";
+}
+
+function todoPageHead(value: OperatorTodoResult | undefined): string {
+  if (value?.kind !== "pending") {
+    return `<header class="page-head"><div><h1>${copy.todo.heading}</h1></div></header>`;
+  }
+  const todo = value.todo;
   const subject = `${escapeHtml(todo.subject.title)} · ${subjectKindWord(todo.subject.kind)} · ${escapeHtml(todo.sourceLabel)}`;
-  return backLink()
-    + `<header class="page-head"><div><h1>${copy.todo.heading}</h1><p>${subject}</p></div>`
-    + `<span class="status attention">${todoKindWord(todo.kind)}</span></header>`
-    + `<div class="notice attention"><h2>${copy.todo.questionHeading}</h2><p>${escapeHtml(todo.question)}</p></div>`
+  return `<header class="page-head"><div><h1>${copy.todo.heading}</h1><p>${subject}</p></div>`
+    + `<span class="status attention">${todoKindWord(todo.kind)}</span></header>`;
+}
+
+function todoQuestion(todo: OperatorTodo): string {
+  return `<div class="notice attention"><h2>${copy.todo.questionHeading}</h2><p>${escapeHtml(todo.question)}</p></div>`
     + `<section class="panel section"><h2>${copy.todo.contextHeading}</h2><p>${escapeHtml(todo.context)}</p></section>`;
 }
 
@@ -568,7 +594,7 @@ function savedSentence(todo: OperatorTodo): string {
 }
 
 function renderSavedTodo(todo: OperatorTodo): string {
-  return `<div class="split"><div>${renderTodoHead(todo)}`
+  return `<div class="split"><div>${todoQuestion(todo)}`
     + `<section class="panel section" aria-live="polite"><h2 role="status">${copy.todo.handledHeading}</h2>`
     + `<div class="notice success"><p>${savedSentence(todo)}</p><p>${copy.todo.savedBody}</p></div>`
     + `<div class="actions"><a class="button" href="/operator/overview">${copy.todo.back}</a></div>`
@@ -585,7 +611,7 @@ function renderTodoBody(
   if (submission?.kind === "saved") return renderSavedTodo(todo);
   const submitting = submission?.kind === "submitting";
   const retry = submission?.kind === "not_saved";
-  return `<div class="split"><div>${renderTodoHead(todo)}`
+  return `<div class="split"><div>${todoQuestion(todo)}`
     + (submitting ? `<div class="notice section"><p>${copy.todo.submitting}</p></div>` : "")
     + (retry
       ? `<div class="notice danger section"><p role="alert">${copy.todo.notSavedHeading}</p><p>${copy.todo.notSavedBody}</p></div>`
@@ -652,13 +678,22 @@ function renderDetailBody(detail: OperatorDetail, selectedRound: number | undefi
     ? detail.history.find((round) => round.number === selectedRound)
     : undefined;
   const panel = selected ? renderRoundPanel(selected, false) : renderRoundPanel(detail.currentRound, true);
-  const subject = `${subjectKindWord(detail.subject.kind)} · ${escapeHtml(detail.stateLabel)}`;
-  return backLink()
-    + `<header class="page-head"><div><h1>${escapeHtml(detail.subject.title)}</h1><p>${subject}</p></div></header>`
-    + renderRoundTabs(detail, selected ? selected.number : current)
+  return renderRoundTabs(detail, selected ? selected.number : current)
     + `<div class="split section"><div>${panel}</div>`
     + renderCostPanel(detail)
     + "</div>";
+}
+
+function detailPageHead(value: OperatorDetailResult | undefined): string {
+  if (value?.kind === "available") {
+    const detail = value.detail;
+    return `<header class="page-head"><div><h1>${escapeHtml(detail.subject.title)}</h1>`
+      + `<p>${subjectKindWord(detail.subject.kind)} · ${escapeHtml(detail.stateLabel)}</p></div></header>`;
+  }
+  if (value?.kind === "no_rounds") {
+    return `<header class="page-head"><div><h1>${escapeHtml(value.subject.title)}</h1></div></header>`;
+  }
+  return `<header class="page-head"><div><h1>${copy.detail.heading}</h1></div></header>`;
 }
 
 function renderEmptyState(heading: string, body: string, action: { href: string; label: string }): string {
@@ -671,12 +706,56 @@ function renderTodoPageBody(
   options: { submittedValue?: string; submission?: TodoSubmissionResult },
 ): string {
   if (value.kind === "pending") return renderTodoBody(value.todo, options);
-  return backLink()
-    + `<header class="page-head"><div><h1>${copy.todo.heading}</h1></div></header>`
-    + renderEmptyState(copy.todo.unavailableHeading, copy.todo.unavailableBody, {
-      href: "/operator/overview",
-      label: copy.todo.back,
-    });
+  return renderEmptyState(copy.todo.unavailableHeading, copy.todo.unavailableBody, {
+    href: "/operator/overview",
+    label: copy.todo.back,
+  });
+}
+
+type ParsedSubmission =
+  | { kind: "ok"; submission: TodoSubmission }
+  | { kind: "invalid"; field: "text" | "option" | "note" }
+  | { kind: "unavailable" };
+
+/** What the browser sent, turned into the command the orchestrator owns, or
+ * into the reason it cannot be. A revision that moved since the page was
+ * rendered is not a submission against this todo at all. */
+function parseSubmission(todo: OperatorTodo, body: Record<string, string>): ParsedSubmission {
+  if (body.revision !== todo.revision) return { kind: "unavailable" };
+  const base = { todoId: todo.id, expectedRevision: todo.revision };
+  if (todo.kind === "reply") {
+    const text = body.text ?? "";
+    if (text.trim() === "") return { kind: "invalid", field: "text" };
+    return { kind: "ok", submission: { ...base, kind: "reply", text, idempotencyKey: submissionKey(todo, [text.trim()]) } };
+  }
+  if (todo.kind === "approval") {
+    const optionId = body.decision ?? "";
+    if (!todo.options.some((option) => option.id === optionId)) return { kind: "invalid", field: "option" };
+    const note = body.note ?? "";
+    if (todo.noteRequired && note.trim() === "") return { kind: "invalid", field: "note" };
+    return {
+      kind: "ok",
+      submission: { ...base, kind: "approval", optionId, note, idempotencyKey: submissionKey(todo, [optionId, note.trim()]) },
+    };
+  }
+  const optionId = body.option ?? "";
+  if (!todo.options.some((option) => option.id === optionId)) return { kind: "invalid", field: "option" };
+  return { kind: "ok", submission: { ...base, kind: "choice", optionId, idempotencyKey: submissionKey(todo, [optionId]) } };
+}
+
+/** The same answer retried keeps its key, so an unconfirmed Notion write
+ * cannot be repeated into a second action; a different answer gets a
+ * different key, because it is a different request. */
+function submissionKey(todo: OperatorTodo, parts: readonly string[]): string {
+  const digest = createHash("sha256").update(JSON.stringify([todo.id, todo.revision, ...parts])).digest("hex");
+  return `console:${todo.id}:${digest.slice(0, 24)}`;
+}
+
+/** What the form put in the only field a person can lose by reloading. */
+function submittedValue(todo: OperatorTodo, body: Record<string, string>): string {
+  if (todo.kind === "reply") return body.text ?? "";
+  if (todo.kind === "approval") return body.note ?? "";
+  return "";
 }
 
 export function renderOperatorAccessPage(): string {
@@ -705,9 +784,28 @@ export function renderOperatorOverviewPage(
   return shell({
     title: copy.titles.overview,
     current: "overview",
-    body: pageHead(copy.overview.heading, copy.overview.intro, "")
+    body: pageHead(copy.overview.heading, copy.overview.intro, refreshingNote(
+      copy.overview.refreshing,
+      state.kind === "ready" && state.refreshing,
+    ))
+      + overviewNotice(state)
       + (value ? renderOverviewBody(value, now) : ""),
   });
+}
+
+/** A read that has not finished yet says what it is reading; one that failed
+ * says what it could not read and how to try again. Neither invents content. */
+function overviewNotice(state: ConsolePageState<OperatorOverview>): string {
+  if (state.kind === "loading") {
+    return noticeBlock({ tone: "", heading: copy.overview.loading, body: copy.overview.loadingBody });
+  }
+  if (state.kind === "failed") {
+    return noticeBlock({ tone: "danger", heading: copy.overview.failureHeading, body: copy.overview.failureBody, retry: true });
+  }
+  if (state.kind === "waiting") {
+    return noticeBlock({ tone: "", heading: copy.overview.waitingHeading, body: copy.overview.waitingBody });
+  }
+  return "";
 }
 
 export function renderOperatorTodoPage(
@@ -715,22 +813,44 @@ export function renderOperatorTodoPage(
   options: { submission?: TodoSubmissionResult; submittedValue?: string } = {},
 ): string {
   const value = state.kind === "ready" || state.kind === "waiting" ? state.value : state.previous;
-  const body = value === undefined ? "" : renderTodoPageBody(value, options);
+  // A confirmation still in flight locks the form: one tap while the first
+  // write is unconfirmed is how two actions get created for one answer.
+  const effective = state.kind === "waiting" && state.waitingFor === "notion_confirmation"
+    ? { ...options, submission: { kind: "submitting" as const, retryAfterMs: state.refreshAfterMs } }
+    : options;
   return shell({
     title: copy.titles.todo,
     current: "overview",
-    body,
+    body: backLink()
+      + todoPageHead(value)
+      + todoNotice(state)
+      + (value === undefined ? "" : renderTodoPageBody(value, effective)),
   });
+}
+
+function todoNotice(state: ConsolePageState<OperatorTodoResult>): string {
+  if (state.kind === "loading") {
+    return noticeBlock({ tone: "", heading: copy.todo.loading, body: copy.todo.loadingBody });
+  }
+  if (state.kind === "failed") {
+    return noticeBlock({ tone: "danger", heading: copy.todo.failureHeading, body: copy.todo.failureBody, retry: true });
+  }
+  if (state.kind === "waiting") {
+    return noticeBlock({
+      tone: "attention",
+      heading: copy.todo.waitingHeading,
+      body: `${copy.todo.confirmationWaiting}。${copy.todo.waitingBody}`,
+    });
+  }
+  return "";
 }
 
 function renderDetailPageBody(value: OperatorDetailResult, selectedRound: number | undefined): string {
   if (value.kind === "available") return renderDetailBody(value.detail, selectedRound);
-  return backLink()
-    + `<header class="page-head"><div><h1>${escapeHtml(value.subject.title)}</h1></div></header>`
-    + renderEmptyState(copy.detail.noRoundsHeading, copy.detail.noRoundsBody, {
-      href: "/operator/overview",
-      label: copy.detail.back,
-    });
+  return renderEmptyState(copy.detail.noRoundsHeading, copy.detail.noRoundsBody, {
+    href: "/operator/overview",
+    label: copy.detail.back,
+  });
 }
 
 export function renderOperatorDetailPage(
@@ -738,12 +858,27 @@ export function renderOperatorDetailPage(
   selectedRound?: number,
 ): string {
   const value = state.kind === "ready" || state.kind === "waiting" ? state.value : state.previous;
-  const body = value === undefined ? "" : renderDetailPageBody(value, selectedRound);
   return shell({
     title: copy.titles.detail,
     current: "overview",
-    body,
+    body: backLink()
+      + detailPageHead(value)
+      + detailNotice(state)
+      + (value === undefined ? "" : renderDetailPageBody(value, selectedRound)),
   });
+}
+
+function detailNotice(state: ConsolePageState<OperatorDetailResult>): string {
+  if (state.kind === "loading") {
+    return noticeBlock({ tone: "", heading: copy.detail.loading, body: copy.detail.loadingBody });
+  }
+  if (state.kind === "failed") {
+    return noticeBlock({ tone: "danger", heading: copy.detail.failureHeading, body: copy.detail.failureBody, retry: true });
+  }
+  if (state.kind === "waiting") {
+    return noticeBlock({ tone: "", heading: copy.detail.waitingHeading, body: copy.detail.waitingBody });
+  }
+  return "";
 }
 
 /** Registers the console routes behind one read port and one command port. */
@@ -796,6 +931,36 @@ export async function registerOperatorConsoleRoutes(
     const { todoId } = request.params as { todoId: string };
     const state = await loadPageState(() => dependencies.reads.todo(todoId));
     return sendHtml(reply, renderOperatorTodoPage(state));
+  });
+
+  app.post("/operator/todos/:todoId", async (request, reply) => {
+    if (!(await allow(request, reply))) return reply;
+    const { todoId } = request.params as { todoId: string };
+    const state = await loadPageState(() => dependencies.reads.todo(todoId));
+    if (state.kind !== "ready" || state.value.kind !== "pending") {
+      return sendHtml(reply, renderOperatorTodoPage(state));
+    }
+    const todo = state.value.todo;
+    const body = (request.body ?? {}) as Record<string, string>;
+    const parsed = parseSubmission(todo, body);
+    if (parsed.kind === "unavailable") {
+      return sendHtml(reply, renderOperatorTodoPage({
+        kind: "ready",
+        value: { kind: "unavailable" },
+        refreshing: false,
+      }));
+    }
+    if (parsed.kind === "invalid") {
+      return sendHtml(reply, renderOperatorTodoPage(state, {
+        submission: { kind: "validation_failed", field: parsed.field },
+        submittedValue: submittedValue(todo, body),
+      }));
+    }
+    const result = await dependencies.commands.submit(parsed.submission);
+    return sendHtml(reply, renderOperatorTodoPage(state, {
+      submission: result,
+      submittedValue: submittedValue(todo, body),
+    }));
   });
 
   app.get("/operator/subjects/:subjectKind/:subjectId", async (request, reply) => {
