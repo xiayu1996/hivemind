@@ -25,6 +25,29 @@ describe("enqueue", () => {
     const row = (await client.execute("SELECT state, attempts FROM notion_outbox")).rows[0];
     expect(row).toMatchObject({ state: "pending", attempts: 0 });
   });
+
+  it("sends a payload again once a different one reached the same target", async () => {
+    const outbox = new NotionOutbox(client);
+    const stopped = await outbox.enqueue({ target: "page-1", operation: "sync_story_page", payload: { stopped: true }, priority: 2 });
+    await client.execute({ sql: "UPDATE notion_outbox SET state = 'sent', sent_at = 1 WHERE id = ?", args: [stopped.id] });
+    const resumed = await outbox.enqueue({ target: "page-1", operation: "sync_story_page", payload: { stopped: false }, priority: 2 });
+    await client.execute({ sql: "UPDATE notion_outbox SET state = 'sent', sent_at = 2 WHERE id = ?", args: [resumed.id] });
+
+    const again = await outbox.enqueue({ target: "page-1", operation: "sync_story_page", payload: { stopped: true }, priority: 2 });
+    expect(again).toMatchObject({ id: stopped.id, inserted: true });
+    const row = (await client.execute({ sql: "SELECT state FROM notion_outbox WHERE id = ?", args: [stopped.id] })).rows[0];
+    expect(row).toMatchObject({ state: "pending" });
+  });
+
+  it("collapses a payload that is still the newest thing the target was given", async () => {
+    const outbox = new NotionOutbox(client);
+    const first = await outbox.enqueue({ target: "page-1", operation: "sync_story_page", payload: { round: 1 }, priority: 2 });
+    await client.execute("UPDATE notion_outbox SET state = 'sent', sent_at = 1");
+    const again = await outbox.enqueue({ target: "page-1", operation: "sync_story_page", payload: { round: 1 }, priority: 2 });
+    expect(again).toMatchObject({ id: first.id, inserted: false });
+    const row = (await client.execute("SELECT state FROM notion_outbox")).rows[0];
+    expect(row).toMatchObject({ state: "sent" });
+  });
 });
 
 describe("replay", () => {
@@ -144,6 +167,23 @@ describe("replay", () => {
     };
     expect(await outbox.replay(delivery)).toEqual({ sent: 3, failed: 0, failures: [], dead: [] });
     expect(order).toEqual(["high-1", "high-2", "low"]);
+  });
+
+  it("sends a revived payload after whatever reached its target in between", async () => {
+    let clock = 10;
+    const outbox = new NotionOutbox(client, () => (clock += 1));
+    const stopped = await outbox.enqueue({ target: "page-1", operation: "sync_story_page", payload: { stopped: true }, priority: 2 });
+    await client.execute({ sql: "UPDATE notion_outbox SET state = 'sent', sent_at = 1 WHERE id = ?", args: [stopped.id] });
+    await outbox.enqueue({ target: "page-1", operation: "sync_story_page", payload: { stopped: false }, priority: 2 });
+    await outbox.enqueue({ target: "page-1", operation: "sync_story_page", payload: { stopped: true }, priority: 2 });
+
+    const order: unknown[] = [];
+    const delivery: NotionOutboxDelivery = {
+      isApplied: async () => false,
+      send: async (record) => { order.push(record.payload); },
+    };
+    expect(await outbox.replay(delivery)).toMatchObject({ sent: 2, failed: 0 });
+    expect(order).toEqual([{ stopped: false }, { stopped: true }]);
   });
 
   it("declares a row dead after its last allowed attempt and stops retrying it", async () => {
