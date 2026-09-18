@@ -60,6 +60,13 @@
     "failuresEmpty": "当前没有异常事项",
     "completedEmpty": "最近没有完成的事项",
     "waitingDuration": "等待 {minutes} 分钟",
+    "detailLink": "查看详情",
+    "itemState": {
+      "running": "运行中",
+      "failed": "失败",
+      "completed": "已完成"
+    },
+    "summaryLabel": "总览摘要",
     "summaryCompleted": "最近完成",
     "summaryCost": "完成事项费用",
     "summaryScope": "统计范围：最近完成事项",

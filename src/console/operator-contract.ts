@@ -206,6 +206,29 @@ export interface OperatorConsoleDependencies {
   commands: OperatorTodoCommandPort;
 }
 
+type NavKey = "overview" | "costs" | "roles" | "records";
+
+const NAV_ITEMS: readonly { key: NavKey; href: string }[] = [
+  { key: "overview", href: "/operator/overview" },
+  { key: "costs", href: "/operator/costs" },
+  { key: "roles", href: "/operator/roles" },
+  { key: "records", href: "/operator/records" },
+];
+
+const NAV_LONG: Record<NavKey, string> = {
+  overview: copy.nav.overview,
+  costs: copy.nav.costs,
+  roles: copy.nav.roles,
+  records: copy.nav.records,
+};
+
+const NAV_SHORT: Record<NavKey, string> = {
+  overview: copy.nav.overviewShort,
+  costs: copy.nav.costsShort,
+  roles: copy.nav.rolesShort,
+  records: copy.nav.recordsShort,
+};
+
 /** Every colour, size and spacing below is a value from the interface
  * contract's token table, because the contract layer measures the delivered
  * screens against it. Properties the table does not name (height, min-height,
@@ -331,6 +354,126 @@ function documentHtml(options: { title: string; body: string }): string {
   ].join("");
 }
 
+function usd(value: number): string {
+  return `$${value.toFixed(2)}`;
+}
+
+/** Fills the `{name}` slots a copy template declares. */
+function fill(template: string, values: Record<string, string>): string {
+  let line = template;
+  for (const [name, value] of Object.entries(values)) line = line.replaceAll(`{${name}}`, value);
+  return line;
+}
+
+function sidebar(current: NavKey): string {
+  const links = NAV_ITEMS.map((item) =>
+    `<a class="nav-link" href="${item.href}"${item.key === current ? ' aria-current="page"' : ""}>${NAV_LONG[item.key]}</a>`
+  ).join("");
+  return `<aside class="sidebar"><div class="brand">${copy.brand.name}<small>${copy.brand.tagline}</small></div>`
+    + `<nav class="nav" aria-label="${copy.nav.landmark}">${links}</nav></aside>`;
+}
+
+function mobileNav(current: NavKey): string {
+  const links = NAV_ITEMS.map((item) =>
+    `<a class="mobile-link" href="${item.href}"${item.key === current ? ' aria-current="page"' : ""}>${NAV_SHORT[item.key]}</a>`
+  ).join("");
+  return `<nav class="mobile-nav" aria-label="${copy.nav.landmark}">${links}</nav>`;
+}
+
+function shell(options: { title: string; current: NavKey; body: string }): string {
+  return documentHtml({
+    title: options.title,
+    body: `<div class="shell">${sidebar(options.current)}<main>${options.body}`
+      + '<div class="reserve" aria-hidden="true"></div></main></div>'
+      + mobileNav(options.current),
+  });
+}
+
+function pageHead(heading: string, intro: string, trailing: string): string {
+  return `<header class="page-head"><div><h1>${escapeHtml(heading)}</h1><p>${escapeHtml(intro)}</p></div>${trailing}</header>`;
+}
+
+function subjectKindWord(kind: OperatorSubjectKind): string {
+  return copy.subjectKinds[kind];
+}
+
+function todoKindWord(kind: OperatorTodoKind): string {
+  return copy.todoKinds[kind];
+}
+
+function waitingMinutes(waitingSince: number, now: number): number {
+  return Math.max(0, Math.floor((now - waitingSince) / 60_000));
+}
+
+function emptyPanel(heading: string, body: string, action: string): string {
+  return `<div class="panel"><h2>${escapeHtml(heading)}</h2>`
+    + (body ? `<p>${escapeHtml(body)}</p>` : "")
+    + action
+    + "</div>";
+}
+
+function overviewSection(id: string, heading: string, panel: string): string {
+  return `<section class="section" aria-labelledby="${id}"><div class="section-head"><h2 id="${id}">${heading}</h2></div>${panel}</section>`;
+}
+
+function overviewRows(items: readonly OverviewItem[]): string {
+  return items.map((item) => [
+    "<li>",
+    `<div><strong>${escapeHtml(item.subject.title)}</strong>`,
+    `<span class="meta">${subjectKindWord(item.subject.kind)}${item.phase ? ` · ${escapeHtml(item.phase)}` : ""}</span></div>`,
+    `<span class="status ${item.state === "running" ? "" : item.state === "failed" ? "danger" : "success"}">${copy.overview.itemState[item.state]}</span>`,
+    `<span class="meta money">${usd(item.costUsd)}</span>`,
+    `<a href="/operator/subjects/${item.subject.kind}/${encodeURIComponent(item.subject.id)}">${copy.overview.detailLink}</a>`,
+    "</li>",
+  ].join("")).join("");
+}
+
+function renderOverviewBody(value: OperatorOverview, now: number): string {
+  const waiting = value.waitingForOperator.length > 0
+    ? `<div class="panel flush attention-rail"><ul class="ledger">`
+      + value.waitingForOperator.map((todo) => [
+        "<li>",
+        `<div><strong>${escapeHtml(todo.subject.title)}</strong>`,
+        `<span class="meta">${todoKindWord(todo.kind)} · ${fill(copy.overview.waitingDuration, { minutes: String(waitingMinutes(todo.waitingSince, now)) })}</span></div>`,
+        `<span class="status attention">${todoKindWord(todo.kind)}</span>`,
+        `<span class="meta">${escapeHtml(todo.sourceLabel)}</span>`,
+        `<a class="button" href="/operator/todos/${encodeURIComponent(todo.id)}">${copy.overview.handle}</a>`,
+        "</li>",
+      ].join("")).join("")
+      + "</ul></div>"
+    : emptyPanel(
+      copy.overview.waitingEmptyHeading,
+      copy.overview.waitingEmptyBody,
+      `<div class="actions"><a class="button secondary" href="#running-title">${copy.overview.inspectRuns}</a></div>`,
+    );
+
+  const running = value.running.length > 0
+    ? `<div class="panel flush"><ul class="ledger">${overviewRows(value.running)}</ul></div>`
+    : emptyPanel(copy.overview.runningEmpty, "", "");
+  const failures = value.failures.length > 0
+    ? `<div class="panel flush"><ul class="ledger">${overviewRows(value.failures)}</ul></div>`
+    : emptyPanel(copy.overview.failuresEmpty, "", "");
+  const completed = value.recentlyCompleted.length > 0
+    ? `<div class="panel flush"><ul class="ledger">${overviewRows(value.recentlyCompleted)}</ul></div>`
+    : emptyPanel(copy.overview.completedEmpty, "", "");
+
+  const completedCount = value.recentlyCompleted.length;
+  const completedCost = value.recentlyCompleted.reduce((total, item) => total + item.costUsd, 0);
+  const summary = `<aside class="stack" aria-label="${copy.overview.summaryLabel}">`
+    + `<div class="metric"><div class="metric-name">${copy.overview.summaryCompleted}</div>`
+    + `<div class="metric-value">${completedCount}</div><div class="metric-detail">${copy.overview.summaryScope}</div></div>`
+    + `<div class="metric"><div class="metric-name">${copy.overview.summaryCost}</div>`
+    + `<div class="metric-value">${usd(completedCost)}</div><div class="metric-detail">${copy.overview.summaryScope}</div></div>`
+    + "</aside>";
+
+  return `<div class="split"><div>`
+    + overviewSection("attention-title", copy.overview.waiting, waiting)
+    + overviewSection("running-title", copy.overview.running, running)
+    + overviewSection("failed-title", copy.overview.failures, failures)
+    + overviewSection("done-title", copy.overview.completed, completed)
+    + `</div>${summary}</div>`;
+}
+
 export function renderOperatorAccessPage(): string {
   const denied = copy.access;
   return documentHtml({
@@ -353,9 +496,13 @@ export function renderOperatorOverviewPage(
   state: ConsolePageState<OperatorOverview>,
   now: number,
 ): string {
-  void state;
-  void now;
-  return "";
+  const value = state.kind === "ready" || state.kind === "waiting" ? state.value : state.previous;
+  return shell({
+    title: copy.titles.overview,
+    current: "overview",
+    body: pageHead(copy.overview.heading, copy.overview.intro, "")
+      + (value ? renderOverviewBody(value, now) : ""),
+  });
 }
 
 export function renderOperatorTodoPage(
@@ -381,6 +528,10 @@ export function renderOperatorDetailPage(
  * must run before every data route and before the application shell is sent;
  * denied requests receive only the access screen and never call another port.
  */
+function sendHtml(reply: FastifyReply, body: string): FastifyReply {
+  return reply.code(200).type("text/html; charset=utf-8").send(body);
+}
+
 export async function registerOperatorConsoleRoutes(
   app: FastifyInstance,
   dependencies: OperatorConsoleDependencies,
@@ -402,6 +553,14 @@ export async function registerOperatorConsoleRoutes(
 
   app.get("/operator/overview", async (request, reply) => {
     if (!(await allow(request, reply))) return reply;
-    return reply.code(501).type("text/html; charset=utf-8").send("not implemented");
+    let state: ConsolePageState<OperatorOverview>;
+    try {
+      state = { kind: "ready", value: await dependencies.reads.overview(), refreshing: false };
+    } catch {
+      // A read failure is a transport failure, not a judgement about the
+      // work: the page reports it and leaves the previous view in place.
+      state = { kind: "failed" };
+    }
+    return sendHtml(reply, renderOperatorOverviewPage(state, Date.now()));
   });
 }
