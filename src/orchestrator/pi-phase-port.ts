@@ -337,6 +337,7 @@ export class PiStoryPhasePort implements StoryPhasePort {
     const tools = [...spec.tools];
     const session = await pinSessionFile({
       sessionRoot: this.options.sessionRoot,
+      cwd: this.options.worktreePath,
       cardId: input.context.cardId,
       phase: input.phase,
       round: input.context.round,

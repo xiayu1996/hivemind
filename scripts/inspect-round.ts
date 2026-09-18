@@ -120,17 +120,30 @@ function finalText(path: string): string | null {
   return last;
 }
 
-function sessionFile(sessionRoot: string, runId: string): string | null {
+/**
+ * The session this round left behind, from the layout `sessionFilePath`
+ * writes: card, phase, round and attempt are all in the path. The last attempt
+ * is the one worth reading -- an earlier one was abandoned to a failover or a
+ * crash, and the round's outcome came from the last.
+ */
+function sessionFile(sessionRoot: string, cardId: string, phase: string, round: number): string | null {
   try {
-    const directory = join(sessionRoot, runId);
-    const files = readdirSync(directory).filter((name) => name.endsWith(".jsonl")).toSorted();
-    const latest = files.at(-1);
+    const directory = join(sessionRoot, cardId, phase);
+    const prefix = `r${round}-a`;
+    const attempts = readdirSync(directory)
+      .filter((name) => name.startsWith(prefix) && name.endsWith(".jsonl"))
+      .toSorted((a, b) => attemptOf(a, prefix) - attemptOf(b, prefix));
+    const latest = attempts.at(-1);
     return latest ? join(directory, latest) : null;
   } catch {
     // A phase that never spawned pi (a guard refusal, a dispatch that died
     // before the handshake) has no session directory at all.
     return null;
   }
+}
+
+function attemptOf(name: string, prefix: string): number {
+  return Number.parseInt(name.slice(prefix.length), 10);
 }
 
 /**
@@ -234,10 +247,10 @@ async function main(): Promise<void> {
         console.log(`event ${String(event.type)}: ${String(event.data ?? "").slice(0, 400)}`);
       }
 
-      const path = sessionFile(sessionRoot, runId);
+      const path = sessionFile(sessionRoot, cardId, String(run.phase), round);
       if (!path) {
         if (String(run.phase) !== "VERIFY") {
-          console.log(`no session file under ${join(sessionRoot, runId)}`);
+          console.log(`no session file under ${join(sessionRoot, cardId, String(run.phase))}`);
           continue;
         }
         const startedAt = Number(run.started_at);
