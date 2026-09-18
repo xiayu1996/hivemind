@@ -280,7 +280,7 @@ function renderReadyBody(view: CostsPageView): string {
   return renderPageHead(true)
     + renderToolbar(view)
     + `<div class="metric-grid"><div class="metric"><div class="metric-name">所选范围累计费用</div>`
-    + `<div class="metric-value">${escapeHtml(formatUsd(snapshot.totalUsd))}</div>`
+    + `<div class="metric-value"><span>${escapeHtml(formatUsd(snapshot.totalUsd))}</span></div>`
     + `<div class="metric-detail">${escapeHtml(snapshot.scope)}</div></div></div>`
     + `<div class="split section">${renderDailyCostPanel(snapshot)}`
     + `<aside class="panel"><h2>计费口径</h2>`
