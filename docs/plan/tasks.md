@@ -416,6 +416,16 @@
 
 ---
 
+## MC 特殊化收敛（2026-09-18 增补，排期在 MU-02 与 MU-03 之间）
+
+目标：在继续往流程上加东西之前，先把已经长出来的特例收回主路径。三处都是"同一件事有多套实现"，而不是"这件事需要例外"——真正的例外（UI 走查不能否决、大脑档反着排成本序、订阅不挂 spend）有理由、写在 AGENTS.md 里，不在此列。纯重构：不改对外行为，不动 schema。
+
+| ID | 任务 | 输出物 | 验证方式 | 前置 |
+|---|---|---|---|---|
+| MC-01 | ✅ 出口检查收敛成一套机制：`evaluate → findings 回喂同一 session → 重解析` 只实现一次，每个 phase 的出口由一张表声明（CODE 的确定性出口、MERGE 的交付报告、DESIGN 的设计摘要由端口内置；SPECIFY 的测试契约、SHAPE 的 DoD 由调用方传入）。逐 gate 声明 `exhausted: fail / ship`，取代此前"有的抛错、有的照发"的隐含差别；SHAPE 的 DoD 语言检查从"换一个 session 重跑"改成会话内回喂，端口不执行时仍单判一次 | `src/orchestrator/pi-phase-port.ts`（`builtInGates` / `runExitGates`，删去 `enforceCodeExit`/`enforceExitGate`/`rewriteUntilReadable` 三份循环）、`story-worker.ts`（`PhaseExitGate` 加 `name`/`exhausted`/`failure`，`exitGates` 复数，`dodGate`） | `pi-phase-port.test.ts`（多 gate 按序执行并各自计数、无否决权的 gate 用尽即照发、有否决权的抛 `PhaseExitNotMetError`、CODE 仍抛 `CodeExitNotMetError`）；`story-worker.test.ts`（英文 DoD 仍被退回并记 friction、SPECIFY 会话内改写不耗 phase run） | MU-02 |
+| MC-02 | Epic 层状态迁移收敛：`assertEpicTransition` 目前全部传字面量常量（断言恒真），真正的守卫是散在 7 个模块里的 `UPDATE ... WHERE state = ?`；`regression/attribution-runner.ts` 直接改 `state`/`phase` 且无断言。改为统一经一处带 CAS 的迁移函数，读实际行状态再判 | store 上的 `transitionEpic`、上述 7 个模块、`regression/attribution-runner.ts` | `epic-*.test.ts` 全量；新增"非法迁移被拒"与"状态已被别人改过时不生效"两条 | MC-01 |
+| MC-03 | 需求层收敛：`prd`/`solution` 两个 runner 的「起草→等人→改写→连续不可用就停」结构提成一份；各自硬编码的 `const MAX_ATTEMPTS = 2` 改为配置（与 Story 道的 `retry.*` 同一处口径）；缺的对等物（无 `phase_runs`、无 checkpoint/崩溃恢复、不进费用上限）补齐或在设计里写明为何不需要 | `src/orchestrator/{prd,solution}-runner.ts`、`config/registry.ts`、08 的一段修订 | 两个 runner 的既有测试全绿；新增"重试次数由配置决定"一条 | MC-02 |
+
 ## M3 多机化
 
 目标：capability 队列 + 派单信封 + 心跳失联两段式 + Mac mini 浏览器 e2e worker 接入。

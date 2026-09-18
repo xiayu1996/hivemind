@@ -408,40 +408,15 @@ export class PiStoryPhasePort implements StoryPhasePort {
       const messages = await runner.getMessages();
       const providerPayloads = await (this.options.readProviderPayloads ?? readProviderPayloads)(capturePath);
       if (providerPayloads.length === 0) throw new Error("phase provider request was not captured");
-      let artifacts = parseResult(input, lastAssistantText(messages));
-      const codeExit = this.options.codeExit;
-      // Only the phases that produce an implementation. DESIGN and SPECIFY also
-      // write the worktree, but their exits are different questions entirely --
-      // asking a phase that must leave its tests failing for green evidence
-      // would refuse every correct SPECIFY.
-      if (codeExit && IMPLEMENTING_PHASES.has(input.phase)) {
-        artifacts = await this.enforceCodeExit(input, runner, codeExit, artifacts);
-      }
-      if (input.phase === "MERGE") {
-        artifacts = await this.rewriteUntilReadable(
-          input, runner, artifacts, "delivery-report",
-          (body) => lintBusinessLanguage(body),
-          renderBusinessLanguageFindings,
-        );
-      }
-      // The design summary is the only part of DESIGN a person reads, and they
-      // read it in their own language. The notes for whoever writes the code
-      // are a separate artifact and are not held to this.
-      if (input.phase === "DESIGN") {
-        artifacts = await this.rewriteUntilReadable(
-          input, runner, artifacts, "design-summary",
-          (body) => lintHumanSentence("design_summary", body),
-          renderDesignSummaryFindings,
-        );
-      }
-      // A phase's own exit, on the same terms as CODE's: findings go back to
-      // the live session, which costs no round and no reentry.
-      let exitGateRounds: number | undefined;
-      if (input.exitGate) {
-        const enforced = await this.enforceExitGate(input, runner, input.exitGate, artifacts);
-        artifacts = enforced.artifacts;
-        exitGateRounds = enforced.rounds;
-      }
+      // Every exit is the same mechanism: judge what the session produced, and
+      // hand the findings back to that same session. A refusal is a work item,
+      // not a verdict on the Story, so it costs no round and no reentry and
+      // reuses everything the session has already loaded. Refusing into a new
+      // session instead cost S-AGENTRULES-01 two phase runs and then the card.
+      const gates = [...this.builtInGates(input), ...(input.exitGates ?? [])];
+      const enforced = await this.runExitGates(input, runner, gates, parseResult(input, lastAssistantText(messages)));
+      let artifacts = enforced.artifacts;
+      const exitGateRounds = Object.keys(enforced.rounds).length > 0 ? enforced.rounds : undefined;
       const telemetry: PhaseTelemetryInput = {
         runId: input.runId,
         cardId: input.context.cardId,
@@ -467,99 +442,122 @@ export class PiStoryPhasePort implements StoryPhasePort {
   }
 
   /**
-   * The deterministic CODE exit, in place of a model judging whether the phase
-   * it just ran is finished. Findings are handed back to the same live session:
-   * they are a work item, not a verdict on the Story, so they cost no round and
-   * no reentry and reuse everything the session has already loaded.
-   */
-  private async enforceCodeExit(
-    input: ManagedPhaseInput,
-    runner: PiRunner,
-    options: CodeExitOptions,
-    artifacts: ManagedPhaseResult["artifacts"],
-  ): Promise<ManagedPhaseResult["artifacts"]> {
-    const dodScenarioIds = input.context.specs.map((spec) => spec.id);
-    const roundTags = roundTasks(input.context).map((task) => task.tag);
-    const collect = this.options.collectExitFacts ?? ((gate, scenarioIds) => this.measureCodeExit(gate, scenarioIds));
-    const maxRounds = options.maxRounds ?? DEFAULT_CODE_EXIT_ROUNDS;
-    let current = artifacts;
-    for (let attempt = 1; ; attempt++) {
-      const artifactText = current.map((item) => item.body).join("\n");
-      const verdict = evaluateCodeExit({ ...(await collect(options, dodScenarioIds)), roundTags, artifactText });
-      if (verdict.passed) return current;
-      if (attempt >= maxRounds) throw new CodeExitNotMetError(verdict.findings);
-      const result = await promptWithContinueRetry(
-        runner,
-        renderCodeExitFindings(verdict),
-        { maxContinueRetries: this.options.maxContinueRetries ?? 8 },
-        this.options.promptTimeoutMs,
-      );
-      if (result.failure) throw new Error(result.failure.errorMessage);
-      current = parseResult(input, lastAssistantText(await runner.getMessages()));
-    }
-  }
-
-  /**
-   * A phase's own deterministic exit, enforced inside the session that
-   * produced the output.
+   * The exits this port owns, per phase.
    *
-   * Same shape as the CODE exit and for the same reason: a refusal is a work
-   * item, not a verdict on the Story. Refusing in a new session instead costs
-   * a whole phase run to fix something the session that wrote it could correct
-   * in one turn, and the abandoned run reads downstream as a crash.
+   * One table rather than a ladder of `if (phase === ...)`: every phase that
+   * gains an exit adds a row, and the mechanism that enforces it is the same
+   * one every other row gets. The exits a caller owns -- SPECIFY's contract,
+   * SHAPE's definition of done -- arrive through `exitGates` because they need
+   * state the port does not have.
    */
-  private async enforceExitGate(
-    input: ManagedPhaseInput,
-    runner: PiRunner,
-    gate: PhaseExitGate,
-    artifacts: ManagedPhaseResult["artifacts"],
-  ): Promise<{ artifacts: ManagedPhaseResult["artifacts"]; rounds: number }> {
-    let current = artifacts;
-    for (let attempt = 1; ; attempt++) {
-      const verdict = await gate.evaluate(current, attempt);
-      if (verdict.passed) return { artifacts: current, rounds: attempt };
-      if (attempt >= gate.maxRounds) throw new PhaseExitNotMetError(input.phase, verdict.findings);
-      const result = await promptWithContinueRetry(
-        runner,
-        verdict.findings,
-        { maxContinueRetries: this.options.maxContinueRetries ?? 8 },
-        this.options.promptTimeoutMs,
-      );
-      if (result.failure) throw new Error(result.failure.errorMessage);
-      current = parseResult(input, lastAssistantText(await runner.getMessages()));
+  private builtInGates(input: ManagedPhaseInput): PhaseExitGate[] {
+    const gates: PhaseExitGate[] = [];
+    const codeExit = this.options.codeExit;
+    // Only the phases that produce an implementation. DESIGN and SPECIFY also
+    // write the worktree, but their exits are different questions entirely --
+    // asking a phase that must leave its tests failing for green evidence
+    // would refuse every correct SPECIFY.
+    if (codeExit && IMPLEMENTING_PHASES.has(input.phase)) {
+      const dodScenarioIds = input.context.specs.map((spec) => spec.id);
+      const roundTags = roundTasks(input.context).map((task) => task.tag);
+      const collect = this.options.collectExitFacts ?? ((gate, scenarioIds) => this.measureCodeExit(gate, scenarioIds));
+      let refused: readonly string[] = [];
+      gates.push({
+        name: "code-exit",
+        maxRounds: codeExit.maxRounds ?? DEFAULT_CODE_EXIT_ROUNDS,
+        exhausted: "fail",
+        // The findings survive as a list rather than one string: the round that
+        // follows is told which checks failed, not that some did.
+        failure: () => new CodeExitNotMetError(refused),
+        evaluate: async (artifacts) => {
+          const artifactText = artifacts.map((item) => item.body).join("\n");
+          const verdict = evaluateCodeExit({ ...(await collect(codeExit, dodScenarioIds)), roundTags, artifactText });
+          if (verdict.passed) return { passed: true };
+          refused = verdict.findings;
+          return { passed: false, findings: renderCodeExitFindings(verdict) };
+        },
+      });
     }
+    if (input.phase === "MERGE") {
+      gates.push(this.readabilityGate(
+        "delivery-report", "delivery-report",
+        (body) => lintBusinessLanguage(body),
+        renderBusinessLanguageFindings,
+      ));
+    }
+    // The design summary is the only part of DESIGN a person reads, and they
+    // read it in their own language. The notes for whoever writes the code are
+    // a separate artifact and are not held to this.
+    if (input.phase === "DESIGN") {
+      gates.push(this.readabilityGate(
+        "design-summary", "design-summary",
+        (body) => lintHumanSentence("design_summary", body),
+        renderDesignSummaryFindings,
+      ));
+    }
+    return gates;
   }
 
   /**
-   * Asks MERGE to rewrite a report whose business section reads like a
-   * transcript. MERGE has no veto over the Story (section 8.2), so a report
-   * that is still technical after its rewrites ships as written: what people
-   * read is worth a retry, never a stalled card.
+   * An artifact a person reads, held to their language.
+   *
+   * It ships when the rewrites run out: neither MERGE nor DESIGN has a veto
+   * over the Story, and a card stalled over prose is a worse outcome than
+   * prose that reads technically.
    */
-  private async rewriteUntilReadable(
-    input: ManagedPhaseInput,
-    runner: PiRunner,
-    artifacts: ManagedPhaseResult["artifacts"],
+  private readabilityGate(
+    name: string,
     kind: string,
     lint: (body: string) => BusinessLanguageFinding[],
     render: (findings: readonly BusinessLanguageFinding[]) => string,
-  ): Promise<ManagedPhaseResult["artifacts"]> {
-    const maxRewrites = this.options.maxReportRewrites ?? DEFAULT_REPORT_REWRITES;
+  ): PhaseExitGate {
+    return {
+      name,
+      // One more than the rewrites allowed: the last rewrite is still judged,
+      // and a gate that passes on its final look never prompts again.
+      maxRounds: (this.options.maxReportRewrites ?? DEFAULT_REPORT_REWRITES) + 1,
+      exhausted: "ship",
+      evaluate: async (artifacts) => {
+        const findings = lint(artifacts.find((item) => item.kind === kind)?.body ?? "");
+        return findings.length === 0 ? { passed: true } : { passed: false, findings: render(findings) };
+      },
+    };
+  }
+
+  /**
+   * Runs each exit in turn against the live session.
+   *
+   * Findings go back as a prompt and the reply is re-parsed, so a later gate
+   * judges what the earlier one left behind rather than the original answer.
+   */
+  private async runExitGates(
+    input: ManagedPhaseInput,
+    runner: PiRunner,
+    gates: readonly PhaseExitGate[],
+    artifacts: ManagedPhaseResult["artifacts"],
+  ): Promise<{ artifacts: ManagedPhaseResult["artifacts"]; rounds: Record<string, number> }> {
     let current = artifacts;
-    for (let attempt = 0; attempt < maxRewrites; attempt++) {
-      const report = current.find((item) => item.kind === kind)?.body ?? "";
-      const findings = lint(report);
-      if (findings.length === 0) return current;
-      const result = await promptWithContinueRetry(
-        runner,
-        render(findings),
-        { maxContinueRetries: this.options.maxContinueRetries ?? 8 },
-        this.options.promptTimeoutMs,
-      );
-      if (result.failure) throw new Error(result.failure.errorMessage);
-      current = parseResult(input, lastAssistantText(await runner.getMessages()));
+    const rounds: Record<string, number> = {};
+    for (const gate of gates) {
+      for (let attempt = 1; ; attempt++) {
+        rounds[gate.name] = attempt;
+        const verdict = await gate.evaluate(current, attempt);
+        if (verdict.passed) break;
+        if (attempt >= gate.maxRounds) {
+          if (gate.exhausted === "ship") break;
+          throw gate.failure?.(verdict.findings) ?? new PhaseExitNotMetError(input.phase, verdict.findings);
+        }
+        const result = await promptWithContinueRetry(
+          runner,
+          verdict.findings,
+          { maxContinueRetries: this.options.maxContinueRetries ?? 8 },
+          this.options.promptTimeoutMs,
+        );
+        if (result.failure) throw new Error(result.failure.errorMessage);
+        current = parseResult(input, lastAssistantText(await runner.getMessages()));
+      }
     }
-    return current;
+    return { artifacts: current, rounds };
   }
 
   private async measureCodeExit(
