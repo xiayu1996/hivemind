@@ -96,6 +96,36 @@ function hostOf(url: string): string | null {
   }
 }
 
+const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]", "::1", "0.0.0.0"]);
+
+/**
+ * Moves a page the blind verifier reached onto the instance this lane started.
+ *
+ * The two lanes each run their own copy of the application, and the verifier's
+ * copy is gone by the time the contract layer runs -- it recorded
+ * `http://127.0.0.1:4311/costs?...` and that port answers nothing any more, so
+ * every page came back unreadable and the one layer that is allowed to refuse
+ * on the token table measured nothing at all.
+ *
+ * Only a loopback origin is rewritten. A page on some other host is not this
+ * application and guessing it is would point the browser somewhere nobody
+ * asked for.
+ */
+export function onAppOrigin(url: string, appUrl: string | undefined): string {
+  if (!appUrl) return url;
+  try {
+    const page = new URL(url);
+    if (!LOOPBACK.has(page.hostname)) return url;
+    const app = new URL(appUrl);
+    page.protocol = app.protocol;
+    page.host = app.host;
+    return page.toString();
+  } catch {
+    // Not a URL either side could open; the collector reports it as it is.
+    return url;
+  }
+}
+
 function inconclusiveOf(result: UiReviewResult, fallback: readonly string[], reason: string | null): Array<{ id: string; reason: string }> {
   const listed = result.acceptance
     .filter((entry) => entry.status === "inconclusive")
@@ -284,8 +314,16 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
       }
       // While the application is still up: the contract layer opens the pages
       // the round reported reaching and reads their computed styles. After the
-      // finally block there is nothing left to open.
-      contract = await this.checkContract(functional.pages ?? [], reviewable);
+      // finally block there is nothing left to open. The URLs come from the
+      // blind lane, whose own copy of the application is already gone, so they
+      // are moved onto this lane's instance first.
+      contract = await this.checkContract(
+        (functional.pages ?? []).map((page) => ({
+          scenarioId: page.scenarioId,
+          url: onAppOrigin(page.url, appUrl),
+        })),
+        reviewable,
+      );
     } finally {
       if (handle) await handle.stop().catch(() => undefined);
     }

@@ -404,6 +404,26 @@ describe("UiReviewedVerifyPort and the interface contract", () => {
     pages: [{ scenarioId: "S-EPIC-01-s0", url: "http://localhost:4000/checkout" }],
   });
 
+  it("opens the pages on the instance this lane started, not on the one that is gone", async () => {
+    // The blind lane runs its own copy and takes it down when it is done, so
+    // the URLs it recorded answer nothing by now. Reading them as they stand
+    // left every page unreadable and the one layer allowed to refuse on the
+    // token table measuring nothing.
+    const styles = collector(offTable);
+    const { instance } = port({
+      functional: functionalResult({
+        pages: [{ scenarioId: "S-EPIC-01-s0", url: "http://127.0.0.1:4311/costs?timeZone=UTC" }],
+      }),
+      app: { startCommand: ["npm", "run", "dev"], readyUrl: "http://127.0.0.1:4173/", readyTimeoutMs: 1000, seedCommand: [] },
+      appUnderReview: () => fakeApp().handle,
+      uiContract: { enforce: "warn", tokens: async () => tokens, collector: styles.make },
+    });
+
+    await instance.run(verifyInput(dod([["ui"]])));
+
+    expect(styles.opened).toEqual(["http://127.0.0.1:4173/costs?timeZone=UTC"]);
+  });
+
   it("delivers the round but records what it found while the layer is only warning", async () => {
     const friction: Array<{ kind: string; detail: string }> = [];
     const styles = collector(offTable);
