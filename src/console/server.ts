@@ -2,6 +2,7 @@ import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { registerMobileConsoleRoutes, type MobileConsoleDependencies } from "./operator-screens.js";
 
 export interface ConsoleDataSource {
   nodes(): Promise<unknown[]>;
@@ -28,6 +29,13 @@ export interface ConsoleServerOptions {
   serveUi?: boolean;
   /** The one write surface. Without it the console stays entirely read-only. */
   configWriter?: ConsoleConfigWritePort;
+  /**
+   * The mobile cost, record and role screens and their read ports. When given,
+   * the server renders those screens itself and does not look for a built
+   * bundle: the process that holds the store is the one that owes a person the
+   * screen, whether or not somebody ran a build.
+   */
+  screens?: MobileConsoleDependencies;
 }
 
 /** Builds the read-only intranet console. */
@@ -39,6 +47,13 @@ export async function createConsoleServer(
   const writable = new Set(options.configWriter
     ? ["/api/config/value", "/api/config/rollback"]
     : []);
+  // Role changes are the one write the mobile screens own; they go through the
+  // role port, which validates and versions the change, so the read-only hook
+  // lets those two paths through exactly as it does the config writes.
+  if (options.screens) {
+    writable.add("/operator/roles");
+    writable.add("/roles");
+  }
   app.addHook("onRequest", async (request, reply) => {
     if (request.method === "GET" || request.method === "HEAD") return;
     // Config is the only thing an operator may change from here, and only
@@ -86,7 +101,9 @@ export async function createConsoleServer(
     });
   }
 
-  if (options.serveUi !== false) {
+  if (options.screens) {
+    await registerMobileConsoleRoutes(app, options.screens);
+  } else if (options.serveUi !== false) {
     const uiRoot = resolve(options.uiRoot ?? "console-ui/dist");
     await app.register(fastifyStatic, {
       root: join(uiRoot, "assets"),
