@@ -154,8 +154,10 @@ pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src
   新增字段先回答"这是给谁读的"，两类内容不共用一个字段——分开之后"这段合不合格"才是可判定的，
   技术内容也永远有地方去，不必为了合规被删掉。
 - **语言要求由确定性出口把关，不靠 prompt 自觉**：`lintHumanSentence` 判语言与实现词汇，findings 回喂同一个
-  session 重写（SHAPE 的 DoD、DESIGN 的摘要、MERGE 的报告各一条回路）。判官模型不进这条路径：
-  同样输入必须得到同样结论，否则 `assemblePhasePrompt` 的逐字节确定性就没了。
+  session 重写（SHAPE 的 DoD、DESIGN 的摘要、MERGE 的报告各一条回路）。判官可以在 DESIGN 摘要与
+  MERGE 报告上**追加** findings（全中文写的实现散文，正则看不见），但只因为这两道 gate 声明了
+  `exhausted: "ship"`——概率永远停不住一张卡。`lintHumanSentence` 本身与拿得到否决权的那些 gate
+  不进这条路径：同样输入必须得到同样结论，否则 `assemblePhasePrompt` 的逐字节确定性就没了。
 - **约束解码拿不到**：pi 的 RPC `prompt` 只收 `{message, images}`，没有 output schema，链上又有订阅型 OAuth
   provider 不经我们自己的 API 调用。结构保证止于 zod，语言保证止于出口检查——要再往上一层得先给 pi 提能力。
 - **被退回的次数记进 friction**（`dod_language_rejected`），用数据决定要不要加强这条规则，而不是靠猜。

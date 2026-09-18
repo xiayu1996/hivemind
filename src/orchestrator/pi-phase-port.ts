@@ -25,12 +25,14 @@ import { pinSessionFile, type CacheKeyScope } from "../runner/session-file.js";
 import type { ResolvedAgentSpec } from "../runner/agent-spec.js";
 import type { AgentSpawnGrant } from "../runner/spawn-broker.js";
 import {
+  businessSection,
   lintBusinessLanguage,
   lintHumanSentence,
   renderBusinessLanguageFindings,
   renderDesignSummaryFindings,
   type BusinessLanguageFinding,
 } from "../report/business-language.js";
+import { judgeHumanSentences, type HumanSentenceJudgeSettings } from "../judge/human-sentence.js";
 import { lastAssistantText } from "../runner/assistant-text.js";
 import { jsonPayloadCandidates } from "../util/json-payload.js";
 import { loadExplicitContextBundle, type ExplicitContextFile } from "../runner/context-files.js";
@@ -152,6 +154,14 @@ export interface PiStoryPhasePortOptions {
   promptTimeoutMs?: number;
   /** How many rewrites the delivery report gets before it ships as written. */
   maxReportRewrites?: number;
+  /**
+   * Adds the semantic half of the two readability gates: a sentence written
+   * entirely in prose that still describes how the system was built. Left out
+   * where there is no credential, and then the linter answers alone. It is
+   * attached only to gates that declare `exhausted: "ship"`, so it can never
+   * stop a Story on a probability.
+   */
+  readabilityJudge?: HumanSentenceJudgeSettings | undefined;
   /** What a provider cache key groups; from `cache.keyScope`. */
   cacheKeyScope?: CacheKeyScope;
   /** Grouping value when the scope is a repository. */
@@ -483,6 +493,9 @@ export class PiStoryPhasePort implements StoryPhasePort {
         "delivery-report", "delivery-report",
         (body) => lintBusinessLanguage(body),
         renderBusinessLanguageFindings,
+        // Only the half a reader reads without opening the code; the technical
+        // notes below the heading are unconstrained and are not asked about.
+        { humanPart: businessSection, what: "this sentence describes how the system was built rather than what a person can now do" },
       ));
     }
     // The design summary is the only part of DESIGN a person reads, and they
@@ -493,6 +506,7 @@ export class PiStoryPhasePort implements StoryPhasePort {
         "design-summary", "design-summary",
         (body) => lintHumanSentence("design_summary", body),
         renderDesignSummaryFindings,
+        { humanPart: (body) => body, what: "这一句写的是怎么实现的，不是做完之后人能做什么、看到什么" },
       ));
     }
     return gates;
@@ -510,6 +524,7 @@ export class PiStoryPhasePort implements StoryPhasePort {
     kind: string,
     lint: (body: string) => BusinessLanguageFinding[],
     render: (findings: readonly BusinessLanguageFinding[]) => string,
+    judged: { humanPart: (body: string) => string; what: string },
   ): PhaseExitGate {
     return {
       name,
@@ -518,7 +533,21 @@ export class PiStoryPhasePort implements StoryPhasePort {
       maxRounds: (this.options.maxReportRewrites ?? DEFAULT_REPORT_REWRITES) + 1,
       exhausted: "ship",
       evaluate: async (artifacts) => {
-        const findings = lint(artifacts.find((item) => item.kind === kind)?.body ?? "");
+        const body = artifacts.find((item) => item.kind === kind)?.body ?? "";
+        const settings = this.options.readabilityJudge;
+        // The linter answers first and alone. The judge is asked only about the
+        // sentences it let through, and what comes back is added to the same
+        // rewrite request: neither gate can stop the Story, so a finding the
+        // judge invents costs one rewrite and the artifact ships regardless.
+        const findings = [
+          ...lint(body),
+          ...await judgeHumanSentences(settings?.judge, judged.humanPart(body), {
+            model: settings?.model ?? "",
+            threshold: settings?.threshold ?? 1,
+            field: kind,
+            what: judged.what,
+          }),
+        ];
         return findings.length === 0 ? { passed: true } : { passed: false, findings: render(findings) };
       },
     };
