@@ -2,6 +2,7 @@
 import { createClient, type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SystemOne, SystemOneRequest } from "../judge/system-one.js";
+import { planRevisionFeedback } from "../orchestrator/epic-blocker.js";
 import { PlanApprovalStore } from "../orchestrator/plan-approval.js";
 import { migrate } from "../persistence/migrate.js";
 import { CommentIngestor, type NotionCommentSource } from "./comment-ingest.js";
@@ -135,12 +136,15 @@ describe("plan approval the four strings do not match", () => {
     expect(await new PlanApprovalStore(client, () => 1_000).getEpic("M2")).toMatchObject({ state: "EXECUTING" });
   });
 
-  it("goes on waiting when the judge is not sure", async () => {
+  it("sends the plan back rather than approving it when the judge is not sure", async () => {
+    // Bare praise is not an approval, so it does not start the work. It is not
+    // silence either: the comment goes back with the plan, and the person who
+    // wrote it sees a new split rather than a page that never moved.
     const { approved, friction } = await pollWith("这个拆解写得挺好的", 0.7);
 
     expect(approved).toBe(0);
     expect(friction).toEqual([]);
-    expect(await new PlanApprovalStore(client, () => 1_000).getEpic("M2")).toMatchObject({ state: "PLAN_APPROVAL" });
+    expect(await new PlanApprovalStore(client, () => 1_000).getEpic("M2")).toMatchObject({ state: "DECOMPOSE" });
   });
 
   it("never asks about the wording the whitelist already approves", async () => {
@@ -148,6 +152,61 @@ describe("plan approval the four strings do not match", () => {
 
     expect(approved).toBe(1);
     expect(asked).toEqual([]);
+  });
+});
+
+describe("a comment on a waiting plan", () => {
+  async function pollWithComments(bodies: readonly string[]): Promise<PlanApprovalStore> {
+    const approvals = new PlanApprovalStore(client, () => 1_000, { planApproval: true });
+    await approvals.present({ epicId: "M2", notionPageId: "epic-page", title: "Plan", plan });
+    const comments = new CommentIngestor(client, {
+      listComments: async () => bodies.map((body, index) => ({
+        id: `comment-${index}`, pageId: "epic-page", blockId: null, discussionId: "d",
+        authorId: "human-1", body, createdTime: 1_000 + index,
+      })),
+    }, { now: () => 1_000 });
+    await comments.registerPage("epic-page", []);
+    const sync = new NotionEpicInputSync(client, gateway("拆解待确认"), comments, approvals, () => 1_000);
+    await sync.pollComments("epic-page");
+    return approvals;
+  }
+
+  it("sends the plan back carrying what the person said was wrong with it", async () => {
+    // This used to be read as `feedback`, which does nothing at all: the Epic
+    // went on waiting and nothing on the page said what it waited for.
+    const said = "这个拆解不对，第二张卡应该拆成两张";
+
+    const approvals = await pollWithComments([said]);
+
+    expect(await approvals.getEpic("M2")).toMatchObject({ state: "DECOMPOSE" });
+    await expect(planRevisionFeedback(client, "M2")).resolves.toEqual([said]);
+  });
+
+  it("carries everything written about one plan into one split", async () => {
+    const approvals = await pollWithComments(["第二张卡应该拆成两张", "另外第四张不该依赖第一张"]);
+
+    expect(await approvals.getEpic("M2")).toMatchObject({ state: "DECOMPOSE" });
+    await expect(planRevisionFeedback(client, "M2"))
+      .resolves.toEqual(["第二张卡应该拆成两张\n另外第四张不该依赖第一张"]);
+    // Both comments are spent. One left unclaimed would send the next plan
+    // straight back the moment it arrived.
+    expect((await client.execute("SELECT event_id FROM epic_approval_events ORDER BY event_id")).rows)
+      .toEqual([{ event_id: "comment-0" }, { event_id: "comment-1" }]);
+  });
+
+  it("does not count an approval written after a request to change something", async () => {
+    // They asked for a change and then said "批准"; what is on the page now is
+    // not what they approved.
+    const approvals = await pollWithComments(["第二张卡应该拆成两张", "批准"]);
+
+    expect(await approvals.getEpic("M2")).toMatchObject({ state: "DECOMPOSE" });
+  });
+
+  it("still starts the work on an approval that stands alone", async () => {
+    const approvals = await pollWithComments(["批准"]);
+
+    expect(await approvals.getEpic("M2")).toMatchObject({ state: "EXECUTING" });
+    await expect(planRevisionFeedback(client, "M2")).resolves.toEqual([]);
   });
 });
 

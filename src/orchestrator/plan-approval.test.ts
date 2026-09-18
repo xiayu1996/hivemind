@@ -64,7 +64,10 @@ describe("@scenario S-M2-02-drag plan approval", () => {
 describe("@scenario S-M2-02-comment plan approval", () => {
   it("starts the Epic from an unambiguous Epic-page approval comment", async () => {
     expect(interpretEpicComment("PLAN_APPROVAL", "批准")).toEqual({ type: "approve_plan" });
-    expect(interpretEpicComment("PLAN_APPROVAL", "Looks good to me")).toEqual({ type: "feedback" });
+    // Without a judge this wording is not the approval, and it no longer
+    // vanishes either: the plan goes back to be split again carrying it.
+    expect(interpretEpicComment("PLAN_APPROVAL", "Looks good to me"))
+      .toEqual({ type: "request_revision", body: "Looks good to me" });
     const { client, approvals } = await presentedPlan();
     expect(await approvals.approve({ epicId: "M2", eventId: "comment-1", source: "comment" })).toBe(true);
     expect(await approvals.getEpic("M2")).toMatchObject({ state: "EXECUTING" });

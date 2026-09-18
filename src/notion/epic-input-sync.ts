@@ -117,6 +117,7 @@ export class NotionEpicInputSync {
       args: [pageId],
     })).rows;
     const approving = await this.judgeApprovals(comments);
+    const waiting: { epicId: string; eventId: string; body: string }[] = [];
     let approved = 0;
     let revised = 0;
     let answered = 0;
@@ -142,10 +143,24 @@ export class NotionEpicInputSync {
         }
       }
       const intent = interpretEpicComment(state, String(comment.body), approving);
-      if (intent.type === "approve_plan") {
+      if (intent.type === "approve_plan" && waiting.length === 0) {
         if (await this.approvals.approve({ epicId, eventId, source: "comment" })) approved++;
-      } else if (intent.type === "request_revision") {
-        if (await this.approvals.requestRevision(epicId, eventId)) revised++;
+        continue;
+      }
+      // Everything the person wrote about this plan travels together into the
+      // next split, and an approval written after a request to change
+      // something is not an approval of what is on the page now.
+      if (intent.type === "request_revision" || intent.type === "approve_plan") {
+        waiting.push({ epicId, eventId, body: intent.type === "request_revision" ? intent.body : "" });
+      }
+    }
+    if (waiting.length > 0) {
+      const [first, ...rest] = waiting;
+      const feedback = waiting.map((item) => item.body).filter((body) => body !== "").join("\n");
+      // One request carrying every comment, and every comment spent: one left
+      // unclaimed would send the next plan back the moment it arrives.
+      if (await this.approvals.requestRevision(first!.epicId, first!.eventId, feedback, rest.map((item) => item.eventId))) {
+        revised++;
       }
     }
     return { ingested: polled.inserted, approved, revised, answered, gaps };

@@ -115,6 +115,38 @@ export function withBlockerAnswers(requirement: string, answers: readonly Blocke
   return `${requirement}\n\n补充说明（拆解时提出的问题与回答）：\n${lines.join("\n\n")}`;
 }
 
+/** The event row that records what a person asked to be changed about a plan.
+ * It lands in the same batch as the transition, so there is never a moment
+ * where the plan was sent back and nobody knows why. */
+export function planRevisionStatement(epicId: string, feedback: string, time: number): InStatement {
+  const runId = `epic:${epicId}`;
+  return {
+    sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
+          VALUES (?, (SELECT COALESCE(MAX(seq), -1) + 1 FROM event_log WHERE run_id = ?),
+                  ?, 'DECOMPOSE', 'epic.plan_revision_requested', ?, ?)`,
+    args: [runId, runId, epicId, time, JSON.stringify({ feedback })],
+  };
+}
+
+/** What a person asked to be changed about a plan, in the order they said it. */
+export async function planRevisionFeedback(client: Client, epicId: string): Promise<string[]> {
+  const rows = (await client.execute({
+    sql: "SELECT data FROM event_log WHERE run_id = ? AND type = 'epic.plan_revision_requested' ORDER BY seq",
+    args: [`epic:${epicId}`],
+  })).rows;
+  return rows.map((row) => String((JSON.parse(String(row.data)) as { feedback: string }).feedback));
+}
+
+/**
+ * The requirement as the decomposer should read it after a plan was sent back:
+ * the page's words, then what the person said was wrong with the last split.
+ * Without this the next attempt has no reason to produce anything different.
+ */
+export function withPlanRevisions(requirement: string, revisions: readonly string[]): string {
+  if (revisions.length === 0) return requirement;
+  return `${requirement}\n\n上一版拆解方案被退回，人提出的意见：\n${revisions.map((item) => `- ${item}`).join("\n")}`;
+}
+
 /**
  * A person's comment on a blocked Epic is the answer. It is claimed under the
  * comment id so a second delivery changes nothing, and the Epic goes back to

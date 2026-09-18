@@ -5,13 +5,24 @@ import {
   type BusinessLanguageJudgeSettings,
   type JudgedLine,
 } from "../judge/business-language.js";
-import { evaluateDecomposition, type DecompositionCandidate, type DecompositionLimits } from "./decompose.js";
+import {
+  domainVocabulary,
+  evaluateDecomposition,
+  type DecompositionCandidate,
+  type DecompositionLimits,
+} from "./decompose.js";
 import {
   judgeVerticalSlices,
   renderRefusedSlices,
   type VerticalSliceJudgeSettings,
 } from "../judge/vertical-slice.js";
-import { blockerAnswers, blockingQuestionStatement, withBlockerAnswers } from "./epic-blocker.js";
+import {
+  blockerAnswers,
+  blockingQuestionStatement,
+  planRevisionFeedback,
+  withBlockerAnswers,
+  withPlanRevisions,
+} from "./epic-blocker.js";
 import type { HumanQuestion } from "./human-question.js";
 import type { PlanApprovalStore } from "./plan-approval.js";
 import { epicTransitionStatement, type EpicState } from "./state-machine.js";
@@ -77,7 +88,18 @@ export class EpicDecomposer {
     const rejections: string[] = [];
     // A question asked on an earlier pass and answered since is part of the
     // requirement now; without it the same question would stop this pass too.
-    const requirement = withBlockerAnswers(epic.requirement, await blockerAnswers(this.client, epic.id));
+    const requirement = withPlanRevisions(
+      withBlockerAnswers(epic.requirement, await blockerAnswers(this.client, epic.id)),
+      // What a person said was wrong with the last plan. Without it this is a
+      // blind retry: the same requirement produces the same split, and they
+      // watch the plan they rejected come back.
+      await planRevisionFeedback(this.client, epic.id),
+    );
+
+    // Words the person used are the product's own vocabulary, so a Story may
+    // use them back. Read from the requirement the attempts are given, which
+    // includes what they answered and what they asked to be changed.
+    const vocabulary = domainVocabulary(requirement);
 
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       const candidate = await this.port.run({
@@ -86,7 +108,7 @@ export class EpicDecomposer {
         requirement,
         previousRejections: [...rejections],
       });
-      const evaluated = evaluateDecomposition(candidate, this.limits);
+      const evaluated = evaluateDecomposition(candidate, this.limits, vocabulary);
 
       if (evaluated.kind === "blocking_question") {
         // The one stop the decomposition is allowed to take: a missing fact that
@@ -104,7 +126,7 @@ export class EpicDecomposer {
         // `evaluateDecomposition` because that function is pure and synchronous
         // and everything else in the system depends on it staying that way.
         const refused = [
-          ...await this.judgeLanguage(epic.id, candidate),
+          ...await this.judgeLanguage(epic.id, candidate, vocabulary),
           ...await this.judgeSlices(epic.id, candidate),
         ];
         if (refused.length > 0) {
@@ -116,6 +138,7 @@ export class EpicDecomposer {
           notionPageId: epic.notionPageId,
           title: epic.title,
           plan: candidate,
+          vocabulary,
         });
         return { kind: "presented", stories: evaluated.stories.length };
       }
@@ -137,7 +160,11 @@ export class EpicDecomposer {
    * was wrong in the same breath as the table's own reasons. They are never
    * persisted, so no prompt is ever rebuilt from a judged answer.
    */
-  private async judgeLanguage(epicId: string, candidate: DecompositionCandidate): Promise<string[]> {
+  private async judgeLanguage(
+    epicId: string,
+    candidate: DecompositionCandidate,
+    vocabulary: ReadonlySet<string>,
+  ): Promise<string[]> {
     const settings = this.judged.language;
     if (!settings?.judge) return [];
     const lines: JudgedLine[] = [{ field: "business goal", line: 1, text: candidate.businessGoal }];
@@ -161,6 +188,7 @@ export class EpicDecomposer {
     const judgement = await judgeBusinessLanguage(settings.judge, lines, {
       model: settings.model,
       threshold: settings.threshold,
+      vocabulary,
     });
     if (judgement.moved.length > 0) {
       await this.judged.recordFriction?.({

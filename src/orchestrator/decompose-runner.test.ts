@@ -179,6 +179,52 @@ describe("EpicDecomposer", () => {
     });
   });
 
+  it("tells the next split what the person said was wrong with the last one", async () => {
+    // Without this the retry is blind: the same requirement produces the same
+    // plan, and the person who said what was wrong watches it come back.
+    await approvals.present({ epicId: "M2", notionPageId: "epic-page", title: "Plan", plan });
+    await approvals.requestRevision("M2", "comment-1", "第二张卡应该拆成两张");
+    const requests: DecomposeRequest[] = [];
+    const port = {
+      run: async (input: DecomposeRequest) => {
+        requests.push(input);
+        return plan;
+      },
+    };
+
+    await new EpicDecomposer(client, approvals, port, () => 1_000).decompose(epic());
+
+    expect(requests[0]!.requirement).toContain("第二张卡应该拆成两张");
+    expect(requests[0]!.requirement).toContain("上一版拆解方案被退回");
+    // The page's own words are still the head of it.
+    expect(requests[0]!.requirement.startsWith(epic().requirement)).toBe(true);
+  });
+
+  it("does not block an Epic for using the words its own requirement used", async () => {
+    // Before this the word table refused the Story, both attempts produced the
+    // same refusal because the word *is* the requirement, and a correctly
+    // written Epic stopped and waited for a person.
+    const technicalEpic = {
+      ...epic(),
+      requirement: "合作方的技术同学可以调用我们的 API 自助查询订单状态，不用再发邮件问我们。",
+    };
+    const technicalPlan: DecompositionCandidate = {
+      ...plan,
+      businessGoal: "合作方自己就能查到订单状态。",
+      stories: [{
+        ...plan.stories[0]!,
+        title: "合作方自助查询订单状态",
+        requirement: "合作方按示例调用 API，拿到这一单当前的状态。",
+        userEntryPoint: "开放平台的「订单查询」页",
+        verificationPath: "用一个合作方账号查一单，确认状态和后台一致",
+        scenarios: [{ id: "S-M2-01-a", given: "合作方有订单号", when: "他调用 API", then: "他拿到当前状态" }],
+      }],
+    };
+
+    await expect(new EpicDecomposer(client, approvals, { run: async () => technicalPlan }, () => 1_000)
+      .decompose(technicalEpic)).resolves.toMatchObject({ kind: "presented" });
+  });
+
   it("starts the work itself when nobody reviews how it was split", async () => {
     const port = { run: vi.fn(async () => plan) };
     const decomposer = new EpicDecomposer(client, new PlanApprovalStore(client, () => 1_000), port, () => 1_000);

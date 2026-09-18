@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import {
   evaluateDecomposition,
+  domainVocabulary,
   inspectBusinessLanguage,
   type DecompositionCandidate,
   type RejectedDecomposition,
@@ -137,6 +138,42 @@ describe("@scenario S-M2-01-language business words that only look technical", (
     ]) {
       expect(inspectBusinessLanguage("requirement", line)).toHaveLength(1);
     }
+  });
+});
+
+describe("a product whose own subject matter is technical", () => {
+  it("lets a Story use the words the requirement itself used", () => {
+    // This is the failure that blocked Epics: the word *is* the requirement,
+    // so the model has nowhere to go, and after two attempts a correctly
+    // written requirement stops and waits for a person.
+    const vocabulary = domainVocabulary("合作方可以调用我们的 API 查询订单，也可以在组件库里挑一个组件放到自己的页面上。");
+
+    expect(inspectBusinessLanguage("requirement", "合作方在组件库里选好组件后放到页面上。", vocabulary)).toEqual([]);
+    expect(inspectBusinessLanguage("requirement", "The partner calls the API and sees the order status.", vocabulary))
+      .toEqual([]);
+  });
+
+  it("still refuses a construction word the requirement never used", () => {
+    // The authority is what the person wrote. A word that appears nowhere
+    // upstream and turns up in a Story is the model reaching for it.
+    const vocabulary = domainVocabulary("合作方可以调用我们的 API 查询订单。");
+
+    expect(inspectBusinessLanguage("requirement", "顺便把数据库表结构也调整一下。", vocabulary)).toHaveLength(1);
+    expect(inspectBusinessLanguage("requirement", "Add a React component for it.", vocabulary)).toHaveLength(1);
+  });
+
+  it("never excuses a path, a fenced block or a stack frame", () => {
+    // A customer does not write a stack frame into what they asked for, so no
+    // requirement can make one acceptable.
+    const vocabulary = domainVocabulary("改 src/orchestrator/decompose.ts 里的判断，报错是 at foo (bar.ts:1:2)。");
+
+    expect(inspectBusinessLanguage("requirement", "改 src/orchestrator/decompose.ts 里的判断。", vocabulary))
+      .toHaveLength(1);
+    expect(inspectBusinessLanguage("requirement", "报错是 at foo (bar.ts:1:2)。", vocabulary)).toHaveLength(1);
+  });
+
+  it("reads nothing as vocabulary from a requirement that has none", () => {
+    expect([...domainVocabulary("值班的人打开看板就知道谁在等他。")]).toEqual([]);
   });
 });
 

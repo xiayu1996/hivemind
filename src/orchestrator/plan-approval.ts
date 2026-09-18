@@ -3,6 +3,7 @@ import type { Client, InStatement } from "@libsql/client";
 import type { DecompositionCandidate, DecompositionLimits, DecompositionStory } from "./decompose.js";
 import { evaluateDecomposition } from "./decompose.js";
 import { EPIC_BOARD_STATUS, epicStatusStatement } from "./epic-status-projection.js";
+import { planRevisionStatement } from "./epic-blocker.js";
 import { epicTransitionStatement, type EpicState } from "./state-machine.js";
 
 /** Who decided. `auto` is the system itself, when the deployment has said a
@@ -14,6 +15,10 @@ export interface PresentPlanInput {
   notionPageId: string;
   title: string;
   plan: DecompositionCandidate;
+  /** The construction words the Epic's requirement uses, from
+   * `domainVocabulary`. This re-checks the plan, so leaving it out here while
+   * the decomposer used it would refuse a plan that was just accepted. */
+  vocabulary?: ReadonlySet<string> | undefined;
 }
 
 export interface ApprovalInput {
@@ -86,7 +91,7 @@ export class PlanApprovalStore {
   }
 
   async present(input: PresentPlanInput): Promise<void> {
-    const accepted = evaluateDecomposition(input.plan, this.limits);
+    const accepted = evaluateDecomposition(input.plan, this.limits, input.vocabulary);
     if (accepted.kind !== "accepted" || accepted.epicId !== input.epicId) {
       throw new Error("only an accepted decomposition for this Epic can await approval");
     }
@@ -126,21 +131,44 @@ export class PlanApprovalStore {
     return { id: String(row.id), state: String(row.state) as EpicState };
   }
 
-  async requestRevision(epicId: string, eventId: string): Promise<boolean> {
+  /**
+   * Sends the plan back to be split again, carrying what the person asked for.
+   *
+   * The feedback is the point. Without it the next attempt is a blind retry:
+   * the decomposer is handed the same requirement it had the first time and
+   * has no reason to produce anything different, so a person who says what is
+   * wrong watches the same plan come back.
+   *
+   * `claimed` are the other comments that travelled with this one. They are
+   * spent here rather than left unclaimed, because a comment still waiting
+   * when the next plan arrives would send that one straight back too.
+   */
+  async requestRevision(
+    epicId: string,
+    eventId: string,
+    feedback = "",
+    claimed: readonly string[] = [],
+  ): Promise<boolean> {
     const epic = await this.getEpic(epicId);
     if (epic.state !== "PLAN_APPROVAL") return false;
     const result = await this.client.execute(
       epicTransitionStatement({ epicId, from: "PLAN_APPROVAL", to: "DECOMPOSE", at: this.now() }),
     );
     if (result.rowsAffected === 1) {
-      await this.client.batch([{
+      const time = this.now();
+      const claim = (id: string) => ({
         sql: `INSERT OR IGNORE INTO epic_approval_events (event_id, epic_id, source, created_at)
               VALUES (?, ?, 'comment', ?)`,
-        args: [eventId, epicId, this.now()],
-      },
-      // The board's intake filter is what feeds the next decomposition, so a
-      // revised Epic has to be visibly waiting again.
-      epicStatusStatement(epicId, EPIC_BOARD_STATUS.waiting, this.now())], "write");
+        args: [id, epicId, time],
+      });
+      await this.client.batch([
+        claim(eventId),
+        ...claimed.map(claim),
+        ...(feedback.trim() === "" ? [] : [planRevisionStatement(epicId, feedback.trim(), time)]),
+        // The board's intake filter is what feeds the next decomposition, so a
+        // revised Epic has to be visibly waiting again.
+        epicStatusStatement(epicId, EPIC_BOARD_STATUS.waiting, time),
+      ], "write");
     }
     return result.rowsAffected === 1;
   }
