@@ -146,3 +146,43 @@ describe("S-M2-03-dispatchable narrowing a repository to what can run now", () =
     ])).toEqual([]);
   });
 });
+
+describe("planStoryExecution with Stories already running", () => {
+  it("keeps a card out of the batch while a running card holds its directories", async () => {
+    // Planned from scratch every cycle, the running card landed in a later
+    // batch and said nothing about the first one: S-R237511CO-03 was sent into
+    // src/console on 2026-09-19 while S-R237511MB-01 was already writing it.
+    const plan = planStoryExecution([
+      { id: "S-NEW-01", dependsOn: [], predictedFootprint: ["src/console", "src/orchestrator"] },
+      { id: "S-ELSEWHERE-01", dependsOn: [], predictedFootprint: ["src/notion"] },
+      { id: "S-RUNNING-01", dependsOn: [], predictedFootprint: ["src/console/"] },
+    ], [], { running: ["S-RUNNING-01"] });
+
+    expect(plan.kind).toBe("planned");
+    expect(plan.batches[0]).toEqual(["S-RUNNING-01", "S-ELSEWHERE-01"]);
+    expect(plan.batches[1]).toEqual(["S-NEW-01"]);
+  });
+
+  it("plans a running card whose dependency has not been delivered", async () => {
+    // It is running; nothing about the graph can make that untrue, and dropping
+    // it from the batch would free the footprint it is holding.
+    const plan = planStoryExecution([
+      { id: "S-FIRST-01", dependsOn: [], predictedFootprint: ["src/config"] },
+      { id: "S-SECOND-02", dependsOn: ["S-FIRST-01"], predictedFootprint: ["src/config"] },
+    ], [], { running: ["S-SECOND-02"] });
+
+    expect(plan.kind).toBe("planned");
+    expect(plan.batches[0]).toEqual(["S-SECOND-02"]);
+    expect(plan.batches[1]).toEqual(["S-FIRST-01"]);
+  });
+
+  it("plans exactly as before when nothing is running", async () => {
+    const stories = [
+      { id: "S-A-01", dependsOn: [], predictedFootprint: ["src/console"] },
+      { id: "S-B-01", dependsOn: [], predictedFootprint: ["src/notion"] },
+    ];
+
+    expect(planStoryExecution(stories, [], { running: [] }))
+      .toEqual(planStoryExecution(stories, []));
+  });
+});
