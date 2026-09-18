@@ -102,10 +102,24 @@ import { planDispatchAcrossRepositories } from "../src/orchestrator/repository-d
 import { readInterfaceContract } from "../src/pipeline/interface-contract.js";
 import { runProjectCheck } from "../src/vcs/project-check-runner.js";
 import { recheckEpicHeads } from "../src/orchestrator/epic-head-recheck.js";
+import { reopenRejectedDecompositions } from "../src/orchestrator/decomposition-reopen.js";
 import { unrecoveredHeadFailures } from "../src/orchestrator/epic-head-failure.js";
 
 const execFileAsync = promisify(execFile);
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
+
+/**
+ * The revision of the installation this process is running, which is what says
+ * whether a decision was made by the criteria in force today. Read from this
+ * repository rather than the working directory, so a service started from
+ * anywhere reports its own code. Unreadable means an empty string, and the
+ * callers treat that as "cannot tell": nothing is retried on a guess.
+ */
+async function installedRevision(): Promise<string> {
+  return await processGitCommand.run(ROOT, ["rev-parse", "HEAD"])
+    .then((sha) => sha.trim())
+    .catch(() => "");
+}
 
 /**
  * The repository's own conventions, loaded into every DECOMPOSE and Story phase
@@ -751,6 +765,18 @@ async function main(): Promise<void> {
   const maintainEpics = async (): Promise<void> => {
     const layout = worktreeLayout(workRoot);
     await config.reload();
+
+    // A split this system's own checks refused is not a question anybody can
+    // answer, so it must not be left waiting for a comment. The revision of
+    // the running installation is what identifies the criteria: when it moves,
+    // every such refusal is stale and its Epic gets one more attempt.
+    for (const epicId of await reopenRejectedDecompositions({
+      client: handle.client,
+      criteriaVersion: await installedRevision(),
+    })) {
+      console.log(`Epic ${epicId} goes back to decomposition: the criteria that refused it have changed`);
+    }
+
     // Which repository each Epic belongs to, read once: every path below is
     // derived from it, and an Epic is not moved between repositories.
     const epicRepositories = new Map((await handle.client.execute("SELECT id, repo FROM epics")).rows
