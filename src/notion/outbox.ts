@@ -258,7 +258,13 @@ export class NotionOutbox {
    * budget that produced the failure.
    */
   async requeue(id: number): Promise<boolean> {
-    throw new Error(`re-queueing outbox row ${id} is not implemented yet`);
+    const result = await this.client.execute({
+      sql: `UPDATE notion_outbox
+            SET state = 'pending', attempts = 0, last_error = NULL, claimed_until = NULL, sent_at = NULL
+            WHERE id = ? AND state = 'dead'`,
+      args: [id],
+    });
+    return result.rowsAffected > 0;
   }
 }
 
