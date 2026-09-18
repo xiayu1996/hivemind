@@ -54,7 +54,90 @@ export interface RequirementCostView {
   details: readonly RequirementCostDetailRow[];
 }
 
-export declare function presentRequirementCost(
+const detailFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function detailFormatter(options: RequirementCostViewOptions): Intl.DateTimeFormat {
+  const key = `${options.locale}\u0000${options.timeZone}`;
+  const cached = detailFormatters.get(key);
+  if (cached) return cached;
+  const formatter = new Intl.DateTimeFormat(options.locale, {
+    timeZone: options.timeZone,
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+  detailFormatters.set(key, formatter);
+  return formatter;
+}
+
+/** Whole token counts read as `200 万令牌` / `11 令牌`, never merged across buckets. */
+function formatTokenCount(tokenCount: number): string {
+  if (tokenCount >= 10_000 && tokenCount % 10_000 === 0) {
+    return `${tokenCount / 10_000} 万令牌`;
+  }
+  return `${tokenCount} 令牌`;
+}
+
+/** Dollars are settled to the cent, whichever shape the snapshot carries. */
+function formatUsd(amountUsd: string): string {
+  const value = Number(amountUsd);
+  return `$${(Number.isFinite(value) ? value : 0).toFixed(2)}`;
+}
+
+function toDetailRow(
+  entry: HistoricalCostEntry,
+  formatter: Intl.DateTimeFormat,
+): RequirementCostDetailRow {
+  const priced = entry.pricingStatus === "priced";
+  return {
+    entryId: entry.entryId,
+    occurredAt: formatter.format(new Date(entry.occurredAtMs)),
+    provider: entry.provider,
+    model: entry.model,
+    billingMode: entry.billingMode,
+    category: entry.category,
+    usage: formatTokenCount(entry.tokenCount),
+    historicalUnitPrice: priced ? `$${entry.usdPerMillionTokens}/百万` : null,
+    amount: priced ? formatUsd(entry.amountUsd) : null,
+    pricingStatus: entry.pricingStatus,
+  };
+}
+
+/**
+ * Renders a requirement's whole-history cost snapshot. Both billing modes keep
+ * their occurrence-time official price; the ceiling judgment stays a separate,
+ * metered-only amount. An unpriced entry keeps a null price and amount, so the
+ * known subtotal is never presented as a complete total.
+ */
+export function presentRequirementCost(
   snapshot: RequirementCostSnapshot,
   options: RequirementCostViewOptions,
-): RequirementCostView;
+): RequirementCostView {
+  const total = snapshot.total;
+  const summary: RequirementCostSummary = total.completeness === "complete"
+    ? {
+      state: "complete",
+      heading: "全部轮次累计",
+      total: formatUsd(total.totalUsd),
+      pricingBasis: "按发生时的官方按量价格计算",
+      subscriptionNotice: "订阅制使用按官方按量价格计入，不显示为免费",
+    }
+    : {
+      state: "incomplete",
+      heading: "累计费用暂不完整",
+      knownSubtotal: formatUsd(total.knownSubtotalUsd),
+      missingPriceNotice: `${total.missingPriceCount} 项使用缺少官方按量价格`,
+    };
+
+  const formatter = detailFormatter(options);
+  return {
+    requirementId: snapshot.requirementId,
+    summary,
+    ceilingJudgment: {
+      label: "用于上限判断",
+      amount: formatUsd(snapshot.ceilingJudgment.amountUsd),
+      explanation: "仅统计按量付费调用",
+    },
+    detailHeading: "供应商与模型明细",
+    details: snapshot.entries.map((entry) => toDetailRow(entry, formatter)),
+  };
+}
