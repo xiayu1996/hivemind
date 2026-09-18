@@ -66,6 +66,18 @@ const scenarioId = /^S-[A-Z0-9]+-\d{2}-[a-z0-9]+$/;
 const footprint = /^(?:[a-z0-9][a-z0-9-]*(?:\/[a-z0-9][a-z0-9-]*)*)$/;
 
 /**
+ * What a footprint entry has to look like, written out wherever one is refused.
+ *
+ * The same lesson as the id shapes below. R237511RC wrote `src/console 角色配置
+ * 读取与版本对比` -- a directory with the reason it was chosen appended -- and
+ * was told the entry "must name a directory or module, not a file" four
+ * attempts running. It had named a directory, so the refusal described a
+ * mistake it had not made and there was nothing for it to act on.
+ */
+const FOOTPRINT_SHAPE =
+  "a footprint entry is the path alone, lowercase, like src/orchestrator: no file name, no extension and no description after it";
+
+/**
  * The id shapes, written out wherever one is refused.
  *
  * A rejection that names only the rule it broke is one the next attempt cannot
@@ -201,9 +213,9 @@ function validateStory(
   for (const issue of inspectBusinessLanguage(`${prefix} verification path`, story.verificationPath, vocabulary)) {
     reasons.push(`${issue.field} line ${issue.line} ${issue.reason}`);
   }
-  if (story.predictedFootprint.length === 0) reasons.push(`${prefix} must declare a directory or module footprint`);
+  if (story.predictedFootprint.length === 0) reasons.push(`${prefix} must declare a footprint: ${FOOTPRINT_SHAPE}`);
   for (const entry of story.predictedFootprint) {
-    if (!footprint.test(entry)) reasons.push(`${prefix} footprint must name a directory or module, not a file: ${entry}`);
+    if (!footprint.test(entry)) reasons.push(`${prefix} footprint entry ${JSON.stringify(entry)} is not usable: ${FOOTPRINT_SHAPE}`);
   }
   for (const dependency of story.dependsOn) {
     if (!allStoryIds.has(dependency)) reasons.push(`${prefix} references unknown dependency ${dependency}`);
