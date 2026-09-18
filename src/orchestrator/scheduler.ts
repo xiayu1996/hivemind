@@ -62,7 +62,23 @@ function findDependencyCycle(stories: readonly SchedulableStory[]): readonly str
   return undefined;
 }
 
-function pathsIntersect(left: string, right: string): boolean {
+/**
+ * A trailing slash names the same directory, so it must not change the answer.
+ * Without this, `src/console/` did not contain `src/console/tabs` while
+ * `src/console` did, and the two Stories ran side by side in one subtree. The
+ * shapes differ because the DoD rewrites the footprint the decomposition
+ * validated (`predicted_footprint` is a bare string array there), so both
+ * spellings reach this comparison from real cards.
+ */
+function withoutTrailingSlash(path: string): string {
+  let end = path.length;
+  while (end > 1 && path[end - 1] === "/") end -= 1;
+  return path.slice(0, end);
+}
+
+function pathsIntersect(rawLeft: string, rawRight: string): boolean {
+  const left = withoutTrailingSlash(rawLeft);
+  const right = withoutTrailingSlash(rawRight);
   return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
 }
 

@@ -147,6 +147,39 @@ describe("S-M2-03-dispatchable narrowing a repository to what can run now", () =
   });
 });
 
+describe("footprints written two ways", () => {
+  it("treats a directory and the same directory with a trailing slash as one", async () => {
+    // The DoD rewrites the footprint the decomposition validated and checks
+    // only that the strings are non-empty, so both spellings reach the
+    // comparison. `src/console/` used to contain neither `src/console/tabs`
+    // nor anything under it, which is how two Stories ended up in one subtree.
+    const plan = planStoryExecution([
+      { id: "S-A-01", dependsOn: [], predictedFootprint: ["src/console/"] },
+      { id: "S-B-01", dependsOn: [], predictedFootprint: ["src/console/tabs"] },
+    ], []);
+
+    expect(plan.batches).toEqual([["S-A-01"], ["S-B-01"]]);
+  });
+
+  it("still keeps two directories that only share a prefix apart", async () => {
+    const plan = planStoryExecution([
+      { id: "S-A-01", dependsOn: [], predictedFootprint: ["src/console/"] },
+      { id: "S-B-01", dependsOn: [], predictedFootprint: ["src/consoles"] },
+    ], []);
+
+    expect(plan.batches).toEqual([["S-A-01", "S-B-01"]]);
+  });
+
+  it("reads a hotspot written with a trailing slash as the directory it names", async () => {
+    const plan = planStoryExecution([
+      { id: "S-A-01", dependsOn: [], predictedFootprint: ["src/config"] },
+      { id: "S-B-01", dependsOn: [], predictedFootprint: ["src/config/registry"] },
+    ], ["src/config/"]);
+
+    expect(plan.batches).toEqual([["S-A-01"], ["S-B-01"]]);
+  });
+});
+
 describe("planStoryExecution with Stories already running", () => {
   it("keeps a card out of the batch while a running card holds its directories", async () => {
     // Planned from scratch every cycle, the running card landed in a later
