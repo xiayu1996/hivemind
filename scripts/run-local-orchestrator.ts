@@ -1148,7 +1148,18 @@ async function main(): Promise<void> {
 
   if (once) {
     await runCycle();
+    // A cycle dispatches Story runs and returns; they are still running. The
+    // daemon drains them before it closes anything, and one cycle has to do
+    // the same: closing the database under a live run kills it with
+    // CLIENT_CLOSED, which is reported as the Story failing. Leaving the
+    // projection service running is what kept the process alive afterwards,
+    // refreshing against a closed client once a second forever.
+    if (inFlight.size > 0) {
+      console.log(`Waiting for ${inFlight.size} in-flight Story run(s) before exit`);
+      await Promise.allSettled(inFlight.values());
+    }
     await media.waitForIdle();
+    await projections.stop();
     handle.close();
     return;
   }
