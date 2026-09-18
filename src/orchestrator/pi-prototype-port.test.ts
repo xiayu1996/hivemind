@@ -61,6 +61,7 @@ async function contract(pages: Record<string, string> = {}): Promise<string> {
     color: { surface: { $type: "color", $value: "#111827" } },
   }));
   await writeFile(join(root, "components.md"), "# 组件\n\n- 按钮：触发一个动作。\n");
+  await writeFile(join(root, "design.md"), "# 为什么长这样\n\n值班的人站着看，所以底色用 `color.surface`。\n");
   const all = { "pages/board.html": "<title>任务看板</title>", ...pages };
   for (const [file, html] of Object.entries(all)) {
     await writeFile(

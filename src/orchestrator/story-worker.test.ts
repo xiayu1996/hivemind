@@ -215,6 +215,7 @@ describe("SingleStoryWorker", () => {
         interfaceContract: async () => ({
           tokens: [{ name: "color.surface", type: "color", value: "#111827" }],
           components: "# 组件",
+          design: "# 为什么长这样\n\n这一批页面服务的是值班的人。",
           pages: [{ file: "pages/board.html", name: "任务看板", purpose: "看今天要做什么" }],
         }),
       },

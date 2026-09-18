@@ -7,6 +7,7 @@ import {
   parseDesignTokens,
   readInterfaceContract,
   renderInterfaceContract,
+  undefinedTokenCitations,
 } from "./interface-contract.js";
 
 const TOKENS = JSON.stringify({
@@ -20,6 +21,10 @@ const TOKENS = JSON.stringify({
     raised: { $type: "shadow", $value: { color: "#0000001A", offsetX: "0", offsetY: "2px", blur: "8px" } },
   },
 });
+
+const DESIGN = "# 为什么长这样\n\n"
+  + "值班的人在往返走动中看这块屏，所以底色用 `color.surface`，"
+  + "行间距用 `space.gutter`。\n";
 
 async function contractRoot(files: Record<string, string>): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "hivemind-prototype-"));
@@ -78,11 +83,36 @@ describe("describePrototypePage", () => {
   });
 });
 
+describe("undefinedTokenCitations", () => {
+  const tokens = [
+    { name: "color.surface", type: "color", value: "#FFFFFF" },
+    { name: "space.gutter", type: "dimension", value: "16px" },
+  ];
+
+  it("says nothing about prose that only cites tokens the table holds", () => {
+    expect(undefinedTokenCitations("底色 `color.surface`，间距 `space.gutter`。", tokens)).toEqual([]);
+  });
+
+  it("names each token the table does not hold, once, sorted", () => {
+    const found = undefinedTokenCitations(
+      "`color.accent` 和 `space.tight`，又一次 `color.accent`。",
+      tokens,
+    );
+
+    expect(found).toEqual(["color.accent", "space.tight"]);
+  });
+
+  it("leaves ordinary backticked code alone, because only a dotted path reads as a token", () => {
+    expect(undefinedTokenCitations("用 `flex` 排，类名 `board-list`。", tokens)).toEqual([]);
+  });
+});
+
 describe("readInterfaceContract", () => {
   it("reads the three pieces and sorts the pages by file name", async () => {
     const root = await contractRoot({
       "tokens.json": TOKENS,
       "components.md": "# 组件清单\n\n卡片：一张任务的摘要。",
+      "design.md": DESIGN,
       "pages/board.html": page("任务看板", "看到哪些卡在等自己"),
       "pages/card.html": page("任务详情", "看一张卡这一轮做了什么"),
     });
@@ -107,8 +137,35 @@ describe("readInterfaceContract", () => {
     const read = await readInterfaceContract(root);
     expect(read.kind === "incomplete" && read.reasons).toEqual([
       "tokens.json is missing",
+      "design.md is missing",
       "pages/ has no page to look at",
     ]);
+  });
+
+  it("refuses a reason layer that names a token nobody defined", async () => {
+    const root = await contractRoot({
+      "tokens.json": TOKENS,
+      "components.md": "# 组件清单\n\n卡片：一张任务的摘要。",
+      "design.md": "底色用 `color.midnight`。\n",
+      "pages/board.html": page("任务看板", "看到哪些卡在等自己"),
+    });
+
+    const read = await readInterfaceContract(root);
+    expect(read.kind === "incomplete" && read.reasons).toEqual([
+      "design.md names color.midnight, which tokens.json does not define",
+    ]);
+  });
+
+  it("refuses a reason layer with nothing written in it", async () => {
+    const root = await contractRoot({
+      "tokens.json": TOKENS,
+      "components.md": "# 组件清单\n\n卡片：一张任务的摘要。",
+      "design.md": "   \n",
+      "pages/board.html": page("任务看板", "看到哪些卡在等自己"),
+    });
+
+    const read = await readInterfaceContract(root);
+    expect(read.kind === "incomplete" && read.reasons).toEqual(["design.md is empty"]);
   });
 });
 
@@ -117,6 +174,7 @@ describe("renderInterfaceContract", () => {
     const first = await readInterfaceContract(await contractRoot({
       "tokens.json": TOKENS,
       "components.md": "# 组件清单\n\n卡片：一张任务的摘要。",
+      "design.md": DESIGN,
       "pages/board.html": page("任务看板", "看到哪些卡在等自己"),
       "pages/card.html": page("任务详情", "看一张卡这一轮做了什么"),
     }));
@@ -125,6 +183,7 @@ describe("renderInterfaceContract", () => {
     const second = await readInterfaceContract(await contractRoot({
       "tokens.json": JSON.stringify(JSON.parse(TOKENS), null, 4),
       "components.md": "# 组件清单\n\n卡片：一张任务的摘要。",
+      "design.md": DESIGN,
       "pages/card.html": page("任务详情", "看一张卡这一轮做了什么"),
       "pages/board.html": page("任务看板", "看到哪些卡在等自己"),
     }));
@@ -136,5 +195,7 @@ describe("renderInterfaceContract", () => {
     const rendered = first.kind === "present" ? renderInterfaceContract(first.contract) : "";
     expect(rendered).toContain("- color.brand.primary (color): #2F6FED");
     expect(rendered).toContain("- pages/board.html - 任务看板: 看到哪些卡在等自己");
+    expect(rendered).toContain("### Why the screens look this way");
+    expect(rendered).toContain("行间距用 `space.gutter`。");
   });
 });

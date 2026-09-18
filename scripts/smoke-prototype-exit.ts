@@ -76,6 +76,11 @@ async function main(): Promise<void> {
   await mkdir(join(root, "pages"), { recursive: true });
   await writeFile(join(root, "tokens.json"), JSON.stringify(TOKENS, null, 2));
   await writeFile(join(root, "components.md"), "# 组件\n\n- 按钮：触发一个动作，每页最多一个主按钮。\n");
+  await writeFile(
+    join(root, "design.md"),
+    "# 为什么长这样\n\n值班的人在走动中看这块屏，所以底色用 `color.surface`，"
+      + "主按钮用 `color.brand`，行间距用 `size.space.tight`。\n",
+  );
   await writeFile(join(root, "pages", "board.html"), PAGE);
   await writeFile(
     join(root, "pages", "broken.html"),
