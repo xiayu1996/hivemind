@@ -21,8 +21,15 @@ import { reapStalePiAuthLock } from "../src/runner/auth-lock.js";
 import { probeCredentialRoundTrip } from "../src/runner/credential-roundtrip.js";
 import { judgeApprovals, type ApprovalSubject } from "../src/judge/approval-intent.js";
 import { judgeBusinessLanguage } from "../src/judge/business-language.js";
+import { judgeVerticalSlices, type JudgedStory } from "../src/judge/vertical-slice.js";
 import { judgeEnvironmentReasons } from "../src/judge/environment-reasons.js";
-import { approvalJudgeSetup, businessLanguageJudgeSetup, environmentJudgeSetup, judgeConfigFrom } from "../src/judge/settings.js";
+import {
+  approvalJudgeSetup,
+  businessLanguageJudgeSetup,
+  environmentJudgeSetup,
+  judgeConfigFrom,
+  verticalSliceJudgeSetup,
+} from "../src/judge/settings.js";
 import { assertErrorFixtureCoverage } from "../src/runner/error-fixtures.js";
 import { assertProviderRetriesDisabled } from "../src/runner/failover.js";
 import { assertModelPolicy, ModelPolicy } from "../src/runner/model-policy.js";
@@ -333,6 +340,32 @@ async function main(): Promise<void> {
       }
       if (refused.has(lines.pass)) {
         throw new Error("the judge refused a line whose subject matter is legitimately technical; that refusal would block an Epic");
+      }
+      return `refused one and passed one against a ${settings.threshold} threshold`;
+    }, "WARN");
+    // The fourth question. Both directions again: the shape it has to refuse
+    // and the one it must not, because this question can only add refusals and
+    // an invented one blocks an Epic.
+    await attempt("judge still reads a known layer Story as one", async () => {
+      const { settings } = verticalSliceJudgeSetup(judgeConfigFrom(judgeConfig), stored);
+      if (!settings) return "off; the non-empty checks answer alone";
+      const recorded = JSON.parse(
+        readFileSync(new URL("../fixtures/judge/decomposition-slices.json", import.meta.url), "utf8"),
+      ) as { exchanges: { want: string; expectRefused: boolean; request: { state: { story: JudgedStory } } }[] };
+      const refuse = recorded.exchanges.find((exchange) => exchange.expectRefused);
+      const pass = recorded.exchanges.find((exchange) => exchange.want === "slice");
+      if (!refuse || !pass) throw new Error("the recorded judge exchanges are missing a slice case");
+      const judgement = await judgeVerticalSlices(settings.judge, [
+        { ...refuse.request.state.story, id: "PROBE-REFUSE" },
+        { ...pass.request.state.story, id: "PROBE-PASS" },
+      ], { model: settings.model, threshold: settings.threshold });
+      if (judgement.error) throw new Error(judgement.error);
+      const refused = new Set(judgement.moved.map((entry) => entry.storyId));
+      if (!refused.has("PROBE-REFUSE")) {
+        throw new Error(`the recorded layer Story did not reach the ${settings.threshold} threshold; the checks still answer, but the judge is adding nothing`);
+      }
+      if (refused.has("PROBE-PASS")) {
+        throw new Error("the judge refused a Story a person can use on its own; that refusal would block an Epic");
       }
       return `refused one and passed one against a ${settings.threshold} threshold`;
     }, "WARN");

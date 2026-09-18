@@ -1,0 +1,259 @@
+{
+  "capturedAt": "2026-09-18",
+  "endpoint": "https://api.typesafe.ai/v1/systemone",
+  "note": "Real exchanges for the vertical-slice question, one Story per request as the decomposer sends them. The six are the classes the threshold has to tell apart: three steps the team takes -- somewhere to keep data, a layout with nothing working in it, and an interface other code calls, which is the borderline shape the bar deliberately only catches sometimes -- and three things a person does, including the two easiest to get wrong: signing in with a company account, and a product whose own customers are developers. The wording was reached by measurement; two earlier phrasings are described in the module and did not separate these classes at all.",
+  "exchanges": [
+    {
+      "want": "step",
+      "note": "a place to keep data",
+      "storyId": "S-X-01",
+      "expectRefused": true,
+      "request": {
+        "model": "jev-latest",
+        "state": {
+          "story": {
+            "title": "费用数据的存储结构",
+            "requirement": "为费用统计准备好数据的存放方式，供后续按维度汇总使用。",
+            "userEntryPoint": "费用数据的存放位置",
+            "verificationPath": "确认数据能按需求、任务、模型、供应商四个维度取出",
+            "scenarios": [
+              {
+                "given": "已有一批费用记录",
+                "when": "按供应商取数",
+                "then": "能取到该供应商的合计"
+              }
+            ]
+          }
+        },
+        "questions": {
+          "is_partial_slice": {
+            "type": "noul",
+            "instructions": "`story` is one Story from a plan that splits a piece of work. Is it a step the team takes toward what a customer asked for, rather than a thing the customer does with the product?",
+            "criteria": {
+              "true": "The Story is something the team needs to build before the thing a customer asked for can exist: a place to keep data, a way for one part of the system to call another, a control or standard several screens will share, a layout with nothing working in it yet. A customer would not have named it, because it is not a thing they do -- it is a step the team takes.",
+              "false": "The Story is a thing a customer does with the product, written down. They could have named it themselves, and they would notice if it were missing. It counts however small or plain it is, and it counts when it is a rule or a limit they experience."
+            }
+          }
+        }
+      },
+      "response": {
+        "answers": {
+          "is_partial_slice": {
+            "type": "noul",
+            "noul": 0.87
+          }
+        }
+      }
+    },
+    {
+      "want": "step",
+      "note": "a layout with nothing working in it",
+      "storyId": "S-X-03",
+      "expectRefused": true,
+      "request": {
+        "model": "jev-latest",
+        "state": {
+          "story": {
+            "title": "费用页面骨架",
+            "requirement": "搭好费用页面的整体框架和区块划分，具体内容由后续任务填充。",
+            "userEntryPoint": "费用页面",
+            "verificationPath": "打开页面，确认区块位置和布局符合设计",
+            "scenarios": [
+              {
+                "given": "打开费用页面",
+                "when": "查看整体",
+                "then": "看到总览区和明细区两块"
+              }
+            ]
+          }
+        },
+        "questions": {
+          "is_partial_slice": {
+            "type": "noul",
+            "instructions": "`story` is one Story from a plan that splits a piece of work. Is it a step the team takes toward what a customer asked for, rather than a thing the customer does with the product?",
+            "criteria": {
+              "true": "The Story is something the team needs to build before the thing a customer asked for can exist: a place to keep data, a way for one part of the system to call another, a control or standard several screens will share, a layout with nothing working in it yet. A customer would not have named it, because it is not a thing they do -- it is a step the team takes.",
+              "false": "The Story is a thing a customer does with the product, written down. They could have named it themselves, and they would notice if it were missing. It counts however small or plain it is, and it counts when it is a rule or a limit they experience."
+            }
+          }
+        }
+      },
+      "response": {
+        "answers": {
+          "is_partial_slice": {
+            "type": "noul",
+            "noul": 0.91
+          }
+        }
+      }
+    },
+    {
+      "want": "step",
+      "note": "an interface other code calls, the borderline shape",
+      "storyId": "S-X-02",
+      "expectRefused": false,
+      "request": {
+        "model": "jev-latest",
+        "state": {
+          "story": {
+            "title": "费用查询接口",
+            "requirement": "提供一个按时间范围返回费用明细的查询能力，供页面调用。",
+            "userEntryPoint": "费用查询能力",
+            "verificationPath": "传入一个时间范围，确认返回的明细条数和总额正确",
+            "scenarios": [
+              {
+                "given": "指定了一个时间范围",
+                "when": "发起查询",
+                "then": "拿到该范围内的明细"
+              }
+            ]
+          }
+        },
+        "questions": {
+          "is_partial_slice": {
+            "type": "noul",
+            "instructions": "`story` is one Story from a plan that splits a piece of work. Is it a step the team takes toward what a customer asked for, rather than a thing the customer does with the product?",
+            "criteria": {
+              "true": "The Story is something the team needs to build before the thing a customer asked for can exist: a place to keep data, a way for one part of the system to call another, a control or standard several screens will share, a layout with nothing working in it yet. A customer would not have named it, because it is not a thing they do -- it is a step the team takes.",
+              "false": "The Story is a thing a customer does with the product, written down. They could have named it themselves, and they would notice if it were missing. It counts however small or plain it is, and it counts when it is a rule or a limit they experience."
+            }
+          }
+        }
+      },
+      "response": {
+        "answers": {
+          "is_partial_slice": {
+            "type": "noul",
+            "noul": 0.54
+          }
+        }
+      }
+    },
+    {
+      "want": "slice",
+      "note": "a real Story from the live board",
+      "storyId": "S-TRACE02-02",
+      "expectRefused": false,
+      "request": {
+        "model": "jev-latest",
+        "state": {
+          "story": {
+            "title": "按时间范围追查费用去向",
+            "requirement": "Ryan 可以选择费用统计的时间范围，查看该范围内的总费用，并分别按照需求、任务、模型和供应商查看费用明细。",
+            "userEntryPoint": "管理后台的「费用」页",
+            "verificationPath": "打开费用页，选一个时间范围，确认总额和四个维度的明细都对得上",
+            "scenarios": [
+              {
+                "given": "过去一周产生了费用",
+                "when": "Ryan 选中这一周",
+                "then": "他看到总额，并能按供应商展开"
+              }
+            ]
+          }
+        },
+        "questions": {
+          "is_partial_slice": {
+            "type": "noul",
+            "instructions": "`story` is one Story from a plan that splits a piece of work. Is it a step the team takes toward what a customer asked for, rather than a thing the customer does with the product?",
+            "criteria": {
+              "true": "The Story is something the team needs to build before the thing a customer asked for can exist: a place to keep data, a way for one part of the system to call another, a control or standard several screens will share, a layout with nothing working in it yet. A customer would not have named it, because it is not a thing they do -- it is a step the team takes.",
+              "false": "The Story is a thing a customer does with the product, written down. They could have named it themselves, and they would notice if it were missing. It counts however small or plain it is, and it counts when it is a rule or a limit they experience."
+            }
+          }
+        }
+      },
+      "response": {
+        "answers": {
+          "is_partial_slice": {
+            "type": "noul",
+            "noul": 0.09
+          }
+        }
+      }
+    },
+    {
+      "want": "slice",
+      "note": "sounds infrastructural, is a thing a person does",
+      "storyId": "S-Z-01",
+      "expectRefused": false,
+      "request": {
+        "model": "jev-latest",
+        "state": {
+          "story": {
+            "title": "用飞书账号登录后台",
+            "requirement": "Ryan 不必再记一套单独的密码，用公司飞书账号就能进入后台。",
+            "userEntryPoint": "后台登录页",
+            "verificationPath": "打开登录页，点飞书登录，确认进得去且认得出是谁",
+            "scenarios": [
+              {
+                "given": "Ryan 已有飞书账号",
+                "when": "他在登录页点飞书登录",
+                "then": "他进入后台，右上角显示他本人"
+              }
+            ]
+          }
+        },
+        "questions": {
+          "is_partial_slice": {
+            "type": "noul",
+            "instructions": "`story` is one Story from a plan that splits a piece of work. Is it a step the team takes toward what a customer asked for, rather than a thing the customer does with the product?",
+            "criteria": {
+              "true": "The Story is something the team needs to build before the thing a customer asked for can exist: a place to keep data, a way for one part of the system to call another, a control or standard several screens will share, a layout with nothing working in it yet. A customer would not have named it, because it is not a thing they do -- it is a step the team takes.",
+              "false": "The Story is a thing a customer does with the product, written down. They could have named it themselves, and they would notice if it were missing. It counts however small or plain it is, and it counts when it is a rule or a limit they experience."
+            }
+          }
+        }
+      },
+      "response": {
+        "answers": {
+          "is_partial_slice": {
+            "type": "noul",
+            "noul": 0.12
+          }
+        }
+      }
+    },
+    {
+      "want": "slice",
+      "note": "the product's own customers are developers",
+      "storyId": "S-Z-02",
+      "expectRefused": false,
+      "request": {
+        "model": "jev-latest",
+        "state": {
+          "story": {
+            "title": "合作方自助查询订单状态",
+            "requirement": "合作方的技术同学不用再发邮件问我们，自己就能查到某一单现在到哪一步。",
+            "userEntryPoint": "开放平台的「订单查询」页与它给出的调用示例",
+            "verificationPath": "用一个合作方账号照示例查一单，确认拿到的状态和后台显示的一致",
+            "scenarios": [
+              {
+                "given": "合作方有一个订单号",
+                "when": "他按示例发起查询",
+                "then": "他拿到这一单当前的状态"
+              }
+            ]
+          }
+        },
+        "questions": {
+          "is_partial_slice": {
+            "type": "noul",
+            "instructions": "`story` is one Story from a plan that splits a piece of work. Is it a step the team takes toward what a customer asked for, rather than a thing the customer does with the product?",
+            "criteria": {
+              "true": "The Story is something the team needs to build before the thing a customer asked for can exist: a place to keep data, a way for one part of the system to call another, a control or standard several screens will share, a layout with nothing working in it yet. A customer would not have named it, because it is not a thing they do -- it is a step the team takes.",
+              "false": "The Story is a thing a customer does with the product, written down. They could have named it themselves, and they would notice if it were missing. It counts however small or plain it is, and it counts when it is a rule or a limit they experience."
+            }
+          }
+        }
+      },
+      "response": {
+        "answers": {
+          "is_partial_slice": {
+            "type": "noul",
+            "noul": 0.12
+          }
+        }
+      }
+    }
+  ]
+}

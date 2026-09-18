@@ -93,8 +93,10 @@ describe("EpicDecomposer", () => {
       const friction: { cardId: string; kind: string; detail: string }[] = [];
       const decomposer = new EpicDecomposer(
         client, approvals, port, () => 1_000, {},
-        { judge, model: "jev-latest", threshold: 0.75 },
-        async (input) => { friction.push(input); },
+        {
+          language: { judge, model: "jev-latest", threshold: 0.75 },
+          recordFriction: async (input) => { friction.push(input); },
+        },
       );
 
       const outcome = await decomposer.decompose(epic());
@@ -118,7 +120,7 @@ describe("EpicDecomposer", () => {
       const port = { run: vi.fn(async () => plan) };
       const decomposer = new EpicDecomposer(
         client, approvals, port, () => 1_000, {},
-        { judge, model: "jev-latest", threshold: 0.75 },
+        { language: { judge, model: "jev-latest", threshold: 0.75 } },
       );
 
       await expect(decomposer.decompose(epic())).resolves.toMatchObject({ kind: "presented" });
@@ -127,6 +129,45 @@ describe("EpicDecomposer", () => {
       expect(new Set(sentences).size).toBe(sentences.length);
       expect(sentences).toContain(plan.businessGoal);
       expect(sentences).toContain(plan.stories[0]!.scenarios[0]!.then);
+    });
+
+    it("refuses a Story the slice judge reads as a step the team takes", async () => {
+      // The non-empty checks cannot see this: "费用数据的存放位置" is a
+      // present, distinct entry point, so six Stories cut this way pass every
+      // check and none of them can be delivered on its own.
+      const layered: DecompositionCandidate = {
+        ...plan,
+        stories: [{
+          ...plan.stories[0]!,
+          title: "费用数据的存储结构",
+          userEntryPoint: "费用数据的存放位置",
+          verificationPath: "确认数据能按四个维度取出",
+        }],
+      };
+      const sliceJudge: SystemOne = {
+        async ask() {
+          return { answers: { is_partial_slice: { type: "noul", noul: 0.91 } } };
+        },
+      };
+      const requests: DecomposeRequest[] = [];
+      const port = {
+        run: async (input: DecomposeRequest) => {
+          requests.push(input);
+          return layered;
+        },
+      };
+      const friction: { cardId: string; kind: string; detail: string }[] = [];
+      const decomposer = new EpicDecomposer(
+        client, approvals, port, () => 1_000, {},
+        {
+          slice: { judge: sliceJudge, model: "jev-latest", threshold: 0.6 },
+          recordFriction: async (input) => { friction.push(input); },
+        },
+      );
+
+      await expect(decomposer.decompose(epic())).resolves.toMatchObject({ kind: "rejected" });
+      expect(requests[1]!.previousRejections.join(" ")).toContain("Re-split the Epic");
+      expect(friction[0]).toMatchObject({ cardId: "M2", kind: "decompose_slice_judged" });
     });
 
     it("presents the same plan as today when there is no judge", async () => {

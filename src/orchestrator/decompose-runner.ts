@@ -6,6 +6,11 @@ import {
   type JudgedLine,
 } from "../judge/business-language.js";
 import { evaluateDecomposition, type DecompositionCandidate, type DecompositionLimits } from "./decompose.js";
+import {
+  judgeVerticalSlices,
+  renderRefusedSlices,
+  type VerticalSliceJudgeSettings,
+} from "../judge/vertical-slice.js";
 import { blockerAnswers, blockingQuestionStatement, withBlockerAnswers } from "./epic-blocker.js";
 import type { HumanQuestion } from "./human-question.js";
 import type { PlanApprovalStore } from "./plan-approval.js";
@@ -35,6 +40,21 @@ export type DecomposeOutcome =
   | { kind: "rejected"; reasons: readonly string[] }
   | { kind: "blocking_question"; question: HumanQuestion };
 
+/**
+ * What the judge adds to the deterministic checks, and where the count of its
+ * additions goes. Every field is optional: a deployment without the credential
+ * leaves them all out and the checks are the whole answer.
+ */
+export interface DecomposeJudgement {
+  /** Refuses construction language the seventeen-word table cannot see. */
+  language?: BusinessLanguageJudgeSettings | undefined;
+  /** Refuses a Story that is a step the team takes rather than a thing a person does. */
+  slice?: VerticalSliceJudgeSettings | undefined;
+  /** How often the checks missed, so the questions earn their place on
+   * measurement rather than on the arguments that made them. */
+  recordFriction?: (input: { cardId: string; runId: string; kind: string; detail: string }) => Promise<void>;
+}
+
 const MAX_ATTEMPTS = 2;
 
 /**
@@ -49,13 +69,7 @@ export class EpicDecomposer {
     private readonly now: () => number = Date.now,
     /** The Story-count ceiling, from `decompose.maxStoriesPerEpic`. */
     private readonly limits: DecompositionLimits = {},
-    /** Left out where there is no credential; the word table then answers alone. */
-    private readonly languageJudge: BusinessLanguageJudgeSettings | undefined = undefined,
-    /** How often the word table missed construction language, so the question
-     * earns its place on measurement rather than on the argument that made it. */
-    private readonly recordFriction:
-      | ((input: { cardId: string; runId: string; kind: string; detail: string }) => Promise<void>)
-      | undefined = undefined,
+    private readonly judged: DecomposeJudgement = {},
   ) {}
 
   async decompose(epic: EpicIntake): Promise<DecomposeOutcome> {
@@ -89,7 +103,10 @@ export class EpicDecomposer {
         // refusal is added. It runs here rather than inside
         // `evaluateDecomposition` because that function is pure and synchronous
         // and everything else in the system depends on it staying that way.
-        const refused = await this.judgeLanguage(epic.id, candidate);
+        const refused = [
+          ...await this.judgeLanguage(epic.id, candidate),
+          ...await this.judgeSlices(epic.id, candidate),
+        ];
         if (refused.length > 0) {
           rejections.push(...refused);
           continue;
@@ -121,7 +138,7 @@ export class EpicDecomposer {
    * persisted, so no prompt is ever rebuilt from a judged answer.
    */
   private async judgeLanguage(epicId: string, candidate: DecompositionCandidate): Promise<string[]> {
-    const settings = this.languageJudge;
+    const settings = this.judged.language;
     if (!settings?.judge) return [];
     const lines: JudgedLine[] = [{ field: "business goal", line: 1, text: candidate.businessGoal }];
     for (const story of candidate.stories) {
@@ -146,7 +163,7 @@ export class EpicDecomposer {
       threshold: settings.threshold,
     });
     if (judgement.moved.length > 0) {
-      await this.recordFriction?.({
+      await this.judged.recordFriction?.({
         cardId: epicId,
         runId: `epic:${epicId}`,
         kind: "decompose_language_judged",
@@ -154,6 +171,30 @@ export class EpicDecomposer {
       });
     }
     return judgement.issues.map((issue) => `${issue.field} line ${issue.line} ${issue.reason}`);
+  }
+
+  /**
+   * Each Story put to the judge on its own. The non-empty checks and the
+   * shared-entry-point check have already refused what they can see; this asks
+   * the one thing they cannot, which is whether the sentence they found means
+   * anything. Nothing is subtracted, and a missing judge adds nothing.
+   */
+  private async judgeSlices(epicId: string, candidate: DecompositionCandidate): Promise<string[]> {
+    const settings = this.judged.slice;
+    if (!settings?.judge) return [];
+    const judgement = await judgeVerticalSlices(settings.judge, candidate.stories, {
+      model: settings.model,
+      threshold: settings.threshold,
+    });
+    if (judgement.moved.length > 0) {
+      await this.judged.recordFriction?.({
+        cardId: epicId,
+        runId: `epic:${epicId}`,
+        kind: "decompose_slice_judged",
+        detail: renderRefusedSlices(judgement.moved),
+      });
+    }
+    return [...judgement.reasons];
   }
 
   private async enterDecompose(epicId: string): Promise<void> {

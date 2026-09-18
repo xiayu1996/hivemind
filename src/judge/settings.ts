@@ -1,6 +1,7 @@
 import type { ConfigStore } from "../config/store.js";
 import type { ApprovalJudgeSettings } from "./approval-intent.js";
 import type { BusinessLanguageJudgeSettings } from "./business-language.js";
+import type { VerticalSliceJudgeSettings } from "./vertical-slice.js";
 import type { EnvironmentJudgement, EnvironmentJudgeSettings } from "./environment-reasons.js";
 import { HttpSystemOne, type SystemOne } from "./system-one.js";
 
@@ -19,6 +20,8 @@ export interface JudgeConfig {
   approvalThreshold: number;
   /** How sure it has to be that a line of a plan is about construction. */
   businessLanguageThreshold: number;
+  /** How sure it has to be that a Story is a step rather than a slice. */
+  verticalSliceThreshold: number;
 }
 
 /** The keys read in one place, so a caller cannot pick up one question's
@@ -32,6 +35,7 @@ export function judgeConfigFrom(config: ConfigStore): JudgeConfig {
     environmentThreshold: config.get("judge.environmentThreshold"),
     approvalThreshold: config.get("judge.approvalThreshold"),
     businessLanguageThreshold: config.get("judge.businessLanguageThreshold"),
+    verticalSliceThreshold: config.get("judge.verticalSliceThreshold"),
   };
 }
 
@@ -111,5 +115,17 @@ export function businessLanguageJudgeSetup(
   return {
     setup,
     settings: { judge: setup.judge, model: setup.model, threshold: config.businessLanguageThreshold },
+  };
+}
+
+export function verticalSliceJudgeSetup(
+  config: JudgeConfig,
+  secrets: ReadonlyMap<string, string>,
+): { setup: JudgeSetup; settings?: VerticalSliceJudgeSettings } {
+  const setup = judgeSetup(config, secrets);
+  if (setup.kind !== "ready") return { setup };
+  return {
+    setup,
+    settings: { judge: setup.judge, model: setup.model, threshold: config.verticalSliceThreshold },
   };
 }
