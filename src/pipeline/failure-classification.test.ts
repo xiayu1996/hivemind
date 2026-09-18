@@ -123,3 +123,35 @@ describe("browser errors that do describe the page the Story owns", () => {
     expect(isEnvironmentFailure("the analytics call failed with net::ERR_BLOCKED_BY_CLIENT")).toBe(false);
   });
 });
+
+describe("splitScenarioFailures with reasons judged elsewhere", () => {
+  const reasons = [
+    { scenarioId: "S-1-a", reason: "the reviewer's own stub crashed before it could serve the page" },
+    { scenarioId: "S-1-b", reason: "the total shown on the summary row was 0 instead of 3" },
+  ];
+
+  it("keeps the table's split when nothing extra was decided", () => {
+    // The default is what every caller got before there was anywhere else for a
+    // reason to be judged, so a deployment with no judge is unchanged.
+    expect(splitScenarioFailures(["S-1-a", "S-1-b"], reasons)).toEqual({
+      code: ["S-1-a", "S-1-b"],
+      environment: [],
+    });
+  });
+
+  it("adds the reasons a caller decided were about the box", () => {
+    const split = splitScenarioFailures(["S-1-a", "S-1-b"], reasons, new Set([reasons[0]!.reason]));
+
+    expect(split).toEqual({ code: ["S-1-b"], environment: ["S-1-a"] });
+  });
+
+  it("still counts a scenario whose other reason is about the code", () => {
+    // One environmental reason does not excuse a real failure reported beside
+    // it, whoever decided the reason was environmental.
+    const mixed = [...reasons, { scenarioId: "S-1-a", reason: "the row was missing from the table" }];
+
+    const split = splitScenarioFailures(["S-1-a"], mixed, new Set([reasons[0]!.reason]));
+
+    expect(split.code).toEqual(["S-1-a"]);
+  });
+});

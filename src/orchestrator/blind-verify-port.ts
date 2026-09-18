@@ -113,7 +113,10 @@ export class BlindVerifyStoryPort implements StoryVerifyPort {
         scenarioId: error.slice(0, error.indexOf(": ")),
         reason: error,
       })),
-    ]);
+      // The executor already judged these reasons for its own verdict. Reusing
+      // its answer rather than asking again keeps the verdict and the failed
+      // set describing the same round.
+    ], result.environmentalReasons);
     return {
       sessionId: result.record.verifySessionId,
       verdict: result.record.verdict,
