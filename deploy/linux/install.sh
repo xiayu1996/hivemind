@@ -146,6 +146,13 @@ PI_BIN="${PI_BIN:-$HIVEMIND_HOME/pi/${HIVEMIND_PI_VERSION:-$PI_VERSION}/pi/pi}"
 # host without them advertises a smaller catalogue than the fixtures record.
 "$REPO/scripts/install-pi-models.sh"
 
+step "Design detector"
+# The anti-pattern detector the prototype exit records friction from. It never
+# refuses a prototype, so a host without it loses data rather than a gate --
+# but a gate that is silently doing nothing is worse than an absent one, which
+# is why preflight probes it and this stage is not optional.
+"$REPO/scripts/install-design-lint.sh"
+
 step "Headless Chromium"
 if (cd "$REPO" && npx playwright-cli install-browser --list 2>/dev/null | grep -q chromium_headless_shell); then
   echo "already installed"

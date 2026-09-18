@@ -12,9 +12,13 @@ import { parseTestContract, type TestContract } from "../pipeline/test-contract.
 import { costCeilingVerdict, renderCostCeilingReport, type CardSpend } from "../pipeline/cost-ceiling.js";
 import {
   DoDValidationError,
+  hasScreen,
   lintDoDLanguage,
   parseDoD,
   renderDoDLanguageFindings,
+  renderMissingInterfaceContract,
+  renderMissingVisible,
+  scenariosMissingVisible,
   type DefinitionOfDone,
 } from "../pipeline/dod.js";
 import { assemblePhasePrompt, type PhaseInput } from "../pipeline/phase-input.js";
@@ -114,6 +118,9 @@ export interface ManagedVerifyResult {
   codeFailedScenarios?: string[];
   evidenceDir?: string;
   screenshots?: Array<{ scenarioId: string; path: string }>;
+  /** The page each scenario reached, for a lane that opens it again while the
+   * application is still up. */
+  pages?: Array<{ scenarioId: string; url: string }>;
   artifact: string;
 }
 
@@ -817,6 +824,29 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
         } else {
           await this.store.freezeDefinitionOfDone(cardId, definitionOfDone);
         }
+        // A card with screens and no interface contract on the branch is the
+        // failure design 08 exists to stop: it would invent a look of its own,
+        // and the next card would invent a different one. Which contract the
+        // repository gets is a requirement-level decision, so this is a
+        // person's call rather than something SHAPE can rewrite its way out
+        // of -- the findings loop above cannot put a token table in a tree.
+        const screens = definitionOfDone.scenarios.filter((scenario) => hasScreen(scenario));
+        if (screens.length > 0 && this.interfaceContract && (await this.interfaceContract()) === null) {
+          const detail = renderMissingInterfaceContract(screens.map((scenario) => scenario.id));
+          await this.friction?.record({ cardId, runId, kind: "interface_contract_missing", detail });
+          await this.store.stopForInput(cardId, "SHAPE", "blocking_question", runId);
+          return {
+            definitionOfDone,
+            runId,
+            stopped: {
+              state: "NEEDS_INPUT",
+              rounds: 0,
+              mrUrl: null,
+              stopReason: "blocking_question",
+              stopReport: detail,
+            },
+          };
+        }
         const blocking = await this.store.unansweredBlockingQuestions(cardId);
         if (blocking.length > 0) {
           await this.store.stopForInput(cardId, "SHAPE", "blocking_question", runId);
@@ -867,6 +897,12 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
           definitionOfDone = parseDoD(body);
         } catch (cause) {
           return { passed: false, findings: (cause as Error).message };
+        }
+        // The structural layer's basis, asked for here because a judgement's
+        // basis cannot be written by the round it judges (08 section 6).
+        const missingVisible = scenariosMissingVisible(definitionOfDone);
+        if (missingVisible.length > 0) {
+          return { passed: false, findings: renderMissingVisible(missingVisible) };
         }
         const language = lintDoDLanguage(definitionOfDone);
         if (language.length === 0) return { passed: true };

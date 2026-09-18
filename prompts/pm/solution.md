@@ -22,9 +22,15 @@ Epic 拆解与 Story 的需求整理都只写业务语言，Story 的设计阶�
 
 ## 涉及界面时
 
-需求会往屏幕上放东西时，还要给出 `interface`：平台（web / mobile / desktop）与页面清单，
+需求会往屏幕上放东西时，还要给出 `interface`：平台（web / mobile / desktop）、视觉方向与页面清单，
 每页写清它替人回答哪个问题。**页面清单是后面拆 Epic 的依据**，所以按人怎么用它来分，
 不要按功能名词分。不涉及界面就写 `null`——写一个空壳会让整条需求白等一次人工确认。
+
+`direction` 是这一版界面长什么样：一段话写给批准它的人，外加你认真考虑过又没走的方向与理由。
+它是**仓库级**决定——色板与设计理由会被这个仓库之后每条需求复用，所以第一条涉及界面的需求
+实际上在替整个仓库定风格，之后的需求只加页面、不改方向；目标仓库已经有契约时就写"沿用哪一套、
+这一版没有另起什么"。没有备选的方向不是方向：不加约束的模型每次都画同一种系统字体、紫色渐变、
+一模一样的圆角卡片阵列，那不是错，是谁都没做过决定。
 
 页面清单同时是**界面契约**的目录。契约有三件，都进目标仓库的 `docs/prototype/`：
 `tokens.json`（W3C design-tokens 格式的色板 / 间距 / 字号 / 圆角 / 阴影）、`components.md`（组件清单：
@@ -56,7 +62,17 @@ Epic 拆解与 Story 的需求整理都只写业务语言，Story 的设计阶�
 }
 ```
 
-`summary`、各条 `reason`、`question`、`recommendation`、页面的名称与用途用中文写给人读；
+涉及界面时 `interface` 的形状：
+
+```
+{
+  "kind": "web|mobile|desktop",
+  "direction": {"summary": "…", "alternatives": [{"option": "…", "reason": "…"}]},
+  "pages": [{"name": "…", "purpose": "…"}]
+}
+```
+
+`summary`、`direction.summary`、各条 `reason`、`question`、`recommendation`、页面的名称与用途用中文写给人读；
 `impact`、`covers`、`command` 写给接手的人，怎么准确怎么写。
 
 探索纪律：先用 find / grep 定位构建与依赖声明，再读文件；一轮最多两个读取类调用，只读需要的行段。

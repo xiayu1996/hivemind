@@ -4,6 +4,11 @@ import { migrate } from "../persistence/migrate.js";
 import type { SolutionCandidate } from "./requirement-solution.js";
 import { RequirementStore } from "./requirement-store.js";
 import { SolutionRunner, type SolutionPort, type SolutionRequest } from "./solution-runner.js";
+import type { PrototypeOutcome, PrototypeRunner } from "./prototype-runner.js";
+
+/** A visual direction that satisfies the contract, so a test only has to
+ * break the one thing it is about. */
+const DIRECTION = { summary: "深色底、字大、一屏一件事，给值班的人走着看。", alternatives: [{ option: "浅色密集表格", reason: "值班的人不会坐下来逐行读。" }] };
 
 const REQUIREMENT_ID = "R-abc123def456";
 
@@ -17,6 +22,23 @@ function keepsTheStack(): SolutionCandidate {
     openDecisions: [],
     qualityGates: [],
     interface: null,
+  };
+}
+
+function needsScreens(): SolutionCandidate {
+  return {
+    ...keepsTheStack(),
+    interface: { kind: "web", direction: DIRECTION, pages: [{ name: "\u4efb\u52a1\u770b\u677f", purpose: "\u770b\u4eca\u5929\u8981\u505a\u4ec0\u4e48" }] },
+  };
+}
+
+/** Stands in for the drawing session: the runner only has to decide whether it
+ * is asked and what a refusal does. */
+function drawing(outcome: PrototypeOutcome) {
+  const seen: unknown[] = [];
+  return {
+    seen,
+    runner: { draw: async (input: unknown) => { seen.push(input); return outcome; } } as unknown as PrototypeRunner,
   };
 }
 
@@ -55,7 +77,12 @@ describe("SolutionRunner", () => {
   let published: string[];
 
   function runner(port: SolutionPort, attempts?: number): SolutionRunner {
-    return new SolutionRunner(store, port, { publish: async (id: string) => { published.push(id); } }, attempts);
+    return new SolutionRunner(
+      store,
+      port,
+      { publish: async (id: string) => { published.push(id); } },
+      attempts === undefined ? {} : { attempts },
+    );
   }
 
   beforeEach(async () => {
@@ -123,6 +150,93 @@ describe("SolutionRunner", () => {
     await expect(store.getRequirement(REQUIREMENT_ID)).resolves.toMatchObject({ state: "SOLUTION" });
   });
 
+  it("draws the screens before the approach is read, for a solution that has any", async () => {
+    const drawn = drawing({ kind: "drawn", revision: 1, concerns: [], mrUrl: "https://example.invalid/mr/1" });
+    const run = new SolutionRunner(
+      store,
+      new ScriptedPort([needsScreens()]),
+      { publish: async (id: string) => { published.push(id); } },
+      { prototype: { runner: drawn.runner, contractRoot: async () => "docs/prototype" } },
+    );
+
+    await expect(run.advance(REQUIREMENT_ID)).resolves.toMatchObject({ awaiting: ["interface"] });
+    expect(drawn.seen).toHaveLength(1);
+    expect(drawn.seen[0]).toMatchObject({ revision: 1, contractRoot: "docs/prototype", repository: "owner/repo" });
+  });
+
+  it("does not draw anything for a solution with no screens", async () => {
+    const drawn = drawing({ kind: "skipped", reason: "no interface" });
+    const run = new SolutionRunner(
+      store,
+      new ScriptedPort([keepsTheStack()]),
+      { publish: async (id: string) => { published.push(id); } },
+      { prototype: { runner: drawn.runner, contractRoot: async () => "docs/prototype" } },
+    );
+
+    await expect(run.advance(REQUIREMENT_ID)).resolves.toMatchObject({ kind: "confirmed" });
+    expect(drawn.seen).toEqual([]);
+  });
+
+  it("does not send an approach on alone when its screens could not be drawn", async () => {
+    const drawn = drawing({ kind: "stopped", reason: "\u754c\u9762\u539f\u578b\u6ca1\u753b\u6210" });
+    const run = new SolutionRunner(
+      store,
+      new ScriptedPort([needsScreens()]),
+      { publish: async (id: string) => { published.push(id); } },
+      { prototype: { runner: drawn.runner, contractRoot: async () => "docs/prototype" } },
+    );
+
+    await expect(run.advance(REQUIREMENT_ID)).resolves.toMatchObject({ kind: "stopped" });
+    await expect(store.getRequirement(REQUIREMENT_ID)).resolves.toMatchObject({ state: "SOLUTION" });
+  });
+
+  it("finishes a drawing an earlier pass never got to, rather than putting the approach up alone", async () => {
+    // What happened the first time round: the drawing failed, a person cleared
+    // the stop, and the draft was already on record -- so the next pass read it
+    // as "waiting for a person" and the screens were never drawn at all.
+    const drawn = drawing({ kind: "drawn", revision: 1, concerns: [], mrUrl: "https://example.invalid/mr/1" });
+    const run = new SolutionRunner(
+      store,
+      new ScriptedPort([]),
+      { publish: async (id: string) => { published.push(id); } },
+      { prototype: { runner: drawn.runner, contractRoot: async () => "docs/prototype" } },
+    );
+    await store.saveDraftSolution(REQUIREMENT_ID, JSON.stringify({
+      approach: { summary: "沿用现有服务端。", alternatives: [] },
+      stackChanges: [],
+      openDecisions: [],
+      qualityGates: [],
+      interface: { kind: "web", direction: DIRECTION, pages: [{ name: "任务看板", purpose: "看今天要做什么" }] },
+    }), "run-interrupted");
+
+    await expect(run.advance(REQUIREMENT_ID)).resolves.toEqual({ kind: "awaiting", revision: 1 });
+
+    expect(drawn.seen).toHaveLength(1);
+    expect(drawn.seen[0]).toMatchObject({ revision: 1, contractRoot: "docs/prototype" });
+    expect(published).toContain(REQUIREMENT_ID);
+  });
+
+  it("leaves screens that were already drawn alone", async () => {
+    const drawn = drawing({ kind: "drawn", revision: 1, concerns: [], mrUrl: "https://example.invalid/mr/1" });
+    const run = new SolutionRunner(
+      store,
+      new ScriptedPort([]),
+      { publish: async (id: string) => { published.push(id); } },
+      { prototype: { runner: drawn.runner, contractRoot: async () => "docs/prototype" } },
+    );
+    await store.saveDraftSolution(REQUIREMENT_ID, JSON.stringify({
+      approach: { summary: "沿用现有服务端。", alternatives: [] },
+      stackChanges: [],
+      openDecisions: [],
+      qualityGates: [],
+      interface: { kind: "web", direction: DIRECTION, pages: [{ name: "任务看板", purpose: "看今天要做什么" }] },
+    }), "run-drafted");
+    await store.saveSolutionPrototype(REQUIREMENT_ID, 1, JSON.stringify({ pages: [], described: [], concerns: [] }), null, "run-drew");
+
+    await expect(run.advance(REQUIREMENT_ID)).resolves.toEqual({ kind: "awaiting", revision: 1 });
+    expect(drawn.seen).toEqual([]);
+  });
+
   it("rewrites once against what the person asked to change", async () => {
     const port = new ScriptedPort([changesTheStack(), changesTheStack()]);
     const run = runner(port);
@@ -159,5 +273,55 @@ describe("SolutionRunner", () => {
       stopReason: "blocking_question",
     });
     expect(published).toContain(REQUIREMENT_ID);
+  });
+
+  describe("the contract the split is built on", () => {
+    function landing(land: (id: string) => Promise<void>, port: SolutionPort): SolutionRunner {
+      return new SolutionRunner(
+        store,
+        port,
+        { publish: async (id: string) => { published.push(id); } },
+        { landContract: land },
+      );
+    }
+
+    it("puts the approved contract on the target branch before splitting the requirement", async () => {
+      // Every card reads the contract off a worktree cut from that branch, so
+      // one left on its own branch is one no card can see.
+      const landed: string[] = [];
+      const run = landing(async (id) => { landed.push(id); }, new ScriptedPort([keepsTheStack()]));
+
+      await expect(run.advance(REQUIREMENT_ID)).resolves.toMatchObject({ kind: "confirmed" });
+      expect(landed).toEqual([REQUIREMENT_ID]);
+      await expect(store.getRequirement(REQUIREMENT_ID)).resolves.toMatchObject({ state: "DECOMPOSING" });
+    });
+
+    it("lands what a person approved, on the round their approval is read", async () => {
+      const landed: string[] = [];
+      const run = landing(async (id) => { landed.push(id); }, new ScriptedPort([changesTheStack()]));
+
+      await run.advance(REQUIREMENT_ID);
+      expect(landed).toEqual([]);
+
+      await store.confirmSolution(REQUIREMENT_ID, 1, "comment-2", "comment", "run-approve");
+      await expect(run.advance(REQUIREMENT_ID)).resolves.toMatchObject({ kind: "confirmed", source: "human" });
+      expect(landed).toEqual([REQUIREMENT_ID]);
+    });
+
+    it("stops rather than splitting a requirement whose contract did not land", async () => {
+      // Splitting first would queue the same stop once per Story with a screen,
+      // each of them asking for a token table nobody handed it.
+      const run = landing(
+        async () => { throw new Error("the review request is open after the merge was asked for"); },
+        new ScriptedPort([keepsTheStack()]),
+      );
+
+      await expect(run.advance(REQUIREMENT_ID)).resolves.toMatchObject({ kind: "stopped" });
+      await expect(store.getRequirement(REQUIREMENT_ID)).resolves.toMatchObject({
+        state: "SOLUTION",
+        stopReason: "blocking_question",
+      });
+      expect(published).toContain(REQUIREMENT_ID);
+    });
   });
 });

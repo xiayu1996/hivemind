@@ -85,9 +85,10 @@ function storiesConflict(left: SchedulableStory, right: SchedulableStory, hotspo
 export async function planRepositoryStoryExecution(
   config: ConfigStore,
   stories: readonly SchedulableStory[],
+  options: StoryExecutionOptions = {},
 ): Promise<StoryExecutionPlan> {
   await config.reload();
-  return planStoryExecution(stories, config.get("schedule.hotspotPaths"));
+  return planStoryExecution(stories, config.get("schedule.hotspotPaths"), options);
 }
 
 /** States a Story can still be dispatched from. A parked or failed Story is
@@ -135,7 +136,24 @@ export function dispatchableStories(stories: readonly RepositoryStory[]): Schedu
     }));
 }
 
-export function planStoryExecution(stories: readonly SchedulableStory[], hotspots: readonly string[]): StoryExecutionPlan {
+export interface StoryExecutionOptions {
+  /**
+   * The most Stories one batch may hold.
+   *
+   * Used for the one case where independent Stories are not independent: a
+   * repository whose interface contract is not on the branch yet. The first
+   * card to run is the one that puts it there, and every card dispatched
+   * beside it would invent its own -- which is what 14 cards pointing at a
+   * front-end directory that did not exist looked like from inside.
+   */
+  maxPerBatch?: number;
+}
+
+export function planStoryExecution(
+  stories: readonly SchedulableStory[],
+  hotspots: readonly string[],
+  options: StoryExecutionOptions = {},
+): StoryExecutionPlan {
   const cycle = findDependencyCycle(stories);
   if (cycle) return { kind: "dependency_cycle", cycle, batches: [] };
 
@@ -147,6 +165,7 @@ export function planStoryExecution(stories: readonly SchedulableStory[], hotspot
     for (const story of remaining) {
       if (!story.dependsOn.every((dependency) => completed.has(dependency))) continue;
       if (batch.some((candidate) => storiesConflict(story, candidate, hotspots))) continue;
+      if (options.maxPerBatch !== undefined && batch.length >= options.maxPerBatch) break;
       batch.push(story);
     }
     if (batch.length === 0) {

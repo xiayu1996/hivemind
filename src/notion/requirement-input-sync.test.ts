@@ -31,6 +31,7 @@ describe("NotionRequirementInputSync", () => {
   let comments: NotionComment[];
   let status: string;
   let checkedBlocks: Set<string>;
+  let pageBoxes: string[];
   let sync: NotionRequirementInputSync;
   let ingestor: CommentIngestor;
 
@@ -39,6 +40,22 @@ describe("NotionRequirementInputSync", () => {
       request: async (request: { method: string; path: string }) => {
         if (request.path.startsWith("/v1/pages/")) {
           return { status: 200, data: { properties: { "需求状态": { select: { name: status } } } } };
+        }
+        const children = /^\/v1\/blocks\/([^/]+)\/children/.exec(request.path);
+        if (children) {
+          return {
+            status: 200,
+            data: {
+              object: "list",
+              results: pageBoxes.map((line, index) => ({
+                id: `box-${index}`,
+                type: "to_do",
+                to_do: { checked: checkedBlocks.has(`box-${index}`), rich_text: [{ plain_text: line }] },
+              })),
+              has_more: false,
+              next_cursor: null,
+            },
+          };
         }
         if (request.path.startsWith("/v1/blocks/")) {
           const blockId = decodeURIComponent(request.path.slice("/v1/blocks/".length));
@@ -62,6 +79,7 @@ describe("NotionRequirementInputSync", () => {
     comments = [];
     status = "PRD 待确认";
     checkedBlocks = new Set();
+    pageBoxes = [];
     ingestor = new CommentIngestor(client, { listComments: async () => comments }, { now: () => MINUTE + 50_000 });
     sync = new NotionRequirementInputSync(client, gateway(), ingestor, store, checklist, () => MINUTE + 50_000);
     await store.createRequirement({ id: REQUIREMENT_ID, notionPageId: PAGE_ID, title: "控制台", originalRequest: "我想随时知道现在在做什么。" });
@@ -173,6 +191,51 @@ describe("NotionRequirementInputSync", () => {
     // Both comments are spent; a later draft does not see them again.
     await store.saveDraftPrd(REQUIREMENT_ID, PRD_BODY, "run");
     await expect(sync.pollComments(REQUIREMENT_ID)).resolves.toMatchObject({ revisionRequested: false, prdConfirmed: false });
+  });
+
+  describe("the boxes in the solution section", () => {
+    const SOLUTION = JSON.stringify({
+      approach: { summary: "沿用现有服务端。", alternatives: [] },
+      stackChanges: [],
+      openDecisions: [{ question: "历史记录保留多久", recommendation: "先不设上限" }],
+      qualityGates: [],
+      interface: null,
+    });
+    const DECISION = "历史记录保留多久：我建议先不设上限";
+    const CONFIRM = "上面「还没定的事」逐条勾完之后再勾这里：这一版方案和界面方向可以，按它往下拆";
+
+    beforeEach(async () => {
+      await store.transition(REQUIREMENT_ID, "PRD_CONFIRM", "SOLUTION", "system", "run-handover");
+      await store.saveDraftSolution(REQUIREMENT_ID, SOLUTION, "run-solution");
+      pageBoxes = [DECISION, CONFIRM];
+    });
+
+    it("confirms the solution when every box above the confirmation is ticked too", async () => {
+      checkedBlocks = new Set(["box-0", "box-1"]);
+
+      await expect(sync.pollContent(REQUIREMENT_ID)).resolves.toEqual({ confirmed: true });
+      await expect(store.getSolution(REQUIREMENT_ID)).resolves.toMatchObject({ revision: 1, status: "confirmed" });
+      // The same tick seen again is the same decision, not a second one.
+      await expect(sync.pollContent(REQUIREMENT_ID)).resolves.toEqual({ confirmed: false });
+    });
+
+    it("leaves the draft alone while a fork above the confirmation is still open", async () => {
+      // Ticking the bottom box first is the click-through a checklist invites;
+      // what it would approve is a question the person never answered.
+      checkedBlocks = new Set(["box-1"]);
+
+      await expect(sync.pollContent(REQUIREMENT_ID)).resolves.toEqual({ confirmed: false });
+      await expect(store.getSolution(REQUIREMENT_ID)).resolves.toMatchObject({ status: "draft" });
+    });
+
+    it("reads nothing off a page whose boxes belong to an older draft", async () => {
+      // A draft the person sent back for changes is superseded, and the boxes
+      // still on the page are the ones it drew.
+      await store.requestSolutionRevision(REQUIREMENT_ID, 1, "换个方向", "c-revise", "comment", "run-revise");
+      checkedBlocks = new Set(["box-0", "box-1"]);
+
+      await expect(sync.pollContent(REQUIREMENT_ID)).resolves.toEqual({ confirmed: false });
+    });
   });
 
   it("reads a drag out of PRD confirmation as PRD approval", async () => {

@@ -34,11 +34,12 @@ import {
 } from "../report/business-language.js";
 import { judgeHumanSentences, type HumanSentenceJudgeSettings } from "../judge/human-sentence.js";
 import { lastAssistantText } from "../runner/assistant-text.js";
+import { addUsage } from "../runner/failure.js";
 import { jsonPayloadCandidates } from "../util/json-payload.js";
 import { loadExplicitContextBundle, type ExplicitContextFile } from "../runner/context-files.js";
 import { promptWithContinueRetry } from "../runner/continue-retry.js";
 import { RpcPiRunner, type RpcRunnerConfig } from "../runner/rpc-runner.js";
-import type { PiRunner, PromptResult } from "../runner/types.js";
+import type { PiRunner, PromptResult, TokenUsage } from "../runner/types.js";
 import type {
   ManagedPhaseInput,
   PhaseExitGate,
@@ -84,6 +85,7 @@ export interface CodeExitOptions {
   testPathPatterns?: readonly string[] | undefined;
   /** Generated outputs no phase may edit by hand. */
   protectedPaths?: readonly string[] | undefined;
+  dependencyManifests?: readonly string[] | undefined;
   /** The commit SPECIFY froze the tests in; the base of the frozen-test diff.
    * Absent on a card driven without SPECIFY, which then rests on the checks
    * that still apply. */
@@ -336,6 +338,7 @@ export class PiStoryPhasePort implements StoryPhasePort {
     const tools = [...spec.tools];
     const session = await pinSessionFile({
       sessionRoot: this.options.sessionRoot,
+      cwd: this.options.worktreePath,
       cardId: input.context.cardId,
       phase: input.phase,
       round: input.context.round,
@@ -404,6 +407,33 @@ export class PiStoryPhasePort implements StoryPhasePort {
       },
     });
 
+    // Billing has to survive a throw. A round that failed still spent its
+    // tokens, and the per-card ceiling is the only guard on an open-ended
+    // spend, so a failure billed at nothing is a hole in it: one SPECIFY spent
+    // fourteen minutes and was recorded at zero because its exit refused the
+    // result and the recording sat after the exit.
+    let billable: { result: PromptResult; messages: unknown[]; providerPayloads: unknown[] } | null = null;
+    let handbackUsage: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, costUsd: 0 };
+    let billed = false;
+    const bill = async (): Promise<PhaseCostRow | void> => {
+      if (billed || !billable) return undefined;
+      billed = true;
+      return await this.options.recordCost?.({
+        runId: input.runId,
+        cardId: input.context.cardId,
+        phase: input.phase,
+        messages: billable.messages,
+        // The handbacks are part of what this round cost: they are prompts on
+        // the same session, billed by the provider like any other.
+        result: { ...billable.result, usage: addUsage(billable.result.usage, handbackUsage) },
+        providerPayloads: billable.providerPayloads,
+        // The spec this execution actually ran on, not the one the process
+        // started with: purpose, tier, provider and billing are all per
+        // execution once the provider is resolved per phase.
+        spec,
+      });
+    };
+
     try {
       await runner.start();
       await runner.setAutoRetry(false);
@@ -414,9 +444,13 @@ export class PiStoryPhasePort implements StoryPhasePort {
         { maxContinueRetries: spec.limits.maxContinueRetries ?? this.options.maxContinueRetries ?? 8 },
         spec.limits.promptTimeoutMs ?? this.options.promptTimeoutMs,
       );
-      if (result.failure) throw new Error(result.failure.errorMessage);
       const messages = await runner.getMessages();
       const providerPayloads = await (this.options.readProviderPayloads ?? readProviderPayloads)(capturePath);
+      // Recorded before the first thing that can throw: a provider that failed
+      // mid-round, a capture that is missing and an exit that refuses all end
+      // up in the same `catch`, and all three spent the tokens above.
+      billable = { result, messages, providerPayloads };
+      if (result.failure) throw new Error(result.failure.errorMessage);
       if (providerPayloads.length === 0) throw new Error("phase provider request was not captured");
       // Every exit is the same mechanism: judge what the session produced, and
       // hand the findings back to that same session. A refusal is a work item,
@@ -424,28 +458,29 @@ export class PiStoryPhasePort implements StoryPhasePort {
       // reuses everything the session has already loaded. Refusing into a new
       // session instead cost S-AGENTRULES-01 two phase runs and then the card.
       const gates = [...this.builtInGates(input), ...(input.exitGates ?? [])];
-      const enforced = await this.runExitGates(input, runner, gates, parseResult(input, lastAssistantText(messages)));
+      const enforced = await this.runExitGates(
+        input, runner, gates, parseResult(input, lastAssistantText(messages)),
+        (usage) => { handbackUsage = addUsage(handbackUsage, usage); },
+      );
       let artifacts = enforced.artifacts;
       const exitGateRounds = Object.keys(enforced.rounds).length > 0 ? enforced.rounds : undefined;
-      const telemetry: PhaseTelemetryInput = {
+      const cost = await bill();
+      emitSafely(this.options.emit, {
         runId: input.runId,
         cardId: input.context.cardId,
         phase: input.phase,
         messages,
-        result,
+        result: { ...result, usage: addUsage(result.usage, handbackUsage) },
         providerPayloads,
-        // The spec this execution actually ran on, not the one the process
-        // started with: purpose, tier, provider and billing are all per
-        // execution once the provider is resolved per phase.
         spec,
-      };
-      const cost = await this.options.recordCost?.(telemetry);
-      emitSafely(this.options.emit, { ...telemetry, ...(cost ? { cost: cost.data } : {}) });
+        ...(cost ? { cost: cost.data } : {}),
+      });
       return {
         sessionId: phaseSessionId, artifacts, spec,
         ...(exitGateRounds === undefined ? {} : { exitGateRounds }),
       };
     } finally {
+      await bill().catch(() => undefined);
       await runner.stop().catch(() => undefined);
       await grant.release().catch(() => undefined);
     }
@@ -564,6 +599,10 @@ export class PiStoryPhasePort implements StoryPhasePort {
     runner: PiRunner,
     gates: readonly PhaseExitGate[],
     artifacts: ManagedPhaseResult["artifacts"],
+    /** Called as each handback settles. A callback rather than a return value
+     * because a gate that runs out of rounds throws, and what it spent getting
+     * there is still spent. */
+    onUsage: (usage: TokenUsage) => void,
   ): Promise<{ artifacts: ManagedPhaseResult["artifacts"]; rounds: Record<string, number> }> {
     let current = artifacts;
     const rounds: Record<string, number> = {};
@@ -582,6 +621,7 @@ export class PiStoryPhasePort implements StoryPhasePort {
           { maxContinueRetries: this.options.maxContinueRetries ?? 8 },
           this.options.promptTimeoutMs,
         );
+        onUsage(result.usage);
         if (result.failure) throw new Error(result.failure.errorMessage);
         current = parseResult(input, lastAssistantText(await runner.getMessages()));
       }
@@ -623,6 +663,7 @@ export class PiStoryPhasePort implements StoryPhasePort {
       projectChecks: options.projectChecks,
       ...(options.testPathPatterns ? { testPathPatterns: options.testPathPatterns } : {}),
       ...(options.protectedPaths ? { protectedPaths: options.protectedPaths } : {}),
+      ...(options.dependencyManifests ? { dependencyManifests: options.dependencyManifests } : {}),
       ...(options.frozenTestCommit ? { frozenTestCommit: options.frozenTestCommit } : {}),
     });
   }

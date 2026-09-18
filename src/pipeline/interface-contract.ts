@@ -35,6 +35,10 @@ export interface InterfaceContract {
   tokens: DesignToken[];
   /** `components.md` verbatim. */
   components: string;
+  /** `design.md` verbatim: why the screens look the way they do. Injected
+   * whole, because a phase that has to build a screen the contract's way needs
+   * the reasoning, not a summary of it. */
+  design: string;
   pages: PrototypePage[];
 }
 
@@ -50,7 +54,33 @@ export type InterfaceContractRead =
 
 const TOKENS_FILE = "tokens.json";
 const COMPONENTS_FILE = "components.md";
+const DESIGN_FILE = "design.md";
 const PAGES_DIR = "pages";
+
+/**
+ * Token names `design.md` cites that the table does not hold.
+ *
+ * A reason layer that names a token nobody defined is worse than none: every
+ * phase after it builds against a name that resolves to nothing, and the
+ * mistake only surfaces as a screen that looks wrong. Names are read from
+ * backticked words that look like a token path -- dotted, lower case -- which
+ * is how the prompt asks for them and how every other citation in the file
+ * would have to be written to be readable at all.
+ */
+const CITED_TOKEN = /`(?<name>[a-z][a-z0-9-]*(?:\.[a-z0-9-]+)+)`/g;
+
+export function undefinedTokenCitations(
+  design: string,
+  tokens: readonly DesignToken[],
+): string[] {
+  const known = new Set(tokens.map((token) => token.name));
+  const cited = new Set<string>();
+  for (const match of design.matchAll(CITED_TOKEN)) {
+    const name = match.groups?.name;
+    if (name !== undefined && !known.has(name)) cited.add(name);
+  }
+  return [...cited].toSorted();
+}
 
 /**
  * Flattens a W3C design-tokens document into one sorted row per token.
@@ -134,17 +164,27 @@ export function describePrototypePage(file: string, html: string): PrototypePage
 export async function readInterfaceContract(root: string): Promise<InterfaceContractRead> {
   const tokensText = await read(join(root, TOKENS_FILE));
   const componentsText = await read(join(root, COMPONENTS_FILE));
+  const designText = await read(join(root, DESIGN_FILE));
   const pageFiles = await listPages(join(root, PAGES_DIR));
-  if (tokensText === null && componentsText === null && pageFiles.length === 0) return { kind: "absent" };
+  if (tokensText === null && componentsText === null && designText === null && pageFiles.length === 0) {
+    return { kind: "absent" };
+  }
 
   const reasons: string[] = [];
   if (tokensText === null) reasons.push(`${TOKENS_FILE} is missing`);
   if (componentsText === null) reasons.push(`${COMPONENTS_FILE} is missing`);
   else if (componentsText.trim() === "") reasons.push(`${COMPONENTS_FILE} is empty`);
+  if (designText === null) reasons.push(`${DESIGN_FILE} is missing`);
+  else if (designText.trim() === "") reasons.push(`${DESIGN_FILE} is empty`);
   if (pageFiles.length === 0) reasons.push(`${PAGES_DIR}/ has no page to look at`);
 
   const parsed = tokensText === null ? { reasons: [] } : parseDesignTokens(tokensText);
   if ("reasons" in parsed) reasons.push(...parsed.reasons);
+  if (designText !== null && "tokens" in parsed) {
+    for (const name of undefinedTokenCitations(designText, parsed.tokens)) {
+      reasons.push(`${DESIGN_FILE} names ${name}, which ${TOKENS_FILE} does not define`);
+    }
+  }
 
   const pages: PrototypePage[] = [];
   for (const file of pageFiles) {
@@ -158,7 +198,12 @@ export async function readInterfaceContract(root: string): Promise<InterfaceCont
   if (reasons.length > 0) return { kind: "incomplete", reasons };
   return {
     kind: "present",
-    contract: { tokens: "tokens" in parsed ? parsed.tokens : [], components: componentsText!.trim(), pages },
+    contract: {
+      tokens: "tokens" in parsed ? parsed.tokens : [],
+      components: componentsText!.trim(),
+      design: designText!.trim(),
+      pages,
+    },
   };
 }
 
@@ -215,6 +260,10 @@ export function renderInterfaceContract(contract: InterfaceContract): string {
     "### Components",
     "",
     contract.components,
+    "",
+    "### Why the screens look this way",
+    "",
+    contract.design,
     "",
     "### Pages",
     "",

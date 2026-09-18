@@ -20,6 +20,7 @@ function verifyResult(
       createdAt: 1,
     },
     screenshots: [],
+    pages: [],
   reasons: [],
     validationErrors: [],
     treeChanged: false,

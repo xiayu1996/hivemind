@@ -1,0 +1,59 @@
+- generic [ref=f3e2]:
+  - banner [ref=f3e3]:
+    - link "hivemind" [ref=f3e4] [cursor=pointer]:
+      - /url: /tasks
+    - generic [ref=f3e5]: 运行控制台
+  - main [ref=f3e6]:
+    - link "← 返回任务列表" [ref=f3e7] [cursor=pointer]:
+      - /url: /tasks
+    - heading "S-TRACE02-01｜逐轮执行详情" [level=1] [ref=f3e8]
+    - list [ref=f3e9]:
+      - listitem [ref=f3e10]:
+        - generic [ref=f3e11]:
+          - heading "第 1 轮" [level=2] [ref=f3e12]
+          - generic [ref=f3e13]: 已完成
+        - generic [ref=f3e14]:
+          - heading "执行过程" [level=3] [ref=f3e15]
+          - list [ref=f3e16]:
+            - listitem [ref=f3e17]: CODE第 1 轮实现已经完成
+            - listitem [ref=f3e18]: VERIFY第 1 轮验收通过
+        - generic [ref=f3e19]:
+          - heading "产出" [level=3] [ref=f3e20]
+          - list [ref=f3e21]:
+            - listitem [ref=f3e22]: CODE第 1 轮实现已经完成
+            - listitem [ref=f3e23]: VERIFY第 1 轮验收通过
+        - generic [ref=f3e24]:
+          - heading "当前结果" [level=3] [ref=f3e25]
+          - paragraph [ref=f3e26]: accepted
+      - listitem [ref=f3e27]:
+        - generic [ref=f3e28]:
+          - heading "第 2 轮" [level=2] [ref=f3e29]
+          - generic [ref=f3e30]: 执行失败
+        - generic [ref=f3e31]:
+          - heading "执行过程" [level=3] [ref=f3e32]
+          - list [ref=f3e33]:
+            - listitem [ref=f3e34]: "VERIFY{\"verdict\":\"rejected\",\"failedScenarios\":[\"S-TRACE02-01-navigation\"],\"reasons\":[{\"scenarioId\":\"S-TRACE02-01-navigation\",\"reason\":\"详情里混进了另一项任务的记录\"}],\"validationErrors\":[]}"
+        - generic [ref=f3e35]:
+          - heading "产出" [level=3] [ref=f3e36]
+          - list [ref=f3e37]:
+            - listitem [ref=f3e38]: VERIFY第 2 轮验收没有通过
+            - listitem [ref=f3e39]: "VERIFY{\"verdict\":\"rejected\",\"failedScenarios\":[\"S-TRACE02-01-navigation\"],\"reasons\":[{\"scenarioId\":\"S-TRACE02-01-navigation\",\"reason\":\"详情里混进了另一项任务的记录\"}],\"validationErrors\":[]}"
+        - generic [ref=f3e40]:
+          - heading "当前结果" [level=3] [ref=f3e41]
+          - paragraph [ref=f3e42]: 详情里混进了另一项任务的记录
+        - paragraph [ref=f3e43]: 失败原因：详情里混进了另一项任务的记录
+      - listitem [ref=f3e44]:
+        - generic [ref=f3e45]:
+          - heading "第 3 轮" [level=2] [ref=f3e46]
+          - generic [ref=f3e47]: 正在进行
+        - generic [ref=f3e48]:
+          - heading "执行过程" [level=3] [ref=f3e49]
+          - list [ref=f3e50]:
+            - listitem [ref=f3e51]: CODE正在准备第 3 轮的验收证据
+        - generic [ref=f3e52]:
+          - heading "产出" [level=3] [ref=f3e53]
+          - list [ref=f3e54]:
+            - listitem [ref=f3e55]: CODE正在准备第 3 轮的验收证据
+        - generic [ref=f3e56]:
+          - heading "当前结果" [level=3] [ref=f3e57]
+          - paragraph [ref=f3e58]: 正在准备第 3 轮的验收证据

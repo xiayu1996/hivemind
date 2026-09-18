@@ -6,6 +6,7 @@ import {
   evaluateDecomposition,
   domainVocabulary,
   inspectBusinessLanguage,
+  storyIdShape,
   type DecompositionCandidate,
   type RejectedDecomposition,
 } from "./decompose.js";
@@ -241,5 +242,64 @@ describe("vertical slices", () => {
     const reasons = (evaluateDecomposition(candidate([broken])) as RejectedDecomposition).reasons.join(" ");
     expect(reasons).toContain("user-visible entry point");
     expect(reasons).toContain("without a sibling Story");
+  });
+});
+
+describe("refusals a next attempt can act on", () => {
+  // Three Epics of the same requirement were blocked here on 2026-09-18: two
+  // invented `<EPIC>-S01` and one carried the PRD's scenario ids into its
+  // Stories, and both attempts got back only the word "invalid".
+  const wrongShape = {
+    ...slice("01", "the plan page", "plans"),
+    id: "M2-S01",
+    scenarios: [{
+      id: "R-237511dd5162-s04-task-detail",
+      given: "a customer needs service",
+      when: "the plan is approved",
+      then: "the customer receives the outcome",
+    }],
+  };
+
+  it("spells out the shape of a Story id it refuses", () => {
+    const reasons = (evaluateDecomposition(candidate([wrongShape])) as RejectedDecomposition).reasons;
+    const idReason = reasons.find((reason) => reason.includes("invalid Story id"));
+    expect(idReason).toContain("M2-S01");
+    expect(idReason).toContain("S-M2-01");
+  });
+
+  it("says a wrong Story id once instead of once per scenario it invalidates", () => {
+    const manyScenarios = {
+      ...wrongShape,
+      scenarios: ["a", "b", "c"].map((suffix) => ({
+        id: `R-237511dd5162-s04-${suffix}`,
+        given: "a customer needs service",
+        when: "the plan is approved",
+        then: "the customer receives the outcome",
+      })),
+    };
+    const reasons = (evaluateDecomposition(candidate([manyScenarios])) as RejectedDecomposition).reasons;
+    expect(reasons.filter((reason) => reason.includes("invalid scenario id"))).toEqual([]);
+  });
+
+  it("spells out the shape of a scenario id under a Story id that is sound", () => {
+    const borrowed = {
+      ...slice("01", "the plan page", "plans"),
+      scenarios: [{
+        id: "R-237511dd5162-s04-task-detail",
+        given: "a customer needs service",
+        when: "the plan is approved",
+        then: "the customer receives the outcome",
+      }],
+    };
+    const reasons = (evaluateDecomposition(candidate([borrowed])) as RejectedDecomposition).reasons;
+    const idReason = reasons.find((reason) => reason.includes("invalid scenario id"));
+    expect(idReason).toContain("R-237511dd5162-s04-task-detail");
+    expect(idReason).toContain("S-M2-01-a");
+    expect(idReason).toContain("PRD");
+  });
+
+  it("keeps the example out of an id shape it would refuse itself", () => {
+    expect(storyIdShape("E-CHECKOUT")).toContain("S-CHECKOUT-01");
+    expect(storyIdShape("a requirement")).toContain("S-<EPIC>-01");
   });
 });

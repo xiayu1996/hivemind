@@ -51,6 +51,12 @@ describe("loadPromptLayers", () => {
     }
   });
 
+  it("gives the drawing the checklist it is judged against, numbers and all", async () => {
+    const { combined } = await loadPmPromptLayers(PROMPTS, "PROTOTYPE");
+
+    for (const item of ["M1", "M2", "M3", "M4", "S1", "S2", "S3"]) expect(combined).toContain(item);
+  });
+
   it("names a missing asset instead of silently dropping a layer", async () => {
     const root = mkdtempSync(join(tmpdir(), "hivemind-prompts-"));
     tempDirs.push(root);

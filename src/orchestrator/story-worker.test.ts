@@ -117,6 +117,23 @@ function frontPhase(input: ManagedPhaseInput, dod: string = DOD) {
   }
 }
 
+/** The same DoD with its first scenario judged on a screen. A screen scenario
+ * owes examples, a source and the roles it shows, so all four are here. */
+function withScreens(dod: string): string {
+  return dod.replace("    layers: [integration]", [
+    "    layers: [ui]",
+    "    source: the stories table",
+    "    examples:",
+    "      - kind: shows",
+    "        text: 新建任务",
+    "      - kind: excludes",
+    "        text: 还没有任何任务",
+    "    visible:",
+    "      - role: button",
+    "        text: 新建任务",
+  ].join("\n"));
+}
+
 describe("SingleStoryWorker", () => {
   let client: ReturnType<typeof createClient>;
   let store: StoryExecutionStore;
@@ -153,6 +170,58 @@ describe("SingleStoryWorker", () => {
       sessionId: "session-merge",
       artifacts: [{ kind: "delivery-report", body: "Both scenarios passed." }],
     };
+  });
+
+  it("stops a card that has screens for a person when the branch has no interface contract", async () => {
+    const screens = withScreens(DOD);
+    const friction = { record: vi.fn(async () => undefined) };
+    const worker = new SingleStoryWorker(
+      store,
+      { run: (input: ManagedPhaseInput) => Promise.resolve(frontPhase(input, screens) ?? { sessionId: "x", artifacts: [] }) },
+      { run: vi.fn() } as unknown as StoryVerifyPort,
+      { deliver: vi.fn(async () => ({ mrUrl: null })) },
+      { enqueue: vi.fn(async () => undefined) },
+      { friction, interfaceContract: async () => null },
+    );
+
+    const result = await worker.run("S-EPIC1-01");
+
+    expect(result).toMatchObject({ state: "NEEDS_INPUT", stopReason: "blocking_question" });
+    expect(result.stopReport).toContain("界面契约");
+    expect(friction.record).toHaveBeenCalledWith(expect.objectContaining({ kind: "interface_contract_missing" }));
+  });
+
+  it("lets a card with screens through once the contract is on the branch", async () => {
+    const screens = withScreens(DOD);
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async () => ({
+        sessionId: "session-verify",
+        verdict: "accepted" as const,
+        failedScenarios: [],
+        artifact: "两个场景都过了。",
+      })),
+    };
+    const worker = new SingleStoryWorker(
+      store,
+      { run: (input: ManagedPhaseInput) => Promise.resolve(frontPhase(input, screens) ?? (
+        input.phase === "CODE"
+          ? { sessionId: "session-code-1", artifacts: [{ kind: "implementation", body: "done" }] }
+          : { sessionId: "session-merge", artifacts: [{ kind: "delivery-report", body: "交付了。" }] }
+      )) },
+      verifier,
+      { deliver: vi.fn(async () => ({ mrUrl: null })) },
+      { enqueue: vi.fn(async () => undefined) },
+      {
+        interfaceContract: async () => ({
+          tokens: [{ name: "color.surface", type: "color", value: "#111827" }],
+          components: "# 组件",
+          design: "# 为什么长这样\n\n这一批页面服务的是值班的人。",
+          pages: [{ file: "pages/board.html", name: "任务看板", purpose: "看今天要做什么" }],
+        }),
+      },
+    );
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
   });
 
   it("spends no inner-loop round on a verification the environment lost", async () => {

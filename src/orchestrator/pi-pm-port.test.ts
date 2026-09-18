@@ -2,8 +2,12 @@
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { testAgentSpec } from "../runner/agent-spec.testing.js";
-import type { PiRunner, PromptResult } from "../runner/types.js";
+import { RunnerTimeoutError, type PiRunner, type PromptResult } from "../runner/types.js";
 import { PiPmPort } from "./pi-pm-port.js";
+
+/** A visual direction that satisfies the contract, so a test only has to
+ * break the one thing it is about. */
+const DIRECTION = { summary: "深色底、字大、一屏一件事，给值班的人走着看。", alternatives: [{ option: "浅色密集表格", reason: "值班的人不会坐下来逐行读。" }] };
 
 const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, reasoning: 0, costUsd: 0 };
 const SPEC = await testAgentSpec({ purpose: "product_manager" });
@@ -65,6 +69,26 @@ describe("PiPmPort", () => {
     // The tokens were spent whether or not the answer parsed; a lane that only
     // billed successful sessions would under-report exactly the bad ones.
     expect(spent).toMatchObject([{ phase: "CLARIFY" }]);
+  });
+
+  it("resumes a turn whose stream broke instead of losing the whole window", async () => {
+    const instance = runner(JSON.stringify({ status: "ask", questions: ["谁会在夜里看这块屏？"] }));
+    let call = 0;
+    instance.prompt = vi.fn(async (message: string) => {
+      instance.prompts.push(message);
+      if (call++ === 0) throw new RunnerTimeoutError("timed out waiting for agent_settled");
+      return { settled: true, failure: null, usage, events: [] } satisfies PromptResult;
+    });
+
+    await port(instance).run({
+      requirementId: REQUIREMENT_ID,
+      title: "控制台",
+      originalRequest: "我想随时知道现在在做什么。",
+      history: [],
+      maxQuestions: 1,
+      previousRejections: [],
+    });
+    expect(instance.prompts.at(-1)).toBe("continue");
   });
 
   it("asks the clarification contract and hands back the parsed batch", async () => {
@@ -181,7 +205,7 @@ describe("PiPmPort", () => {
         stackChanges: [],
         openDecisions: [],
         qualityGates: [],
-        interface: { kind: "web", pages: [{ name: "任务列表", purpose: "让人一眼看到哪些任务在等自己" }] },
+        interface: { kind: "web", direction: DIRECTION, pages: [{ name: "任务列表", purpose: "让人一眼看到哪些任务在等自己" }] },
       },
     });
 

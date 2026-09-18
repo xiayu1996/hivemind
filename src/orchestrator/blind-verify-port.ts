@@ -78,6 +78,14 @@ export class BlindVerifyStoryPort implements StoryVerifyPort {
       specification: JSON.stringify(input.definitionOfDone),
       declaredScenarioIds: input.definitionOfDone.scenarios.map((scenario) => scenario.id),
       screenScenarioIds: screenScenarios(input.definitionOfDone).map((scenario) => scenario.id),
+      // From the frozen DoD, the same place the declared ids come from: the
+      // structural layer is only worth anything if what it compares against
+      // was written before the round it is judging.
+      visibleRequirements: new Map(
+        input.definitionOfDone.scenarios
+          .filter((scenario) => scenario.visible !== undefined)
+          .map((scenario) => [scenario.id, scenario.visible!]),
+      ),
       allowedHosts: this.options.allowedHosts,
       ...(this.options.chromiumSandbox === undefined ? {} : { chromiumSandbox: this.options.chromiumSandbox }),
       commitMessages: await this.options.commitMessages(),
@@ -124,6 +132,7 @@ export class BlindVerifyStoryPort implements StoryVerifyPort {
       codeFailedScenarios: split.code,
       evidenceDir: result.record.evidenceDir,
       screenshots: result.screenshots,
+      pages: result.pages,
       artifact: verificationArtifact(result),
     };
   }

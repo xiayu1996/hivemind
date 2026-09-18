@@ -180,3 +180,59 @@ export class LeaseStore {
     }));
   }
 }
+
+export interface LeaseHeartbeatOptions {
+  /** How often to renew. Must be well under the TTL: one missed renewal has to
+   * leave time for the next one before the lease lapses. */
+  intervalMs: number;
+  /** Called once when a renewal is refused, which means this holder no longer
+   * owns the card. Every subsequent write is refused by `assertHolds`, so this
+   * is a report, not the enforcement. */
+  onLost?: (reason: string) => void;
+}
+
+/**
+ * Keeps a held lease alive for as long as the phase runs.
+ *
+ * `acquire` gives a card away for one TTL. A phase that runs longer than that
+ * -- CODE routinely does -- outlives its own lease, and the card becomes
+ * dispatchable again while its subprocess is still working in the worktree.
+ * On one host the coordinator's in-flight map hides this; across hosts nothing
+ * does, and that is precisely the double execution the lease exists to make
+ * impossible.
+ *
+ * Returns the function that stops it. The timer is unref'd, so it never keeps
+ * the process alive by itself.
+ */
+export function startLeaseHeartbeat(
+  store: LeaseStore,
+  cardId: string,
+  holder: LeaseHolder,
+  fence: number,
+  options: LeaseHeartbeatOptions,
+): () => void {
+  let stopped = false;
+  const timer = setInterval(() => {
+    void (async () => {
+      if (stopped) return;
+      try {
+        const renewed = await store.renew(cardId, holder, fence);
+        if (renewed === null) {
+          stopped = true;
+          clearInterval(timer);
+          options.onLost?.("the lease was taken, revoked or released");
+        }
+      } catch {
+        // A store fault is not a lost lease, and reporting it as one would send
+        // a healthy run looking for a holder that never changed. The interval
+        // is a fraction of the TTL, so there are several more ticks before the
+        // lease could actually lapse; nothing else can reach this catch.
+      }
+    })();
+  }, options.intervalMs);
+  timer.unref?.();
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
+}

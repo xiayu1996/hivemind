@@ -29,7 +29,14 @@ export type PipelinePhase = (typeof PIPELINE_PHASES)[number];
 
 /** The product manager's phases. They run above the Epic pipeline, share none
  * of its phase prompts, and have no state of their own in the Story machine. */
-export const PM_PHASES = ["CLARIFY", "PRD", "SOLUTION", "REQUIREMENT_DECOMPOSE", "UI_REVIEW"] as const;
+export const PM_PHASES = [
+  "CLARIFY",
+  "PRD",
+  "SOLUTION",
+  "PROTOTYPE",
+  "REQUIREMENT_DECOMPOSE",
+  "UI_REVIEW",
+] as const;
 export type PmPhase = (typeof PM_PHASES)[number];
 
 /** Spawn contexts that are not phases of either machine but still need a guard
@@ -64,6 +71,7 @@ export function isPmPhase(value: string): value is PmPhase {
 export const MODEL_PURPOSES = [
   "product_manager",
   "decompose",
+  "prototype",
   "shape",
   "design",
   "specify",
@@ -100,6 +108,11 @@ export const PHASE_PURPOSE: Record<AgentPhase, ModelPurpose> = {
   // The solution reads the repository and weighs what to build it with, which
   // is the decomposition tier's job, not the conversational one's.
   SOLUTION: "decompose",
+  // Drawing a screen is read as a screen, so it is served by the same tier as
+  // the decomposition -- but it is its own call site because it is the one
+  // product-manager phase that writes, and the decomposer's surface has no
+  // write tool in it.
+  PROTOTYPE: "prototype",
   REQUIREMENT_DECOMPOSE: "decompose",
   UI_REVIEW: "ui_review",
   E2E: "verify",
@@ -124,6 +137,7 @@ export const PHASE_LANE: Record<AgentPhase, PhaseLane> = {
   CLARIFY: "build",
   PRD: "build",
   SOLUTION: "build",
+  PROTOTYPE: "build",
   REQUIREMENT_DECOMPOSE: "build",
   UI_REVIEW: "verify",
   E2E: "verify",

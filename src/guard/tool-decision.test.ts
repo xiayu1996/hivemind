@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_FENCED_PATTERNS } from "./danger-rules.js";
 import { compileBannedBashPatterns, compileFencedPatterns, type GuardPolicy, READ_ONLY_BASH_PATTERNS } from "./policy.js";
-import { decideToolCall, type ToolCallEvent } from "./tool-decision.js";
+import { prototypeFencePatterns } from "./prototype-fence.js";
+import { decideToolCall, READ_ONLY_TOOL_NAMES, type ToolCallEvent } from "./tool-decision.js";
 
 const policy: GuardPolicy = {
   phase: "CODE",
@@ -34,6 +35,27 @@ describe("disallowed tools", () => {
   it("leaves other tools alone", () => {
     const verifyPolicy = { ...policy, phase: "VERIFY", disallowedTools: ["write", "edit"] };
     expect(decideToolCall(call("read", { path: "a.ts" }), verifyPolicy, fenced).block).toBe(false);
+  });
+});
+
+describe("tools that only look", () => {
+  const drawing: GuardPolicy = { ...policy, phase: "PROTOTYPE", worktreePath: "/wt/R-1" };
+  const contractFence = prototypeFencePatterns("docs/prototype").map((source) => new RegExp(source));
+
+  it("lets every one of them read what the fence keeps it from writing", () => {
+    // A name missing from that set is judged against the write fence, and a
+    // phase fenced to one directory then cannot list anything at all: the first
+    // drawing session had `ls` and `find` refused on `docs` and on the contract
+    // root, and answered with six pages it had never written.
+    for (const toolName of READ_ONLY_TOOL_NAMES) {
+      expect(decideToolCall(call(toolName, { path: "src/app.ts" }), drawing, contractFence).block).toBe(false);
+      expect(decideToolCall(call(toolName, { path: "docs/prototype" }), drawing, contractFence).block).toBe(false);
+    }
+  });
+
+  it("still refuses to write outside the fence, which is what the fence is for", () => {
+    expect(decideToolCall(call("write", { path: "src/app.ts" }), drawing, contractFence).block).toBe(true);
+    expect(decideToolCall(call("write", { path: "docs/prototype/tokens.json" }), drawing, contractFence).block).toBe(false);
   });
 });
 

@@ -41,6 +41,13 @@ export interface SolutionRevision {
   status: "draft" | "confirmed" | "superseded";
 }
 
+export interface PrototypeRevision {
+  revision: number;
+  body: string;
+  /** Where a person can read the screens, once they are up for review. */
+  mrUrl: string | null;
+}
+
 export interface AcceptanceItem {
   itemId: string;
   prdScenarioId: string;
@@ -56,9 +63,11 @@ export type ApprovalKind =
   | "solution_revision"
   | "acceptance"
   | "resume_answer";
-export type ApprovalSource = "comment" | "drag" | "auto";
+/** A tick is its own gesture: it is neither a sentence somebody wrote nor a
+ * column they dragged, and reading it as either would lose who did what. */
+export type ApprovalSource = "comment" | "drag" | "auto" | "check";
 
-export type RequirementNotionSection = "callout" | "clarify" | "prd" | "delivery";
+export type RequirementNotionSection = "callout" | "clarify" | "prd" | "solution" | "delivery";
 
 export interface RequirementStop {
   /** The state the requirement was in when it stopped; it resumes from there. */
@@ -594,6 +603,51 @@ export class RequirementStore {
     return true;
   }
 
+  /**
+   * Records the interface contract drawn for one solution revision.
+   *
+   * Keyed by that revision, and replaced rather than appended when the same
+   * revision is drawn again: a round that was sent back to redraw produced one
+   * prototype, not two, and the person confirms a solution together with the
+   * screens it goes with.
+   */
+  async saveSolutionPrototype(
+    id: string,
+    revision: number,
+    body: string,
+    mrUrl: string | null,
+    runId: string,
+  ): Promise<void> {
+    JSON.parse(body) as unknown;
+    const time = this.now();
+    await this.client.batch([
+      {
+        sql: `INSERT INTO requirement_prototypes (requirement_id, revision, body, mr_url, created_at)
+              VALUES (?, ?, ?, ?, ?)
+              ON CONFLICT (requirement_id, revision)
+              DO UPDATE SET body = excluded.body, mr_url = excluded.mr_url, created_at = excluded.created_at`,
+        args: [id, revision, body, mrUrl, time],
+      },
+      eventStatement(runId, id, "requirement.prototype_drawn", { revision, mrUrl }, time),
+    ], "write");
+  }
+
+  /** The prototype drawn for a solution revision, or null when there is none:
+   * a requirement that touches no screen never draws one. */
+  async getSolutionPrototype(id: string, revision: number): Promise<PrototypeRevision | null> {
+    const row = (await this.client.execute({
+      sql: `SELECT body, mr_url FROM requirement_prototypes
+            WHERE requirement_id = ? AND revision = ?`,
+      args: [id, revision],
+    })).rows[0];
+    if (!row) return null;
+    return {
+      revision,
+      body: stringValue(row.body, "prototype body"),
+      mrUrl: row.mr_url === null ? null : stringValue(row.mr_url, "prototype merge request url"),
+    };
+  }
+
   /** Everything a person has asked to change about the solution, oldest first. */
   async solutionRevisionFeedback(id: string): Promise<string[]> {
     return this.feedbackFrom(id, "requirement.solution_revision_requested");
@@ -602,6 +656,31 @@ export class RequirementStore {
   /** Everything a person has asked to change, oldest first. */
   async prdRevisionFeedback(id: string): Promise<string[]> {
     return this.feedbackFrom(id, "requirement.prd_revision_requested");
+  }
+
+  /**
+   * What the anti-pattern detector found on the drawings already made, so the
+   * next one is not handed the same page and asked to invent the same mistakes
+   * again. Deduplicated and sorted, because it goes into a prompt: the same
+   * state has to produce the same bytes.
+   *
+   * These never gate anything. The detector runs after the exit has passed and
+   * files friction; this reads that friction back as a hint, which is the only
+   * way a taste finding is allowed to travel (design 08 section 6).
+   */
+  async designLintFindings(id: string): Promise<string[]> {
+    const rows = (await this.client.execute({
+      sql: `SELECT data FROM event_log
+             WHERE card_id = ? AND type = 'friction.recorded'
+               AND json_extract(data, '$.kind') = 'design_lint_finding'
+             ORDER BY ts, id`,
+      args: [id],
+    })).rows;
+    const details = rows.map((row) => {
+      const parsed: unknown = JSON.parse(stringValue(row.data, "event data"));
+      return String((parsed as { detail?: unknown }).detail ?? "");
+    });
+    return [...new Set(details.filter((detail) => detail !== ""))].toSorted();
   }
 
   private async feedbackFrom(id: string, eventType: string): Promise<string[]> {

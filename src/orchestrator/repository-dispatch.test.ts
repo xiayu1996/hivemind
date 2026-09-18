@@ -21,6 +21,24 @@ describe("planDispatchAcrossRepositories", () => {
     ]);
   });
 
+  it("dispatches one card into a repository that has no interface contract yet", () => {
+    const plan = planDispatchAcrossRepositories([
+      {
+        slug: "acme/widget",
+        stories: [story("S-A-01"), story("S-A-02")],
+        hotspotPaths: [],
+        hasInterfaceContract: false,
+      },
+      { slug: "acme/gadget", stories: [story("S-B-01"), story("S-B-02")], hotspotPaths: [] },
+    ]);
+
+    expect(plan.batch).toEqual([
+      { slug: "acme/widget", cardId: "S-A-01" },
+      { slug: "acme/gadget", cardId: "S-B-01" },
+      { slug: "acme/gadget", cardId: "S-B-02" },
+    ]);
+  });
+
   it("serialises Stories that share a hotspot only inside their own repository", () => {
     const plan = planDispatchAcrossRepositories([
       {

@@ -99,12 +99,32 @@ import { processGitCommand } from "../src/vcs/story-delivery.js";
 import { checkoutKey, checkoutPath, ensureCheckout, processRemoteGit, remoteDefaultBranch } from "../src/vcs/repository-checkout.js";
 import { RepositoryRegistry } from "../src/vcs/repository-registry.js";
 import { planDispatchAcrossRepositories } from "../src/orchestrator/repository-dispatch.js";
+import { readInterfaceContract } from "../src/pipeline/interface-contract.js";
 import { runProjectCheck } from "../src/vcs/project-check-runner.js";
 import { recheckEpicHeads } from "../src/orchestrator/epic-head-recheck.js";
+import { reopenRejectedDecompositions } from "../src/orchestrator/decomposition-reopen.js";
 import { unrecoveredHeadFailures } from "../src/orchestrator/epic-head-failure.js";
 
 const execFileAsync = promisify(execFile);
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
+
+/** How often the outbox is emptied while the process is draining. The cycle is
+ * no longer running, and a Story that changes state during a drain must still
+ * reach the board. */
+const DRAIN_OUTBOX_INTERVAL_MS = 15_000;
+
+/**
+ * The revision of the installation this process is running, which is what says
+ * whether a decision was made by the criteria in force today. Read from this
+ * repository rather than the working directory, so a service started from
+ * anywhere reports its own code. Unreadable means an empty string, and the
+ * callers treat that as "cannot tell": nothing is retried on a guess.
+ */
+async function installedRevision(): Promise<string> {
+  return await processGitCommand.run(ROOT, ["rev-parse", "HEAD"])
+    .then((sha) => sha.trim())
+    .catch(() => "");
+}
 
 /**
  * The repository's own conventions, loaded into every DECOMPOSE and Story phase
@@ -243,6 +263,32 @@ async function main(): Promise<void> {
   // The global view, for the keys that are not a repository's business (the
   // schedule limits this host applies, the console, the provider policy).
   const config = await ConfigStore.load(handle.client);
+  /**
+   * Makes a freshly cut worktree usable, by the repository's own account of
+   * what that takes.
+   *
+   * A checkout is not a working tree: for most repositories it has no
+   * dependencies installed, so the first phase that runs the tests finds
+   * nothing to run them with. The first real requirement hit this at SPECIFY
+   * on every Story, and one of them symlinked the host's `node_modules` in to
+   * get past it -- a tree that then builds against whatever the host happens
+   * to have. hivemind does not decide how somebody else's repository is
+   * prepared, so the command is theirs to declare; declaring none says a
+   * checkout is ready as it stands.
+   */
+  const prepareWorktree = async (worktreePath: string, slug: string): Promise<void> => {
+    const scoped = await configFor(slug);
+    const command = scoped.get("worktree.setupCommand");
+    if (command.length === 0) return;
+    const [binary, ...args] = command;
+    console.log(`preparing ${worktreePath}: ${command.join(" ")}`);
+    await execFileAsync(binary!, args, {
+      cwd: worktreePath,
+      windowsHide: true,
+      timeout: scoped.get("worktree.setupTimeoutMs"),
+      maxBuffer: 16 * 1024 * 1024,
+    });
+  };
   // The Epic's integration branch goes to origin the moment its Stories exist:
   // every Story's draft MR targets it and delivery reads it from origin.
   const publishEpicBranchFor = async (epicId: string): Promise<void> => {
@@ -371,6 +417,21 @@ async function main(): Promise<void> {
       coordinator.registerActivePage(pageId);
     }
   };
+  /** Sends what is queued for the Story side. The requirement loop shares this
+   * outbox; each side replays only its own rows. */
+  const sendQueuedNotionWrites = async (): Promise<void> => {
+    const replayed = await outbox.replay(delivery, { operations: STORY_OUTBOX_OPERATIONS });
+    for (const failure of replayed.failures) {
+      console.warn(`Notion outbox: ${failure.operation} for ${failure.cardId ?? "no card"} failed (attempt ${failure.attempts}): ${failure.error}`);
+    }
+    for (const letter of replayed.dead) {
+      await reportP0(
+        `Notion outbox gave up on ${letter.operation} for ${letter.cardId ?? "no card"}`,
+        new Error(`${letter.attempts} attempts; last error: ${letter.lastError ?? "unknown"}`),
+      );
+    }
+  };
+
   const syncIntake = async (): Promise<void> => {
     await ingestReadyStories(storyApi, dataSourceId, store);
     await registerActiveStories();
@@ -389,17 +450,7 @@ async function main(): Promise<void> {
     await enqueueEpicPages(handle.client, boardTargetBranch);
     const stories = (await handle.client.execute("SELECT id FROM stories ORDER BY id")).rows;
     for (const story of stories) await projection.enqueue(String(story.id));
-    // The requirement loop shares this outbox; each side replays only its own rows.
-    const replayed = await outbox.replay(delivery, { operations: STORY_OUTBOX_OPERATIONS });
-    for (const failure of replayed.failures) {
-      console.warn(`Notion outbox: ${failure.operation} for ${failure.cardId ?? "no card"} failed (attempt ${failure.attempts}): ${failure.error}`);
-    }
-    for (const letter of replayed.dead) {
-      await reportP0(
-        `Notion outbox gave up on ${letter.operation} for ${letter.cardId ?? "no card"}`,
-        new Error(`${letter.attempts} attempts; last error: ${letter.lastError ?? "unknown"}`),
-      );
-    }
+    await sendQueuedNotionWrites();
     await media.reconcile();
     await registerActiveStories();
   };
@@ -562,7 +613,20 @@ async function main(): Promise<void> {
         recordFriction: (input) => store.recordFriction(input),
       },
     );
-    const outcome = await decomposer.decompose(epic);
+    // The provider was chosen from the breaker but nothing here reported back
+    // to it, so a spent account stayed "usable" and every cycle spawned into
+    // the same refusal. Only a failure the error catalogue recognises says
+    // anything about the provider: a defect of ours is UNKNOWN and must not
+    // open a breaker. With this written down, the next cycle skips the open
+    // provider and takes the next one in the chain.
+    const outcome = await decomposer.decompose(epic).catch(async (cause: unknown) => {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      if (classifyError(message).class !== "UNKNOWN") {
+        await providerHealth.recordFailure(provider, message, await breakerPolicy(epicConfig))
+          .catch(() => undefined);
+      }
+      throw cause;
+    });
     console.log(`Epic ${epic.id} decomposition: ${outcome.kind}`);
     if (outcome.kind !== "presented") {
       await alerts.send({
@@ -652,6 +716,9 @@ async function main(): Promise<void> {
             branch: epicBranch,
             startPoint: targetBranch === epicBranch ? targetBranchDefault : targetBranch,
           }, layout);
+          // The integration tree runs the merge checks, so it needs the same
+          // preparation the Story tree does.
+          await prepareWorktree(integration.worktreePath, slug);
         }
         integrationWorktree = integration.worktreePath;
       }
@@ -664,6 +731,7 @@ async function main(): Promise<void> {
           branch,
           startPoint: targetBranch,
         }, layout);
+        await prepareWorktree(location.worktreePath, slug);
       } else if (await currentBranch(location.worktreePath) !== branch) {
         throw new Error(`existing worktree for ${cardId} is not on ${branch}`);
       }
@@ -750,6 +818,18 @@ async function main(): Promise<void> {
   const maintainEpics = async (): Promise<void> => {
     const layout = worktreeLayout(workRoot);
     await config.reload();
+
+    // A split this system's own checks refused is not a question anybody can
+    // answer, so it must not be left waiting for a comment. The revision of
+    // the running installation is what identifies the criteria: when it moves,
+    // every such refusal is stale and its Epic gets one more attempt.
+    for (const epicId of await reopenRejectedDecompositions({
+      client: handle.client,
+      criteriaVersion: await installedRevision(),
+    })) {
+      console.log(`Epic ${epicId} goes back to decomposition: the criteria that refused it have changed`);
+    }
+
     // Which repository each Epic belongs to, read once: every path below is
     // derived from it, and an Epic is not moved between repositories.
     const epicRepositories = new Map((await handle.client.execute("SELECT id, repo FROM epics")).rows
@@ -908,6 +988,7 @@ async function main(): Promise<void> {
         branch,
         startPoint: targetBranchDefault,
       }, layout);
+      await prepareWorktree(sweepTree.worktreePath, slug);
     }
 
     // Attribution bisects the Epic's Story sequence by checking out revisions,
@@ -924,6 +1005,7 @@ async function main(): Promise<void> {
           branch: `probe/${epicId}`,
           startPoint: branch,
         }, layout);
+        await prepareWorktree(probeTree.worktreePath, slug);
       }
       probeWorktree = probeTree.worktreePath;
     }
@@ -990,8 +1072,28 @@ async function main(): Promise<void> {
       if (servable.length === 0) return;
       await step("intake sync", syncIntake);
       await step("projection reconciliation", reconcileProjections);
-      await step("epic decomposition", decomposeWaitingEpic);
-      await step("epic maintenance", maintainEpics);
+      // Reported, not raised, for the same reason the regression sweep is: one
+      // Epic that cannot be split has nothing to do with the Stories already
+      // split out of the others. Raising it ended the cycle before dispatch,
+      // so a single spent account stopped every Story on the host and kept
+      // stopping it, one silent cycle at a time.
+      await step("epic decomposition", async () => {
+        try {
+          await decomposeWaitingEpic();
+        } catch (error) {
+          await reportP0("epic decomposition failed", error);
+        }
+      });
+      // Same reason again: Epic upkeep is background work about Epics, and a
+      // branch or a head recheck it cannot finish says nothing about the
+      // Stories waiting to be dispatched below it.
+      await step("epic maintenance", async () => {
+        try {
+          await maintainEpics();
+        } catch (error) {
+          await reportP0("epic maintenance failed", error);
+        }
+      });
       // Before dispatch, not after. Called after, it saw the Stories this very
       // cycle had just put in flight and gave way to them; and the cycle
       // returns early when there is nothing to dispatch, which is exactly when
@@ -1030,6 +1132,12 @@ async function main(): Promise<void> {
       const plan = planDispatchAcrossRepositories(await Promise.all(slugs.map(async (slug) => ({
         slug,
         hotspotPaths: (await configFor(slug)).get("schedule.hotspotPaths"),
+        // Read off the checkout, which the cycle refreshed to the default
+        // branch: until a contract is on the branch, the first card is the one
+        // that puts it there and the rest would each invent their own.
+        hasInterfaceContract: (await readInterfaceContract(
+          join(checkoutOf(slug), (await configFor(slug)).get("prototype.root")),
+        )).kind === "present",
         stories: rows.filter((row) => String(row.repo) === slug && !(
           String(row.state) === "MERGE" && headFailures.has(String(row.epic_id ?? ""))
         )).map((row) => ({
@@ -1148,7 +1256,18 @@ async function main(): Promise<void> {
 
   if (once) {
     await runCycle();
+    // A cycle dispatches Story runs and returns; they are still running. The
+    // daemon drains them before it closes anything, and one cycle has to do
+    // the same: closing the database under a live run kills it with
+    // CLIENT_CLOSED, which is reported as the Story failing. Leaving the
+    // projection service running is what kept the process alive afterwards,
+    // refreshing against a closed client once a second forever.
+    if (inFlight.size > 0) {
+      console.log(`Waiting for ${inFlight.size} in-flight Story run(s) before exit`);
+      await Promise.allSettled(inFlight.values());
+    }
     await media.waitForIdle();
+    await projections.stop();
     handle.close();
     return;
   }
@@ -1213,7 +1332,21 @@ async function main(): Promise<void> {
     // orchestrator would dispatch the same card again beside it: drain first.
     if (inFlight.size > 0) {
       console.log(`Waiting for ${inFlight.size} in-flight Story run(s) before exit`);
-      await Promise.allSettled(inFlight.values());
+      // The cycle timer is what normally empties the outbox, and it has just
+      // been cleared -- while a Story runs on for another hour the board would
+      // show nothing it does. Keep the postman walking: the health probe reads
+      // an unsent write as the system being stuck, and during a drain it would
+      // be right.
+      const postman = setInterval(() => {
+        void sendQueuedNotionWrites().catch(() => undefined);
+      }, DRAIN_OUTBOX_INTERVAL_MS);
+      postman.unref?.();
+      try {
+        await Promise.allSettled(inFlight.values());
+      } finally {
+        clearInterval(postman);
+      }
+      await sendQueuedNotionWrites().catch(() => undefined);
     }
     coordinator.stop();
     await coordinator.waitForIdle();
