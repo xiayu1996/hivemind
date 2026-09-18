@@ -17,6 +17,7 @@ import { breakerPolicy, intakeHalted, usableProviders } from "../src/runner/circ
 import { classifyError } from "../src/runner/classify.js";
 import { settleDispatchFailure } from "../src/orchestrator/dispatch-failure.js";
 import { renderStopSummary } from "../src/orchestrator/stop-summary.js";
+import { epicTransitionStatement } from "../src/orchestrator/state-machine.js";
 import {
   AlertStopSink,
   FrictionStopSink,
@@ -822,10 +823,9 @@ async function main(): Promise<void> {
       console.log(`Epic ${epicId} review request waits: ${delivered.reason}`);
       return;
     }
-    await handle.client.execute({
-      sql: "UPDATE epics SET state = 'EPIC_ACCEPT', mr_url = ?, updated_at = ? WHERE id = ? AND state = 'EXECUTING'",
-      args: [delivered.mrUrl, Date.now(), epicId],
-    });
+    await handle.client.execute(epicTransitionStatement({
+      epicId, from: "EXECUTING", to: "EPIC_ACCEPT", at: Date.now(), set: { mrUrl: delivered.mrUrl },
+    }));
     // The batch is complete, so what it promised goes up for judgement on its
     // own page, next to the review request that carries it.
     const judged = await new EpicAcceptance(handle.client).open(epicId);

@@ -8,7 +8,7 @@ import {
   replyHint,
   type HumanQuestion,
 } from "./human-question.js";
-import { assertEpicTransition } from "./state-machine.js";
+import { epicTransitionStatement } from "./state-machine.js";
 import escalationText from "./epic-escalation-text.json" with { type: "json" };
 
 export const COMMENT_EPIC_PAGE = "comment_epic_page";
@@ -138,7 +138,6 @@ export async function answerBlocker(
   // decomposer reads what was chosen, not which key was pressed.
   const question = questionText(asked);
   const resolved = annotateReply([asked], answer.trim());
-  assertEpicTransition("BLOCKED", "DECOMPOSE");
   const time = now();
   const runId = `epic:${epicId}`;
   const results = await client.batch([
@@ -147,10 +146,7 @@ export async function answerBlocker(
             VALUES (?, ?, 'comment', ?)`,
       args: [commentId, epicId, time],
     },
-    {
-      sql: "UPDATE epics SET state = 'DECOMPOSE', updated_at = ? WHERE id = ? AND state = 'BLOCKED'",
-      args: [time, epicId],
-    },
+    epicTransitionStatement({ epicId, from: "BLOCKED", to: "DECOMPOSE", at: time }),
     {
       sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
             SELECT ?, (SELECT COALESCE(MAX(seq), -1) + 1 FROM event_log WHERE run_id = ?),

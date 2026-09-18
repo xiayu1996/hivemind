@@ -3,7 +3,7 @@ import { evaluateDecomposition, type DecompositionCandidate, type DecompositionL
 import { blockerAnswers, blockingQuestionStatement, withBlockerAnswers } from "./epic-blocker.js";
 import type { HumanQuestion } from "./human-question.js";
 import type { PlanApprovalStore } from "./plan-approval.js";
-import { assertEpicTransition, type EpicState } from "./state-machine.js";
+import { epicTransitionStatement, type EpicState } from "./state-machine.js";
 
 export interface DecomposeRequest {
   epicId: string;
@@ -90,13 +90,11 @@ export class EpicDecomposer {
   private async enterDecompose(epicId: string): Promise<void> {
     const state = await this.stateOf(epicId);
     if (state === "DECOMPOSE") return;
-    assertEpicTransition(state, "DECOMPOSE");
     await this.transition(epicId, state, "DECOMPOSE");
   }
 
   private async block(epicId: string, reason: string, question?: HumanQuestion): Promise<void> {
     const state = await this.stateOf(epicId);
-    assertEpicTransition(state, "BLOCKED");
     await this.transition(epicId, state, "BLOCKED", reason, question);
   }
 
@@ -119,10 +117,7 @@ export class EpicDecomposer {
     const time = this.now();
     const runId = `epic:${epicId}`;
     const [update] = await this.client.batch([
-      {
-        sql: "UPDATE epics SET state = ?, updated_at = ? WHERE id = ? AND state = ?",
-        args: [to, time, epicId, from],
-      },
+      epicTransitionStatement({ epicId, from, to, at: time }),
       {
         sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
               VALUES (?, (SELECT COALESCE(MAX(seq), -1) + 1 FROM event_log WHERE run_id = ?),

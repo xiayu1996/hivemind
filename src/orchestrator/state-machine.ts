@@ -1,3 +1,9 @@
+import type { InStatement } from "@libsql/client";
+
+/** A parameterised statement; the object form of `InStatement`, named so a
+ * caller can read back what it is about to run. */
+export type GuardedStatement = InStatement & { sql: string; args: (string | number)[] };
+
 export type EpicState =
   | "INTAKE"
   | "DECOMPOSE"
@@ -89,6 +95,47 @@ export function assertEpicTransition(from: EpicState, to: EpicState): void {
 }
 
 /**
+ * The one way an Epic's state is written.
+ *
+ * The declared edge and the row guard come from the same pair of states, so
+ * they cannot drift: every call site used to assert one pair and then hand-write
+ * `WHERE state = '<from>'` in its own SQL, which is two copies of the same fact
+ * and a silent no-op the day they disagree. The guard is also what makes the
+ * write safe to race -- a caller that read the row and then lost it to another
+ * process gets `rowsAffected === 0` rather than overwriting the winner.
+ *
+ * It returns a statement rather than performing the write because these
+ * transitions travel in a batch with the events and the board projection they
+ * belong with; splitting them would let a state change land without its record.
+ */
+export function epicTransitionStatement(input: {
+  epicId: string;
+  from: EpicState;
+  to: EpicState;
+  at: number;
+  /** The review request that travels with the state: a URL when one is
+   * raised, null when an Epic goes back to work without it. */
+  set?: { mrUrl: string | null };
+  /** Anded into the guard, for a caller with a further precondition. */
+  requires?: { sql: string; args: readonly (string | number)[] };
+}): GuardedStatement {
+  assertEpicTransition(input.from, input.to);
+  const columns = ["state = ?", "updated_at = ?"];
+  const args: (string | number)[] = [input.to, input.at];
+  if (input.set) {
+    // Null is written as literal SQL rather than as an argument: the argument
+    // list stays a list of values a reader can match to the placeholders.
+    columns.push(input.set.mrUrl === null ? "mr_url = NULL" : "mr_url = ?");
+    if (input.set.mrUrl !== null) args.push(input.set.mrUrl);
+  }
+  const requires = input.requires ? ` AND ${input.requires.sql}` : "";
+  return {
+    sql: `UPDATE epics SET ${columns.join(", ")} WHERE id = ? AND state = ?${requires}`,
+    args: [...args, input.epicId, input.from, ...(input.requires?.args ?? [])],
+  };
+}
+
+/**
  * HUMAN_PARKED outranks the workflow graph. Only a human-originated command can
  * enter it, and the system cannot leave it. Restoration must name the exact
  * state captured before parking so a drag cannot accidentally skip a phase.
@@ -115,6 +162,37 @@ export function assertStoryTransition(
     return;
   }
   if (!STORY_TRANSITIONS[from].includes(to)) throw new StateTransitionError("Story", from, to);
+}
+
+/**
+ * The same guarded write for a Story, for the callers that do not go through
+ * the execution store.
+ *
+ * Most Story transitions belong to `StoryExecutionStore.transition`, which
+ * carries the board projection and the event with them. A caller outside it --
+ * the regression attributor reopening a delivered card -- still has to be held
+ * to the declared graph, and had been writing `state` straight through with no
+ * check of any kind.
+ */
+export function storyTransitionStatement(input: {
+  cardId: string;
+  from: StoryState;
+  to: StoryState;
+  at: number;
+  actor?: TransitionActor;
+  /** Columns that travel with the state, such as the phase a reopened card
+   * resumes in and the priority that puts it ahead of ordinary work. */
+  set?: { phase?: string; priority?: number };
+}): GuardedStatement {
+  assertStoryTransition(input.from, input.to, input.actor ?? "system");
+  const columns = ["state = ?", "updated_at = ?"];
+  const args: (string | number)[] = [input.to, input.at];
+  if (input.set?.phase !== undefined) { columns.push("phase = ?"); args.push(input.set.phase); }
+  if (input.set?.priority !== undefined) { columns.push("priority = ?"); args.push(input.set.priority); }
+  return {
+    sql: `UPDATE stories SET ${columns.join(", ")} WHERE id = ? AND state = ?`,
+    args: [...args, input.cardId, input.from],
+  };
 }
 
 /**

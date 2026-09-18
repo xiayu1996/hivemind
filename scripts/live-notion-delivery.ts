@@ -12,6 +12,7 @@ import { NotionMediaPipeline } from "../src/notion/media.js";
 import { NotionOutbox } from "../src/notion/outbox.js";
 import { NotionStoryPageDelivery } from "../src/notion/story-page-delivery.js";
 import { NotionEpicPlanDelivery } from "../src/notion/epic-plan-delivery.js";
+import { epicTransitionStatement } from "../src/orchestrator/state-machine.js";
 import { EpicAcceptance } from "../src/orchestrator/epic-acceptance.js";
 import { NotionRequirementPageDelivery } from "../src/notion/requirement-page-delivery.js";
 import { RequirementPageProjector } from "../src/notion/requirement-projection.js";
@@ -387,10 +388,13 @@ async function epicProbe(
   })).rows[0];
   if (String(bound?.notion_block_id) !== boxId) throw new Error("the acceptance box is not tied to its scenario");
   await new EpicAcceptance(db.client).recordGap(epicId, "s01", "\u4fdd\u5b58\u540e\u5217\u8868\u6ca1\u5237\u65b0");
-  await db.client.execute({
-    sql: "UPDATE epics SET state = 'EPIC_ACCEPT', mr_url = ? WHERE id = ?",
-    args: [`https://example.test/pull/${day.replaceAll("-", "")}`, epicId],
-  });
+  // Recording the gap sent the Epic back to work; this raises the follow-up
+  // review request the same way the orchestrator does.
+  const raised = await db.client.execute(epicTransitionStatement({
+    epicId, from: "EXECUTING", to: "EPIC_ACCEPT", at: Date.now(),
+    set: { mrUrl: `https://example.test/pull/${day.replaceAll("-", "")}` },
+  }));
+  if (raised.rowsAffected !== 1) throw new Error(`Epic ${epicId} was not in EXECUTING when the review request was raised`);
   await project(4);
   const afterGap = (await listChildren(gateway, epicPageId)).filter((block) => block.type === "to_do");
   if (afterGap.length !== 1 || afterGap[0]!.id !== boxId) {

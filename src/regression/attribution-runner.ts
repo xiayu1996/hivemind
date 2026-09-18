@@ -1,5 +1,6 @@
 import type { Client } from "@libsql/client";
 import { attributeRegression, type Attribution } from "./attribution.js";
+import { storyTransitionStatement } from "../orchestrator/state-machine.js";
 import type { RegressionStore } from "./store.js";
 
 export interface IntegrationStep {
@@ -69,15 +70,14 @@ export async function attributeCard(
   // Priority 0 puts it ahead of every ordinary card: a known regression on the
   // Epic head blocks everything else landing there.
   const [update] = await client.batch([
-    {
-      // Reopened into SPECIFY, not straight into the fix: the reproduction
-      // test is written and proved red before anything may change the code it
-      // exists to prove. `phase` stays REGRESSION_FIX so the worker knows this
-      // SPECIFY is the narrow one and where it leads.
-      sql: `UPDATE stories SET state = 'SPECIFY', phase = 'REGRESSION_FIX', priority = 0, updated_at = ?
-             WHERE id = ? AND state = 'DELIVERED'`,
-      args: [time, attribution.item],
-    },
+    // Reopened into SPECIFY, not straight into the fix: the reproduction test
+    // is written and proved red before anything may change the code it exists
+    // to prove. `phase` stays REGRESSION_FIX so the worker knows this SPECIFY
+    // is the narrow one and where it leads.
+    storyTransitionStatement({
+      cardId: attribution.item, from: "DELIVERED", to: "SPECIFY", at: time,
+      set: { phase: "REGRESSION_FIX", priority: 0 },
+    }),
     {
       sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
             VALUES (?, (SELECT COALESCE(MAX(seq), -1) + 1 FROM event_log WHERE run_id = ?),
