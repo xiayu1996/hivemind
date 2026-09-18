@@ -137,6 +137,18 @@ async function main(): Promise<void> {
         + (leaked.length > 0 ? ` leaked=${leaked.join(",")}` : "")
         + (overflow ? " overflows the phone width" : ""));
     }
+    // The read APIs carry the same rows the screens do, so a denied peer has to
+    // be turned away from them directly and not only from the pages built on top.
+    const deniedData = ["/api/costs", "/api/config", "/api/nodes", "/api/queue"];
+    for (const route of deniedData) {
+      const response = await page.goto(denied.base + route, { waitUntil: "load" });
+      const snapshot = await page.locator("body").ariaSnapshot();
+      const deniedHeaded = missingFromSnapshot(snapshot, [{ role: "heading", text: "当前设备无法进入后台" }]).length === 0;
+      const passed = response?.status() === 403 && deniedHeaded && !snapshot.includes("运行总览");
+      if (!passed) failed += 1;
+      console.log(`${passed ? "PASS" : "FAIL"} S-R237511MB-02-access ${denied.base}${route}`
+        + (passed ? "" : ` status=${response?.status()} deniedPage=${deniedHeaded}`));
+    }
   } finally {
     await browser.close();
     await allowed.close();
@@ -148,6 +160,7 @@ async function main(): Promise<void> {
     return;
   }
   console.log(`OK: ${CASES.length} screens match their declared roles and words at a phone width`);
+  console.log("OK: the read APIs refuse a peer outside the allowed networks");
   console.log("sample reading range: Asia/Shanghai · 2026-09-01 至 2026-09-07");
 }
 

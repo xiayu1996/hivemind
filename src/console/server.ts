@@ -2,7 +2,8 @@ import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { registerMobileConsoleRoutes, type MobileConsoleDependencies } from "./operator-screens.js";
+import { registerMobileConsoleRoutes, renderOperatorAccessPage, type MobileConsoleDependencies } from "./operator-screens.js";
+import type { ConsoleAccessPolicy } from "./operator-contract.js";
 
 export interface ConsoleDataSource {
   nodes(): Promise<unknown[]>;
@@ -27,6 +28,15 @@ export interface ConsoleConfigWritePort {
 export interface ConsoleServerOptions {
   uiRoot?: string;
   serveUi?: boolean;
+  /**
+   * The console's network boundary. When given, the gate runs as the first
+   * hook before every route -- the read APIs, the static shell and the mobile
+   * screens -- so a peer outside the allowed networks is answered with the
+   * access screen and never with a row read from the store. Without it the
+   * server stays open, which is what the sample servers and single-process
+   * tests rely on.
+   */
+  access?: ConsoleAccessPolicy;
   /** The one write surface. Without it the console stays entirely read-only. */
   configWriter?: ConsoleConfigWritePort;
   /**
@@ -44,6 +54,21 @@ export async function createConsoleServer(
   options: ConsoleServerOptions = {},
 ): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
+  // The access boundary is the outermost layer: the mobile screens carry their
+  // own copy for a direct registration, but a server that serves the read APIs
+  // and the static shell has to close those too, or the screens are the only
+  // thing the network check guarded. `/access` has to answer when denied, and
+  // `/health` carries no operator data, so both stay reachable.
+  const access = options.access ?? options.screens?.access;
+  if (access) {
+    app.addHook("onRequest", async (request, reply) => {
+      const path = request.url.split("?")[0] ?? "";
+      if (path === "/access" || path === "/operator/access" || path === "/health") return;
+      const decision = access.decide({ remoteAddress: request.ip });
+      if (decision.allowed) return;
+      await reply.code(403).type("text/html; charset=utf-8").send(renderOperatorAccessPage(decision));
+    });
+  }
   const writable = new Set(options.configWriter
     ? ["/api/config/value", "/api/config/rollback"]
     : []);
