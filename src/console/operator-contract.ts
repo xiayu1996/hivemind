@@ -461,5 +461,5 @@ export function readWorkRecord(
     workStillRunning: options.workStillRunning,
     revision: options.revision,
   };
-  return detail;
+  return options.refreshAfter === undefined ? detail : { ...detail, refreshAfter: options.refreshAfter };
 }
