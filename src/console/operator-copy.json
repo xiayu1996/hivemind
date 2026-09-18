@@ -1,0 +1,138 @@
+{
+  "brand": {
+    "name": "Hivemind",
+    "tagline": "内网运行控制台"
+  },
+  "titles": {
+    "access": "访问验证｜Hivemind",
+    "overview": "运行总览｜Hivemind",
+    "todo": "待办处理｜Hivemind",
+    "detail": "需求与任务详情｜Hivemind"
+  },
+  "nav": {
+    "landmark": "运行总览",
+    "overview": "运行总览",
+    "costs": "费用分析",
+    "roles": "角色配置",
+    "records": "工作记录",
+    "overviewShort": "总览",
+    "costsShort": "费用",
+    "rolesShort": "配置",
+    "recordsShort": "记录"
+  },
+  "subjectKinds": {
+    "requirement": "需求",
+    "epic": "批次",
+    "story": "任务"
+  },
+  "notionDestinations": {
+    "requirement": "需求",
+    "epic": "需求",
+    "story": "任务"
+  },
+  "todoKinds": {
+    "reply": "待答复",
+    "approval": "待批准",
+    "choice": "待选择"
+  },
+  "access": {
+    "heading": "访问验证",
+    "intro": "Hivemind 后台仅按家庭或办公网络范围开放。",
+    "deniedStatus": "无法访问",
+    "deniedHeading": "当前设备无法进入后台",
+    "deniedBody": "当前设备不在允许访问后台的家庭或办公网络范围内。",
+    "connectNetwork": "请连接家庭或办公网络后重新检查。",
+    "recheck": "重新检查"
+  },
+  "overview": {
+    "heading": "运行总览",
+    "intro": "当前运行情况与近期结果。",
+    "waiting": "等待本人处理",
+    "running": "运行中",
+    "failures": "异常",
+    "completed": "最近完成",
+    "handle": "去处理",
+    "back": "返回总览",
+    "waitingEmptyHeading": "当前没有等待本人处理的事项",
+    "waitingEmptyBody": "所有事项都已处理。新的答复、批准或选择出现后，会在这里优先提示。",
+    "inspectRuns": "检查运行项",
+    "runningEmpty": "当前没有运行中的事项",
+    "failuresEmpty": "当前没有异常事项",
+    "completedEmpty": "最近没有完成的事项",
+    "waitingDuration": "等待 {minutes} 分钟",
+    "summaryCompleted": "最近完成",
+    "summaryCost": "完成事项费用",
+    "summaryScope": "统计范围：最近完成事项",
+    "loading": "正在读取运行总览",
+    "loadingBody": "正在加载待处理、运行中、异常和最近完成的事项。",
+    "refreshing": "正在刷新运行总览",
+    "failureHeading": "无法读取运行总览",
+    "failureBody": "后台没有取得最新状态，正在运行的工作不会因此停止。",
+    "waitingHeading": "正在等待下一次状态更新",
+    "waitingBody": "当前还没有新的运行结果，页面会自动刷新。"
+  },
+  "todo": {
+    "heading": "待办处理",
+    "back": "返回总览",
+    "subjectFallback": "待办",
+    "contextHeading": "上下文",
+    "submitReply": "提交答复",
+    "submitApproval": "提交批准",
+    "choiceLegend": "请选择一项",
+    "submitChoice": "提交选择",
+    "noteLegend": "处理说明",
+    "handledHeading": "已处理",
+    "savedPrefix": {
+      "reply": "答复",
+      "approval": "批准结果",
+      "choice": "选择结果"
+    },
+    "savedTemplate": "{prefix}已保留到对应 Notion {destination}",
+    "savedBody": "后续工作可以继续。",
+    "submitting": "正在提交，请稍候。",
+    "validationText": "请填写答复后再提交",
+    "validationOption": "请选择一项后再提交",
+    "validationNote": "请填写处理说明后再提交",
+    "notSavedHeading": "结果尚未保存",
+    "notSavedBody": "对应 Notion 条目没有确认保存，已填写的内容会保留。",
+    "retrySubmit": "重新提交",
+    "unavailableHeading": "这项待办已不再等待处理",
+    "unavailableBody": "它已经被处理，或来源已经改变。返回总览查看其他事项。",
+    "waitingHeading": "正在等待 Notion 确认保存",
+    "confirmationWaiting": "处理结果尚未确认，确认后将自动刷新",
+    "waitingBody": "确认前这项待办仍保持未处理。",
+    "loading": "正在读取待办内容",
+    "loadingBody": "正在加载需要决定的问题、选项和关联条目。",
+    "failureHeading": "无法读取这件待办",
+    "failureBody": "待办内容没有载入，重新读取前不会提交任何结果。"
+  },
+  "detail": {
+    "back": "返回总览",
+    "currentRoundLabel": "当前轮 {number}",
+    "historicalRoundLabel": "第 {number} 轮",
+    "roundsLabel": "选择轮次",
+    "trigger": "触发原因：{value}",
+    "phase": "阶段：{value}",
+    "result": "结果：{value}",
+    "resultMissing": "结果尚未产生",
+    "blocker": "卡点：{value}",
+    "blockerMissing": "暂无卡点",
+    "roundCost": "本轮费用：{amount}",
+    "recordedCost": "费用：{amount}",
+    "totalCost": "累计费用：{amount}",
+    "exceeded": "已超限",
+    "continues": "工作仍继续",
+    "noRoundsHeading": "当前还没有轮次",
+    "noRoundsBody": "首轮开始后，这里会显示阶段、结果、卡点和费用。",
+    "loading": "正在读取本轮详情",
+    "loadingBody": "正在加载当前轮和历史轮次。",
+    "failureHeading": "无法读取本轮详情",
+    "failureBody": "当前轮和历史轮次未能载入，请重新读取。",
+    "waitingHeading": "正在等待本轮产生结果",
+    "waitingBody": "本轮尚未产生结果，产生后会自动刷新。"
+  },
+  "states": {
+    "retryRead": "重新读取",
+    "refreshing": "刷新中"
+  }
+}
