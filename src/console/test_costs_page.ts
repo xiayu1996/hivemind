@@ -207,7 +207,7 @@ describe("costs page is reachable and shows the amount for each state", () => {
     expect(html).toContain("<h1>费用分析</h1>");
     expect(html).toContain('<h2 id="daily-title">每日费用</h2>');
     expect(html).toContain("按 Asia/Shanghai 自然日");
-    expect(html).toContain("<span>$20.00</span>");
+    expect(html).toContain("<span class=\"metric-value\">$20.00</span>");
     expect(html).not.toContain("每日总费用上限");
     expect(html).not.toContain("今日已超限");
     expect(html).not.toContain("已暂停");

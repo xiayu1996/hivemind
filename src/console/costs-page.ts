@@ -280,7 +280,7 @@ function renderReadyBody(view: CostsPageView): string {
   return renderPageHead(true)
     + renderToolbar(view)
     + `<div class="metric-grid"><div class="metric"><div class="metric-name">所选范围累计费用</div>`
-    + `<div class="metric-value"><span>${escapeHtml(formatUsd(snapshot.totalUsd))}</span></div>`
+    + `<span class="metric-value">${escapeHtml(formatUsd(snapshot.totalUsd))}</span>`
     + `<div class="metric-detail">${escapeHtml(snapshot.scope)}</div></div></div>`
     + `<div class="split section">${renderDailyCostPanel(snapshot)}`
     + `<aside class="panel"><h2>计费口径</h2>`
@@ -363,10 +363,11 @@ function renderRequirementLimitPanel(limit: RequirementCostLimitPageView): strin
     : `<p class="metric-detail" role="status">${escapeHtml(limit.form.confirmationText)}</p>`;
   return `<section class="panel section" aria-labelledby="requirement-limit-title">`
     + `<div class="section-head"><div><h2 id="requirement-limit-title">需求费用上限</h2>`
-    + `<p class="metric-detail">全部轮次累计费用 <span class="money">${escapeHtml(metric.cumulativeAmount)}</span></p></div></div>`
+    + `<p class="metric-detail">全部轮次累计费用 <span class="money">${escapeHtml(metric.cumulativeAmount)}</span> `
+    + `<a href="/requirements/${encodeURIComponent(limit.form.requirementId)}">查看需求详情</a></p></div></div>`
     + `<div class="metric${metric.status === "over_limit" ? " danger" : ""}">`
-    + `<span class="metric-name">需求费用上限</span>`
-    + `<div class="metric-value money"><span>${escapeHtml(limitText)}</span></div>`
+    + `<span class="metric-name">需求费用上限</span><br>`
+    + `<span class="metric-value money">${escapeHtml(limitText)}</span>`
     + `<div class="metric-detail" role="status">${statusLine}</div></div>`
     + `<form method="post" action="/costs/requirement-limit">`
     + `<input type="hidden" name="requirementId" value="${escapeHtml(limit.form.requirementId)}">`

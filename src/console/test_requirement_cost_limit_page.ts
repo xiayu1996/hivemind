@@ -231,13 +231,14 @@ describe("the costs page saves one requirement's limit", () => {
     );
 
     // The DoD declares the cumulative label, both amounts and the limit label
-    // as text nodes, and the excess sentence as a status region. Block
-    // containers render as `generic`, so each figure is an inline text node
-    // and the sentence carries its own role.
+    // as text nodes, and the excess sentence as a status region. The snapshot
+    // publishes a text run as `text` only while its container has a second
+    // child, so the amounts keep their detail links and the limit label keeps
+    // its line break; the sentence carries its own status role.
     expect(html).toContain("<h1>费用分析</h1>");
-    expect(html).toContain('全部轮次累计费用 <span class="money">$17.22</span>');
-    expect(html).toContain('<span class="metric-name">需求费用上限</span>');
-    expect(html).toContain('<div class="metric-value money"><span>$15.00</span></div>');
+    expect(html).toContain('全部轮次累计费用 <span class="money">$17.22</span> <a href="/requirements/R-main">查看需求详情</a>');
+    expect(html).toContain('<span class="metric-name">需求费用上限</span><br>');
+    expect(html).toContain('<span class="metric-value money">$15.00</span>');
     expect(html).toContain('role="status">已超限 $2.22，工作仍会继续</div>');
   });
 

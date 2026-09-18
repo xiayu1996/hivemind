@@ -32,7 +32,8 @@ function renderAlertRow(row: OverviewCostAlertRow): string {
     + `<div><strong>${escapeHtml(row.requirementTitle)}</strong></div>`
     + running
     + `<span class="status danger" role="status">${escapeHtml(row.statusText)}</span>`
-    + `<div><span>${escapeHtml(row.continuationText)}</span></div></li>`;
+    + `<div><span>${escapeHtml(row.continuationText)}</span> `
+    + `<a href="/costs?requirement=${encodeURIComponent(row.requirementId)}">查看费用明细</a></div></li>`;
 }
 
 function renderAlertSummary(view: OverviewPageView): string {
@@ -42,16 +43,16 @@ function renderAlertSummary(view: OverviewPageView): string {
       + `<h2>费用超限</h2>`
       + `<p>目前没有需求超过自己保存的费用上限。</p></section>`;
   }
-  // The label is an inline text node and the requirement's status is a status
-  // region: a block element would publish the same words under a role the
-  // frozen DoD does not declare, which is how the alert became unreadable to
-  // the structural check while the page still looked right.
+  // The summary label sits beside the count as an inline text node, and the
+  // promise sits beside the costs link: a lone block whose only content is the
+  // text publishes it as the block's own name, under a role the frozen DoD
+  // does not declare, which is how the alert became unreadable to the
+  // structural check while the page still looked right.
   return `<section class="panel metric danger" aria-label="费用已超限">`
     + `<span class="metric-name">费用已超限</span>`
     + `<div class="metric-value">${view.alert.count}</div>`
-    + `<div class="metric-detail"><span>工作仍会继续</span></div>`
-    + `<ul class="ledger">${rows}</ul>`
-    + `<p><a href="/costs">查看超限需求</a></p></section>`;
+    + `<div class="metric-detail"><span>工作仍会继续</span> <a href="/costs">查看超限需求</a></div>`
+    + `<ul class="ledger">${rows}</ul></section>`;
 }
 
 /** The complete run-overview document. */

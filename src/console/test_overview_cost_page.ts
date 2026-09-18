@@ -81,13 +81,13 @@ describe("the overview screen states a requirement cost alert without pausing it
     const app = await createConsoleServer(dataWithAlerts(), { serveUi: false });
     try {
       const html = (await app.inject({ method: "GET", url: "/" })).body;
-      // The DoD declares these three as a text node and a status region. A
-      // block element renders as `generic` and a heading as `heading`, so the
-      // summary label and the promise are inline text, and the status is an
-      // explicit status region rather than a styled span.
-      expect(html).toContain('<span class="metric-name">费用已超限</span>');
-      expect(html).toContain('role="status">已超限</span>');
-      expect(html).toContain("<span>工作仍会继续</span>");
+      // The DoD declares these three as a text node and a status region. The
+      // snapshot publishes a text run as `text` only while its container has a
+      // second child, so the label keeps its count and the promise keeps its
+      // costs link; the over-limit word is an explicit status region.
+      expect(html).toContain('<span class="metric-name">费用已超限</span><div class="metric-value">1</div>');
+      expect(html).toContain('<div class="metric-detail"><span>工作仍会继续</span> <a href="/costs">查看超限需求</a></div>');
+      expect(html).toContain('<span class="status danger" role="status">已超限</span>');
       expect(html).not.toContain("已暂停");
     } finally {
       await app.close();
@@ -100,9 +100,9 @@ describe("the overview screen states a requirement cost alert without pausing it
       const html = (await app.inject({ method: "GET", url: "/" })).body;
       // Continuing work must be readable as running, not as waiting on a
       // person to raise the limit.
-      expect(html).toContain('role="status">运行中</span>');
-      expect(html).toContain('role="status">已超限</span>');
-      expect(html).toContain("<span>工作仍会继续</span>");
+      expect(html).toContain('<span class="status running" role="status">运行中</span>');
+      expect(html).toContain('<span class="status danger" role="status">已超限</span>');
+      expect(html).toContain('<div class="metric-detail"><span>工作仍会继续</span> <a href="/costs">查看超限需求</a></div>');
       expect(html).not.toContain("等待本人提高费用上限");
     } finally {
       await app.close();
