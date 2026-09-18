@@ -72,6 +72,17 @@ describe("resolving one spawn", () => {
     }
   });
 
+  it("hands the drawing the tools it needs to draw with", async () => {
+    // It is served by the decomposition tier and was for a while spawned with
+    // the decomposer's own surface, which has no write tool in it: the session
+    // answered the contract it was asked for and had created no file, and the
+    // exit refused six pages that were never on disk.
+    const spec = await resolveAgentSpec({ config: ConfigStore.defaults(), policy: await policy() }, "prototype", "mock");
+
+    expect(spec.tools).toEqual([...DEFAULT_AGENT_TOOLS].toSorted());
+    expect(spec.tier).toBe("standard");
+  });
+
   it("lets one purpose opt out of the shared tool set without moving the others", async () => {
     const config = await ConfigStore.load(client);
     await config.set("agent.purposeTools", { ui_review: ["read", "bash", "read"] }, "agent-spec test");

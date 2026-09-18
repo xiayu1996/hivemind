@@ -16,13 +16,20 @@ export interface GuardDecision {
 }
 
 /**
- * pi built-in tools that only observe the filesystem.
+ * pi built-in tools that only observe the filesystem, by the names pi gives
+ * them. Getting a name wrong here is not a small thing: an observing tool the
+ * set does not hold is judged against the write fence, and a phase fenced to
+ * one directory then cannot list the directory it owns -- which is what
+ * happened to the first drawing session, where `ls` and `find` were refused on
+ * the contract root.
  *
  * Reads are deliberately not bounded by the worktree: an agent legitimately
  * reads the repository's own conventions and toolchain files that live above
  * it, and a fenced file is fenced against writes, not against being understood.
  */
-const READ_ONLY_TOOLS = new Set(["read", "grep", "list", "glob"]);
+export const READ_ONLY_TOOL_NAMES = ["find", "grep", "ls", "read"] as const;
+
+const READ_ONLY_TOOLS = new Set<string>(READ_ONLY_TOOL_NAMES);
 
 const PATH_KEYS = ["path", "file_path", "filePath"] as const;
 const URL_KEYS = ["url", "uri", "href"] as const;

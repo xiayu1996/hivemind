@@ -71,6 +71,7 @@ export function isPmPhase(value: string): value is PmPhase {
 export const MODEL_PURPOSES = [
   "product_manager",
   "decompose",
+  "prototype",
   "shape",
   "design",
   "specify",
@@ -107,9 +108,11 @@ export const PHASE_PURPOSE: Record<AgentPhase, ModelPurpose> = {
   // The solution reads the repository and weighs what to build it with, which
   // is the decomposition tier's job, not the conversational one's.
   SOLUTION: "decompose",
-  // Drawing a screen is read as a screen, which is the tier that reads prose
-  // and judges pictures rather than the one that writes code.
-  PROTOTYPE: "decompose",
+  // Drawing a screen is read as a screen, so it is served by the same tier as
+  // the decomposition -- but it is its own call site because it is the one
+  // product-manager phase that writes, and the decomposer's surface has no
+  // write tool in it.
+  PROTOTYPE: "prototype",
   REQUIREMENT_DECOMPOSE: "decompose",
   UI_REVIEW: "ui_review",
   E2E: "verify",

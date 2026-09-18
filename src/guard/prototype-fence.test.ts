@@ -16,6 +16,14 @@ describe("prototypeFencePatterns", () => {
     expect(allowed(`${WORKTREE}/docs/prototype/design.md`)).toBe(true);
   });
 
+  it("leaves the contract directory itself on the inside", () => {
+    // Fencing the root against its own name refused `ls docs/prototype` and the
+    // creation of the directory this phase exists to fill; the session spent
+    // its rounds finding out it could not look at what it was told to write.
+    expect(allowed("docs/prototype")).toBe(true);
+    expect(allowed(`${WORKTREE}/docs/prototype`)).toBe(true);
+  });
+
   it("refuses the product itself, which is not this phase's to start", () => {
     expect(allowed("src/app.ts")).toBe(false);
     expect(allowed("package.json")).toBe(false);

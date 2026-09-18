@@ -19,14 +19,17 @@ function escape(value: string): string {
 }
 
 /**
- * Two patterns: everything that is not inside the contract root, and any path
- * that walks up out of one. The second is not redundant -- without it
+ * Two patterns: everything that is not the contract root or inside it, and any
+ * path that walks up out of one. The second is not redundant -- without it
  * `docs/prototype/../../src/app.ts` satisfies the first.
+ *
+ * The root itself is on the inside. A fence that excluded it refused `ls
+ * docs/prototype` and the creation of the directory the phase exists to fill.
  */
 export function prototypeFencePatterns(contractRoot: string): string[] {
   const root = escape(contractRoot.replaceAll("\\", "/").replace(/^\/+|\/+$/g, ""));
   return [
     String.raw`(^|/)\.\.(/|$)`,
-    `^(?!(?:.*/)?${root}/).*$`,
+    `^(?!(?:.*/)?${root}(/|$)).*$`,
   ];
 }

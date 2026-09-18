@@ -191,8 +191,8 @@ async function main(): Promise<void> {
           }, prototypeLayout)).worktreePath;
         const drawingSpec = await resolveAgentSpec(
           { config, policy },
-          "decompose",
-          (await policy.providersFor("decompose"))[0]!,
+          "prototype",
+          (await policy.providersFor("prototype"))[0]!,
         );
         return new PiPrototypePort({
           binary: piBinary,
@@ -217,7 +217,7 @@ async function main(): Promise<void> {
           recordUsage: async ({ usage, spec: used }) => {
             await ledger.record({
               runId: `pm-prototype-${Date.now()}`,
-              purpose: "product_manager",
+              purpose: "prototype",
               tier: used.tier,
               provider: used.model.provider,
               modelId: used.model.id,

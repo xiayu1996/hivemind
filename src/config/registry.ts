@@ -1,10 +1,12 @@
 import { z } from "zod";
+import { READ_ONLY_TOOL_NAMES } from "../guard/tool-decision.js";
 import { snapshotModelIds } from "../runner/catalog-snapshot.js";
 import { THINKING_LEVELS } from "../runner/model-resolver.js";
 import { MODEL_PURPOSES, MODEL_TIERS } from "../pipeline/phase.js";
 
 /** The surface of a call site that only reads. */
-const READ_ONLY_TOOLS = ["find", "grep", "ls", "read"];
+/** The surface of a call site that only reads, named as pi names them. */
+const READ_ONLY_TOOLS = [...READ_ONLY_TOOL_NAMES];
 
 /**
  * How a changed value reaches a running process.
@@ -244,6 +246,7 @@ export const CONFIG_KEYS = {
     default: {
       product_manager: "brain",
       decompose: "brain",
+      prototype: "brain",
       // SHAPE and SPECIFY each hold half of the acceptance bar: one reads a
       // sentence of requirement into scenarios that can be judged true or
       // false, the other turns a business-language `then` into assertions that
@@ -271,6 +274,7 @@ export const CONFIG_KEYS = {
     default: {
       product_manager: "high",
       decompose: "high",
+      prototype: "high",
       shape: "high",
       design: "high",
       specify: "high",
@@ -737,7 +741,9 @@ export const CONFIG_KEYS = {
     // in one place only; what is declared here is the exception to it. The
     // product manager and the decomposer write nothing: their whole output is
     // text a person approves, and either one editing the tree would be doing
-    // the work it is supposed to be describing.
+    // the work it is supposed to be describing. The drawing phase is the one
+    // exception and is absent here on purpose: it puts the interface contract
+    // into the repository, so it takes the write-capable default.
     default: { product_manager: READ_ONLY_TOOLS, decompose: READ_ONLY_TOOLS },
     scope: "global",
     reload: "next-spawn",
