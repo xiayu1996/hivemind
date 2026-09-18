@@ -569,14 +569,15 @@ function refreshingNote(label: string, refreshing: boolean): string {
   return refreshing ? `<div class="refresh">${label}</div>` : "";
 }
 
-function todoPageHead(value: OperatorTodoResult | undefined): string {
+function todoPageHead(value: OperatorTodoResult | undefined, refreshing: boolean): string {
+  const note = refreshingNote(copy.todo.refreshing, refreshing);
   if (value?.kind !== "pending") {
-    return `<header class="page-head"><div><h1>${copy.todo.heading}</h1></div></header>`;
+    return `<header class="page-head"><div><h1>${copy.todo.heading}</h1></div>${note}</header>`;
   }
   const todo = value.todo;
   const subject = `${escapeHtml(todo.subject.title)} · ${subjectKindWord(todo.subject.kind)} · ${escapeHtml(todo.sourceLabel)}`;
   return `<header class="page-head"><div><h1>${copy.todo.heading}</h1><p>${subject}</p></div>`
-    + `<span class="status attention">${todoKindWord(todo.kind)}</span></header>`;
+    + `<span class="status attention">${todoKindWord(todo.kind)}</span>${note}</header>`;
 }
 
 function todoQuestion(todo: OperatorTodo): string {
@@ -684,16 +685,17 @@ function renderDetailBody(detail: OperatorDetail, selectedRound: number | undefi
     + "</div>";
 }
 
-function detailPageHead(value: OperatorDetailResult | undefined): string {
+function detailPageHead(value: OperatorDetailResult | undefined, refreshing: boolean): string {
+  const note = refreshingNote(copy.detail.refreshing, refreshing);
   if (value?.kind === "available") {
     const detail = value.detail;
     return `<header class="page-head"><div><h1>${escapeHtml(detail.subject.title)}</h1>`
-      + `<p>${subjectKindWord(detail.subject.kind)} · ${escapeHtml(detail.stateLabel)}</p></div></header>`;
+      + `<p>${subjectKindWord(detail.subject.kind)} · ${escapeHtml(detail.stateLabel)}</p></div>${note}</header>`;
   }
   if (value?.kind === "no_rounds") {
-    return `<header class="page-head"><div><h1>${escapeHtml(value.subject.title)}</h1></div></header>`;
+    return `<header class="page-head"><div><h1>${escapeHtml(value.subject.title)}</h1></div>${note}</header>`;
   }
-  return `<header class="page-head"><div><h1>${copy.detail.heading}</h1></div></header>`;
+  return `<header class="page-head"><div><h1>${copy.detail.heading}</h1></div>${note}</header>`;
 }
 
 function renderEmptyState(heading: string, body: string, action: { href: string; label: string }): string {
@@ -822,7 +824,7 @@ export function renderOperatorTodoPage(
     title: copy.titles.todo,
     current: "overview",
     body: backLink()
-      + todoPageHead(value)
+      + todoPageHead(value, state.kind === "ready" && state.refreshing)
       + todoNotice(state)
       + (value === undefined ? "" : renderTodoPageBody(value, effective)),
   });
@@ -862,7 +864,7 @@ export function renderOperatorDetailPage(
     title: copy.titles.detail,
     current: "overview",
     body: backLink()
-      + detailPageHead(value)
+      + detailPageHead(value, state.kind === "ready" && state.refreshing)
       + detailNotice(state)
       + (value === undefined ? "" : renderDetailPageBody(value, selectedRound)),
   });
@@ -897,6 +899,82 @@ async function loadPageState<T>(load: () => Promise<T>): Promise<ConsolePageStat
 }
 
 /**
+ * A state a person named in the query string, the way the interface contract's
+ * pages and the costs page already reach their non-default states. Reading and
+ * waiting are exactly the states a server-rendered page would otherwise hide
+ * behind a read that happened to be slow, so they are reachable on their own.
+ */
+const FORCED_PAGE_STATES = new Set(["loading", "refreshing", "error", "waiting"]);
+type ForcedPageState = "loading" | "refreshing" | "error" | "waiting";
+
+function forcedPageState(query: unknown): ForcedPageState | null {
+  const requested = (query as { state?: unknown } | null | undefined)?.state;
+  return typeof requested === "string" && FORCED_PAGE_STATES.has(requested)
+    ? requested as ForcedPageState
+    : null;
+}
+
+/** How long a waiting page tells the person to expect before it asks again. */
+const AUTO_REFRESH_MS = 30_000;
+
+/** Loading and failure are the two states where there is nothing to read, so a
+ * forced one is rendered as asked rather than read from the ledger. Refreshing
+ * and waiting keep showing what is already known, because the person is meant
+ * to keep seeing it while the next answer arrives. */
+async function overviewPageState(
+  reads: OperatorConsoleReadPort,
+  forced: ForcedPageState | null,
+): Promise<ConsolePageState<OperatorOverview>> {
+  if (forced === "loading") return { kind: "loading" };
+  if (forced === "error") return { kind: "failed" };
+  const state = await loadPageState(() => reads.overview());
+  if (state.kind !== "ready") return state;
+  if (forced === "refreshing") return { ...state, refreshing: true };
+  if (forced === "waiting") {
+    return { kind: "waiting", value: state.value, waitingFor: "round_result", refreshAfterMs: AUTO_REFRESH_MS };
+  }
+  return state;
+}
+
+async function todoPageState(
+  reads: OperatorConsoleReadPort,
+  todoId: string,
+  forced: ForcedPageState | null,
+): Promise<ConsolePageState<OperatorTodoResult>> {
+  if (forced === "loading") return { kind: "loading" };
+  if (forced === "error") return { kind: "failed" };
+  const state = await loadPageState(() => reads.todo(todoId));
+  if (state.kind !== "ready") return state;
+  if (forced === "refreshing") return { ...state, refreshing: true };
+  // A todo that no longer waits for anything keeps its own empty state: it is
+  // not waiting for a confirmation that this page knows nothing about.
+  if (forced === "waiting" && state.value.kind === "pending") {
+    return { kind: "waiting", value: state.value, waitingFor: "notion_confirmation", refreshAfterMs: AUTO_REFRESH_MS };
+  }
+  return state;
+}
+
+/** A round that has not produced a result yet is the waiting state: the answer
+ * is not late, it does not exist yet, and the page says which result it is
+ * waiting for instead of leaving the person to guess. */
+async function detailPageState(
+  reads: OperatorConsoleReadPort,
+  subject: Pick<OperatorSubjectRef, "kind" | "id">,
+  forced: ForcedPageState | null,
+): Promise<ConsolePageState<OperatorDetailResult>> {
+  if (forced === "loading") return { kind: "loading" };
+  if (forced === "error") return { kind: "failed" };
+  const state = await loadPageState(() => reads.detail(subject));
+  if (state.kind !== "ready") return state;
+  if (forced === "refreshing") return { ...state, refreshing: true };
+  const pendingResult = state.value.kind === "available" && state.value.detail.currentRound.result === null;
+  if (state.value.kind === "available" && (forced === "waiting" || pendingResult)) {
+    return { kind: "waiting", value: state.value, waitingFor: "round_result", refreshAfterMs: AUTO_REFRESH_MS };
+  }
+  return state;
+}
+
+/**
  * Registers the access gate, overview, todo and detail HTTP surfaces. The gate
  * must run before every data route and before the application shell is sent;
  * denied requests receive only the access screen and never call another port.
@@ -922,14 +1000,14 @@ export async function registerOperatorConsoleRoutes(
 
   app.get("/operator/overview", async (request, reply) => {
     if (!(await allow(request, reply))) return reply;
-    const state = await loadPageState(() => dependencies.reads.overview());
+    const state = await overviewPageState(dependencies.reads, forcedPageState(request.query));
     return sendHtml(reply, renderOperatorOverviewPage(state, Date.now()));
   });
 
   app.get("/operator/todos/:todoId", async (request, reply) => {
     if (!(await allow(request, reply))) return reply;
     const { todoId } = request.params as { todoId: string };
-    const state = await loadPageState(() => dependencies.reads.todo(todoId));
+    const state = await todoPageState(dependencies.reads, todoId, forcedPageState(request.query));
     return sendHtml(reply, renderOperatorTodoPage(state));
   });
 
@@ -957,6 +1035,17 @@ export async function registerOperatorConsoleRoutes(
       }));
     }
     const result = await dependencies.commands.submit(parsed.submission);
+    // A write still waiting for Notion is the waiting state, not a success and
+    // not a failure: the person is told what has not been confirmed yet and
+    // that it becomes visible here once it is.
+    if (result.kind === "submitting") {
+      return sendHtml(reply, renderOperatorTodoPage({
+        kind: "waiting",
+        value: state.value,
+        waitingFor: "notion_confirmation",
+        refreshAfterMs: result.retryAfterMs,
+      }, { submittedValue: submittedValue(todo, body) }));
+    }
     return sendHtml(reply, renderOperatorTodoPage(state, {
       submission: result,
       submittedValue: submittedValue(todo, body),
@@ -968,10 +1057,10 @@ export async function registerOperatorConsoleRoutes(
     const { subjectKind, subjectId } = request.params as { subjectKind: string; subjectId: string };
     const requested = Number((request.query as { round?: string }).round);
     const selectedRound = Number.isInteger(requested) && requested > 0 ? requested : undefined;
-    const state = await loadPageState(() => dependencies.reads.detail({
+    const state = await detailPageState(dependencies.reads, {
       kind: subjectKind as OperatorSubjectKind,
       id: subjectId,
-    }));
+    }, forcedPageState(request.query));
     return sendHtml(reply, renderOperatorDetailPage(state, selectedRound));
   });
 }
