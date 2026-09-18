@@ -137,6 +137,30 @@ class FakeNotion {
   }
 }
 
+const SOLUTION_BODY = JSON.stringify({
+  approach: {
+    summary: "在现有内网控制台里补齐，不另起一套。",
+    alternatives: [{ option: "另起一个前端单页应用", reason: "换一套框架只是把同样的内容多搬一次。" }],
+  },
+  stackChanges: [],
+  openDecisions: [{ question: "历史记录保留多久", recommendation: "先不设上限" }],
+  qualityGates: [],
+  interface: {
+    kind: "web",
+    direction: {
+      summary: "深色底、字偏大、一屏一件事。",
+      alternatives: [{ option: "浅色密集表格", reason: "每一行都一样重，最该被看见的反而看不见。" }],
+    },
+    pages: [{ name: "任务看板", purpose: "看今天要做什么" }],
+  },
+});
+
+const PROTOTYPE_BODY = JSON.stringify({
+  pages: [{ file: "pages/board.html", scenarios: ["R-1-01"], visible: [{ role: "button", text: "新建任务" }] }],
+  described: [{ file: "pages/board.html", name: "任务看板", purpose: "看今天要做什么" }],
+  concerns: [],
+});
+
 describe("NotionRequirementPageDelivery", () => {
   let client: ReturnType<typeof createClient>;
   let store: RequirementStore;
@@ -199,7 +223,7 @@ describe("NotionRequirementPageDelivery", () => {
       .toEqual({ select: { name: schema.options.requirementStatus[1] } });
 
     const sections = (await client.execute("SELECT section FROM requirement_notion_sections ORDER BY section")).rows;
-    expect(sections.map((row) => row.section)).toEqual(["callout", "clarify", "delivery", "prd"]);
+    expect(sections.map((row) => row.section)).toEqual(["callout", "clarify", "delivery", "prd", "solution"]);
   });
 
   it("answers a round in the block it was asked in, and adds the next one after it", async () => {
@@ -278,9 +302,66 @@ describe("NotionRequirementPageDelivery", () => {
       "\u56de\u590d\u672c\u9875\u6700\u65b0\u4e00\u6761\u8bc4\u8bba\uff0c\u9009\u5b57\u6bcd\u5373\u53ef\u3002",
       "\u6f84\u6e05\u8bb0\u5f55",
       "PRD",
+      "\u65b9\u6848",
       "\u4ea4\u4ed8\u7ed3\u679c",
       "\u573a\u666f\u7531\u627f\u63a5\u5b83\u4eec\u7684 Epic \u9010\u6279\u9a8c\u6536\uff0c\u5168\u90e8\u901a\u8fc7\u540e\u8fd9\u6761\u9700\u6c42\u81ea\u52a8\u7ed3\u6848\u3002",
     ]);
+  });
+
+  it("shows the solution a person has to judge, and reads their tick back nowhere else", async () => {
+    await store.transition(REQUIREMENT_ID, "CLARIFY", "PRD_CONFIRM", "system", "run");
+    await store.transition(REQUIREMENT_ID, "PRD_CONFIRM", "SOLUTION", "system", "run");
+    await store.saveDraftSolution(REQUIREMENT_ID, SOLUTION_BODY, "run-solution");
+    await store.saveSolutionPrototype(REQUIREMENT_ID, 1, PROTOTYPE_BODY, "https://example.invalid/mr/7", "run-draw");
+    await projector.publish(REQUIREMENT_ID);
+    await replay();
+
+    const contents = fake.contents(PAGE_ID);
+    expect(contents).toContain("方案");
+    expect(contents).toContain("在现有内网控制台里补齐，不另起一套。");
+    expect(contents).toContain("另起一个前端单页应用：换一套框架只是把同样的内容多搬一次。");
+    expect(contents).toContain("深色底、字偏大、一屏一件事。");
+    // No dependency changes reads as a sentence, not as an empty heading.
+    expect(contents).toContain("这一版不新增、不升级、不移除任何依赖，全部用现有技术栈实现。");
+    expect(contents).toContain("原型已经画好并进了仓库，可以点开逐页看");
+    expect(contents).toContain("任务看板 · 看今天要做什么");
+    expect(contents).toContain("历史记录保留多久：我建议先不设上限");
+    expect(contents).toContain("上面「还没定的事」逐条勾完之后再勾这里：这一版方案和界面方向可以，按它往下拆");
+
+    // The page names screens, never files, and says what each one carries.
+    const fold = fake.visible(PAGE_ID).find((block) => block.type === "toggle")!;
+    expect(fake.contents(fold.id)).toEqual([
+      "承接场景：R-1-01",
+      "这页必须看得见：新建任务",
+      "空、加载中、出错、等人四个样子都画了，在原型里换一下地址栏末尾的 ?state= 就能逐个看。",
+    ]);
+
+    // Nothing moves on a republish, so a tick put on the page survives it.
+    const before = fake.visible(PAGE_ID).map((block) => block.id);
+    await projector.publish(REQUIREMENT_ID);
+    await replay();
+    expect(fake.visible(PAGE_ID).map((block) => block.id)).toEqual(before);
+  });
+
+  it("stops asking for a tick once the solution is confirmed", async () => {
+    await store.transition(REQUIREMENT_ID, "CLARIFY", "PRD_CONFIRM", "system", "run");
+    await store.transition(REQUIREMENT_ID, "PRD_CONFIRM", "SOLUTION", "system", "run");
+    await store.saveDraftSolution(REQUIREMENT_ID, SOLUTION_BODY, "run-solution");
+    await projector.publish(REQUIREMENT_ID);
+    await replay();
+    const headings = fake.visible(PAGE_ID).filter((block) => block.type === "heading_2").map((block) => block.id);
+
+    await store.confirmSolution(REQUIREMENT_ID, 1, "comment-1", "comment", "run-confirm");
+    await projector.publish(REQUIREMENT_ID);
+    await replay();
+
+    const contents = fake.contents(PAGE_ID);
+    expect(contents).toContain("这一版方案你已经确认过，不会再被改写。");
+    expect(contents).not.toContain("上面「还没定的事」逐条勾完之后再勾这里：这一版方案和界面方向可以，按它往下拆");
+    // Rewriting the section leaves every heading where it was: a comment a
+    // person left under one hangs off that block.
+    expect(fake.visible(PAGE_ID).filter((block) => block.type === "heading_2").map((block) => block.id))
+      .toEqual(headings);
   });
 
   it("creates the Epic page a decomposition asked for and records its real id", async () => {

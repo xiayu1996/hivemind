@@ -6,8 +6,10 @@ import {
   lintDoDLanguage,
   parseDoD,
   refusableStatements,
+  renderMissingVisible,
   renderDoDLanguageFindings,
   scanScenarioCoverage,
+  scenariosMissingVisible,
   scenarioTitle,
   seedOf,
 } from "./dod.js";
@@ -153,5 +155,41 @@ depends_on: []
   it("refuses a title longer than a line a person skims", () => {
     const long = chinese.replace("title: 用券后按折后价算税", `title: ${"很长".repeat(11)}`);
     expect(() => parseDoD(long)).toThrow(DoDValidationError);
+  });
+});
+
+describe("what a screen scenario says a person will see", () => {
+  // A screen scenario already owes examples and a source, so the fixture has
+  // to satisfy those before the missing declaration is what fails.
+  const screen = [
+    "    layers: [ui]",
+    "    source: the stories table",
+    "    examples:",
+    "      - kind: shows",
+    "        text: 运行控制台",
+    "      - kind: excludes",
+    "        text: 还没有任何任务",
+  ].join("\n");
+  const withScreen = (extra = ""): string =>
+    yaml.replace("    layers: [unit, integration]", `${screen}${extra}`);
+
+  it("asks a scenario a browser settles for the roles and text it will show", () => {
+    expect(scenariosMissingVisible(parseDoD(withScreen()))).toEqual(["S-EPIC12-03-a"]);
+  });
+
+  it("asks nothing of a scenario a test runner settles", () => {
+    expect(scenariosMissingVisible(parseDoD(yaml))).toEqual([]);
+  });
+
+  it("is satisfied once the scenario declares them", () => {
+    const declared = withScreen("\n    visible:\n      - role: heading\n        text: 运行控制台");
+    const dod = parseDoD(declared);
+
+    expect(dod.scenarios[0]?.visible).toEqual([{ role: "heading", text: "运行控制台" }]);
+    expect(scenariosMissingVisible(dod)).toEqual([]);
+  });
+
+  it("names every scenario still missing them, so one round closes them all", () => {
+    expect(renderMissingVisible(["S-A-01-a", "S-A-01-b"])).toContain("- S-A-01-a\n- S-A-01-b");
   });
 });

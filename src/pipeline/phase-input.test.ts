@@ -124,6 +124,7 @@ describe("interface contract", () => {
       { name: "space.gutter", type: "dimension", value: "16px" },
     ],
     components: "# 组件清单\n\n卡片：一张任务的摘要。",
+    design: "# 为什么长这样\n\n值班的人站着看这块屏，所以字号偏大。",
     pages: [{ file: "pages/board.html", name: "任务看板", purpose: "看到哪些卡在等自己" }],
   };
 

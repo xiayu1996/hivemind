@@ -5,6 +5,10 @@ import { testAgentSpec } from "../runner/agent-spec.testing.js";
 import type { PiRunner, PromptResult } from "../runner/types.js";
 import { PiPmPort } from "./pi-pm-port.js";
 
+/** A visual direction that satisfies the contract, so a test only has to
+ * break the one thing it is about. */
+const DIRECTION = { summary: "深色底、字大、一屏一件事，给值班的人走着看。", alternatives: [{ option: "浅色密集表格", reason: "值班的人不会坐下来逐行读。" }] };
+
 const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, reasoning: 0, costUsd: 0 };
 const SPEC = await testAgentSpec({ purpose: "product_manager" });
 const REQUIREMENT_ID = "R-abc123def456";
@@ -181,7 +185,7 @@ describe("PiPmPort", () => {
         stackChanges: [],
         openDecisions: [],
         qualityGates: [],
-        interface: { kind: "web", pages: [{ name: "任务列表", purpose: "让人一眼看到哪些任务在等自己" }] },
+        interface: { kind: "web", direction: DIRECTION, pages: [{ name: "任务列表", purpose: "让人一眼看到哪些任务在等自己" }] },
       },
     });
 

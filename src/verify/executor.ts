@@ -12,6 +12,8 @@ import type { PiRunner, RpcEvent, TokenUsage } from "../runner/types.js";
 import { promptWithContinueRetry } from "../runner/continue-retry.js";
 import { jsonPayloadCandidates } from "../util/json-payload.js";
 import { browserLaneEnv } from "./browser-config.js";
+import type { VisibleRequirement } from "./aria-snapshot.js";
+import { checkStructuralLayer } from "./structural-layer.js";
 
 export { EVIDENCE_DIR_ENV } from "../guard/policy.js";
 
@@ -22,6 +24,7 @@ const scenarioSchema = z.object({
   detail: z.string().optional(),
   url: z.string().optional(),
   screenshots: z.array(z.string()).optional(),
+  snapshots: z.array(z.string()).optional(),
 }).strict();
 
 const verifierReplySchema = z.object({
@@ -41,6 +44,12 @@ export interface BlindVerifyInput {
   declaredScenarioIds: string[];
   /** Scenarios that must be reached in the browser, each with its own screenshot. */
   screenScenarioIds?: string[];
+  /**
+   * Per scenario, the roles and text SHAPE said a person would see, from the
+   * frozen DoD. Scenarios absent from the map are not judged structurally,
+   * which is every scenario of a Story frozen before SHAPE produced them.
+   */
+  visibleRequirements?: ReadonlyMap<string, readonly VisibleRequirement[]>;
   allowedHosts: string[];
   /** From verify.chromiumSandbox; undefined keeps the sandbox. */
   chromiumSandbox?: boolean;
@@ -90,6 +99,10 @@ export interface TreePinPort {
 export interface BlindVerifyResult {
   record: VerifyRecord;
   screenshots: Array<{ scenarioId: string; path: string }>;
+  /** The page each scenario reported reaching. The contract layer opens these
+   * again while the application is still up, so it judges the screen a person
+   * would see rather than a route somebody guessed. */
+  pages: Array<{ scenarioId: string; url: string }>;
   /** Why each non-passing scenario did not pass, in the verifier's words. */
   reasons: Array<{ scenarioId: string; reason: string }>;
   /** Reasons the judge said were about the box although the pattern table did
@@ -232,6 +245,7 @@ function toVerdictDocument(value: z.infer<typeof verifierReplySchema>): VerdictD
       ...(scenario.detail === undefined ? {} : { detail: scenario.detail }),
       ...(scenario.url === undefined ? {} : { url: scenario.url }),
       ...(scenario.screenshots === undefined ? {} : { screenshots: scenario.screenshots }),
+      ...(scenario.snapshots === undefined ? {} : { snapshots: scenario.snapshots }),
     })),
   };
 }
@@ -452,15 +466,34 @@ export class BlindVerifyExecutor {
     const refusedClaims = (validation?.errors ?? [])
       .map((error) => error.slice(0, error.indexOf(": ")))
       .filter((id) => declared.has(id));
+    // The structural layer (08 section 6): the page either carried the roles
+    // and text the scenario declared, or it did not. Read from the snapshots
+    // the round left behind, by code, because the round is what is on trial.
+    const structural = input.visibleRequirements
+      ? await checkStructuralLayer({
+          root: input.evidencePath,
+          subjects: (document?.scenarios ?? [])
+            .filter((scenario) => scenario.status === "passed" && input.visibleRequirements!.has(scenario.id))
+            .map((scenario) => ({
+              id: scenario.id,
+              snapshots: scenario.snapshots ?? [],
+              required: input.visibleRequirements!.get(scenario.id) ?? [],
+            })),
+        })
+      : [];
     const failedScenarios = [...new Set([
       ...(document?.scenarios.filter((scenario) => scenario.status !== "passed").map((scenario) => scenario.id)
         ?? [...declared]),
       ...observedFailures,
       ...refusedClaims,
+      ...structural.map((finding) => finding.id),
     ])].toSorted();
-    const scenarioReasons = document?.scenarios
-      .filter((scenario) => scenario.status !== "passed" && scenario.reason)
-      .map((scenario) => ({ scenarioId: scenario.id, reason: scenario.reason! })) ?? [];
+    const scenarioReasons = [
+      ...document?.scenarios
+        .filter((scenario) => scenario.status !== "passed" && scenario.reason)
+        .map((scenario) => ({ scenarioId: scenario.id, reason: scenario.reason! })) ?? [],
+      ...structural.map((finding) => ({ scenarioId: finding.id, reason: finding.reason })),
+    ];
     const environmentReasons = [
       ...scenarioReasons,
       ...(validation?.errors ?? []).map((error) => ({
@@ -500,6 +533,8 @@ export class BlindVerifyExecutor {
     await this.records.insert(record);
     const screenshots = document?.scenarios.flatMap((scenario) =>
       (scenario.screenshots ?? []).map((path) => ({ scenarioId: scenario.id, path }))) ?? [];
-    return { record, screenshots, reasons: scenarioReasons, environmentalReasons: judged.environmental, validationErrors, treeChanged: !pin.matches, runnerFailure: runnerError, events, usage, messages };
+    const pages = document?.scenarios.flatMap((scenario) =>
+      scenario.url ? [{ scenarioId: scenario.id, url: scenario.url }] : []) ?? [];
+    return { record, screenshots, pages, reasons: scenarioReasons, environmentalReasons: judged.environmental, validationErrors, treeChanged: !pin.matches, runnerFailure: runnerError, events, usage, messages };
   }
 }

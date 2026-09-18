@@ -44,13 +44,33 @@ export interface InterfacePage {
 }
 
 /**
+ * Which way the screens look, and which ways they were not made to look.
+ *
+ * It is here rather than in the drawing because it is a repository-level
+ * decision made once: the token table and the reason layer are reused by every
+ * later requirement, so the first requirement with screens is choosing the
+ * style for all of them (design 08 section 3.3). The alternatives are what
+ * makes it a choice rather than a default -- an unconstrained model converges
+ * on the same system font, the same violet gradient and the same grid of
+ * identical rounded cards, which is not wrong so much as nobody's decision.
+ */
+export interface VisualDirection {
+  /** The direction taken, in one paragraph, for the person who approves it. */
+  summary: string;
+  /** The directions turned down, and why. A repository that already has a
+   * contract says here that it is keeping it, and what it did not start. */
+  alternatives: readonly { option: string; reason: string }[];
+}
+
+/**
  * Present when the requirement puts something on a screen. The contract itself
  * (tokens, component inventory, runnable page prototypes) lands in the
  * repository and is written by the next slice; what is here is the shape a
- * person approves: which platform, and which pages.
+ * person approves: which platform, which pages, and which way they look.
  */
 export interface InterfacePlan {
   kind: InterfaceKind;
+  direction: VisualDirection;
   pages: readonly InterfacePage[];
 }
 
@@ -66,7 +86,9 @@ export interface SolutionCandidate {
   stackChanges?: readonly StackChange[];
   openDecisions?: readonly OpenDecision[];
   qualityGates?: readonly QualityGate[];
-  interface?: InterfacePlan | null;
+  /** The direction may be absent here and is refused with a reason, rather than
+   * failing to parse: a draft that forgot it is told what it forgot. */
+  interface?: (Omit<InterfacePlan, "direction"> & { direction?: VisualDirection }) | null;
 }
 
 export interface AcceptedSolution {
@@ -87,6 +109,34 @@ const INTERFACE_KINDS = new Set<string>(["web", "mobile", "desktop"]);
 
 function humanReasons(field: string, text: string): string[] {
   return lintHumanSentence(field, text).map((finding) => finding.what);
+}
+
+/**
+ * What is wrong with the visual direction, if anything.
+ *
+ * A direction with no alternatives is not a direction: it reads the same
+ * whether the agent weighed three and picked one or drew the first thing it
+ * thought of, and the person approving has nothing to approve against.
+ */
+function directionReasons(direction: VisualDirection | undefined): string[] {
+  const reasons: string[] = [];
+  const summary = direction?.summary?.trim() ?? "";
+  const alternatives = (direction?.alternatives ?? []).map((entry) => ({
+    option: entry.option.trim(),
+    reason: entry.reason.trim(),
+  }));
+  if (summary === "") reasons.push("an interface must say which way its screens look");
+  else reasons.push(...humanReasons("visual direction", summary));
+  if (alternatives.length === 0) {
+    reasons.push("a visual direction must name the directions it did not take");
+  }
+  for (const [index, entry] of alternatives.entries()) {
+    const label = `visual direction alternative ${index + 1}`;
+    if (entry.option === "") reasons.push(`${label} must name the direction considered`);
+    if (entry.reason === "") reasons.push(`${label} must say why it was turned down`);
+    else reasons.push(...humanReasons(`${label} reason`, entry.reason));
+  }
+  return reasons;
 }
 
 /**
@@ -165,6 +215,7 @@ export function evaluateSolution(candidate: SolutionCandidate): SolutionResult {
 
   if (plan !== null) {
     if (!INTERFACE_KINDS.has(plan.kind)) reasons.push("an interface must be web, mobile or desktop");
+    reasons.push(...directionReasons(plan.direction));
     if (plan.pages.length === 0) reasons.push("an interface must list the pages it is made of");
     for (const [index, page] of plan.pages.entries()) {
       const label = `page ${index + 1}`;
@@ -190,6 +241,13 @@ export function evaluateSolution(candidate: SolutionCandidate): SolutionResult {
     qualityGates,
     interface: plan === null ? null : {
       kind: plan.kind,
+      direction: {
+        summary: plan.direction?.summary.trim() ?? "",
+        alternatives: (plan.direction?.alternatives ?? []).map((entry) => ({
+          option: entry.option.trim(),
+          reason: entry.reason.trim(),
+        })),
+      },
       pages: plan.pages.map((page) => ({ name: page.name.trim(), purpose: page.purpose.trim() })),
     },
   };

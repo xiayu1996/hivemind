@@ -237,6 +237,42 @@ describe("the repository's own checks", () => {
     expect(collected.changedProtectedPaths).toEqual(["src/generated/api.ts"]);
   });
 
+  it("refuses a card that decided for every other card what the repository is built with", async () => {
+    const adding = async (args: readonly string[]): Promise<string> => {
+      const command = args.join(" ");
+      if (command.startsWith("diff --name-only")) return "src/console/data.ts\npackage.json\n";
+      return trespassing(args);
+    };
+    const collected = await collectCodeExitFacts({
+      git: { run: adding },
+      readWorktreeFile: async () => "",
+      runCheck: async () => ({ passed: true, detail: "" }),
+      baseRef: "main",
+      dodScenarioIds: [],
+      projectChecks: [],
+      dependencyManifests: ["package.json", "go.mod"],
+    });
+
+    expect(collected.changedDependencyPaths).toEqual(["package.json"]);
+    const verdict = evaluateCodeExit(facts({ changedDependencyPaths: ["package.json"] }));
+    expect(verdict.passed).toBe(false);
+    expect(verdict.findings[0]).toContain("package.json");
+  });
+
+  it("says nothing about a manifest no card touched", async () => {
+    const collected = await collectCodeExitFacts({
+      git: { run: trespassing },
+      readWorktreeFile: async () => "",
+      runCheck: async () => ({ passed: true, detail: "" }),
+      baseRef: "main",
+      dodScenarioIds: [],
+      projectChecks: [],
+      dependencyManifests: ["package.json"],
+    });
+
+    expect(collected.changedDependencyPaths).toEqual([]);
+  });
+
   it("does not run a check the round's changes make irrelevant", async () => {
     const ran: string[] = [];
     const collected = await collectCodeExitFacts({

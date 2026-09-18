@@ -59,6 +59,14 @@ export const requirementSolutions = sqliteTable("requirement_solutions", {
   confirmedAt: ms("confirmed_at"),
 }, (t) => [primaryKey({ columns: [t.requirementId, t.revision] })]);
 
+export const requirementPrototypes = sqliteTable("requirement_prototypes", {
+  requirementId: text("requirement_id").notNull(),
+  revision: integer("revision").notNull(),
+  body: text("body").notNull(),
+  mrUrl: text("mr_url"),
+  createdAt: ms("created_at").notNull(),
+}, (t) => [primaryKey({ columns: [t.requirementId, t.revision] })]);
+
 export const requirementAcceptanceItems = sqliteTable("requirement_acceptance_items", {
   requirementId: text("requirement_id").notNull(),
   itemId: text("item_id").notNull(),
@@ -272,6 +280,7 @@ export const storySpecs = sqliteTable("story_specs", {
   // oxlint-disable-next-line unicorn/no-thenable -- Given/When/Then is the external DoD contract.
   then: text("then_"),
   layers: text("layers"),
+  visibleJson: text("visible_json"),
   notionDetailHash: text("notion_detail_hash"),
   status: text("status").notNull(),
   notionBlockId: text("notion_block_id").unique(),

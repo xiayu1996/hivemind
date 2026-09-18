@@ -99,6 +99,7 @@ import { processGitCommand } from "../src/vcs/story-delivery.js";
 import { checkoutKey, checkoutPath, ensureCheckout, processRemoteGit, remoteDefaultBranch } from "../src/vcs/repository-checkout.js";
 import { RepositoryRegistry } from "../src/vcs/repository-registry.js";
 import { planDispatchAcrossRepositories } from "../src/orchestrator/repository-dispatch.js";
+import { readInterfaceContract } from "../src/pipeline/interface-contract.js";
 import { runProjectCheck } from "../src/vcs/project-check-runner.js";
 import { recheckEpicHeads } from "../src/orchestrator/epic-head-recheck.js";
 import { unrecoveredHeadFailures } from "../src/orchestrator/epic-head-failure.js";
@@ -1030,6 +1031,12 @@ async function main(): Promise<void> {
       const plan = planDispatchAcrossRepositories(await Promise.all(slugs.map(async (slug) => ({
         slug,
         hotspotPaths: (await configFor(slug)).get("schedule.hotspotPaths"),
+        // Read off the checkout, which the cycle refreshed to the default
+        // branch: until a contract is on the branch, the first card is the one
+        // that puts it there and the rest would each invent their own.
+        hasInterfaceContract: (await readInterfaceContract(
+          join(checkoutOf(slug), (await configFor(slug)).get("prototype.root")),
+        )).kind === "present",
         stories: rows.filter((row) => String(row.repo) === slug && !(
           String(row.state) === "MERGE" && headFailures.has(String(row.epic_id ?? ""))
         )).map((row) => ({

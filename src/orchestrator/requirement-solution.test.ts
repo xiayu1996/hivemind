@@ -7,6 +7,10 @@ import {
   type SolutionCandidate,
 } from "./requirement-solution.js";
 
+/** A visual direction that satisfies the contract, so a test only has to
+ * break the one thing it is about. */
+const DIRECTION = { summary: "深色底、字大、一屏一件事，给值班的人走着看。", alternatives: [{ option: "浅色密集表格", reason: "值班的人不会坐下来逐行读。" }] };
+
 function solution(overrides: Partial<SolutionCandidate> = {}): SolutionCandidate {
   return {
     approach: {
@@ -84,13 +88,47 @@ describe("evaluateSolution", () => {
   });
 
   it("refuses an interface with no pages, because the pages are what the split is cut along", () => {
-    const result = evaluateSolution(solution({ interface: { kind: "web", pages: [] } }));
+    const result = evaluateSolution(solution({ interface: { kind: "web", direction: DIRECTION, pages: [] } }));
     expect(result.kind === "rejected" && result.reasons).toContain("an interface must list the pages it is made of");
+  });
+
+  it("refuses an interface that never says which way its screens look", () => {
+    const result = evaluateSolution(solution({
+      interface: { kind: "web", pages: [{ name: "任务列表", purpose: "让人一眼看到哪些任务在等自己" }] },
+    }));
+
+    expect(result.kind === "rejected" && result.reasons).toContain("an interface must say which way its screens look");
+  });
+
+  it("refuses a direction with nothing it turned down, because that is a default and not a choice", () => {
+    const result = evaluateSolution(solution({
+      interface: {
+        kind: "web",
+        direction: { summary: "深色底、字大、一屏一件事。", alternatives: [] },
+        pages: [{ name: "任务列表", purpose: "让人一眼看到哪些任务在等自己" }],
+      },
+    }));
+
+    expect(result.kind === "rejected" && result.reasons).toContain(
+      "a visual direction must name the directions it did not take",
+    );
+  });
+
+  it("holds the direction a person reads to their own language", () => {
+    const result = evaluateSolution(solution({
+      interface: {
+        kind: "web",
+        direction: { summary: "A dark, dense dashboard.", alternatives: [{ option: "浅色", reason: "值班的人不坐下来读。" }] },
+        pages: [{ name: "任务列表", purpose: "让人一眼看到哪些任务在等自己" }],
+      },
+    }));
+
+    expect(result.kind === "rejected" && result.reasons.join(" ")).toContain("not written in Chinese");
   });
 
   it("refuses a platform this installation cannot show works", () => {
     const result = evaluateSolution(solution({
-      interface: { kind: "mobile", pages: [{ name: "任务列表", purpose: "让人一眼看到哪些任务在等自己" }] },
+      interface: { kind: "mobile", direction: DIRECTION, pages: [{ name: "任务列表", purpose: "让人一眼看到哪些任务在等自己" }] },
     }));
 
     expect(result.kind === "rejected" && result.reasons).toContain(
@@ -117,7 +155,7 @@ describe("solutionNeedsApproval", () => {
       openDecisions: [{ question: "手机优先还是电脑优先？", recommendation: "先做手机，电脑用同一套页面。" }],
     }));
     const withInterface = accepted(solution({
-      interface: { kind: "web", pages: [{ name: "任务列表", purpose: "让人一眼看到哪些任务在等自己" }] },
+      interface: { kind: "web", direction: DIRECTION, pages: [{ name: "任务列表", purpose: "让人一眼看到哪些任务在等自己" }] },
     }));
 
     expect(solutionNeedsApproval(withStack)).toBe(true);

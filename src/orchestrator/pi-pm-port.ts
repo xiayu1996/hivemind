@@ -55,6 +55,10 @@ const solutionSchema = z.object({
   }).strict()).optional(),
   interface: z.object({
     kind: z.enum(["web", "mobile", "desktop"]),
+    direction: z.object({
+      summary: z.string(),
+      alternatives: z.array(z.object({ option: z.string(), reason: z.string() }).strict()),
+    }).strict().optional(),
     pages: z.array(z.object({ name: z.string(), purpose: z.string() }).strict()),
   }).strict().nullable().optional(),
 }).strict();

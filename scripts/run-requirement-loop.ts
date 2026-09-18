@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, stat } from "node:fs/promises";
 import { hostname } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +13,7 @@ import {
   REQUIREMENT_OUTBOX_OPERATIONS,
 } from "../src/notion/requirement-page-delivery.js";
 import { RequirementPageProjector } from "../src/notion/requirement-projection.js";
-import { approvalJudgeSetup, describeJudgeSetup, judgeConfigFrom } from "../src/judge/settings.js";
+import { approvalJudgeSetup, describeJudgeSetup, judgeConfigFrom, usabilityJudgeSetup } from "../src/judge/settings.js";
 import { NotionRequirementInputSync } from "../src/notion/requirement-input-sync.js";
 import { ingestRequirements } from "../src/notion/requirement-intake.js";
 import { NotionGatewayCommentSource, createNotionHttpTransport } from "../src/notion/sdk-adapters.js";
@@ -25,6 +25,13 @@ import { PiPmPort } from "../src/orchestrator/pi-pm-port.js";
 import { PrdRunner } from "../src/orchestrator/prd-runner.js";
 import { RequirementDecomposer } from "../src/orchestrator/requirement-decompose.js";
 import { SolutionRunner } from "../src/orchestrator/solution-runner.js";
+import { PiPrototypePort } from "../src/orchestrator/pi-prototype-port.js";
+import { PrototypeRunner } from "../src/orchestrator/prototype-runner.js";
+import { GitPrototypeDelivery, prototypeBranch } from "../src/vcs/prototype-delivery.js";
+import { playwrightPrototypeInspector } from "../src/verify/prototype-inspector.js";
+import { checkoutPath } from "../src/vcs/repository-checkout.js";
+import { createWorktree, locateWorktree, worktreeLayout } from "../src/vcs/worktree.js";
+import { discoverMRPort } from "../src/vcs/mr/adapters.js";
 import { RequirementStore } from "../src/orchestrator/requirement-store.js";
 import { openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
@@ -38,6 +45,7 @@ import { CANONICAL_CAPTURE_ENV } from "../src/observability/capture-contract.js"
 import { needsApiKeyEnv, providerKeyEnv } from "../src/runner/provider-env.js";
 import { defaultModelCatalog } from "../src/runner/catalog.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
+import { defaultDesignLintBinary } from "../src/verify/design-lint-binary.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -156,7 +164,97 @@ async function main(): Promise<void> {
   });
   const draftAttempts = config.get("requirement.maxDraftAttempts");
   const prd = new PrdRunner(store, pm, projector, draftAttempts);
-  const solution = new SolutionRunner(store, pm, projector, draftAttempts);
+  // The drawing session is the one product-manager phase that writes, so it
+  // needs a tree of its own: a worktree of the target repository on a branch
+  // named after the requirement, fenced to the contract directory, reused
+  // across redraws so the second attempt starts from what the first left.
+  const prototypeLayout = worktreeLayout(workRoot);
+  // The three semantic checklist items. Absent on a host without the judge
+  // credential, and then the mechanical four are the whole checklist.
+  const usabilityJudge = usabilityJudgeSetup(judgeConfigFrom(config), stored);
+  const prototypeRunner = new PrototypeRunner(
+    store,
+    {
+      run: async (input) => {
+        const repository = await registry.get(input.repository);
+        if (!repository) throw new Error(`repository ${input.repository} is not registered`);
+        const branch = prototypeBranch(input.requirementId);
+        const existing = locateWorktree("prototype", input.requirementId, prototypeLayout);
+        const worktreePath = (await stat(existing.worktreePath).then(() => true, () => false))
+          ? existing.worktreePath
+          : (await createWorktree({
+            repositoryPath: checkoutPath(workRoot, repository.slug),
+            repositoryId: "prototype",
+            cardId: input.requirementId,
+            branch,
+            startPoint: `origin/${repository.defaultBranch}`,
+          }, prototypeLayout)).worktreePath;
+        const drawingSpec = await resolveAgentSpec(
+          { config, policy },
+          "prototype",
+          (await policy.providersFor("prototype"))[0]!,
+        );
+        return new PiPrototypePort({
+          binary: piBinary,
+          spec: drawingSpec,
+          promptRoot: resolve(ROOT, "prompts"),
+          worktreePath,
+          contractRoot: input.contractRoot,
+          auditPath: join(evidenceRoot, `${input.requirementId}-prototype-audit.jsonl`),
+          maxRounds: config.get("prototype.maxRounds"),
+          inspector: playwrightPrototypeInspector,
+          extensions: [
+            resolve(ROOT, "extensions", "hive-guard.ts"),
+            resolve(ROOT, "extensions", "canonical-capture.ts"),
+          ],
+          env: {
+            ...providerEnv,
+            [CANONICAL_CAPTURE_ENV]: join(evidenceRoot, "prototype-requests.jsonl"),
+          },
+          designLint: { binary: defaultDesignLintBinary() },
+          ...(usabilityJudge.settings ? { usability: usabilityJudge.settings } : {}),
+          recordFriction: async (row) => { await store.recordFriction(row); },
+          recordUsage: async ({ usage, spec: used }) => {
+            await ledger.record({
+              runId: `pm-prototype-${Date.now()}`,
+              purpose: "prototype",
+              tier: used.tier,
+              provider: used.model.provider,
+              modelId: used.model.id,
+              hostId: hostname(),
+              isSubscription: !used.metered,
+            }, usage);
+          },
+        }).run(input);
+      },
+    },
+    {
+      publish: async (input) => {
+        const requirement = await store.getRequirement(input.requirementId);
+        const repository = requirement.repo ? await registry.get(requirement.repo) : null;
+        if (!repository) return null;
+        const worktreePath = locateWorktree("prototype", input.requirementId, prototypeLayout).worktreePath;
+        return new GitPrototypeDelivery(await discoverMRPort(), {
+          worktreePath,
+          contractRoot: (await ConfigStore.load(handle.client, { repository: repository.slug }))
+            .get("prototype.root"),
+          repository: repository.slug,
+          targetBranch: repository.defaultBranch,
+        }).publish(input);
+      },
+    },
+    projector,
+  );
+  const solution = new SolutionRunner(store, pm, projector, {
+    attempts: draftAttempts,
+    prototype: {
+      runner: prototypeRunner,
+      // Per repository: a repository that keeps its contract elsewhere says so
+      // in its own scope, and this layer serves every registered one.
+      contractRoot: async (repository) =>
+        (await ConfigStore.load(handle.client, { repository })).get("prototype.root"),
+    },
+  });
   const decomposer = new RequirementDecomposer(handle.client, store, pm, projector);
   const acceptance = new AcceptanceChecklist(handle.client, store, projector);
   const judged = approvalJudgeSetup(judgeConfigFrom(config), stored);
@@ -187,6 +285,10 @@ async function main(): Promise<void> {
         console.log(`${requirementId} status drag: ${property.intent}${property.applied ? "" : " (not applied)"}`);
       }
       const state = String(row.state);
+      if (state === "SOLUTION" && row.stop_reason === null) {
+        const ticked = await humanInput.pollContent(requirementId);
+        if (ticked.confirmed) console.log(`${requirementId} solution confirmed by tick`);
+      }
       // A stopped requirement, whatever its state, is waiting for a comment.
       if (state === "PRD_CONFIRM" || state === "SOLUTION" || state === "ACCEPTANCE" || row.stop_reason !== null) {
         const commented = await humanInput.pollComments(requirementId);

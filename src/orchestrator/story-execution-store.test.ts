@@ -1,6 +1,7 @@
 import { createClient } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { migrate } from "../persistence/migrate.js";
+import { parseDoD } from "../pipeline/dod.js";
 import { assemblePhasePrompt } from "../pipeline/phase-input.js";
 import { StoryExecutionStore } from "./story-execution-store.js";
 
@@ -579,6 +580,67 @@ describe("StoryExecutionStore phase input", () => {
     await store.failPhase("run-code-3", "OAuth refresh failed for openai-codex: token refresh failed (401)");
     const afterwards = await store.buildPhaseInput("S-EPIC1-01", "CODE", 4);
     expect(afterwards.previousRejections).toEqual([]);
+    client.close();
+  });
+});
+
+describe("the frozen contract keeps what a person must see", () => {
+  const dod = [
+    "story_id: S-EPIC1-01",
+    "design_summary: 让人在一页上看清这次执行做了什么。",
+    "scenarios:",
+    "  - id: S-EPIC1-01-a",
+    "    given: 有一次已经跑完的执行",
+    "    when: 打开这一页",
+    "    then: 能看到这次执行的标题",
+    "    layers: [ui]",
+    "    source: 执行记录表",
+    "    examples:",
+    "      - kind: shows",
+    "        text: 运行控制台",
+    "      - kind: excludes",
+    "        text: 还没有任何记录",
+    "    visible:",
+    "      - role: heading",
+    "        text: 运行控制台",
+    "  - id: S-EPIC1-01-b",
+    "    given: 有一次已经跑完的执行",
+    "    when: 读取它的结论",
+    "    then: 结论与记录一致",
+    "    layers: [unit]",
+    "baseline:",
+    "  type: acceptance_test",
+    "acceptance_criteria:",
+    "  - text: 这一页显示本次执行的标题",
+    "    scenarios: [S-EPIC1-01-a]",
+    "out_of_scope: []",
+    "relies_on: []",
+    "predicted_footprint: [src/console]",
+    "depends_on: []",
+  ].join("\n");
+
+  it("records the declaration on the screen scenario and leaves the others empty", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, () => 1_000);
+    await store.createStory({
+      id: "S-EPIC1-01",
+      notionPageId: "page-1",
+      title: "逐轮执行详情",
+      requirement: "人能看清一次执行做了什么。",
+      repo: "acme/widget",
+      branch: "story/epic1-01",
+    });
+
+    await store.freezeDefinitionOfDone("S-EPIC1-01", parseDoD(dod));
+
+    const rows = (await client.execute(
+      "SELECT spec_id, visible_json FROM story_specs WHERE story_id = 'S-EPIC1-01' ORDER BY seq",
+    )).rows;
+    expect(rows).toEqual([
+      { spec_id: "S-EPIC1-01-a", visible_json: '[{"role":"heading","text":"运行控制台"}]' },
+      { spec_id: "S-EPIC1-01-b", visible_json: null },
+    ]);
     client.close();
   });
 });

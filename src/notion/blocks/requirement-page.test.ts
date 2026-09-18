@@ -5,9 +5,12 @@ import {
   planRequirementPageUpdate,
   prdFrozenLine,
   prdLines,
+  solutionBlocks,
   type DesiredPrd,
   type DesiredRequirementPage,
+  type DesiredSolution,
   type RequirementPageSnapshot,
+  type RequirementSectionSnapshot,
 } from "./requirement-page.js";
 
 const PRD: DesiredPrd = {
@@ -24,6 +27,27 @@ const ROUND = {
   items: [{ question: "谁会用它？", options: ["A. 值班的人"], answer: "A", reading: "A（选了 A：值班的人）" }],
 };
 
+const SOLUTION: DesiredSolution = {
+  approach: { summary: "沿用现有服务端。", alternatives: [{ option: "另起一套", reason: "同样的内容多搬一次。" }] },
+  direction: null,
+  stackChanges: [],
+  qualityGates: [],
+  pages: [],
+  prototypeUrl: null,
+  concerns: [],
+  openDecisions: [],
+  confirmed: false,
+};
+
+/** A page showing exactly that solution, so a test shows only its own diff. */
+function solutionSection(solution: DesiredSolution): RequirementSectionSnapshot {
+  return {
+    anchorBlockId: "anchor-solution",
+    title: "方案",
+    blocks: solutionBlocks(solution).map((entry, index) => ({ id: `s${index}`, content: entry.line })),
+  };
+}
+
 /** A page that already matches `desired()`, so a test shows only its own diff. */
 function settledPage(overrides: Partial<RequirementPageSnapshot> = {}): RequirementPageSnapshot {
   return {
@@ -36,6 +60,7 @@ function settledPage(overrides: Partial<RequirementPageSnapshot> = {}): Requirem
         title: "PRD",
         blocks: prdLines(PRD).map((content, index) => ({ id: `p${index}`, content })),
       },
+      solution: { anchorBlockId: "anchor-solution", title: "方案", blocks: [] },
       delivery: {
         anchorBlockId: "anchor-delivery",
         title: "交付结果",
@@ -53,6 +78,7 @@ function desired(overrides: Partial<DesiredRequirementPage> = {}): DesiredRequir
     original: "我想随时知道现在在做什么。",
     clarify: [ROUND],
     prd: PRD,
+    solution: null,
     delivery: "场景由承接它们的 Epic 逐批验收。",
     ...overrides,
   };
@@ -142,6 +168,30 @@ describe("planRequirementPageUpdate", () => {
       },
     };
     expect(planRequirementPageUpdate(frozen, desired({ prd: { ...PRD, goal: "谁也不许改", frozen: true } }))).toEqual([]);
+  });
+
+  it("leaves a solution section that already says what the record says", () => {
+    const page = settledPage({ sections: { ...settledPage().sections, solution: solutionSection(SOLUTION) } });
+    expect(planRequirementPageUpdate(page, desired({ solution: SOLUTION }))).toEqual([]);
+  });
+
+  it("rewrites the solution as a whole when the draft changed, keeping the heading", () => {
+    // Every line of it comes from one record, so a section that differs
+    // anywhere is a section written from a draft that no longer exists.
+    const page = settledPage({ sections: { ...settledPage().sections, solution: solutionSection(SOLUTION) } });
+    const rewritten = { ...SOLUTION, approach: { ...SOLUTION.approach, summary: "改成另起一套。" } };
+
+    const operations = planRequirementPageUpdate(page, desired({ solution: rewritten }));
+
+    expect(operations.filter((operation) => operation.type === "archive_block"))
+      .toEqual(page.sections.solution!.blocks.map((block) => ({ type: "archive_block", blockId: block.id })));
+    expect(operations.at(-1)).toEqual({ type: "insert_solution", afterBlockId: "anchor-solution" });
+  });
+
+  it("leaves the heading empty until a solution has been drafted", () => {
+    // The heading is created with every other one, so a requirement still being
+    // clarified carries it; what goes under it only exists once there is a draft.
+    expect(planRequirementPageUpdate(settledPage(), desired({ solution: null }))).toEqual([]);
   });
 
   it("keeps the delivery line to one block and rewrites it in place", () => {

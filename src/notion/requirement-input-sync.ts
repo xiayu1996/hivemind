@@ -7,6 +7,8 @@ import type { RequirementStore } from "../orchestrator/requirement-store.js";
 import { floorToNotionMinute } from "./comment-ingest.js";
 import type { CommentIngestor } from "./comment-ingest.js";
 import type { NotionGateway } from "./gateway.js";
+import { solutionBlocks, solutionConfirmLine } from "./blocks/requirement-page.js";
+import { buildRequirementPage } from "./requirement-projection.js";
 import { interpretRequirementComment, interpretRequirementPropertyChange } from "./intent-interpreter.js";
 import schema from "./notion-schema.json" with { type: "json" };
 
@@ -36,6 +38,17 @@ export interface RequirementCommentPollResult {
 }
 
 const pageSchema = z.object({ properties: z.record(z.string(), z.unknown()) }).passthrough();
+const blockListSchema = z.object({
+  results: z.array(z.object({ id: z.string(), type: z.string() }).passthrough()),
+  has_more: z.boolean().default(false),
+  next_cursor: z.string().nullable().default(null),
+}).passthrough();
+const toDoSchema = z.object({
+  to_do: z.object({
+    checked: z.boolean(),
+    rich_text: z.array(z.object({ plain_text: z.string() }).passthrough()),
+  }).passthrough(),
+}).passthrough();
 const selectSchema = z.object({ select: z.object({ name: z.string() }).nullable() });
 
 function runId(requirementId: string): string {
@@ -186,6 +199,76 @@ export class NotionRequirementInputSync {
     }
 
     return result;
+  }
+
+  /**
+   * The boxes in the solution section. A tick is the third way a person
+   * approves a solution, beside a comment and a column, and it is the only one
+   * that can say which forks they read: the confirmation counts only once every
+   * open decision above it is ticked, which is what the box's own line says.
+   *
+   * An unticked box is the absence of a verdict, never a refusal -- that has to
+   * be said in words, and those words already reach the revision path.
+   */
+  async pollContent(requirementId: string): Promise<{ confirmed: boolean }> {
+    const requirement = await this.store.getRequirement(requirementId);
+    if (requirement.state !== "SOLUTION" || requirement.stopReason) return { confirmed: false };
+    const solution = await this.store.getSolution(requirementId);
+    if (solution?.status !== "draft") return { confirmed: false };
+
+    const wanted = buildRequirementPage({
+      requirement,
+      clarify: await this.store.clarifyHistory(requirementId),
+      prd: await this.store.getPrd(requirementId),
+      acceptance: await this.store.acceptanceItems(requirementId),
+      solution,
+      prototype: await this.store.getSolutionPrototype(requirementId, solution.revision),
+    }).solution;
+    if (!wanted) return { confirmed: false };
+
+    const boxes = solutionBlocks(wanted).filter((entry) => entry.kind === "todo").map((entry) => entry.line);
+    const confirmLine = solutionConfirmLine();
+    const ticked = await this.tickedBoxes(requirement.notionPageId);
+    // Every fork first, then the confirmation: a page that asked a question and
+    // took a tick beside it as an answer to something else would be reading a
+    // gesture the person did not make.
+    const undecided = boxes.filter((line) => line !== confirmLine && !ticked.has(line));
+    const confirmBlockId = ticked.get(confirmLine);
+    if (undecided.length > 0 || confirmBlockId === undefined) return { confirmed: false };
+    const confirmed = await this.store.confirmSolution(
+      requirementId,
+      solution.revision,
+      `notion-check:${confirmBlockId}`,
+      "check",
+      runId(requirementId),
+    );
+    return { confirmed };
+  }
+
+  /** The ticked boxes on the page, by the line each one carries. */
+  private async tickedBoxes(pageId: string): Promise<Map<string, string>> {
+    const ticked = new Map<string, string>();
+    let cursor: string | undefined;
+    do {
+      const suffix = cursor
+        ? `?page_size=100&start_cursor=${encodeURIComponent(cursor)}`
+        : "?page_size=100";
+      const response = await this.gateway.request({
+        method: "GET",
+        path: `/v1/blocks/${encodeURIComponent(pageId)}/children${suffix}`,
+        priority: "interaction",
+      });
+      const page = blockListSchema.parse(response.data);
+      for (const block of page.results) {
+        if (block.type !== "to_do") continue;
+        const parsed = toDoSchema.safeParse(block);
+        if (!parsed.success || !parsed.data.to_do.checked) continue;
+        const line = parsed.data.to_do.rich_text.map((run) => run.plain_text).join("");
+        if (!ticked.has(line)) ticked.set(line, block.id);
+      }
+      cursor = page.has_more ? page.next_cursor ?? undefined : undefined;
+    } while (cursor);
+    return ticked;
   }
 
   private async readDraftVerdict(
