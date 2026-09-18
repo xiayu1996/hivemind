@@ -1,6 +1,7 @@
 import type { ConfigStore } from "../config/store.js";
 import type { ApprovalJudgeSettings } from "./approval-intent.js";
 import type { BusinessLanguageJudgeSettings } from "./business-language.js";
+import type { HumanSentenceJudgeSettings } from "./human-sentence.js";
 import type { VerticalSliceJudgeSettings } from "./vertical-slice.js";
 import type { EnvironmentJudgement, EnvironmentJudgeSettings } from "./environment-reasons.js";
 import { HttpSystemOne, type SystemOne } from "./system-one.js";
@@ -22,6 +23,8 @@ export interface JudgeConfig {
   businessLanguageThreshold: number;
   /** How sure it has to be that a Story is a step rather than a slice. */
   verticalSliceThreshold: number;
+  /** How sure it has to be that a sentence a person reads is about building. */
+  readabilityThreshold: number;
 }
 
 /** The keys read in one place, so a caller cannot pick up one question's
@@ -36,6 +39,7 @@ export function judgeConfigFrom(config: ConfigStore): JudgeConfig {
     approvalThreshold: config.get("judge.approvalThreshold"),
     businessLanguageThreshold: config.get("judge.businessLanguageThreshold"),
     verticalSliceThreshold: config.get("judge.verticalSliceThreshold"),
+    readabilityThreshold: config.get("judge.readabilityThreshold"),
   };
 }
 
@@ -127,5 +131,17 @@ export function verticalSliceJudgeSetup(
   return {
     setup,
     settings: { judge: setup.judge, model: setup.model, threshold: config.verticalSliceThreshold },
+  };
+}
+
+export function readabilityJudgeSetup(
+  config: JudgeConfig,
+  secrets: ReadonlyMap<string, string>,
+): { setup: JudgeSetup; settings?: HumanSentenceJudgeSettings } {
+  const setup = judgeSetup(config, secrets);
+  if (setup.kind !== "ready") return { setup };
+  return {
+    setup,
+    settings: { judge: setup.judge, model: setup.model, threshold: config.readabilityThreshold },
   };
 }

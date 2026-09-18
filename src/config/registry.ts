@@ -648,6 +648,13 @@ export const CONFIG_KEYS = {
     reload: "hot",
     description: "How sure the judge has to be that a Story is a step the team takes rather than a thing a person does, before that Story is refused. The two mistakes are not comparable: a refusal it misses costs what happens today, while one it invents can block the Epic, since the decomposer has only two attempts. Measured 2026-09-18 over fifteen Stories, twice: steps the team takes scored 0.54 to 0.91 and things a person does 0.07 to 0.15. The bar sits above the coin-flip line rather than at the bottom of that gap, which leaves the one genuinely borderline shape -- a Story that is nothing but an interface other code calls, measured at 0.54 to 0.59 -- to be caught only sometimes. That is the cheap direction.",
   }),
+  "judge.readabilityThreshold": def({
+    schema: z.number().min(0.5).max(1),
+    default: 0.6,
+    scope: "global",
+    reload: "hot",
+    description: "How sure the judge has to be that a sentence in a design summary or a delivery report describes how the system was built, before that sentence is sent back to be rewritten. Lower than judge.businessLanguageThreshold although it is the same question, because the costs are not the same: these two gates declare exhausted: \"ship\", so a finding the judge invents costs one rewrite and the artifact goes out anyway, while the same mistake in the decomposer blocks an Epic. Measured 2026-09-18 over twelve report sentences, twice: implementation prose scored 0.84 to 0.97 and sentences that must survive 0.04 to 0.18. The deterministic linter flags none of the twelve, in either direction.",
+  }),
   "judge.environmentThreshold": def({
     schema: z.number().min(0.5).max(1),
     default: 0.7,

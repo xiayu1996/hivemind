@@ -33,7 +33,12 @@ import { breakerPolicy, usableProviders } from "../src/runner/circuit-breaker.js
 import { classifyError } from "../src/runner/classify.js";
 import { LibsqlProviderHealthStore } from "../src/runner/provider-health-store.js";
 import { loadSecretsFile } from "../src/config/secrets-file.js";
-import { describeJudgeSetup, environmentJudgeSetup, judgeConfigFrom } from "../src/judge/settings.js";
+import {
+  describeJudgeSetup,
+  environmentJudgeSetup,
+  judgeConfigFrom,
+  readabilityJudgeSetup,
+} from "../src/judge/settings.js";
 import { renderMovedReasons } from "../src/judge/environment-reasons.js";
 import { needsApiKeyEnv, providerKeyEnv } from "../src/runner/provider-env.js";
 import { cacheRetentionEnv } from "../src/runner/cache-retention.js";
@@ -328,6 +333,7 @@ async function main(): Promise<void> {
       cacheKeyScope: config.get("cache.keyScope") as CacheKeyScope,
       ...(story.repo ? { repoId: story.repo } : {}),
       worktreePath,
+      readabilityJudge: readabilityJudgeSetup(judgeConfigFrom(config), secrets).settings,
       promptRoot: join(ROOT, "prompts"),
       sessionRoot,
       evidencePath: evidenceRoot,

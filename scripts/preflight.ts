@@ -21,6 +21,7 @@ import { reapStalePiAuthLock } from "../src/runner/auth-lock.js";
 import { probeCredentialRoundTrip } from "../src/runner/credential-roundtrip.js";
 import { judgeApprovals, type ApprovalSubject } from "../src/judge/approval-intent.js";
 import { judgeBusinessLanguage } from "../src/judge/business-language.js";
+import { judgeHumanSentences } from "../src/judge/human-sentence.js";
 import { judgeVerticalSlices, type JudgedStory } from "../src/judge/vertical-slice.js";
 import { judgeEnvironmentReasons } from "../src/judge/environment-reasons.js";
 import {
@@ -28,6 +29,7 @@ import {
   businessLanguageJudgeSetup,
   environmentJudgeSetup,
   judgeConfigFrom,
+  readabilityJudgeSetup,
   verticalSliceJudgeSetup,
 } from "../src/judge/settings.js";
 import { assertErrorFixtureCoverage } from "../src/runner/error-fixtures.js";
@@ -368,6 +370,28 @@ async function main(): Promise<void> {
         throw new Error("the judge refused a Story a person can use on its own; that refusal would block an Epic");
       }
       return `refused one and passed one against a ${settings.threshold} threshold`;
+    }, "WARN");
+    // The fifth. It shares the decomposition question and its fixture, so only
+    // its own bar is checked here: it sits lower because the two gates it runs
+    // on ship whatever they find.
+    await attempt("judge still reads a known implementation line as one for the report gates", async () => {
+      const { settings } = readabilityJudgeSetup(judgeConfigFrom(judgeConfig), stored);
+      if (!settings) return "off; the sentence linter answers alone";
+      const lines = knownDecompositionLines();
+      const judged = await judgeHumanSentences(settings.judge, `${lines.refuse}。${lines.pass}。`, {
+        model: settings.model,
+        threshold: settings.threshold,
+        field: "design-summary",
+        what: "probe",
+      });
+      const flagged = new Set(judged.map((finding) => finding.excerpt));
+      if (![...flagged].some((excerpt) => excerpt.startsWith(lines.refuse.slice(0, 10)))) {
+        throw new Error(`the recorded implementation line was not flagged at the ${settings.threshold} threshold; the linter still answers, but the judge is adding nothing`);
+      }
+      if ([...flagged].some((excerpt) => excerpt.startsWith(lines.pass.slice(0, 10)))) {
+        throw new Error("the judge flagged a sentence about what a person can do; that costs a rewrite on every card");
+      }
+      return `flagged one and kept one against a ${settings.threshold} threshold`;
     }, "WARN");
     for (const purpose of ["product_manager", "decompose", "code", "verify"] as const) {
       await attempt(`a provider serves the ${purpose} tier`, async () => {

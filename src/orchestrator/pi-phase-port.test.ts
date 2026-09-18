@@ -438,6 +438,42 @@ describe("PiStoryPhasePort", () => {
     });
   });
 
+  it("sends back the implementation prose the linter is blind to, and ships it anyway", async () => {
+    // All Chinese, no path, no code block: lintBusinessLanguage has nothing to
+    // say, so without the judge this goes out as the delivery report's
+    // business section.
+    const prose = "本次改动把缓存层抽出来，复用到三个调用点。";
+    const runner = fakeRunner(JSON.stringify({ delivery_report: prose }));
+    temporary = await mkdtemp(join(tmpdir(), "hivemind-pi-phase-"));
+    const port = new PiStoryPhasePort({
+      binary: "pi",
+      resolveSpec: async () => ({ spec: await testAgentSpec(), release: async () => undefined }),
+      worktreePath: resolve("."),
+      promptRoot: resolve("prompts"),
+      sessionRoot: join(temporary, "sessions"),
+      evidencePath: join(temporary, "evidence"),
+      auditPath: join(temporary, "audit.jsonl"),
+      guardExtension: resolve("extensions/hive-guard.ts"),
+      canonicalCaptureExtension: resolve("extensions/canonical-capture.ts"),
+      createRunner: () => runner,
+      readProviderPayloads: async () => [{ model: "mock-1", messages: [] }],
+      maxReportRewrites: 1,
+      readabilityJudge: {
+        judge: { async ask() { return { answers: { is_implementation: { type: "noul", noul: 0.97 } } }; } },
+        model: "jev-latest",
+        threshold: 0.6,
+      },
+    });
+
+    // Refused, rewritten, refused again -- and delivered, because this gate has
+    // no veto. A probability may never stop a Story.
+    await expect(port.run(phaseInput("MERGE"))).resolves.toMatchObject({
+      artifacts: [{ kind: "delivery-report", body: prose }],
+    });
+    const prompted = (runner.prompt as unknown as { mock: { calls: string[][] } }).mock.calls.map((call) => call[0]!);
+    expect(prompted[1]).toContain(prose);
+  });
+
   it("fails closed before persistence when the phase output is not the declared JSON contract", async () => {
     temporary = await mkdtemp(join(tmpdir(), "hivemind-pi-phase-"));
     const port = new PiStoryPhasePort({
