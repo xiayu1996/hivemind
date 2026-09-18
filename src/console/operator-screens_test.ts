@@ -255,6 +255,26 @@ async function consoleWith(allowed: boolean) {
   });
 }
 
+/** A store whose rows are identifiable, so a leak shows up in the response
+ * body and not only in the status code. */
+const sentinelData: ConsoleDataSource = {
+  nodes: async () => [{ sentinel: "LEAKED-NODE" }],
+  tasks: async () => [{ sentinel: "LEAKED-TASK" }],
+  costs: async () => [{ sentinel: "LEAKED-COST" }],
+  config: async () => [{ sentinel: "LEAKED-CONFIG" }],
+  stats: async () => ({ sentinel: "LEAKED-STATS" }),
+  providers: async () => [{ sentinel: "LEAKED-PROVIDER" }],
+  queue: async () => ({ sentinel: "LEAKED-QUEUE" }),
+};
+
+async function sentinelConsole(allowed: boolean) {
+  const networks = allowed ? SAMPLE_NETWORKS : HOME;
+  return createConsoleServer(sentinelData, {
+    serveUi: false,
+    screens: createMobileConsoleSample({ networks }),
+  });
+}
+
 /** An HTML form post, the only write the role screen accepts. */
 function roleForm(body: Record<string, string>) {
   return {
@@ -275,6 +295,35 @@ describe("mobile console routes", () => {
       expect(response.body).toContain("重新检查");
       expect(response.body).not.toContain('class="nav-link"');
     }
+    await app.close();
+  });
+
+  it("@scenario S-R237511MB-02-access hides the read APIs and the shell from outside the allowed networks", async () => {
+    const app = await sentinelConsole(false);
+    const routes = [
+      "/api/nodes", "/api/tasks", "/api/costs", "/api/config",
+      "/api/stats", "/api/providers", "/api/queue", "/",
+    ];
+    for (const route of routes) {
+      const response = await app.inject({ method: "GET", url: route });
+      expect(response.statusCode, route).toBe(403);
+      expect(response.body, route).toContain("当前设备无法进入后台");
+      expect(response.body, route).not.toContain("LEAKED-");
+      expect(response.body, route).not.toContain('class="nav-link"');
+    }
+    // The recheck screen itself is reachable and still free of operator data.
+    const access = await app.inject({ method: "GET", url: "/access" });
+    expect(access.statusCode).toBe(200);
+    expect(access.body).toContain("当前设备无法进入后台");
+    expect(access.body).not.toContain("LEAKED-");
+    await app.close();
+  });
+
+  it("@scenario S-R237511MB-02-access still serves the read APIs from inside the allowed networks", async () => {
+    const app = await sentinelConsole(true);
+    const response = await app.inject({ method: "GET", url: "/api/costs" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual([{ sentinel: "LEAKED-COST" }]);
     await app.close();
   });
 
