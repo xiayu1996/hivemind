@@ -15,6 +15,7 @@ import {
   type ContractViolation,
 } from "../verify/ui-contract.js";
 import { CONTRACT_PROPERTIES } from "../verify/ui-contract.js";
+import { describeAccessibilityViolations } from "../verify/accessibility-audit.js";
 import { CONTRACT_MAX_ELEMENTS, type StyleCollectorPort } from "../verify/ui-contract-collector.js";
 import type { UiReviewExecutor, UiReviewReference, UiReviewResult, UiReviewScenario } from "../verify/ui-review.js";
 import { renderDodAmendments, renderUiFindings } from "../verify/ui-review.js";
@@ -133,6 +134,10 @@ function inconclusiveOf(result: UiReviewResult, fallback: readonly string[], rea
  * taste and never gets one. */
 interface ContractCheck {
   violations: ContractViolation[];
+  /** What axe-core found, by scenario. Judged with the token table because it
+   * asks the same kind of question: a finite set of rules, each of which the
+   * page either breaks or does not. */
+  inaccessible: Array<{ page: string; text: string }>;
   /** Pages the layer could not open. Never a violation: a page that would not
    * render has already failed the structural layer, and reporting it twice
    * would read as two problems. */
@@ -152,16 +157,17 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
     reviewable: ReadonlySet<string>,
   ): Promise<ContractCheck> {
     const options = this.options.uiContract;
-    if (!options || options.enforce === "off") return { violations: [], failures: [] };
+    if (!options || options.enforce === "off") return { violations: [], inaccessible: [], failures: [] };
     const tokens = await options.tokens();
     // No token table means nothing to measure against. It is not a violation:
     // a repository without an interface contract has made no promise to break.
-    if (!tokens || tokens.length === 0) return { violations: [], failures: [] };
+    if (!tokens || tokens.length === 0) return { violations: [], inaccessible: [], failures: [] };
     const wanted = pages.filter((page) => reviewable.has(page.scenarioId));
-    if (wanted.length === 0) return { violations: [], failures: [] };
+    if (wanted.length === 0) return { violations: [], inaccessible: [], failures: [] };
 
     const collector = await options.collector();
     const violations: ContractViolation[] = [];
+    const inaccessible: Array<{ page: string; text: string }> = [];
     const failures: string[] = [];
     try {
       // Sorted so two runs of one round report the same findings in the same
@@ -180,6 +186,12 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
             styles,
             allowedValues(tokens, styles.rootFontSizePx),
           ));
+          for (const text of describeAccessibilityViolations(
+            page.scenarioId,
+            await collector.audit?.(page.url) ?? [],
+          )) {
+            inaccessible.push({ page: page.scenarioId, text });
+          }
         } catch (cause) {
           failures.push(`${page.scenarioId}: ${cause instanceof Error ? cause.message : "did not render"}`);
         }
@@ -187,7 +199,7 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
     } finally {
       await collector.close().catch(() => undefined);
     }
-    return { violations, failures };
+    return { violations, inaccessible, failures };
   }
 
   async run(input: ManagedVerifyInput): Promise<ManagedVerifyResult> {
@@ -204,7 +216,7 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
       : null;
 
     let result: UiReviewResult;
-    let contract: ContractCheck = { violations: [], failures: [] };
+    let contract: ContractCheck = { violations: [], inaccessible: [], failures: [] };
     let appFailure: string | null = null;
     const seedFailures: string[] = [];
     try {
@@ -330,14 +342,19 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
         images: result.images,
         sessionId: result.reviewSessionId,
       },
-      ...(contract.violations.length === 0 && contract.failures.length === 0 ? {} : {
-        uiContract: {
-          enforce: this.options.uiContract?.enforce ?? "off",
-          violations: contract.violations,
-          text: describeContractViolations(contract.violations).join("\n"),
-          ...(contract.failures.length === 0 ? {} : { unreadable: contract.failures }),
-        },
-      }),
+      ...(contract.violations.length === 0 && contract.inaccessible.length === 0 && contract.failures.length === 0
+        ? {}
+        : {
+          uiContract: {
+            enforce: this.options.uiContract?.enforce ?? "off",
+            violations: contract.violations,
+            text: [
+              ...describeContractViolations(contract.violations),
+              ...contract.inaccessible.map((entry) => entry.text),
+            ].join("\n"),
+            ...(contract.failures.length === 0 ? {} : { unreadable: contract.failures }),
+          },
+        }),
     });
 
     // What the reviewer could not see because the box misbehaved is not a
@@ -370,16 +387,22 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
     // fails the scenarios that carry it. Which one is a deployment's decision
     // (`uiContract.enforce`), not this round's.
     const contractFailures = this.options.uiContract?.enforce === "block"
-      ? [...new Set(contract.violations.map((violation) => violation.page))].toSorted()
+      ? [...new Set([
+        ...contract.violations.map((violation) => violation.page),
+        ...contract.inaccessible.map((entry) => entry.page),
+      ])].toSorted()
       : [];
-    if (contract.violations.length > 0 && this.options.recordFriction) {
+    if ((contract.violations.length > 0 || contract.inaccessible.length > 0) && this.options.recordFriction) {
       // Recorded whether or not it refused: the count is what decides whether
       // this layer is ready to be given a veto (08 section 6).
       await this.options.recordFriction({
         cardId: input.context.cardId,
         runId: input.runId,
         kind: this.options.uiContract?.enforce === "block" ? "ui_contract_blocked" : "ui_contract_warned",
-        detail: describeContractViolations(contract.violations).join("; "),
+        detail: [
+          ...describeContractViolations(contract.violations),
+          ...contract.inaccessible.map((entry) => entry.text),
+        ].join("; "),
       });
     }
     const split = splitScenarioFailures(result.failedScenarios, reviewReasons, judged.environmental);

@@ -1,4 +1,5 @@
 import type { DesignToken } from "../pipeline/interface-contract.js";
+import { describeAccessibilityViolations, type AccessibilityViolation } from "./accessibility-audit.js";
 import { missingFromSnapshot, type VisibleRequirement } from "./aria-snapshot.js";
 import {
   allowedValues,
@@ -47,6 +48,8 @@ export interface PrototypePageEvidence {
   states: Readonly<Partial<Record<PrototypeState, string>>>;
   /** Computed styles of the page with no query, or null when it would not open. */
   styles: PageStyles | null;
+  /** What axe-core found on the page with no query. */
+  violations?: readonly AccessibilityViolation[];
 }
 
 export interface PrototypeExitInput {
@@ -99,6 +102,7 @@ export function evaluatePrototypeExit(input: PrototypeExitInput): string[] {
       findings.push(`${claim.file} 上没有出现它声称能看见的内容：${missing.role} “${missing.text}”`);
     }
     findings.push(...stateFindings(claim.file, seen.states));
+    findings.push(...describeAccessibilityViolations(claim.file, seen.violations ?? []));
     if (seen.styles !== null) {
       findings.push(...describeContractViolations(contractViolations(
         claim.file,

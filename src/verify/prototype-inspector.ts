@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { collectStylesExpression, CONTRACT_MAX_ELEMENTS } from "./ui-contract-collector.js";
 import { PROTOTYPE_STATES, type PrototypePageEvidence, type PrototypeState } from "./prototype-exit.js";
 import { CONTRACT_PROPERTIES, type PageStyles } from "./ui-contract.js";
+import { axeRunExpression, type AccessibilityViolation } from "./accessibility-audit.js";
 
 /**
  * Opens the pages of a prototype and brings back what the exit checks judge.
@@ -21,6 +22,8 @@ export interface PageInspection {
   snapshot: string;
   /** Computed styles, only when they were asked for. */
   styles: PageStyles | null;
+  /** What axe-core found, only when it was asked for. */
+  violations?: readonly AccessibilityViolation[];
 }
 
 export interface PrototypeInspectorPort {
@@ -42,13 +45,20 @@ export async function playwrightPrototypeInspector(): Promise<
       try {
         await page.goto(url, { waitUntil: "load" });
         const snapshot = await page.locator("body").ariaSnapshot();
-        const styles = want.styles
-          ? await page.evaluate(collectStylesExpression({
-            properties: CONTRACT_PROPERTIES,
-            maxElements: CONTRACT_MAX_ELEMENTS,
-          })) as PageStyles
-          : null;
-        return { snapshot, styles };
+        if (!want.styles) return { snapshot, styles: null };
+        const styles = await page.evaluate(collectStylesExpression({
+          properties: CONTRACT_PROPERTIES,
+          maxElements: CONTRACT_MAX_ELEMENTS,
+        })) as PageStyles;
+        // axe's own source, added to the page rather than bundled with it: the
+        // prototype must not have to depend on anything to be audited.
+        // axe-core is CommonJS, so the named export is only on the default:
+        // reading `source` off the namespace gets undefined and adds an empty
+        // script, and the page then has no `axe` for the expression to call.
+        const axe = (await import("axe-core")).default;
+        await page.addScriptTag({ content: axe.source });
+        const violations = await page.evaluate(axeRunExpression()) as AccessibilityViolation[];
+        return { snapshot, styles, violations };
       } finally {
         await page.close();
       }
@@ -85,6 +95,7 @@ export async function inspectPrototypePages(request: {
       snapshot: plain?.snapshot ?? null,
       states,
       styles: plain?.styles ?? null,
+      violations: plain?.violations ?? [],
     });
   }
   return evidence;

@@ -1,6 +1,7 @@
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 import { CONTRACT_PROPERTIES, type PageStyles } from "./ui-contract.js";
+import { axeRunExpression, type AccessibilityViolation } from "./accessibility-audit.js";
 
 /**
  * Reads the computed styles of a rendered page.
@@ -19,11 +20,17 @@ export const CONTRACT_MAX_ELEMENTS = 400;
 
 export interface StyleCollectorPort {
   /**
-   * Opens `url` and returns what `COLLECT_STYLES` evaluates to. Rejecting is
-   * allowed: a page that will not render is reported as a failure rather than
-   * as a page with no violations.
+   * Opens `url` and returns the styles it declared. Rejecting is allowed: a
+   * page that will not render is reported as a failure rather than as a page
+   * with no violations.
    */
   collect(url: string, properties: readonly string[], maxElements: number): Promise<PageStyles>;
+  /**
+   * What axe-core finds on the same page. Optional because it is a second
+   * question about one screen and a caller that only asked the first should
+   * not have to answer it.
+   */
+  audit?(url: string): Promise<readonly AccessibilityViolation[]>;
 }
 
 export interface PageStyleRequest {
@@ -151,6 +158,22 @@ export async function playwrightStyleCollector(): Promise<StyleCollectorPort & {
       try {
         await page.goto(url, { waitUntil: "load" });
         return await page.evaluate(collectStylesExpression({ properties, maxElements })) as PageStyles;
+      } finally {
+        await page.close();
+      }
+    },
+    audit: async (url) => {
+      const page = await browser.newPage();
+      try {
+        await page.goto(url, { waitUntil: "load" });
+        // axe's own source, added to the page: the repository under review
+        // must not have to depend on anything to be audited.
+        // axe-core is CommonJS, so the named export is only on the default:
+        // reading `source` off the namespace gets undefined and adds an empty
+        // script, and the page then has no `axe` for the expression to call.
+        const axe = (await import("axe-core")).default;
+        await page.addScriptTag({ content: axe.source });
+        return await page.evaluate(axeRunExpression()) as AccessibilityViolation[];
       } finally {
         await page.close();
       }

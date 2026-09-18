@@ -125,6 +125,20 @@ describe("evaluatePrototypeExit", () => {
     ]);
   });
 
+  it("refuses a page a person could not use, and lets an accessibility note that is advice through", () => {
+    const snapshot = '- heading "任务看板" [level=1]\n- button "新建任务"';
+    const withViolations = (impact: string) => evaluatePrototypeExit(input({
+      evidence: [page("pages/board.html", snapshot, {
+        violations: [{ id: "label", impact, help: "表单控件要有标签", nodes: ["#phone"] }],
+      })],
+    }));
+
+    expect(withViolations("critical")).toEqual([
+      "pages/board.html 上有一处用不了的地方（label）：表单控件要有标签；出现在 #phone",
+    ]);
+    expect(withViolations("moderate")).toEqual([]);
+  });
+
   it("says a page would not open rather than reporting everything it cannot see on it", () => {
     const found = evaluatePrototypeExit(input({
       evidence: [{ file: "pages/board.html", snapshot: null, states: {}, styles: null }],

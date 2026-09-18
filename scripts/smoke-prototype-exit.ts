@@ -55,6 +55,7 @@ const PAGE = `<!doctype html>
 </head>
 <body>
   <h1>任务看板</h1>
+  <label for="search">搜索任务</label><input id="search" name="search">
   <section id="ready"><button>新建任务</button><p>今天有 3 件事</p></section>
   <section id="empty" hidden><p>今天还没有任务</p><button>新建任务</button></section>
   <section id="loading" hidden><p>正在读取任务</p></section>
@@ -97,7 +98,9 @@ async function main(): Promise<void> {
     });
     const board = evidence.find((page) => page.file === "pages/board.html")!;
     console.log(`board.html: ${board.snapshot?.split("\n").length ?? 0} snapshot lines, ` +
-      `${board.styles?.usages.length ?? 0} style readings, states ${Object.keys(board.states).join(",")}`);
+      `${board.styles?.usages.length ?? 0} style readings, states ${Object.keys(board.states).join(",")}, ` +
+      `${board.violations?.length ?? 0} accessibility violations`);
+    if (board.violations === undefined) throw new Error("axe-core did not run on the page at all");
 
     const good = evaluatePrototypeExit({
       claims: [{
@@ -133,13 +136,14 @@ async function main(): Promise<void> {
       (text: string) => text.includes("导出报表"),
       (text: string) => text.includes("不在设计规范里的颜色"),
       (text: string) => text.includes("R-SMOKE-02"),
+      (text: string) => text.includes("color-contrast"),
     ];
     for (const [index, predicate] of wanted.entries()) {
       if (!bad.some((finding) => predicate(finding))) {
         throw new Error(`the broken page was not refused for reason ${index + 1}`);
       }
     }
-    console.log("a page that claims what it did not draw, and paints outside the table: refused for both");
+    console.log("a page that claims what it did not draw, paints outside the table and fails a contrast rule: refused for all three");
   } finally {
     await inspector.close();
   }

@@ -56,7 +56,13 @@ describe("inspectPrototypePages", () => {
 
     const evidence = await inspectPrototypePages({ root: "/repo", pages: ["pages/a.html"], port: collector });
 
-    expect(evidence[0]).toEqual({ file: "pages/a.html", snapshot: null, states: {}, styles: null });
+    expect(evidence[0]).toEqual({
+      file: "pages/a.html",
+      snapshot: null,
+      states: {},
+      styles: null,
+      violations: [],
+    });
     expect(collector.inspect).toHaveBeenCalledTimes(1);
   });
 

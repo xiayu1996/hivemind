@@ -5,6 +5,7 @@ import type { AppUnderReview } from "../verify/app-under-review.js";
 import type { DesignToken } from "../pipeline/interface-contract.js";
 import type { PageStyles } from "../verify/ui-contract.js";
 import type { StyleCollectorPort } from "../verify/ui-contract-collector.js";
+import type { AccessibilityViolation } from "../verify/accessibility-audit.js";
 import { reviewableScenarios, UiReviewedVerifyPort, type UiReviewAppOptions } from "./ui-reviewed-verify-port.js";
 import type { ManagedVerifyInput, ManagedVerifyResult } from "./story-worker.js";
 
@@ -371,7 +372,7 @@ describe("UiReviewedVerifyPort", () => {
   });
 });
 
-function collector(styles: PageStyles) {
+function collector(styles: PageStyles, violations: AccessibilityViolation[] = []) {
   const opened: string[] = [];
   let closed = 0;
   return {
@@ -382,6 +383,7 @@ function collector(styles: PageStyles) {
         opened.push(url);
         return styles;
       },
+      audit: async () => violations,
       close: async () => { closed += 1; },
     } satisfies StyleCollectorPort & { close(): Promise<void> }),
   };
@@ -431,6 +433,39 @@ describe("UiReviewedVerifyPort and the interface contract", () => {
     expect(result.verdict).toBe("rejected");
     expect(result.failedScenarios).toEqual(["S-EPIC-01-s0"]);
     expect(result.codeFailedScenarios).toEqual(["S-EPIC-01-s0"]);
+  });
+
+  it("sends the Story back for a page a person could not use, on the same switch", async () => {
+    const styles = collector(fromTable, [{
+      id: "label",
+      impact: "critical",
+      help: "表单控件要有标签",
+      nodes: ["#phone"],
+    }]);
+    const { instance } = port({
+      functional,
+      uiContract: { enforce: "block", tokens: async () => tokens, collector: styles.make },
+    });
+
+    const result = await instance.run(verifyInput(dod([["ui"]])));
+
+    expect(result.verdict).toBe("rejected");
+    expect(JSON.parse(result.artifact).uiContract.text).toContain("表单控件要有标签");
+  });
+
+  it("does not refuse for an accessibility note that is only advice", async () => {
+    const styles = collector(fromTable, [{
+      id: "region",
+      impact: "moderate",
+      help: "内容应当放在地标里",
+      nodes: ["main"],
+    }]);
+    const { instance } = port({
+      functional,
+      uiContract: { enforce: "block", tokens: async () => tokens, collector: styles.make },
+    });
+
+    await expect(instance.run(verifyInput(dod([["ui"]])))).resolves.toMatchObject({ verdict: "accepted" });
   });
 
   it("says nothing about a page whose every value came from the table", async () => {
