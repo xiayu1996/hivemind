@@ -509,16 +509,17 @@ function renderValidation(message: string | null): string {
 
 function renderTodoFields(
   todo: OperatorTodo,
-  input: { submittedValue: string; submission: TodoSubmissionResult | undefined },
+  input: { submittedValue: string; submission: TodoSubmissionResult | undefined; submitting: boolean },
 ): string {
   const submitted = escapeHtml(input.submittedValue);
+  const disabled = input.submitting ? " disabled" : "";
   if (todo.kind === "reply") {
     const message = validationMessage(input.submission, "text");
     return `<div><label for="todo-reply">${escapeHtml(todo.answerLabel)}</label>`
       + `<textarea id="todo-reply" name="text"${message ? ' aria-invalid="true"' : ""}>${submitted}</textarea>`
       + renderValidation(message)
       + `<p class="field-help">${copy.todo.replyHelp}</p></div>`
-      + `<div class="actions"><button class="primary-action" type="submit">${copy.todo.submitReply}</button></div>`;
+      + `<div class="actions"><button class="primary-action" type="submit"${disabled}>${copy.todo.submitReply}</button></div>`;
   }
   if (todo.kind === "approval") {
     const first = todo.options[0];
@@ -532,27 +533,60 @@ function renderTodoFields(
       + `<textarea id="todo-note" name="note"${noteMessage ? ' aria-invalid="true"' : ""}>${submitted}</textarea>`
       + renderValidation(noteMessage)
       + `<p class="field-help">${copy.todo.noteHelp}</p></div>`
-      + `<div class="actions"><button class="primary-action" type="submit">${copy.todo.submitApproval}</button></div>`;
+      + `<div class="actions"><button class="primary-action" type="submit"${disabled}>${copy.todo.submitApproval}</button></div>`;
   }
   const message = validationMessage(input.submission, "option");
   return `<fieldset><legend>${copy.todo.choiceLegend}</legend>`
     + todo.options.map((option) => renderOptionField(option, { name: "option" })).join("")
     + renderValidation(message)
     + "</fieldset>"
-    + `<div class="actions"><button class="primary-action" type="submit">${copy.todo.submitChoice}</button></div>`;
+    + `<div class="actions"><button class="primary-action" type="submit"${disabled}>${copy.todo.submitChoice}</button></div>`;
 }
 
-function renderTodoBody(todo: OperatorTodo, options: { submittedValue?: string; submission?: TodoSubmissionResult }): string {
+function renderTodoHead(todo: OperatorTodo): string {
   const subject = `${escapeHtml(todo.subject.title)} · ${subjectKindWord(todo.subject.kind)} · ${escapeHtml(todo.sourceLabel)}`;
   return backLink()
     + `<header class="page-head"><div><h1>${copy.todo.heading}</h1><p>${subject}</p></div>`
     + `<span class="status attention">${todoKindWord(todo.kind)}</span></header>`
-    + `<div class="split"><div>`
     + `<div class="notice attention"><h2>${copy.todo.questionHeading}</h2><p>${escapeHtml(todo.question)}</p></div>`
-    + `<section class="panel section"><h2>${copy.todo.contextHeading}</h2><p>${escapeHtml(todo.context)}</p></section>`
+    + `<section class="panel section"><h2>${copy.todo.contextHeading}</h2><p>${escapeHtml(todo.context)}</p></section>`;
+}
+
+/** What a person is told once the Notion write is confirmed. The destination
+ * is named because a person needs to know where the answer went. */
+function savedSentence(todo: OperatorTodo): string {
+  return fill(copy.todo.savedTemplate, {
+    prefix: copy.todo.savedPrefix[todo.kind],
+    destination: copy.notionDestinations[todo.subject.kind],
+  });
+}
+
+function renderSavedTodo(todo: OperatorTodo): string {
+  return `<div class="split"><div>${renderTodoHead(todo)}`
+    + `<section class="panel section" aria-live="polite"><h2 role="status">${copy.todo.handledHeading}</h2>`
+    + `<div class="notice success"><p>${savedSentence(todo)}</p><p>${copy.todo.savedBody}</p></div>`
+    + `<div class="actions"><a class="button" href="/operator/overview">${copy.todo.back}</a></div>`
+    + "</section></div>"
+    + renderTodoSummary(todo)
+    + "</div>";
+}
+
+function renderTodoBody(
+  todo: OperatorTodo,
+  options: { submittedValue?: string; submission?: TodoSubmissionResult },
+): string {
+  const submission = options.submission;
+  if (submission?.kind === "saved") return renderSavedTodo(todo);
+  const submitting = submission?.kind === "submitting";
+  return `<div class="split"><div>${renderTodoHead(todo)}`
+    + (submitting ? `<div class="notice section"><p>${copy.todo.submitting}</p></div>` : "")
     + `<form class="panel section" method="post" action="/operator/todos/${encodeURIComponent(todo.id)}">`
     + `<input type="hidden" name="revision" value="${escapeHtml(todo.revision)}">`
-    + renderTodoFields(todo, { submittedValue: options.submittedValue ?? "", submission: options.submission })
+    + renderTodoFields(todo, {
+      submittedValue: options.submittedValue ?? "",
+      submission,
+      submitting,
+    })
     + "</form></div>"
     + renderTodoSummary(todo)
     + "</div>";
