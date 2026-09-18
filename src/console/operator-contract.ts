@@ -630,11 +630,33 @@ function renderCostPanel(detail: OperatorDetail): string {
     + "</aside>";
 }
 
-function renderDetailBody(detail: OperatorDetail): string {
+function roundTab(round: number, label: string, selected: number): string {
+  return `<button class="tab" type="submit" name="round" value="${round}"${round === selected ? ' aria-current="true"' : ""}>${label}</button>`;
+}
+
+/** The current round is always the default; a historical round is shown only
+ * because a person chose it, and round 1 does not appear until then. */
+function renderRoundTabs(detail: OperatorDetail, selected: number): string {
+  const current = detail.currentRound.number;
+  return `<form class="tabs" method="get" aria-label="${copy.detail.roundsLabel}" action="/operator/subjects/${detail.subject.kind}/${encodeURIComponent(detail.subject.id)}">`
+    + roundTab(current, fill(copy.detail.currentRoundLabel, { number: String(current) }), selected)
+    + detail.history.map((round) =>
+      roundTab(round.number, fill(copy.detail.historicalRoundLabel, { number: String(round.number) }), selected)
+    ).join("")
+    + "</form>";
+}
+
+function renderDetailBody(detail: OperatorDetail, selectedRound: number | undefined): string {
+  const current = detail.currentRound.number;
+  const selected = selectedRound !== undefined && selectedRound !== current
+    ? detail.history.find((round) => round.number === selectedRound)
+    : undefined;
+  const panel = selected ? renderRoundPanel(selected, false) : renderRoundPanel(detail.currentRound, true);
   const subject = `${subjectKindWord(detail.subject.kind)} · ${escapeHtml(detail.stateLabel)}`;
   return backLink()
     + `<header class="page-head"><div><h1>${escapeHtml(detail.subject.title)}</h1><p>${subject}</p></div></header>`
-    + `<div class="split"><div>${renderRoundPanel(detail.currentRound, true)}</div>`
+    + renderRoundTabs(detail, selected ? selected.number : current)
+    + `<div class="split section"><div>${panel}</div>`
     + renderCostPanel(detail)
     + "</div>";
 }
@@ -687,9 +709,8 @@ export function renderOperatorDetailPage(
   state: ConsolePageState<OperatorDetailResult>,
   selectedRound?: number,
 ): string {
-  void selectedRound;
   const value = state.kind === "ready" || state.kind === "waiting" ? state.value : state.previous;
-  const body = value?.kind === "available" ? renderDetailBody(value.detail) : "";
+  const body = value?.kind === "available" ? renderDetailBody(value.detail, selectedRound) : "";
   return shell({
     title: copy.titles.detail,
     current: "overview",
