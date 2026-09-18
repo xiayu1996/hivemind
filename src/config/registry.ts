@@ -641,6 +641,13 @@ export const CONFIG_KEYS = {
     reload: "hot",
     description: "How sure the judge has to be that a line of a decomposition describes how the system is built before that line is refused. High because the two mistakes are not comparable: a refusal it misses costs what happens today -- one line on a page that reads like construction -- while a refusal it invents can block the Epic, since the decomposer has only two attempts. Measured 2026-09-18 over eighteen real wordings, twice: construction the word table misses scored 0.85 to 0.96, and lines that must pass 0.03 to 0.30, including the ones the table itself wrongly refuses.",
   }),
+  "judge.verticalSliceThreshold": def({
+    schema: z.number().min(0.5).max(1),
+    default: 0.6,
+    scope: "global",
+    reload: "hot",
+    description: "How sure the judge has to be that a Story is a step the team takes rather than a thing a person does, before that Story is refused. The two mistakes are not comparable: a refusal it misses costs what happens today, while one it invents can block the Epic, since the decomposer has only two attempts. Measured 2026-09-18 over fifteen Stories, twice: steps the team takes scored 0.54 to 0.91 and things a person does 0.07 to 0.15. The bar sits above the coin-flip line rather than at the bottom of that gap, which leaves the one genuinely borderline shape -- a Story that is nothing but an interface other code calls, measured at 0.54 to 0.59 -- to be caught only sometimes. That is the cheap direction.",
+  }),
   "judge.environmentThreshold": def({
     schema: z.number().min(0.5).max(1),
     default: 0.7,

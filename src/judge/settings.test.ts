@@ -5,6 +5,7 @@ import {
   describeJudgeSetup,
   environmentJudgeSetup,
   JUDGE_API_KEY,
+  verticalSliceJudgeSetup,
 } from "./settings.js";
 
 const CONFIG = {
@@ -15,6 +16,7 @@ const CONFIG = {
   environmentThreshold: 0.7,
   approvalThreshold: 0.8,
   businessLanguageThreshold: 0.75,
+  verticalSliceThreshold: 0.6,
 };
 
 const WITH_KEY = new Map([[JUDGE_API_KEY, "key-under-test"]]);
@@ -63,9 +65,10 @@ describe("each question's own threshold", () => {
       environmentJudgeSetup(CONFIG, WITH_KEY).settings?.threshold,
       approvalJudgeSetup(CONFIG, WITH_KEY).settings?.threshold,
       businessLanguageJudgeSetup(CONFIG, WITH_KEY).settings?.threshold,
+      verticalSliceJudgeSetup(CONFIG, WITH_KEY).settings?.threshold,
     ];
 
-    expect(thresholds).toEqual([0.7, 0.8, 0.75]);
+    expect(thresholds).toEqual([0.7, 0.8, 0.75, 0.6]);
   });
 
   it("leaves the whitelist alone when the deployment did not ask for a judge", () => {
