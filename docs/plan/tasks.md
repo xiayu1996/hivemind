@@ -546,6 +546,8 @@ MU-09 拆开的那一项（2026-09-18，MU-03 做完后复核）：“仓库首�
 | W-11 ✅ | host 十二分钟一张卡没派，日志里每个周期只有一行 `cycle failed: Codex error: The usage limit has been reached` | 周期顺序是 checkouts → intake → projection → **拆解** → **Epic 维护** → 回归 → 派发，而 `step()` 只吞 TRANSPORT；一个拆不动的 Epic 让派发永远走不到。回归道早就因为同样的教训改成了「报告而不上抛」，这两步没跟上 | 拆解与 Epic 维护改成报告而不上抛。一个 Epic 拆不动，与已经拆出来的那些 Story 无关 |
 | W-12 ✅ | `openai-codex` 配额耗尽后，每个周期还在敲同一个账号，`retry_at` 停在 00:48 再没动过 | 拆解这条路只读断路器（`usableProviders(...)[0]`）从不回写；Story 那条路一直是对的（`run-story.ts:622-633`），只有这条漏了。于是 `model.tierFailoverChains` 的降级从来没有机会发生 | 拆解失败按同一判据回写断路器：`classifyError !== UNKNOWN` 才记，我们自己的缺陷不许开别人的闸。实测窗口从 00:48 改写成 02:09，下一周期即取链上下一个 |
 | W-13 ✅ | W-11 修完后浮出来：两个 Epic 反复拆解失败，每个周期重来一次按大脑档计费，看板上没有任何给人看的东西 | 端口在「回复里找不到能解析的候选」时抛普通 `Error`，而 `EpicDecomposer` 的尝试循环没有 catch——抛出去就跳出循环：不消耗尝试、不进 `previousRejections`、不走 `block()`，Epic 留在 `DECOMPOSE`。W-03 加的「四次上限 + 理由不得重复」全在这条路径之外 | `DecompositionContractError`：解析失败当作一次被拒的尝试，理由回喂、消耗一次、同样失败两次即 BLOCKED；provider 失败照旧上抛，它对「拆得对不对」零信息量，由断路器读 |
+| W-14 ✅ | 两张在跑的卡租约 01:09:38 取得、01:24:38 到期，`renewed_at` 与 `acquired_at` 完全相同；01:27 两轮都还在跑（CODE 会话已 762KB），租约已过期九分钟 | `LeaseStore.renew` 写好了、测过了、**生产代码零调用**。`run-story.ts` 只 `acquire` 一次，TTL 15 分钟，而 CODE 轮常规超过 15 分钟。单机靠 orchestrator 的 `inFlight` map 恰好挡住；多机没有这一层，而 AGENTS.md 说租约「是多机粘性不出双执行的根」——这个根只在前 15 分钟成立 | `startLeaseHeartbeat`：每 TTL/3 续一次，允许连丢两次；续租被拒只报一次，执行仍由 fence 强制；store 故障不当作丢租约 |
+| W-15 ⬜ 观察 | DESIGN 轮静默 15 分钟：模型为了找一个还不存在的 `console-ui/` 目录跑了 `find / -maxdepth 6`，把宿主整盘翻了一遍 | 预测 footprint 指向尚未创建的目录，模型出树去找。工具面对 `bash` 不设边界 | **已有兜底生效**：`retry.promptTimeoutMs`(15 分钟) 到点放弃该轮、杀掉 `find`、以 continue 续跑，实测 01:30 恢复。代价是一个 15 分钟窗口 + 宿主整盘被读过一遍。不打算按命令拼写去围堵（换个写法就绕开）；真正的问题是「骨架由第一张切片带出来」这件事模型不确信，属于 prompt 而非守卫 |
 
 ---
 
