@@ -620,6 +620,33 @@ CREATE TABLE IF NOT EXISTS human_feedback (
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_channel ON human_feedback(channel, created_at);
 
+-- What a person decided on one waiting todo, and the write that has to carry it
+-- to the Notion entry before the decision counts as made.
+--
+-- `todo_id` being the primary key is the whole exclusion between two
+-- submitters: the second request finds the first one's decision and is answered
+-- with it, instead of replacing a decision a person already made. The words
+-- live in `comments`, in the exact form the lanes that read human input expect,
+-- so the outbox payload and the record the ledger receives are the same bytes.
+CREATE TABLE IF NOT EXISTS todo_decisions (
+  todo_id      TEXT PRIMARY KEY,
+  kind         TEXT NOT NULL CHECK (kind IN ('answer','approve','choose')),
+  subject_kind TEXT NOT NULL CHECK (subject_kind IN ('requirement','epic','story')),
+  subject_id   TEXT NOT NULL,
+  -- The Notion page that has to keep this decision.
+  page_id      TEXT NOT NULL,
+  comments     TEXT NOT NULL CHECK (json_valid(comments)),
+  submitted_by TEXT NOT NULL,
+  submitted_at INTEGER NOT NULL,
+  -- The durable write. Confirmation is read from this row's state, so the
+  -- decision and the write can never disagree about whether Notion kept it.
+  outbox_id    INTEGER NOT NULL REFERENCES notion_outbox(id),
+  -- Set once the decision became the person's recorded input in the ledger.
+  -- Until then the todo still waits, whatever the outbox row says.
+  recorded_at  INTEGER,
+  CHECK (recorded_at IS NULL OR recorded_at >= submitted_at)
+);
+
 -- Builder and verifier must be different sessions. Enforced here rather than in
 -- application code so no future code path can quietly bypass it.
 CREATE TABLE IF NOT EXISTS verify_records (

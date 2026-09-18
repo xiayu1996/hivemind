@@ -440,6 +440,21 @@ export const humanFeedback = sqliteTable("human_feedback", {
   createdAt: ms("created_at").notNull(),
 }, (t) => [index("idx_feedback_channel").on(t.channel, t.createdAt)]);
 
+// The console's only write: one decision on one waiting todo, and the outbox
+// row that has to reach Notion before the decision counts as made.
+export const todoDecisions = sqliteTable("todo_decisions", {
+  todoId: text("todo_id").primaryKey(),
+  kind: text("kind").notNull(),
+  subjectKind: text("subject_kind").notNull(),
+  subjectId: text("subject_id").notNull(),
+  pageId: text("page_id").notNull(),
+  comments: text("comments").notNull(),
+  submittedBy: text("submitted_by").notNull(),
+  submittedAt: ms("submitted_at").notNull(),
+  outboxId: integer("outbox_id").notNull().references(() => notionOutbox.id),
+  recordedAt: ms("recorded_at"),
+});
+
 export const verifyRecords = sqliteTable("verify_records", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   cardId: text("card_id").notNull(),

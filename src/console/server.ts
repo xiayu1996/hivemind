@@ -2,6 +2,10 @@ import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import {
+  type ConsoleTodoCommandPort,
+  type ConsoleTodoReadPort,
+} from "./todo-contract.js";
 
 export interface ConsoleDataSource {
   nodes(): Promise<unknown[]>;
@@ -28,6 +32,24 @@ export interface ConsoleServerOptions {
   serveUi?: boolean;
   /** The one write surface. Without it the console stays entirely read-only. */
   configWriter?: ConsoleConfigWritePort;
+  /**
+   * The todo surface. `todoRead` is the ledger's account of what is waiting;
+   * `todoCommands` is the only other write the console may perform, and it can
+   * only answer a todo that already waits. Without `todoCommands` the todo
+   * page is served read-only, exactly as the config page is without a writer.
+   *
+   * Routes these add, and nothing else:
+   *   GET  /api/todos                   -> TodoListPayload
+   *   GET  /api/todos/:todoId           -> TodoDetailPayload, 404 when unknown
+   *   POST /api/todos/:todoId/decision  -> TODO_DECISION_PATH
+   *   POST /api/todos/:todoId/save-check-> TODO_SAVE_CHECK_PATH
+   *
+   * The request hook below moves from the two config paths to
+   * `isConsoleWriteRequest`, so every other write -- creating a requirement,
+   * editing a task, moving work on -- is refused with 405 before a handler.
+   */
+  todoRead?: ConsoleTodoReadPort;
+  todoCommands?: ConsoleTodoCommandPort;
 }
 
 /** Builds the read-only intranet console. */

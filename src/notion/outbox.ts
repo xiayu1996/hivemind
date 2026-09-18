@@ -247,6 +247,19 @@ export class NotionOutbox {
 
     return { sent, failed, failures, dead };
   }
+
+  /**
+   * Puts a row that gave up back in the queue so the next replay tries it
+   * again.
+   *
+   * Only `dead` rows: a pending row is already coming, and a sent one must not
+   * be sent again. Attempts are reset, because the person asking is answering
+   * a question about this write ("check the save"), not extending the retry
+   * budget that produced the failure.
+   */
+  async requeue(id: number): Promise<boolean> {
+    throw new Error(`re-queueing outbox row ${id} is not implemented yet`);
+  }
 }
 
 /** Rows that gave up, newest first, for the operator log and inspect scripts. */

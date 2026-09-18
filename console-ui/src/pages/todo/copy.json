@@ -1,0 +1,84 @@
+{
+  "heading": "待办处理",
+  "intro": "需要本人答复、批准或选择的事项。",
+  "back": "返回运行总览",
+  "loading": "正在读取待办内容",
+  "loadingBody": "正在加载需要你决定的问题、选项和关联需求。",
+  "failed": "无法读取这件待办",
+  "failedBody": "待办内容没有载入，检查内网连接后重新读取；内容完整之前不会提交任何结果。",
+  "retry": "重新读取",
+  "none": "目前没有待办",
+  "noneBody": "所有事项都已处理。新的答复、批准或选择出现后，会在运行总览中优先提示。",
+  "gone": "这项待办已不再等待处理",
+  "goneBody": "它已经被处理，或来源已经改变。返回运行总览查看其他事项。",
+  "statusUnhandled": "未处理",
+  "statusProcessed": "已处理",
+  "decisionHeading": "需要你决定",
+  "summaryHeading": "待办摘要",
+  "summaryKind": "类型",
+  "summaryRequirement": "所属需求",
+  "summaryWaiting": "已等待",
+  "summaryDestination": "保留位置",
+  "kindLabels": {
+    "answer": "待答复",
+    "approve": "待批准",
+    "choose": "待选择"
+  },
+  "destinationValues": {
+    "requirement": "Notion 需求",
+    "epic": "Notion 需求",
+    "story": "Notion 任务"
+  },
+  "sectionHeadings": {
+    "question": "要回答的问题",
+    "suggested_answer": "可以采用的答复",
+    "prd_goal": "这份需求要解决什么",
+    "prd_scenarios": "要交付的场景",
+    "solution_summary": "方案摘要",
+    "solution_alternatives": "已经考虑并放弃的做法",
+    "approval_reasons": "需要本人确认的原因",
+    "solution_open_decisions": "留给本人的技术疑问",
+    "plan_summary": "这批工作的目标",
+    "plan_stories": "拆解出的任务"
+  },
+  "replyLabel": "答复",
+  "replyPlaceholder": "写下你的答复。",
+  "approveLegend": "处理结果",
+  "conclusionLabels": {
+    "approve": "批准并继续",
+    "rework": "要求返工"
+  },
+  "conclusionEffects": {
+    "approve": "按这份内容继续后续工作",
+    "rework": "把结论交回本阶段，按说明重做"
+  },
+  "choiceLegend": "请选择一项",
+  "recommendedMark": "推荐",
+  "noteLabel": "处理说明",
+  "noteHelp": "说明会保留到对应的 Notion 条目。",
+  "submitLabels": {
+    "answer": "提交答复",
+    "approve": "提交批准",
+    "choose": "提交选择"
+  },
+  "submitting": "正在提交，请稍候。",
+  "validation": {
+    "empty_answer": "请填写答复后再提交",
+    "empty_choice": "请为每个问题选择一项后再提交",
+    "unknown_option": "这个选项已经不在可选范围内，请重新选择",
+    "unknown_question": "待办内容已经改变，请重新读取后再提交",
+    "unknown_conclusion": "请选择“批准并继续”或“要求返工”后再提交",
+    "unavailable": "待办内容没有读取完整，暂时不能提交"
+  },
+  "savedPrefixes": {
+    "answer": "答复",
+    "approve": "批准结果",
+    "choose": "选择结果"
+  },
+  "processedBody": "后续工作可以继续。",
+  "awaitingHeading": "正在等待 Notion 确认保存",
+  "awaitingBody": "处理结果已经提交，但对应的 Notion 条目还没有确认保存。这件待办仍未处理，确认之后才会继续。",
+  "retryableBody": "对应的 Notion 条目没有确认保存。可以检查保存结果，原样重试这件待办的结果。",
+  "checkSave": "检查保存结果",
+  "notionTargetTemplate": "{prefix}已保留到对应的{destination}“{title}”。"
+}
