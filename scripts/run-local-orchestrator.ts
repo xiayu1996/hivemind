@@ -258,6 +258,32 @@ async function main(): Promise<void> {
   // The global view, for the keys that are not a repository's business (the
   // schedule limits this host applies, the console, the provider policy).
   const config = await ConfigStore.load(handle.client);
+  /**
+   * Makes a freshly cut worktree usable, by the repository's own account of
+   * what that takes.
+   *
+   * A checkout is not a working tree: for most repositories it has no
+   * dependencies installed, so the first phase that runs the tests finds
+   * nothing to run them with. The first real requirement hit this at SPECIFY
+   * on every Story, and one of them symlinked the host's `node_modules` in to
+   * get past it -- a tree that then builds against whatever the host happens
+   * to have. hivemind does not decide how somebody else's repository is
+   * prepared, so the command is theirs to declare; declaring none says a
+   * checkout is ready as it stands.
+   */
+  const prepareWorktree = async (worktreePath: string, slug: string): Promise<void> => {
+    const scoped = await configFor(slug);
+    const command = scoped.get("worktree.setupCommand");
+    if (command.length === 0) return;
+    const [binary, ...args] = command;
+    console.log(`preparing ${worktreePath}: ${command.join(" ")}`);
+    await execFileAsync(binary!, args, {
+      cwd: worktreePath,
+      windowsHide: true,
+      timeout: scoped.get("worktree.setupTimeoutMs"),
+      maxBuffer: 16 * 1024 * 1024,
+    });
+  };
   // The Epic's integration branch goes to origin the moment its Stories exist:
   // every Story's draft MR targets it and delivery reads it from origin.
   const publishEpicBranchFor = async (epicId: string): Promise<void> => {
@@ -667,6 +693,9 @@ async function main(): Promise<void> {
             branch: epicBranch,
             startPoint: targetBranch === epicBranch ? targetBranchDefault : targetBranch,
           }, layout);
+          // The integration tree runs the merge checks, so it needs the same
+          // preparation the Story tree does.
+          await prepareWorktree(integration.worktreePath, slug);
         }
         integrationWorktree = integration.worktreePath;
       }
@@ -679,6 +708,7 @@ async function main(): Promise<void> {
           branch,
           startPoint: targetBranch,
         }, layout);
+        await prepareWorktree(location.worktreePath, slug);
       } else if (await currentBranch(location.worktreePath) !== branch) {
         throw new Error(`existing worktree for ${cardId} is not on ${branch}`);
       }
@@ -935,6 +965,7 @@ async function main(): Promise<void> {
         branch,
         startPoint: targetBranchDefault,
       }, layout);
+      await prepareWorktree(sweepTree.worktreePath, slug);
     }
 
     // Attribution bisects the Epic's Story sequence by checking out revisions,
@@ -951,6 +982,7 @@ async function main(): Promise<void> {
           branch: `probe/${epicId}`,
           startPoint: branch,
         }, layout);
+        await prepareWorktree(probeTree.worktreePath, slug);
       }
       probeWorktree = probeTree.worktreePath;
     }
