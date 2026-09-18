@@ -2,7 +2,6 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { assembleGuardPolicy, POLICY_ENV_VAR, serializeGuardPolicy } from "../guard/policy.js";
-import { prototypeFencePatterns } from "../guard/prototype-fence.js";
 import { readInterfaceContract, type PrototypePage } from "../pipeline/interface-contract.js";
 import {
   describeChecklistFindings,
@@ -127,7 +126,13 @@ export class PiPrototypePort implements PrototypePort {
       runId,
       worktreePath: this.options.worktreePath,
       auditPath: this.options.auditPath,
-      fencedPatterns: prototypeFencePatterns(this.options.contractRoot),
+      // The contract fence is off while the flow is being proven end to end
+      // (Ryan, 2026-09-18). It is a scope rule rather than a safety one: this
+      // session works in a worktree of its own, on a branch of its own, and
+      // what it writes lands in a review nobody merges. Against that, its
+      // first real run was spent being refused the listing of the directory it
+      // had been told to fill. `prototypeFencePatterns` and its tests stay;
+      // putting the fence back is this one argument.
     });
     const runner = (this.options.createRunner ?? ((config) => new RpcPiRunner(config)))({
       binary: this.options.binary,

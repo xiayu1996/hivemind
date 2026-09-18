@@ -254,24 +254,28 @@
 | IT-02 | ✅ CODE 出口「逐条回应」：每个注入 tag 需 `addressed <tag>:` 一行，缺则 finding 喂回同一 session | `src/pipeline/code-exit-gate.ts`、`src/orchestrator/pi-phase-port.ts` | gate 单测 | IT-06 |
 | IT-03 | ✅ 走查否决回指 DoD：`failed` 必带 `cites` 且真存在；引不到降为 finding + DoD 修订建议写 Notion；`out_of_scope`/`relies_on` 随 prompt 下发 | `src/verify/ui-review.ts`、`src/orchestrator/ui-reviewed-verify-port.ts` | ui-review 单测 | IT-01 |
 | IT-04 | ✅ VERIFY 屏幕证据校验：e2e/ui 场景需独有截图 + 到达页面，缺则 inconclusive（环境类） | `src/pipeline/verdict.ts`、`src/verify/executor.ts` | verdict 单测；smoke-browser-e2e | IT-01 |
-| IT-05 | 环境失败补类：「route not found / 看到旧页面 / 无法复现 worktree UI」归环境 | `src/pipeline/failure-classification.ts` | classification 单测 | — |
+| IT-05 | ✅ 环境失败补类：「route not found / 看到旧页面 / 无法复现 worktree UI」归环境 | `src/pipeline/failure-classification.ts` | classification 单测 | — |
 | IT-06 | ✅ prompt 结构：`## What this round must do` 置顶带 tag；只注入每 (phase, kind) 最新产物；从最新验证产物提取逐场景原因 | `src/pipeline/phase-input.ts`、`src/orchestrator/story-execution-store.ts` | phase-input / store 单测 | — |
 | IT-07 | ✅ 人的回答回写 Notion：「已应用的回答」（谁、何时、针对哪条、原文、用于第几轮），代答诚实署名 | `src/notion/story-projection.ts` | projection 单测 | — |
 | IT-08 | ✅ `scripts/inspect-round.ts` 转正：一轮一屏；VERIFY/走查 session 按时间窗口定位 | `scripts/inspect-round.ts` | 对 S-E3OVERVIEW-01 第 7 轮实跑 | — |
-| IT-09 | `scripts/replay-phase.ts`：用存下的轮次输入单跑一个 phase，不写库不动状态机 | `scripts/replay-phase.ts` | 对 S-E3OVERVIEW-01 第 7 轮 CODE 输入实跑一次 | IT-06 |
-| IT-10 | 每轮 prompt 全文落盘到 session 目录；prompt 文件版本 sha 记入 `phase_runs` | `src/orchestrator/pi-phase-port.ts` | 单测 | — |
+| IT-09 | ✅ `scripts/replay-phase.ts`：用存下的轮次输入单跑一个 phase，不写库不动状态机 | `scripts/replay-phase.ts` | 脚本按 `--card-id/--phase/--print-prompt` 实跑过；原判据点名的 S-E3OVERVIEW-01 已随 2026-09-18 的建库重置删除，无法再对它复跑 | IT-06 |
+| IT-10 | ✅ 每轮 prompt 全文落盘到 session 目录；prompt 文件版本 sha 记入 `phase_runs` | `src/orchestrator/pi-phase-port.ts` | 单测 | — |
 | IT-11 | ✅ Notion 验证记录可读：accepted 轮写「N 个场景都验证通过（…）」，rejected 轮逐场景写两条道原因与所依据的 DoD 句子，列出 DoD 修订建议 | `src/notion/story-projection.ts` | projection 单测 | IT-03 |
 | IT-12 | ✅ 轮次账本展示：`Budget x/6` 按 `last_human_action_at` 之后被拒轮数计；round 流水号不重置 | `src/notion/story-projection.ts` | projection 单测 | — |
 | IT-13 | ~~**IT 验收**：S-E3OVERVIEW-01 重置到 DESIGN 重跑；对照旧 8 轮~~ **判据在 2026-09-14 重写并并入 MR-38**。原判据在新拓扑下不成立：卡不再从 DESIGN 起跑（前面多了 SHAPE），DoD 的产出方也换了阶段，「对照旧 8 轮」没有同基准。IT-01..12 的**单项判据仍然有效**，只是端到端那一条由 MR-38 承担 | 见 MR-38 | 见 MR-38 | IT-01..12 |
 | IT-14 | ✅ Epic 分支在拆解批准时推送；派发前重试；合入后推头 | `src/vcs/epic-branch.ts`, `plan-approval.ts`, `merge-flow.ts` | 单测 + 实跑 origin/epic/E3OVERVIEW 存在 | — |
 | IT-15 | ✅ Story draft MR 在 ff-merge 之前开（rebase → 推分支 → 开 MR → 复验 → 合入）；复用已开 MR；目标已包含则不开 | `merge-flow.ts`, `epic-integration.ts`, `story-worker.ts`, `story-delivery.ts`, `mr/adapters.ts` | 单测顺序断言 + S-E3OVERVIEW-01 resume 实跑 | IT-14 |
-| IT-16 | Epic MR：缺红绿提交对不抛错；目标分支来自 `--target-branch`；等回归池干净；关闭未合并退回 EXECUTING | `src/vcs/epic-delivery.ts`, `epic-completion.ts`, `regression/epic-gate.ts` | 单测 | — |
-| IT-17 | 走查环境：`verify.appStartCommand/appReadyUrl/seedCommand`，DoD `seed`；走查 inconclusive 可见 | `src/verify/app-under-review.ts`, `ui-reviewed-verify-port.ts`, `dod.ts` | 单测 + E3 卡实跑 | — |
-| IT-18 | 需求层 `clearStop` 调用者；停点详情上页；HUMAN_PARKED 空 resume 不抛；EXECUTING 期间重投影 | `requirement-input-sync.ts`, `requirement-page-delivery.ts` | 单测 | — |
+| IT-16 | ✅ Epic MR：缺红绿提交对不抛错；目标分支来自 `--target-branch`；等回归池干净；关闭未合并退回 EXECUTING | `src/vcs/epic-delivery.ts`、`src/orchestrator/epic-completion.ts`、`src/regression/epic-gate.ts` | 单测 | — |
+| IT-17 | ✅ 走查环境：`verify.appStartCommand/appReadyUrl/seedCommand`，DoD `seed`；走查 inconclusive 可见 | `src/verify/app-under-review.ts`, `ui-reviewed-verify-port.ts`, `dod.ts` | 单测 + E3 卡实跑 | — |
+| IT-18 | ✅ 需求层 `clearStop` 调用者；停点详情上页；HUMAN_PARKED 空 resume 不抛；EXECUTING 期间重投影 | `requirement-input-sync.ts`, `requirement-page-delivery.ts` | 单测 | — |
 | IT-19 | ✅ MERGE 可重入；✅ 人工/契约触发的回 DESIGN 解冻并作废可复用轮 | `run-local-orchestrator.ts`, `story-execution-store.ts`, `story-worker.ts` | 单测 | — |
-| IT-20 | Story 停牌上浮 Epic BLOCKED，恢复自动回 EXECUTING；escalation 型 BLOCKED 不可被评论触发重拆 | `src/orchestrator/epic-escalation.ts` | 单测 | — |
-| IT-21 | outbox attempts + dead 状态 + 计数日志 + 死信列表 | `src/notion/outbox.ts` | 单测 | — |
-| IT-22 | 回归环路：sweep 传 probe worktree；`regression_cards` resolve；REGRESSION_FIX 可运行 | `scripts/run-regression.ts`, `regression/store.ts`, `story-worker.ts` | 单测 + 人为制造回归实跑 | IT-16 |
+| IT-20 | ✅ Story 停牌上浮 Epic BLOCKED，恢复自动回 EXECUTING；escalation 型 BLOCKED 不可被评论触发重拆 | `src/orchestrator/epic-escalation.ts` | 单测 | — |
+| IT-21 | ✅ outbox attempts + dead 状态 + 计数日志 + 死信列表 | `src/notion/outbox.ts` | 单测 | — |
+| IT-22 | ✅ 回归环路：sweep 传 probe worktree；`regression_cards` resolve；REGRESSION_FIX 可运行 | `scripts/run-regression.ts`, `regression/store.ts`, `story-worker.ts` | 单测 + 人为制造回归实跑 | IT-16 |
+
+IT-* 与 MS-* 逐行复核（2026-09-18）：此前未打勾的 IT-05/09/10/16/17/18/20/21/22 与 MS-01/02 全部已落地，
+逐条对着代码与测试确认后补勾。唯一的实质修正是 IT-16 的输出物路径：`epic-completion.ts` 在 `src/orchestrator/` 而不是 `src/vcs/`。
+IT-09 的判据点名了一张已被删库带走的卡，改写为脚本自身的实跑；IT-13 仍是并入 MR-38 的那条，不单独打勾。
 
 ---
 
@@ -378,8 +382,8 @@
 
 | ID | 任务 | 输出物 | 验证方式 | 前置 |
 |---|---|---|---|---|
-| MS-02 | 审批粒度与验收层级：`decompose.planApproval` 配置项（默认关，Story 立即建）；验收下沉到 Epic（`epic_acceptance_items` 由 `epic_prd_scenarios` 播种、Epic 页 to_do、缺口在本 Epic 下开补交付 Story、全勾 + MR 合并才 DONE）；需求层改为汇总各 Epic 判定；Story 只在真停下时进「等我处理」，看板去掉「待人确认」列 | `src/orchestrator/epic-acceptance.ts`、`acceptance-checklist.ts`、`plan-approval.ts`、`src/notion/board-status.ts`、01 §2.3/§8.2 | `epic-acceptance.test.ts`（播种、勾选一次、缺口开补交付 Story 并回 EXECUTING、重开时已通过的不再问）；`epic-completion.test.ts`（未判定不 DONE）；`plan-approval.test.ts`（开关两态）；`acceptance-checklist.test.ts`（汇总不再等人）；`story-projection.test.ts`（四类停点各出一条 callout，运行中不出） | MS-01 |
-| MS-01 | Notion 呈现重构：角色驱动的需求/Epic/Story 三级骨架（判断方向的信息排在进度之前、每层只维护自己这一层的状态、不等人时页面不出状态 callout）、agent 产中文业务语言 + 出口 lint、显示词表 `src/notion/display-text.json` 收口全部给人看的枚举 | `src/notion/display-text.{json,ts}`、`rich-text.ts`、三层 page builder 与 delivery、`prompts/phases/shape.md` 与 `design.md`、01 §2.3/§8.2 | `notion-write-language.test.ts` 扫三条投影的全部 outbox payload，裸枚举与英文模板即红；三层 delivery 的原位迁移用例（heading/spec/场景块的 blockId 不重建）；`scripts/live-notion-delivery.ts` 对真实需求/Epic/Story 页各跑一轮，每轮恰好一个 toggle、区段各出现一次、callout 唯一 | MR-37 |
+| MS-02 | ✅ 审批粒度与验收层级：`decompose.planApproval` 配置项（默认关，Story 立即建）；验收下沉到 Epic（`epic_acceptance_items` 由 `epic_prd_scenarios` 播种、Epic 页 to_do、缺口在本 Epic 下开补交付 Story、全勾 + MR 合并才 DONE）；需求层改为汇总各 Epic 判定；Story 只在真停下时进「等我处理」，看板去掉「待人确认」列 | `src/orchestrator/epic-acceptance.ts`、`acceptance-checklist.ts`、`plan-approval.ts`、`src/notion/board-status.ts`、01 §2.3/§8.2 | `epic-acceptance.test.ts`（播种、勾选一次、缺口开补交付 Story 并回 EXECUTING、重开时已通过的不再问）；`epic-completion.test.ts`（未判定不 DONE）；`plan-approval.test.ts`（开关两态）；`acceptance-checklist.test.ts`（汇总不再等人）；`story-projection.test.ts`（四类停点各出一条 callout，运行中不出） | MS-01 |
+| MS-01 | ✅ Notion 呈现重构：角色驱动的需求/Epic/Story 三级骨架（判断方向的信息排在进度之前、每层只维护自己这一层的状态、不等人时页面不出状态 callout）、agent 产中文业务语言 + 出口 lint、显示词表 `src/notion/display-text.json` 收口全部给人看的枚举 | `src/notion/display-text.{json,ts}`、`rich-text.ts`、三层 page builder 与 delivery、`prompts/phases/shape.md` 与 `design.md`、01 §2.3/§8.2 | `notion-write-language.test.ts` 扫三条投影的全部 outbox payload，裸枚举与英文模板即红；三层 delivery 的原位迁移用例（heading/spec/场景块的 blockId 不重建）；`scripts/live-notion-delivery.ts` 对真实需求/Epic/Story 页各跑一轮，每轮恰好一个 toggle、区段各出现一次、callout 唯一 | MR-37 |
 
 ---
 
@@ -426,6 +430,11 @@ MU-09 拆开的那一项（2026-09-18，MU-03 做完后复核）：“仓库首�
 同一条也解释 MU-03 为什么没做逐页四态截图：`prototype-screenshots.ts` 拍的 PNG 落在本机 evidence 目录，Notion 拿不到。方案区段的逐页折叠里放的是这页承接哪些场景、必须看得见什么、四态怎么在原型里切，图仍然在合并请求里点开看。
 要解掉这条，先给 gateway 补 `POST /v1/file_uploads` 与 multipart 发送，之后并排方向与四态截图是同一条路上的两件事。
 `interface.direction` 已经让方向变成一个被写下来、被人批的决定，这是这一节的主体；多方向只是把“描述题”换成“选择题”的那一步。
+
+原型阶段的写入围栏暂时摘掉（2026-09-18，Ryan）：主流程还没跑通，先不拿权限挡路。它是一条作用域规则而不是安全规则——
+画原型的会话在自己的 worktree、自己的分支上，写出来的东西进的是一个没人合的评审；而它第一次真跑，
+把轮次花在被拒绝 `ls` 它自己要填的那个目录上。`src/guard/prototype-fence.ts` 与它的测试都留着，
+装回去就是 `pi-prototype-port.ts` 里的一个参数。
 
 ## MC 特殊化收敛（2026-09-18 增补，排期在 MU-02 与 MU-03 之间）
 

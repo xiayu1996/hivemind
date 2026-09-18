@@ -270,7 +270,11 @@ describe("PiPrototypePort", () => {
     expect(drawing.instance.prompts[1]).toContain("JSON");
   });
 
-  it("fences the session's writes to the contract directory", async () => {
+  it("keeps the session inside its own worktree, and does not fence it further", async () => {
+    // The contract fence is off while the flow is being proven (Ryan,
+    // 2026-09-18): the first run spent its rounds being refused the listing of
+    // the directory it was told to fill. What still holds is the worktree --
+    // this session writes to a branch of its own and nowhere else.
     const worktree = await contract();
     const seen: Array<Record<string, unknown>> = [];
     await drawingPort({ worktree, replies: [GOOD], seen }).port.run(request);
@@ -278,8 +282,10 @@ describe("PiPrototypePort", () => {
     const env = seen[0]!.env as Record<string, string>;
     const policy = parseGuardPolicy(env[POLICY_ENV_VAR]!);
     const patterns = policy.fencedPatterns.map((source) => new RegExp(source));
+    expect(policy.fencedPatterns).toEqual([]);
     expect(checkFilePath("docs/prototype/pages/board.html", worktree, [], patterns).deny).toBe(false);
-    expect(checkFilePath("src/app.ts", worktree, [], patterns).deny).toBe(true);
+    expect(checkFilePath("src/app.ts", worktree, [], patterns).deny).toBe(false);
+    expect(checkFilePath("/etc/passwd", worktree, [], patterns).deny).toBe(true);
   });
 
   it("says the contract is not there when nothing was written", async () => {
