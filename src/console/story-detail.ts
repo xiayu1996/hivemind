@@ -126,20 +126,26 @@ export interface StoryRoundStartEvidence {
  * and only a person can.
  */
 export function classifyRoundStart(
-  _evidence: StoryRoundStartEvidence,
+  evidence: StoryRoundStartEvidence,
 ): { trigger: StoryRoundTrigger; note: string | null } {
-  return { trigger: "first_run", note: null };
+  if (evidence.round <= 1) return { trigger: "first_run", note: null };
+  if (evidence.feedbackChannel === "rework" || evidence.feedbackChannel === "defect") {
+    return { trigger: "rework", note: evidence.feedbackBody };
+  }
+  if (evidence.feedbackChannel === "answer") return { trigger: "restart", note: null };
+  if (evidence.refusedPreviousResult) return { trigger: "rework", note: null };
+  return { trigger: "restart", note: null };
 }
 
 /** The round a person is looking at when they open the card: the last one, or
  * null when the card has not run any. */
-export function currentRound(_snapshot: StoryDetailSnapshot): StoryRound | null {
-  return null;
+export function currentRound(snapshot: StoryDetailSnapshot): StoryRound | null {
+  return snapshot.rounds.at(-1) ?? null;
 }
 
 /** One round by its serial number, or null when this card has no such round. */
-export function roundByNumber(_snapshot: StoryDetailSnapshot, _round: number): StoryRound | null {
-  return null;
+export function roundByNumber(snapshot: StoryDetailSnapshot, round: number): StoryRound | null {
+  return snapshot.rounds.find((entry) => entry.round === round) ?? null;
 }
 
 export interface StoryDetailReadPort {
@@ -157,7 +163,176 @@ export class LibsqlStoryDetailReadPort implements StoryDetailReadPort {
     this.now = now;
   }
 
-  readStoryDetail(cardId: string): Promise<StoryDetailReadResult> {
-    return Promise.resolve({ kind: "failed", message: `the detail of ${cardId} is not available yet` });
+  async readStoryDetail(cardId: string): Promise<StoryDetailReadResult> {
+    try {
+      const story = (
+        await this.client.execute({
+          sql: "SELECT id, title, state FROM stories WHERE id = ?",
+          args: [cardId],
+        })
+      ).rows[0];
+      if (!story) return { kind: "not_found" };
+
+      const [runRows, acceptanceRows, roundCostRows, totalCostRow, feedbackRows, rejectionRows, refusalEventRows] =
+        await Promise.all([
+          this.client.execute({
+            sql: `SELECT round, run_id, phase, started_at, ended_at FROM phase_runs
+                   WHERE card_id = ? ORDER BY round, started_at, run_id`,
+            args: [cardId],
+          }),
+          this.client.execute({
+            // This round's own conclusions, never the carry-forwards of them: a
+            // carried row repeats an earlier round's result, and counting it
+            // again would move that result into the round that copied it.
+            sql: `SELECT v.round AS round, v.scenario_id AS scenario_id, v.outcome AS outcome,
+                         COALESCE(s.title, v.scenario_id) AS text
+                   FROM verify_scenario_results v
+                   LEFT JOIN story_specs s ON s.story_id = v.card_id AND s.spec_id = v.scenario_id
+                   WHERE v.card_id = ? AND v.carried_from IS NULL
+                   ORDER BY v.round, COALESCE(s.seq, v.id), v.id`,
+            args: [cardId],
+          }),
+          this.client.execute({
+            sql: `SELECT r.round AS round, SUM(c.cost_usd) AS usd
+                   FROM cost_entries c
+                   JOIN phase_runs r ON r.run_id = c.run_id
+                   WHERE r.card_id = ?
+                   GROUP BY r.round`,
+            args: [cardId],
+          }),
+          this.client.execute({
+            sql: "SELECT SUM(cost_usd) AS usd FROM cost_entries WHERE card_id = ?",
+            args: [cardId],
+          }),
+          this.client.execute({
+            sql: `SELECT applied_round AS round, channel, body FROM human_feedback
+                   WHERE card_id = ? AND applied_round IS NOT NULL
+                   ORDER BY applied_round, created_at, id`,
+            args: [cardId],
+          }),
+          this.client.execute({
+            sql: `SELECT round FROM verify_records WHERE card_id = ? AND verdict = 'rejected'`,
+            args: [cardId],
+          }),
+          this.client.execute({
+            sql: `SELECT ts FROM event_log
+                   WHERE card_id = ? AND type IN ('phase.invalidated','merge.conflict','merge.verification_failed')
+                   ORDER BY ts, id`,
+            args: [cardId],
+          }),
+        ]);
+
+      const runsByRound = new Map<
+        number,
+        Array<{ runId: string; phase: string; startedAt: number; endedAt: number | null }>
+      >();
+      for (const row of runRows.rows) {
+        const round = Number(row.round);
+        const list = runsByRound.get(round) ?? [];
+        list.push({
+          runId: String(row.run_id),
+          phase: String(row.phase),
+          startedAt: Number(row.started_at),
+          endedAt: row.ended_at === null ? null : Number(row.ended_at),
+        });
+        runsByRound.set(round, list);
+      }
+
+      const acceptanceByRound = new Map<number, StoryRoundAcceptance[]>();
+      for (const row of acceptanceRows.rows) {
+        const round = Number(row.round);
+        const list = acceptanceByRound.get(round) ?? [];
+        list.push({
+          scenarioId: String(row.scenario_id),
+          text: String(row.text),
+          outcome: String(row.outcome) === "failed" ? "failed" : "passed",
+        });
+        acceptanceByRound.set(round, list);
+      }
+
+      const costByRound = new Map<number, number>();
+      for (const row of roundCostRows.rows) {
+        costByRound.set(Number(row.round), Number(row.usd ?? 0));
+      }
+
+      // The comment the executor applied to a round. Rows are read oldest
+      // first, so the last one written wins: that is the comment a person saw
+      // land, and the one that names the round.
+      const feedbackByRound = new Map<number, { channel: StoryRoundStartEvidence["feedbackChannel"]; body: string | null }>();
+      for (const row of feedbackRows.rows) {
+        const channel = String(row.channel);
+        feedbackByRound.set(Number(row.round), {
+          channel:
+            channel === "answer" || channel === "rework" || channel === "defect" ? channel : null,
+          body: row.body === null ? null : String(row.body),
+        });
+      }
+
+      const rejectedRounds = new Set(rejectionRows.rows.map((row) => Number(row.round)));
+      const refusalEvents = refusalEventRows.rows.map((row) => Number(row.ts));
+
+      const roundNumbers = [...runsByRound.keys()].toSorted((a, b) => a - b);
+      const rounds: StoryRound[] = [];
+      for (let index = 0; index < roundNumbers.length; index += 1) {
+        const round = roundNumbers[index]!;
+        const runs = [...runsByRound.get(round)!].toSorted((a, b) =>
+          a.startedAt !== b.startedAt ? a.startedAt - b.startedAt : a.runId.localeCompare(b.runId),
+        );
+        const first = runs[0]!;
+        const last = runs[runs.length - 1]!;
+        const open = runs.some((run) => run.endedAt === null);
+        const endedAt = open
+          ? null
+          : runs.reduce<number | null>((latest, run) => {
+              const end = run.endedAt;
+              if (end === null) return latest;
+              return latest === null || end > latest ? end : latest;
+            }, null);
+
+        const previous = index > 0 ? runsByRound.get(roundNumbers[index - 1]!)! : null;
+        const refusedPreviousResult =
+          previous !== null &&
+          (rejectedRounds.has(roundNumbers[index - 1]!) ||
+            (() => {
+              const from = Math.min(...previous.map((run) => run.startedAt));
+              return refusalEvents.some((ts) => ts >= from && ts <= first.startedAt);
+            })());
+        const feedback = feedbackByRound.get(round);
+        const { trigger, note } = classifyRoundStart({
+          round,
+          feedbackChannel: feedback?.channel ?? null,
+          feedbackBody: feedback?.body ?? null,
+          refusedPreviousResult,
+          humanRestart: false,
+        });
+
+        const acceptance = acceptanceByRound.get(round) ?? [];
+        rounds.push({
+          round,
+          trigger,
+          triggerNote: note,
+          phase: last.phase,
+          startedAt: first.startedAt,
+          endedAt,
+          resultPending: open && acceptance.length === 0,
+          acceptance,
+          costUsd: costByRound.get(round) ?? 0,
+        });
+      }
+
+      return {
+        kind: "ok",
+        snapshot: {
+          cardId,
+          title: String(story.title),
+          state: String(story.state),
+          rounds,
+          totalCostUsd: Number(totalCostRow.rows[0]?.usd ?? 0),
+          generatedAt: this.now(),
+        },
+      };
+    } catch (cause) {
+      return { kind: "failed", message: cause instanceof Error ? cause.message : String(cause) };
+    }
   }
 }
