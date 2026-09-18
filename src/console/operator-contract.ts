@@ -391,3 +391,75 @@ export function transitionConsoleLoadState<Query, Value>(
 
 /** Locates every occurrence of the keyword. Matching is case-insensitive, which
  * leaves CJK text literal; the ranges let callers mark matches with text, not colour. */
+function keywordRanges(content: string, keyword: string | undefined): Array<{ start: number; end: number }> {
+  if (keyword === undefined || keyword === "") return [];
+  const haystack = content.toLowerCase();
+  const needle = keyword.toLowerCase();
+  const ranges: Array<{ start: number; end: number }> = [];
+  let cursor = haystack.indexOf(needle);
+  while (cursor !== -1) {
+    ranges.push({ start: cursor, end: cursor + keyword.length });
+    cursor = haystack.indexOf(needle, cursor + needle.length);
+  }
+  return ranges;
+}
+
+/**
+ * Searches one ordered record stream by local date, role and keyword together.
+ * The query is echoed back unchanged so the caller can show exactly what was
+ * searched; a missing keyword matches every entry in the other facets.
+ */
+export function searchWorkRecords(
+  entries: readonly WorkRecordEntry[],
+  query: WorkRecordQuery,
+): WorkRecordSearchPage {
+  const matches = entries
+    .filter((entry) => {
+      const localDate = localDateIn(query.timeZone, entry.occurredAt);
+      if (localDate < query.startDateInclusive || localDate > query.endDateInclusive) return false;
+      if (query.role !== undefined && entry.role !== query.role) return false;
+      return keywordRanges(entry.content, query.keyword).length > 0 || query.keyword === undefined || query.keyword === "";
+    })
+    .map((entry) => ({
+      recordId: entry.recordId,
+      workId: entry.workId,
+      occurredAt: entry.occurredAt,
+      role: entry.role,
+      matchedText: entry.content,
+      matchRanges: keywordRanges(entry.content, query.keyword),
+    }))
+    .toSorted((left, right) => left.occurredAt.localeCompare(right.occurredAt) || left.recordId.localeCompare(right.recordId));
+
+  return {
+    query,
+    matches,
+    revision: `records:${query.timeZone}:${query.startDateInclusive}:${query.endDateInclusive}`,
+    generatedAt: matches.at(-1)?.occurredAt ?? `${query.endDateInclusive}T00:00:00.000Z`,
+  };
+}
+
+/**
+ * Reads one record with its immediate neighbours from the same work. Adjacency is
+ * fixed to one entry on each side: at the head or tail the missing neighbour is
+ * null, and a still-running work carries the instant the next append is expected.
+ */
+export function readWorkRecord(
+  entries: readonly WorkRecordEntry[],
+  recordId: string,
+  options: { revision: string; workStillRunning: boolean; refreshAfter?: IsoInstant },
+): WorkRecordDetail | null {
+  const current = entries.find((entry) => entry.recordId === recordId);
+  if (!current) return null;
+  const siblings = entries
+    .filter((entry) => entry.workId === current.workId)
+    .toSorted((left, right) => left.sequence - right.sequence);
+  const index = siblings.findIndex((entry) => entry.recordId === recordId);
+  const detail: WorkRecordDetail = {
+    current,
+    previous: siblings[index - 1] ?? null,
+    next: siblings[index + 1] ?? null,
+    workStillRunning: options.workStillRunning,
+    revision: options.revision,
+  };
+  return detail;
+}
