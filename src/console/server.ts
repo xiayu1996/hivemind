@@ -2,6 +2,11 @@ import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import type {
+  DailyCostReadResult,
+  DailyCostSelection,
+  DailyCostTimeZoneOption,
+} from "./daily-costs.js";
 
 export interface ConsoleDataSource {
   nodes(): Promise<unknown[]>;
@@ -14,6 +19,11 @@ export interface ConsoleDataSource {
    * store: the queue is a set of rows there, and a board over a separate broker
    * would be a second account of the same thing, free to disagree with it. */
   queue(): Promise<unknown>;
+  /** The natural-day zones the costs page may offer. Optional so a source that
+   * cannot enumerate them offers none rather than a hand-kept list that drifts. */
+  dailyCostTimeZones?(): Promise<readonly DailyCostTimeZoneOption[]>;
+  /** One snapshot of daily costs for a selection, read from the central ledger. */
+  dailyCosts?(selection: DailyCostSelection): Promise<DailyCostReadResult>;
 }
 
 export interface ConsoleConfigWritePort {
@@ -51,6 +61,25 @@ export async function createConsoleServer(
   app.get("/api/nodes", async () => data.nodes());
   app.get("/api/tasks", async () => data.tasks());
   app.get("/api/costs", async () => data.costs());
+  app.get("/api/costs/time-zones", async (_request, reply) => {
+    if (!data.dailyCostTimeZones) return reply.code(404).send({ error: "daily cost time zones are not available" });
+    return data.dailyCostTimeZones();
+  });
+  app.get("/api/costs/daily", async (request, reply) => {
+    if (!data.dailyCosts) return reply.code(404).send({ error: "daily costs are not available" });
+    const query = request.query as { timeZone?: string; startDate?: string; endDate?: string };
+    if (!query.timeZone || !query.startDate || !query.endDate) {
+      return reply.code(400).send({ error: "timeZone, startDate and endDate are required" });
+    }
+    const result = await data.dailyCosts({
+      timeZone: query.timeZone,
+      startDate: query.startDate,
+      endDate: query.endDate,
+    });
+    if (result.kind === "invalid") return reply.code(400).send({ error: result.code, message: result.message });
+    if (result.kind === "failed") return reply.code(500).send({ error: result.message });
+    return result.snapshot;
+  });
   app.get("/api/config", async () => data.config());
   app.get("/api/stats", async () => data.stats());
   app.get("/api/providers", async () => data.providers());

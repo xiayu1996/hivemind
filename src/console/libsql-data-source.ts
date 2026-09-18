@@ -4,6 +4,7 @@ import { ProjectionRegistry } from "../observability/projections/registry.js";
 import { renderTraceHtml } from "../observability/projections/trace-html.js";
 import { traceProjection } from "../observability/projections/units.js";
 import { summarizeFootprintDeviation } from "../orchestrator/footprint-deviation.js";
+import { LibsqlDailyCostReadPort, type DailyCostReadResult, type DailyCostSelection, type DailyCostTimeZoneOption } from "./daily-costs.js";
 import type { ConsoleDataSource } from "./server.js";
 
 function plain(row: Row): Record<string, unknown> {
@@ -11,6 +12,8 @@ function plain(row: Row): Record<string, unknown> {
 }
 
 export class LibsqlConsoleDataSource implements ConsoleDataSource {
+  private readonly dailyCostPort: LibsqlDailyCostReadPort;
+
   constructor(
     private readonly client: Client,
     private readonly nodeSnapshot: () => Promise<unknown[]>,
@@ -18,7 +21,9 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
      * never recomputed here: the whole point of the cascade is that the widest
      * view costs one read rather than a walk over every event. */
     private readonly fleet?: () => unknown,
-  ) {}
+  ) {
+    this.dailyCostPort = new LibsqlDailyCostReadPort(client);
+  }
 
   nodes(): Promise<unknown[]> {
     return this.nodeSnapshot();
@@ -129,6 +134,16 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
       running: running.rows.map(plain),
       providerSlots: slots.rows.map(plain),
     };
+  }
+
+  /** The selectable natural-day zones, straight from the runtime's IANA catalog. */
+  dailyCostTimeZones(): Promise<readonly DailyCostTimeZoneOption[]> {
+    return this.dailyCostPort.listTimeZones();
+  }
+
+  /** One snapshot of daily costs for a selection, read from `cost_entries` and `turn_usage`. */
+  dailyCosts(selection: DailyCostSelection): Promise<DailyCostReadResult> {
+    return this.dailyCostPort.readDailyCosts(selection);
   }
 
   async config(): Promise<unknown[]> {
