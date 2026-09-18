@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { loadPmPromptLayers, type PmPhase } from "../pipeline/prompt-loader.js";
+import { promptWithContinueRetry } from "../runner/continue-retry.js";
 import { lastAssistantText } from "../runner/assistant-text.js";
 import type { ResolvedAgentSpec } from "../runner/agent-spec.js";
 import { RpcPiRunner, type RpcRunnerConfig } from "../runner/rpc-runner.js";
@@ -141,7 +142,11 @@ export class PiPmPort implements ClarifyPort, PrdPort, SolutionPort, Requirement
     try {
       await runner.start();
       await runner.setAutoRetry(false);
-      const result = await runner.prompt(prompt);
+      // Resumed rather than replayed, like every other lane that drives a
+      // model: the pi process and its in-memory session survive a broken
+      // stream, and this lane's turns are long enough that throwing one
+      // away costs a whole fifteen-minute window and buys nothing.
+      const result = await promptWithContinueRetry(runner, prompt, { maxContinueRetries: 8 });
       if (result.failure) throw new Error(result.failure.errorMessage);
       // Reported before the contract is checked: the tokens were spent whether
       // or not the answer turns out to be usable.

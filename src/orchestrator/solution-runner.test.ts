@@ -274,4 +274,54 @@ describe("SolutionRunner", () => {
     });
     expect(published).toContain(REQUIREMENT_ID);
   });
+
+  describe("the contract the split is built on", () => {
+    function landing(land: (id: string) => Promise<void>, port: SolutionPort): SolutionRunner {
+      return new SolutionRunner(
+        store,
+        port,
+        { publish: async (id: string) => { published.push(id); } },
+        { landContract: land },
+      );
+    }
+
+    it("puts the approved contract on the target branch before splitting the requirement", async () => {
+      // Every card reads the contract off a worktree cut from that branch, so
+      // one left on its own branch is one no card can see.
+      const landed: string[] = [];
+      const run = landing(async (id) => { landed.push(id); }, new ScriptedPort([keepsTheStack()]));
+
+      await expect(run.advance(REQUIREMENT_ID)).resolves.toMatchObject({ kind: "confirmed" });
+      expect(landed).toEqual([REQUIREMENT_ID]);
+      await expect(store.getRequirement(REQUIREMENT_ID)).resolves.toMatchObject({ state: "DECOMPOSING" });
+    });
+
+    it("lands what a person approved, on the round their approval is read", async () => {
+      const landed: string[] = [];
+      const run = landing(async (id) => { landed.push(id); }, new ScriptedPort([changesTheStack()]));
+
+      await run.advance(REQUIREMENT_ID);
+      expect(landed).toEqual([]);
+
+      await store.confirmSolution(REQUIREMENT_ID, 1, "comment-2", "comment", "run-approve");
+      await expect(run.advance(REQUIREMENT_ID)).resolves.toMatchObject({ kind: "confirmed", source: "human" });
+      expect(landed).toEqual([REQUIREMENT_ID]);
+    });
+
+    it("stops rather than splitting a requirement whose contract did not land", async () => {
+      // Splitting first would queue the same stop once per Story with a screen,
+      // each of them asking for a token table nobody handed it.
+      const run = landing(
+        async () => { throw new Error("the review request is open after the merge was asked for"); },
+        new ScriptedPort([keepsTheStack()]),
+      );
+
+      await expect(run.advance(REQUIREMENT_ID)).resolves.toMatchObject({ kind: "stopped" });
+      await expect(store.getRequirement(REQUIREMENT_ID)).resolves.toMatchObject({
+        state: "SOLUTION",
+        stopReason: "blocking_question",
+      });
+      expect(published).toContain(REQUIREMENT_ID);
+    });
+  });
 });

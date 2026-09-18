@@ -491,6 +491,20 @@ export const CONFIG_KEYS = {
     description: "Run the browser lane's Chromium with its process sandbox. Turn off only on a host that cannot build one (a container, or Ubuntu's user-namespace restriction that preflight reports) after the kernel fix is ruled out.",
     dangerous: true,
   }),
+  "worktree.setupCommand": def({
+    schema: z.array(z.string().trim().min(1)),
+    default: [],
+    scope: "per-repo",
+    reload: "hot",
+    description: "What this repository needs done to a fresh worktree before a phase can work in it, as argv run in it once at creation: a dependency install, a code generation step. Empty means a checkout is usable as it stands. Without it a phase reaches its first test run and finds nothing to run it with -- the first real requirement had every Story arrive at SPECIFY with no node_modules, and one of them symlinked the host's to get out.",
+  }),
+  "worktree.setupTimeoutMs": def({
+    schema: z.number().int().positive(),
+    default: 600_000,
+    scope: "per-repo",
+    reload: "hot",
+    description: "How long the worktree setup command may take. A cold dependency install is minutes, so this is not the ordinary command timeout.",
+  }),
   "verify.appStartCommand": def({
     schema: z.array(z.string().trim().min(1)),
     default: [],

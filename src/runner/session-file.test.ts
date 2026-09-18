@@ -22,6 +22,7 @@ function root(): string {
 function request(over: Partial<SessionFileRequest> = {}): SessionFileRequest {
   return {
     sessionRoot: over.sessionRoot ?? root(),
+    cwd: "/work/trees/S-EPIC1-01",
     cardId: "S-EPIC1-01",
     phase: "CODE",
     round: 1,
@@ -80,6 +81,16 @@ describe("the session file a spawn is given", () => {
     expect(JSON.parse(header!)).toMatchObject({ type: "session", version: 3, id: pinned.id });
     expect(rest).toEqual([""]);
     expect(await sessionMessageCount(pinned.path)).toBe(0);
+  });
+
+  it("names the tree the phase works on, not the directory the sessions are filed in", async () => {
+    // pi takes this as the session's working directory. Pointed at the session
+    // root it puts the model somewhere with no repository in it, and what the
+    // model writes lands in a tree the exit checks never look at.
+    const pinned = await pinSessionFile(request({ cwd: "/work/trees/S-EPIC1-01" }));
+
+    const header = readFileSync(pinned.path, "utf8").split("\n")[0]!;
+    expect(JSON.parse(header)).toMatchObject({ cwd: "/work/trees/S-EPIC1-01" });
   });
 
   it("writes the same bytes twice, so a rebuilt round is the same input", async () => {

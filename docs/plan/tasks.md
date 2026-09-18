@@ -526,6 +526,36 @@ MU-09 拆开的那一项（2026-09-18，MU-03 做完后复核）：“仓库首�
 
 ---
 
+## MW 首次真实需求全程观察（2026-09-18 夜 — 09-19）
+
+需求「Hivemind 的 web 管理后台」是第一个从 Notion 接单、走完澄清 → PRD → 方案 → 原型 → 拆解 → 执行的真实需求。
+逐条记录观察到的流程缺陷、根因与处置；**修复必须落在机制上**，手工推一把只算止血不算修。
+
+| # | 现象 | 根因 | 处置 |
+|---|---|---|---|
+| W-01 ✅ | 画原型的会话声称画了六页，磁盘上一个文件没有 | 它借拆解的调用点取大脑档，连带继承了拆解的**只读**工具面（实测请求体 `tools: ['find','grep','ls','read']`）；守卫的只读工具名单写的是 Claude Code 的拼法（`list`/`glob`）而非 pi 的；围栏把契约根排除在自身之外 | 画原型成为自己的 `ModelPurpose`；两张工具名单合并为一个导出常量；围栏放行根目录。各带回归测试 |
+| W-02 ✅ | 方案已批准，界面契约却留在未合的 PR 上 | `prototype-delivery.ts` 的注释写明「人批准方案时一起批」，但**没有任何代码在批准后合它**；而每张卡从自己的 worktree 读契约，worktree 从主干切 | `MergeRequestLandPort` + `SolutionRunner.landContract`：确认方案即落地契约，落不下去就停在 SOLUTION 让人看 PR，而不是拆完让每张带界面的卡各停一次 |
+| W-03 ✅ | 七个 Epic 里三个在十分钟内 BLOCKED | 拒绝理由只说「invalid Story id」不说正确形状；prompt 说「数量有上限」不说上限是几；一个错 Story id 放大成十六条 reason 淹掉真正的打回理由；固定两次尝试在每轮都有进展时掐断 | 拒绝自带可照抄的形状；形状与上限随请求下发（上限来自配置）；级联抑制；固定两次改为上限四次 + 内环同款「理由集合不得重复」 |
+| W-04 ✅ | BLOCKED 的 Epic 只能靠人评论恢复，而「id 形状不对」没有人答得上来 | 出路只有 `answerBlocker` 一条，它是为 blocking question 设计的 | `reopenRejectedDecompositions`：判据拒绝类的 BLOCKED 在安装版本变化后自动重开一次；blocking question 原样留着 |
+| W-05 ✅ | 两版原型的 design lint finding 一字不差（实库 22 行只有 6 种，同一条重复四次） | `recordDesignLint` 在出口通过后记 friction（检测器慢/缺/错不许改变契约是否被接受，这是对的），但**没有任何代码把 friction 读回来**，下一版重画拿到的是和上一版一样的空白起点 | `RequirementStore.designLintFindings`：去重排序后作为「不否决」的提示进下一版 prompt。不给否决权是结构性的（08 §6）：拿得到否决权的审美评审每轮挑出不同一处细节，失败集合永不重复，卡只会烧完预算 |
+| W-07 ✅ | 每个 phase 读的路径都带 `worktree/` 前缀，是模型自己摸出来的；SPECIFY 花十四分钟写完测试契约被以「没有测试」拒了三次 | session 头里的 `cwd` 写的是 session root（放会话文件的地方，没有仓库），pi 拿它当会话工作目录。模型写的测试落在出口不看的那棵树里；session root 下还长出第二棵 git worktree，挂在进程启动时所在的 checkout 上 | 头里改写这次 spawn 真正运行的目录；错位的 worktree 已移除 |
+| W-08 ✅ | 「no session file」对每张卡的每一轮都出现，排障只能靠翻库和猜 | `inspect-round` 按一个已不存在的布局找会话（`<root>/<runId>/*.jsonl`，实际是 `<root>/<card>/<phase>/r<round>-a<n>.jsonl`），并且传了一个它从没取出来的 round | 按实际布局找，取最后一次 attempt。W-07 花一整夜才找到，就是因为这条先坏了 |
+| W-09 ✅ | 失败那一轮的 tokens 记成 0、费用 0，而它真跑了 837 秒 | 记账写在出口检查之后，出口一拒绝就抛错走人；会话内回喂的那几轮 prompt 也从来不在这一轮的账上 | 记账移到抛错也走得到的地方，只记一次；回喂的 usage 逐轮累加进来。费用上限是唯一的敞口护栏，漏账就是护栏上的洞 |
+| W-10 ✅ | 模型在卡的树里找不到依赖，跑去宝宝机主 checkout 翻源码，最后把宓主的 `node_modules` 软链进来 | 新切的 worktree 只是一份 checkout，没有装依赖；SPECIFY 要证明测试是红的，而测试根本跑不起来 | `worktree.setupCommand`（per-repo，默认空）：仓库自己声明一棵新树怎么准备好。hivemind 自己配 `npm ci`。软链宓主依赖会让树对着宓主恰好装了什么构建，不可复现 |
+| W-06 ⬜ | 人只能从 worktree 的 `file://` 路径看原型，背离「只在 Notion 上完成」 | 截图能力（`prototype-screenshots.ts`，四态）与 Notion 上传能力（`sdk-adapters.ts` 的 multipart + `file_upload`，Story 侧已在生产用）都在仓库里，**两者之间没有接线**；MU-09 记的「gateway 没有 multipart 通道」是错的 | 待定：Ryan 倾向接 Cloudflare 一类免费服务给可点原型；截图进 Notion 是另一半，两件事不互斥 |
+| W-11 ✅ | host 十二分钟一张卡没派，日志里每个周期只有一行 `cycle failed: Codex error: The usage limit has been reached` | 周期顺序是 checkouts → intake → projection → **拆解** → **Epic 维护** → 回归 → 派发，而 `step()` 只吞 TRANSPORT；一个拆不动的 Epic 让派发永远走不到。回归道早就因为同样的教训改成了「报告而不上抛」，这两步没跟上 | 拆解与 Epic 维护改成报告而不上抛。一个 Epic 拆不动，与已经拆出来的那些 Story 无关 |
+| W-12 ✅ | `openai-codex` 配额耗尽后，每个周期还在敲同一个账号，`retry_at` 停在 00:48 再没动过 | 拆解这条路只读断路器（`usableProviders(...)[0]`）从不回写；Story 那条路一直是对的（`run-story.ts:622-633`），只有这条漏了。于是 `model.tierFailoverChains` 的降级从来没有机会发生 | 拆解失败按同一判据回写断路器：`classifyError !== UNKNOWN` 才记，我们自己的缺陷不许开别人的闸。实测窗口从 00:48 改写成 02:09，下一周期即取链上下一个 |
+| W-13 ✅ | W-11 修完后浮出来：两个 Epic 反复拆解失败，每个周期重来一次按大脑档计费，看板上没有任何给人看的东西 | 端口在「回复里找不到能解析的候选」时抛普通 `Error`，而 `EpicDecomposer` 的尝试循环没有 catch——抛出去就跳出循环：不消耗尝试、不进 `previousRejections`、不走 `block()`，Epic 留在 `DECOMPOSE`。W-03 加的「四次上限 + 理由不得重复」全在这条路径之外 | `DecompositionContractError`：解析失败当作一次被拒的尝试，理由回喂、消耗一次、同样失败两次即 BLOCKED；provider 失败照旧上抛，它对「拆得对不对」零信息量，由断路器读 |
+| W-14 ✅ | 两张在跑的卡租约 01:09:38 取得、01:24:38 到期，`renewed_at` 与 `acquired_at` 完全相同；01:27 两轮都还在跑（CODE 会话已 762KB），租约已过期九分钟 | `LeaseStore.renew` 写好了、测过了、**生产代码零调用**。`run-story.ts` 只 `acquire` 一次，TTL 15 分钟，而 CODE 轮常规超过 15 分钟。单机靠 orchestrator 的 `inFlight` map 恰好挡住；多机没有这一层，而 AGENTS.md 说租约「是多机粘性不出双执行的根」——这个根只在前 15 分钟成立 | `startLeaseHeartbeat`：每 TTL/3 续一次，允许连丢两次；续租被拒只报一次，执行仍由 fence 强制；store 故障不当作丢租约 |
+| W-15 ⬜ 观察 | DESIGN 轮静默 15 分钟：模型为了找一个还不存在的 `console-ui/` 目录跑了 `find / -maxdepth 6`，把宿主整盘翻了一遍 | 预测 footprint 指向尚未创建的目录，模型出树去找。工具面对 `bash` 不设边界 | **已有兜底生效**：`retry.promptTimeoutMs`(15 分钟) 到点放弃该轮、杀掉 `find`、以 continue 续跑，实测 01:30 恢复。代价是一个 15 分钟窗口 + 宿主整盘被读过一遍。不打算按命令拼写去围堵（换个写法就绕开）；真正的问题是「骨架由第一张切片带出来」这件事模型不确信，属于 prompt 而非守卫 |
+| W-16 ✅ | 一个 Epic 的拆解跑满 15 分钟 prompt 超时，整轮作废交给下一周期再花一个 15 分钟（`timed out waiting for agent_settled`） | `grep -rn "runner\.prompt(" src scripts` 除测试与探针外只有两处生产调用：拆解端口与产品经理端口。其余每一条驱动模型的道都走 `promptWithContinueRetry`（phase / prototype / verify / UI 走查）——RPC 下 pi 进程与会话都还在，流断了发一句 `continue` 就接上。而 `retry.promptTimeoutMs` 的描述本身写的就是「resumed, not failed」，这两条道是例外，且恰好是全系统最长的两种 turn | 两处改走 `promptWithContinueRetry`；非可重试的失败（QUOTA/AUTH）行为不变，照旧返回给调用方由断路器读 |
+| W-17 ✅ | `inspect-round` 把 CODE r2 的 34.9KB prompt 报成 44 段，其中 `### SPECIFY / test-contract` 0.0KB——而它是整份里第二大的一段 | `sectionMap` 把任何以 `#` 开头的行当分界，而组装器只写一个 `# `（任务标题），其余一律 `## ` / `### `。于是 `components.md` 自己的十四个标题、测试合同 YAML 开头的注释行都成了「段落」，内容的体重记到了内容自己的标题上 | 分界只认组装器写得出的三种。44 段 → 20 段，测试合同 0.0KB → 7.7KB。一张 prompt 地图说最大的那段是空的，会把读的人送去找一个并不缺的注入——W-08 同一个方向的假话花了一整夜 |
+| W-18 ✅ | 第一张走到界面走查的卡，`uiContract.unreadable = 7`、`violations = []`——七条全是 `ERR_CONNECTION_REFUSED at http://127.0.0.1:4311/...`，而同一轮走查自己的页面全在 4173 上打开成功 | 两条道各起一份应用：盲审道起 4311/4312/4313 跑完就关，`functional.pages` 记的是那些 URL；走查道起 4173。`checkContract` 用前者的 URL，而前者此刻已经不在了。**两层能否决的判据里的契约层（色值/字号/间距是否来自 token 表）结构性地从未真正跑过**——现在是 warn 所以没人受影响，拨到 block 就会零覆盖放行或全数打回 | `onAppOrigin`：页面身份是 path + query，由哪个实例服务是「此刻哪个还活着」。只改写 loopback 源，其他主机原样留着 |
+| W-19 ⬜ 观察 | 换代码要等一个多小时：SIGTERM 之后常驻打「Waiting for 2 in-flight Story run(s) before exit」，而 run-story 子进程会带着卡一路走完 CODE→VERIFY→CODE→…→DELIVERED，排空没有自然终点。期间不再派新卡，另外 10 张全停 | `stop()` 里是无界的 `Promise.allSettled(inFlight.values())`。注释给的理由是「A Story worker keeps running after its parent dies, and a restarted orchestrator would dispatch the same card again beside it」——**这个理由在 W-14 之后不再成立**：租约现在会续期，活着的持有者让卡不在可派发集里 | **暂不改**。生产上 systemd 的 `TimeoutStopSec=120` + `KillMode=mixed` 已经把它限在两分钟，所以不是生产缺陷；而提前退出要同时想清楚 `handle.close()` 与 orchestrator 自己那半 DB 工作的生命周期（注释写明关早了会被报成 Story 失败）。这条改动碰的是进程退出与双执行两条不变量，值得单独一个 PR 想清楚，不在夜里顺手做 |
+| W-20 ✅ | `npm run health` 退出码 1：「最早一条没发出去的 Notion 写入已经 19 分钟，看板不再显示系统在做什么」。两行 outbox 挂着，`attempts = 0`——不是发失败，是根本没人去发 | `outbox.replay` 在 `reconcileProjection` 里，而它是一个 cycle step；`stop()` 第一件事就是 `clearInterval(timer)`，然后才等在跑的卡。于是排空期间卡照常从 CODE 走到 VERIFY 再回 CODE，每次状态变化都排一行，一行都发不出去。今晚那次排空一个多小时 | 排空期间每 15 秒继续发，结束再发一次；其余一概不动。刻意只修这独立无风险的一半，排空本身没有上限那条仍是 W-19 |
+
+---
+
 ## 贯穿性事项（不属于单一里程碑）
 
 | 事项 | 约束 |

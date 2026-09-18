@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createClient, type Client } from "@libsql/client";
 import { migrate } from "./migrate.js";
-import { LeaseFenceError, LeaseStore, holderKey, type LeaseHolder } from "./lease.js";
+import { LeaseFenceError, LeaseStore, holderKey, startLeaseHeartbeat, type LeaseHolder } from "./lease.js";
 
 const TTL = 30_000;
 let client: Client;
@@ -184,5 +184,44 @@ describe("expiry sweep", () => {
     await store().release("card-1", holder("host-a"), lease.fence);
     clock += TTL + 1;
     expect(await store().expired()).toEqual([]);
+  });
+});
+
+describe("heartbeat", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("keeps a card held for longer than one TTL", async () => {
+    const lease = (await store().acquire("card-1", holder("host-a")))!;
+    vi.useFakeTimers();
+    const stop = startLeaseHeartbeat(store(), "card-1", holder("host-a"), lease.fence, { intervalMs: TTL / 3 });
+
+    for (let tick = 0; tick < 4; tick++) {
+      clock += TTL / 3;
+      await vi.advanceTimersByTimeAsync(TTL / 3);
+    }
+    stop();
+
+    // Past the original expiry, and still nobody else's to take.
+    expect((await store().expired())).toEqual([]);
+    expect(await store().acquire("card-1", holder("host-b"))).toBeNull();
+  });
+
+  it("says so once when the lease is no longer this holder's, and stops asking", async () => {
+    const lease = (await store().acquire("card-1", holder("host-a")))!;
+    vi.useFakeTimers();
+    const lost: string[] = [];
+    const stop = startLeaseHeartbeat(store(), "card-1", holder("host-a"), lease.fence, {
+      intervalMs: TTL / 3,
+      onLost: (reason) => lost.push(reason),
+    });
+    await store().revoke("card-1");
+
+    for (let tick = 0; tick < 3; tick++) {
+      clock += TTL / 3;
+      await vi.advanceTimersByTimeAsync(TTL / 3);
+    }
+    stop();
+
+    expect(lost).toHaveLength(1);
   });
 });

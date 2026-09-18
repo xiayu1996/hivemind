@@ -38,6 +38,11 @@ export interface PrototypeRequest {
   contractRoot: string;
   /** What the person asked to change about earlier drafts, oldest first. */
   revisionFeedback: readonly string[];
+  /** What the anti-pattern detector caught on the drawings already made. A
+   * hint the next drawing is told about and nothing more: taste may not gate
+   * (design 08 section 6), but a finding nobody is ever told about is a
+   * finding that comes back identical every revision. */
+  designHints: readonly string[];
 }
 
 export interface PrototypeResult {
@@ -103,6 +108,7 @@ export class PrototypeRunner {
     if (input.repository === "") return { kind: "skipped", reason: "这条需求还没有目标仓库" };
 
     const revisionFeedback = await this.store.solutionRevisionFeedback(input.requirementId);
+    const designHints = await this.store.designLintFindings(input.requirementId);
     let result: PrototypeResult;
     try {
       result = await this.port.run({
@@ -116,6 +122,7 @@ export class PrototypeRunner {
         direction: input.solution.interface.direction,
         contractRoot: input.contractRoot,
         revisionFeedback,
+        designHints,
       });
     } catch (cause) {
       const reason = `界面原型没画成：${cause instanceof Error ? cause.message : String(cause)}`;

@@ -45,6 +45,22 @@ export interface DecomposePort {
   run(input: DecomposeRequest): Promise<DecompositionCandidate>;
 }
 
+/**
+ * The attempt produced no candidate the contract recognises. From the Epic's
+ * side this is the same thing as a split that broke a rule -- the model did not
+ * hand back a usable one -- so it is a refusal the loop tells the model about
+ * and counts, not an exception. Thrown as an error only because there is no
+ * candidate to return. Everything else the port throws (a provider that
+ * refused, a runner that could not start) stays an exception: it says nothing
+ * about the split, and the breaker upstream is what reads it.
+ */
+export class DecompositionContractError extends Error {
+  constructor(readonly reason: string) {
+    super(reason);
+    this.name = "DecompositionContractError";
+  }
+}
+
 export interface EpicIntake {
   id: string;
   notionPageId: string;
@@ -125,13 +141,25 @@ export class EpicDecomposer {
 
     const seen = new Set<string>();
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      const candidate = await this.port.run({
-        epicId: epic.id,
-        title: epic.title,
-        requirement,
-        previousRejections: [...rejections],
-        maxStories: this.limits.maxStories ?? DEFAULT_MAX_STORIES,
-      });
+      let candidate: DecompositionCandidate;
+      try {
+        candidate = await this.port.run({
+          epicId: epic.id,
+          title: epic.title,
+          requirement,
+          previousRejections: [...rejections],
+          maxStories: this.limits.maxStories ?? DEFAULT_MAX_STORIES,
+        });
+      } catch (cause) {
+        if (!(cause instanceof DecompositionContractError)) throw cause;
+        // Counted like any other refusal, so the ceiling and the "must not
+        // repeat" rule apply. Without this the Epic stayed in DECOMPOSE and
+        // every cycle paid the brain tier to be handed the same unparseable
+        // answer, with nothing on the board for a person to see.
+        rejections.push(cause.reason);
+        if (!isNewRefusal(seen, [cause.reason])) break;
+        continue;
+      }
       const evaluated = evaluateDecomposition(candidate, this.limits, vocabulary);
 
       if (evaluated.kind === "blocking_question") {

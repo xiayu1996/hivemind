@@ -28,6 +28,17 @@ export type CacheKeyScope = "card" | "repo";
 
 export interface SessionFileRequest {
   sessionRoot: string;
+  /**
+   * The directory the spawn runs in, which is the tree the phase works on.
+   *
+   * It is not the session root. pi takes the header's `cwd` as the session's
+   * working directory, so pointing it at the session root put the model
+   * somewhere with no repository in it: on 2026-09-19 every path a phase read
+   * carried a `worktree/` prefix it had to discover by hand, a second git
+   * worktree appeared under the session root, and the SPECIFY exit found no
+   * tests because they had been written into a tree it does not look at.
+   */
+  cwd: string;
   cardId: string;
   phase: string;
   round: number;
@@ -135,7 +146,7 @@ export async function pinSessionFile(request: SessionFileRequest, options?: { re
     // Fixed rather than the wall clock: the file is an input to a spawn, and
     // two rebuilds of the same round must produce the same bytes.
     timestamp: "1970-01-01T00:00:00.000Z",
-    cwd: request.sessionRoot,
+    cwd: request.cwd,
   };
   // Trailing newline is mandatory: appending to an unterminated last line
   // merges two records and loses both (pi#8345).
