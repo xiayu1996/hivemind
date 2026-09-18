@@ -5,11 +5,18 @@ import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { costsPageZones, renderCostsRoute } from "./costs-page.js";
+import {
+  renderRequirementDetailPage,
+  renderRequirementListPage,
+  renderRequirementNotFoundPage,
+  type RequirementSummaryRow,
+} from "./requirement-detail-page.js";
 import type {
   DailyCostReadResult,
   DailyCostSelection,
   DailyCostTimeZoneOption,
 } from "./daily-costs.js";
+import type { RequirementCostSnapshot } from "../persistence/requirement-cost-ledger.js";
 
 export interface ConsoleDataSource {
   nodes(): Promise<unknown[]>;
@@ -27,6 +34,10 @@ export interface ConsoleDataSource {
   dailyCostTimeZones?(): Promise<readonly DailyCostTimeZoneOption[]>;
   /** One snapshot of daily costs for a selection, read from the central ledger. */
   dailyCosts?(selection: DailyCostSelection): Promise<DailyCostReadResult>;
+  /** The requirements a person may open, newest first. */
+  requirements?(): Promise<readonly RequirementSummaryRow[]>;
+  /** One requirement's whole-history cost, or null when the id is unknown. */
+  requirementCost?(requirementId: string): Promise<RequirementCostSnapshot | null>;
 }
 
 export interface ConsoleConfigWritePort {
@@ -107,11 +118,50 @@ export async function createConsoleServer(
       data.dailyCosts
         ? data.dailyCosts(selection)
         : Promise.resolve({ kind: "failed", message: "daily costs are not available" });
-    const html = await renderCostsRoute(query, zones, read);
+    const requirementRead = (requirementId: string): Promise<RequirementCostSnapshot | null> =>
+      data.requirementCost
+        ? data.requirementCost(requirementId)
+        : Promise.resolve(null);
+    const html = await renderCostsRoute(query, zones, read, Date.now(), requirementRead);
     return reply.type("text/html").send(html);
   };
   app.get("/", renderCosts);
   app.get("/costs", renderCosts);
+
+  // A requirement's cumulative cost is the central ledger's answer, so it is
+  // served by the same process that holds the store, whether or not a browser
+  // bundle was built. The route is the person-visible half of the ledger read;
+  // the JSON API below is for the pages that do not need a document.
+  app.get("/requirements", async (request, reply) => {
+    const requirements = data.requirements ? await data.requirements() : [];
+    return reply.type("text/html").send(renderRequirementListPage(requirements));
+  });
+  app.get("/requirements/:id", async (request, reply) => {
+    const requirementId = (request.params as { id: string }).id;
+    if (!data.requirementCost) {
+      return reply.code(404).type("text/html").send(renderRequirementNotFoundPage(requirementId));
+    }
+    const snapshot = await data.requirementCost(requirementId);
+    if (snapshot === null) {
+      return reply.code(404).type("text/html").send(renderRequirementNotFoundPage(requirementId));
+    }
+    const title = data.requirements
+      ? (await data.requirements()).find((row) => row.id === requirementId)?.title ?? null
+      : null;
+    return reply.type("text/html").send(renderRequirementDetailPage(
+      requirementId,
+      title,
+      snapshot,
+      { locale: "zh-CN", timeZone: "Asia/Shanghai" },
+    ));
+  });
+  app.get("/api/requirements/:id/cost", async (request, reply) => {
+    if (!data.requirementCost) return reply.code(404).send({ error: "requirement costs are not available" });
+    const requirementId = (request.params as { id: string }).id;
+    const snapshot = await data.requirementCost(requirementId);
+    if (snapshot === null) return reply.code(404).send({ error: "requirement not found" });
+    return snapshot;
+  });
   app.get("/api/costs/time-zones", async (_request, reply) => {
     if (!data.dailyCostTimeZones) return reply.code(404).send({ error: "daily cost time zones are not available" });
     return data.dailyCostTimeZones();

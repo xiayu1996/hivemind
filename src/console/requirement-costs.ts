@@ -16,11 +16,28 @@ export interface RequirementCostDetailRow {
   provider: string;
   model: string;
   billingMode: ProviderBillingMode;
+  billingModeLabel: string;
   category: CostCategory;
+  categoryLabel: string;
   usage: string;
   historicalUnitPrice: string | null;
   amount: string | null;
   pricingStatus: HistoricalCostEntry["pricingStatus"];
+}
+
+/** The four pricing categories as the page names them, never merged. */
+export function costCategoryLabel(category: CostCategory): string {
+  switch (category) {
+    case "uncached_input": return "未缓存输入";
+    case "output": return "输出";
+    case "cache_read": return "缓存读取";
+    case "cache_write": return "缓存写入";
+  }
+}
+
+/** How the call was paid for, kept apart from whether it counts toward the ceiling. */
+export function billingModeLabel(mode: ProviderBillingMode): string {
+  return mode === "metered" ? "按量付费" : "订阅制";
 }
 
 export interface CompleteRequirementCostSummary {
@@ -94,7 +111,9 @@ function toDetailRow(
     provider: entry.provider,
     model: entry.model,
     billingMode: entry.billingMode,
+    billingModeLabel: billingModeLabel(entry.billingMode),
     category: entry.category,
+    categoryLabel: costCategoryLabel(entry.category),
     usage: formatTokenCount(entry.tokenCount),
     historicalUnitPrice: priced ? `$${entry.usdPerMillionTokens}/百万` : null,
     amount: priced ? formatUsd(entry.amountUsd) : null,

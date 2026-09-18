@@ -5,8 +5,10 @@ import {
   type DailyCostSnapshot,
   type DailyCostTimeZoneOption,
 } from "./daily-costs.js";
+import type { RequirementCostSnapshot } from "../persistence/requirement-cost-ledger.js";
 import { formatDailyCostScope, formatUsd, renderDailyCostPanel, type DailyCostViewSnapshot } from "../../console-ui/src/costs/contracts.js";
 import { COSTS_PAGE_STYLE } from "../../console-ui/src/costs/page-style.js";
+import { renderRequirementCostSection } from "./requirement-cost-view.js";
 
 /**
  * The costs page, rendered on the server that holds the central ledger.
@@ -48,6 +50,8 @@ export interface CostsPageRequest {
   rangeValue: string;
   rangeLabel: string;
   forcedState: CostsPageState | null;
+  /** The requirement the page is scoped to, when a person came from one. */
+  requirementId: string | null;
 }
 
 export interface CostsPageView {
@@ -57,6 +61,9 @@ export interface CostsPageView {
   rangeLabel: string;
   zones: readonly DailyCostTimeZoneOption[];
   snapshot?: DailyCostViewSnapshot;
+  requirementId: string | null;
+  /** The requirement's whole-history cost, when the page was scoped to one. */
+  requirementSnapshot?: RequirementCostSnapshot;
 }
 
 /** The page's view of a ledger snapshot: the same days under the scope they are read in. */
@@ -135,11 +142,14 @@ export function resolveCostsPageRequest(
     ? query.state as CostsPageState
     : null;
 
+  const requirement = query.requirement?.trim();
+
   return {
     selection: { timeZone, startDate, endDate },
     rangeValue,
     rangeLabel,
     forcedState,
+    requirementId: requirement === undefined || requirement === "" ? null : requirement,
   };
 }
 
@@ -149,13 +159,22 @@ export async function loadCostsPage(
   zones: readonly DailyCostTimeZoneOption[],
   read: (selection: DailyCostSelection) => Promise<DailyCostReadResult>,
   now: number = Date.now(),
+  requirementRead?: (requirementId: string) => Promise<RequirementCostSnapshot | null>,
 ): Promise<CostsPageView> {
   const request = resolveCostsPageRequest(query, new Set(zones.map((zone) => zone.id)), now);
+  // A requirement the person came from is read whatever the daily band's own
+  // state is: the cumulative figure is a different question from the day view,
+  // and an empty day range must not hide it.
+  const requirementSnapshot = request.requirementId !== null && requirementRead
+    ? (await requirementRead(request.requirementId)) ?? undefined
+    : undefined;
   const base = {
     selection: request.selection,
     rangeValue: request.rangeValue,
     rangeLabel: request.rangeLabel,
     zones,
+    requirementId: request.requirementId,
+    ...(requirementSnapshot === undefined ? {} : { requirementSnapshot }),
   };
   const forced = request.forcedState;
   // A state a person asked to see is not read from the ledger: loading and
@@ -305,10 +324,19 @@ export function renderCostsPage(view: CostsPageView): string {
       : view.state === "empty" ? renderEmptyBody(view)
         : view.state === "waiting" ? renderWaitingBody(view)
           : renderReadyBody(view);
+  // A requirement-scoped visit keeps the whole-history breakdown visible under
+  // every daily state: the day range answering "nothing here" says nothing
+  // about whether the requirement itself has recorded usage.
+  const requirement = view.requirementSnapshot === undefined
+    ? ""
+    : `<div class="section">${renderRequirementCostSection(view.requirementSnapshot, {
+      locale: "zh-CN",
+      timeZone: view.selection.timeZone,
+    })}</div>`;
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">`
     + `<meta name="viewport" content="width=device-width,initial-scale=1">`
     + `<title>费用分析｜Hivemind</title><style>${COSTS_PAGE_STYLE}</style></head><body>`
-    + `<div class="shell">${renderSidebar()}<main>${body}</main></div>`
+    + `<div class="shell">${renderSidebar()}<main>${body}${requirement}</main></div>`
     + renderNavigation(MOBILE_NAV, "mobile-nav", "手机导航")
     + `</body></html>`;
 }
@@ -319,8 +347,9 @@ export async function renderCostsRoute(
   zones: readonly DailyCostTimeZoneOption[],
   read: (selection: DailyCostSelection) => Promise<DailyCostReadResult>,
   now: number = Date.now(),
+  requirementRead?: (requirementId: string) => Promise<RequirementCostSnapshot | null>,
 ): Promise<string> {
-  return renderCostsPage(await loadCostsPage(query, zones, read, now));
+  return renderCostsPage(await loadCostsPage(query, zones, read, now, requirementRead));
 }
 
 /** The zone catalog, from the source when it can enumerate one, from the runtime otherwise. */

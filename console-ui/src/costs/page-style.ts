@@ -62,6 +62,13 @@ main{min-width:0;padding:24px var(--space-page-gutter) 72px;max-width:1440px;wid
 .metric-value{font-family:var(--font-numeric);font-size:var(--font-metric);font-weight:var(--weight-strong);line-height:1.2;margin-top:4px}
 .metric-detail{font-size:var(--font-caption);margin-top:5px}
 .money,.number{font-family:var(--font-numeric);font-variant-numeric:tabular-nums;text-align:right}
+.stack{display:grid;gap:var(--space-section-gap)}
+.divider{border:0;border-top:1px solid var(--color-border);margin:var(--space-content-gap) 0}
+.row{display:flex;align-items:baseline;justify-content:space-between;gap:var(--space-content-gap);padding:var(--space-inline-tight) 0}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--color-border);vertical-align:top}
+th{color:var(--color-text-muted);font-size:var(--font-caption);font-weight:var(--weight-medium);white-space:nowrap}
+.cell-label{display:none}
 .bar-list{display:grid;gap:12px}
 .bar-row{display:grid;grid-template-columns:92px 1fr 90px;gap:12px;align-items:center}
 .bar-track{height:12px;background:var(--color-page);border:1px solid var(--color-border);border-radius:var(--radius-pill);overflow:hidden}
@@ -87,6 +94,14 @@ main{min-width:0;padding:24px var(--space-page-gutter) 72px;max-width:1440px;wid
   .mobile-nav{position:fixed;display:grid;grid-template-columns:repeat(4,1fr);bottom:0;left:0;right:0;background:var(--color-surface);border-top:1px solid var(--color-border);box-shadow:var(--shadow-raised);z-index:var(--layer-navigation);padding-bottom:max(4px,env(safe-area-inset-bottom))}
   .mobile-link{display:flex;align-items:center;justify-content:center;text-align:center;padding:8px 3px;color:var(--color-text);font-size:var(--font-caption);text-decoration:none;min-height:44px}
   .mobile-link[aria-current="page"]{color:var(--color-action);font-weight:var(--weight-strong);background:var(--color-surface-selected)}
+}
+@media (max-width:760px){
+  table,thead,tbody,tr,td{display:block}
+  thead{display:none}
+  tr{border-bottom:1px solid var(--color-border);padding:var(--space-control-gap) 0}
+  td{border:0;padding:2px 0}
+  td.money{text-align:left}
+  .cell-label{display:block;color:var(--color-text-muted);font-size:var(--font-caption)}
 }
 @media (max-width:420px){.metric-grid{grid-template-columns:1fr}}
 @media (prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
