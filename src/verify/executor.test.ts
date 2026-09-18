@@ -286,15 +286,46 @@ describe("BlindVerifyExecutor", () => {
     expect(inserted).toHaveLength(0);
   });
 
-  it("fails closed on malformed model output", async () => {
+  it("fails closed when the verdict never parses, after asking for it again", async () => {
+    const instance = runner({ content: "not json" });
     const result = await new BlindVerifyExecutor(
-      { create: () => runner({ content: "not json" }) },
+      { create: () => instance },
       { insert: async () => undefined },
       pins(),
     ).run(input());
 
     expect(result.record.verdict).toBe("inconclusive");
-    expect(result.validationErrors.join(" ")).toMatch(/JSON|Unexpected token/i);
+    expect(result.validationErrors.join(" ")).toMatch(/malformed verdict/i);
+    expect(instance.prompts).toHaveLength(3);
+  });
+
+  it("takes the verdict a second ask produced instead of losing the round", async () => {
+    // Re-running the round showed the verifier nothing about what was wrong,
+    // so the next attempt repeated the last one and S-R237511TD-01 was parked
+    // on retry_limit_exceeded having been judged on nothing.
+    const verdict = JSON.stringify({ scenarios: [{ id: "S-EPIC-01-unit", status: "passed" }] });
+    const instance = runner({ content: "not json" });
+    let call = 0;
+    instance.prompt = vi.fn(async (message: string): Promise<PromptResult> => {
+      instance.prompts.push(message);
+      const content = call++ === 0 ? "I looked at everything and it works." : verdict;
+      return {
+        settled: true,
+        failure: null,
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, costUsd: 0 },
+        events: [{ type: "test_result", scenarioId: "S-EPIC-01-unit", status: "passed" }, assistant(content)],
+      };
+    });
+
+    const result = await new BlindVerifyExecutor(
+      { create: () => instance },
+      { insert: async () => undefined },
+      pins(),
+    ).run(input());
+
+    expect(result.record.verdict).toBe("accepted");
+    expect(instance.prompts).toHaveLength(2);
+    expect(instance.prompts[1]).toContain("no verdict this system can read");
   });
 
   it("extracts evidence from real pi toolResult messages without the echo protocol", async () => {
