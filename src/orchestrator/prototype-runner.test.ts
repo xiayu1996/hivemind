@@ -133,6 +133,29 @@ describe("PrototypeRunner", () => {
     expect(drawing.seen[0]!.approach).toBe("沿用现有栈，加一个后台页面");
   });
 
+  it("tells the next drawing what the detector caught the last one doing", async () => {
+    // Taste may not gate, so these never refuse a contract. But a finding
+    // nobody is ever told about comes back identical every revision, which is
+    // what both drawings of the first real requirement did, word for word.
+    await store.recordFriction({
+      cardId: "R-1", runId: "requirement:R-1", kind: "design_lint_finding",
+      detail: "side-tab pages/board.html Side-tab accent border: border-left: 4px",
+    });
+    await store.recordFriction({
+      cardId: "R-1", runId: "requirement:R-1", kind: "design_lint_finding",
+      detail: "side-tab pages/board.html Side-tab accent border: border-left: 4px",
+    });
+    await store.recordFriction({
+      cardId: "R-1", runId: "requirement:R-1", kind: "design_lint_unavailable", detail: "没装",
+    });
+    const drawing = port(async () => drawn);
+
+    await runner({ port: drawing }).draw(request());
+
+    expect(drawing.seen[0]!.designHints)
+      .toEqual(["side-tab pages/board.html Side-tab accent border: border-left: 4px"]);
+  });
+
   it("stops the requirement when the drawing never passed its own checks", async () => {
     const drawing = port(async () => {
       throw new Error("pages/board.html 上没有出现它声称能看见的内容");

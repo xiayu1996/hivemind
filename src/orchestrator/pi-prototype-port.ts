@@ -362,6 +362,18 @@ function prototypePrompt(input: PrototypeRequest, contractRoot: string): string 
       input.revisionFeedback.map((entry) => `- ${entry}`).join("\n")
     }`);
   }
+  if (input.designHints.length > 0) {
+    // A hint, never a gate. The detector's findings are taste, and design 08
+    // section 6 forbids taste a veto: an aesthetic reviewer that may refuse
+    // picks a different detail every round, so the failing set never repeats
+    // and the loop only ever runs out of budget. Telling the next drawing what
+    // the last one was caught doing costs nothing and is the only way these
+    // travel -- without it both revisions were caught doing exactly the same
+    // things, word for word.
+    parts.push(`## 上一版被检出的界面问题（不否决，能改就改）\n\n${
+      input.designHints.map((entry) => `- ${entry}`).join("\n")
+    }`);
+  }
   parts.push([
     `只能写 ${contractRoot} 目录，写别处会被拒绝。每页必须能以 ?state= 取 ${
       PROTOTYPE_STATES.join(" / ")

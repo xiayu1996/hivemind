@@ -30,6 +30,7 @@ const request: PrototypeRequest = {
   direction: DIRECTION,
   contractRoot: CONTRACT_ROOT,
   revisionFeedback: [],
+  designHints: [],
 };
 
 function runner(replies: string[]): PiRunner & { prompts: string[] } {
@@ -224,6 +225,16 @@ describe("PiPrototypePort", () => {
 
     expect(drawing.instance.prompts[0]).toContain(DIRECTION.summary);
     expect(drawing.instance.prompts[0]).toContain(DIRECTION.alternatives[0]!.option);
+  });
+
+  it("names last version's detector findings as something to fix, not as a gate", async () => {
+    const worktree = await contract();
+    const drawing = drawingPort({ worktree, replies: [GOOD] });
+
+    await drawing.port.run({ ...request, designHints: ["side-tab pages/board.html Side-tab accent border"] });
+
+    expect(drawing.instance.prompts[0]).toContain("side-tab pages/board.html Side-tab accent border");
+    expect(drawing.instance.prompts[0]).toContain("不否决");
   });
 
   it("hands the findings back to the same session instead of starting another", async () => {
