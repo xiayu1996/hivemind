@@ -190,6 +190,53 @@ describe("SolutionRunner", () => {
     await expect(store.getRequirement(REQUIREMENT_ID)).resolves.toMatchObject({ state: "SOLUTION" });
   });
 
+  it("finishes a drawing an earlier pass never got to, rather than putting the approach up alone", async () => {
+    // What happened the first time round: the drawing failed, a person cleared
+    // the stop, and the draft was already on record -- so the next pass read it
+    // as "waiting for a person" and the screens were never drawn at all.
+    const drawn = drawing({ kind: "drawn", revision: 1, concerns: [], mrUrl: "https://example.invalid/mr/1" });
+    const run = new SolutionRunner(
+      store,
+      new ScriptedPort([]),
+      { publish: async (id: string) => { published.push(id); } },
+      { prototype: { runner: drawn.runner, contractRoot: async () => "docs/prototype" } },
+    );
+    await store.saveDraftSolution(REQUIREMENT_ID, JSON.stringify({
+      approach: { summary: "沿用现有服务端。", alternatives: [] },
+      stackChanges: [],
+      openDecisions: [],
+      qualityGates: [],
+      interface: { kind: "web", direction: DIRECTION, pages: [{ name: "任务看板", purpose: "看今天要做什么" }] },
+    }), "run-interrupted");
+
+    await expect(run.advance(REQUIREMENT_ID)).resolves.toEqual({ kind: "awaiting", revision: 1 });
+
+    expect(drawn.seen).toHaveLength(1);
+    expect(drawn.seen[0]).toMatchObject({ revision: 1, contractRoot: "docs/prototype" });
+    expect(published).toContain(REQUIREMENT_ID);
+  });
+
+  it("leaves screens that were already drawn alone", async () => {
+    const drawn = drawing({ kind: "drawn", revision: 1, concerns: [], mrUrl: "https://example.invalid/mr/1" });
+    const run = new SolutionRunner(
+      store,
+      new ScriptedPort([]),
+      { publish: async (id: string) => { published.push(id); } },
+      { prototype: { runner: drawn.runner, contractRoot: async () => "docs/prototype" } },
+    );
+    await store.saveDraftSolution(REQUIREMENT_ID, JSON.stringify({
+      approach: { summary: "沿用现有服务端。", alternatives: [] },
+      stackChanges: [],
+      openDecisions: [],
+      qualityGates: [],
+      interface: { kind: "web", direction: DIRECTION, pages: [{ name: "任务看板", purpose: "看今天要做什么" }] },
+    }), "run-drafted");
+    await store.saveSolutionPrototype(REQUIREMENT_ID, 1, JSON.stringify({ pages: [], described: [], concerns: [] }), null, "run-drew");
+
+    await expect(run.advance(REQUIREMENT_ID)).resolves.toEqual({ kind: "awaiting", revision: 1 });
+    expect(drawn.seen).toEqual([]);
+  });
+
   it("rewrites once against what the person asked to change", async () => {
     const port = new ScriptedPort([changesTheStack(), changesTheStack()]);
     const run = runner(port);
