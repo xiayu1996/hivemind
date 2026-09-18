@@ -8,6 +8,7 @@ import { RpcPiRunner, type RpcRunnerConfig } from "../runner/rpc-runner.js";
 import type { PiRunner, PromptResult } from "../runner/types.js";
 import { jsonPayloadCandidates } from "../util/json-payload.js";
 import { storyIdStem } from "./decompose.js";
+import { DecompositionContractError } from "./decompose-runner.js";
 import type { DecomposePort, DecomposeRequest } from "./decompose-runner.js";
 import type { DecompositionCandidate } from "./decompose.js";
 import { humanQuestionInputSchema } from "./human-question.js";
@@ -118,7 +119,9 @@ export class PiDecomposePort implements DecomposePort {
         const { blockingQuestion, ...candidate } = parsed.data;
         return blockingQuestion === undefined ? candidate : { ...candidate, blockingQuestion };
       }
-      throw new Error("DECOMPOSE returned no candidate matching the decomposition contract");
+      throw new DecompositionContractError(
+        "回复里没有任何一段能按拆解契约解析：整份回复只写一个 JSON 对象，字段按契约给全，不要夹叙述性文字",
+      );
     } finally {
       await runner.stop().catch(() => undefined);
     }
