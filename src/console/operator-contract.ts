@@ -348,3 +348,46 @@ export function buildCostSnapshot(
 }
 
 /** The value a transition may carry forward so a failed or in-flight read never blanks the page. */
+function retainedValue<Query, Value>(state: ConsoleLoadState<Query, Value> | undefined): Value | undefined {
+  if (!state) return undefined;
+  switch (state.status) {
+    case "ready":
+    case "waiting":
+      return state.value;
+    case "loading":
+    case "unavailable":
+      return state.retained;
+    default:
+      return undefined;
+  }
+}
+
+/** Moves between the empty, loading, ready, unavailable and waiting states while
+ * retaining the submitted query and the last visible value wherever one exists. */
+export function transitionConsoleLoadState<Query, Value>(
+  previous: ConsoleLoadState<Query, Value> | undefined,
+  transition: ConsoleLoadTransition<Query, Value>,
+): ConsoleLoadState<Query, Value> {
+  const retained = retainedValue(previous);
+  switch (transition.status) {
+    case "loading":
+      return retained === undefined
+        ? { status: "loading", query: transition.query }
+        : { status: "loading", query: transition.query, retained };
+    case "empty":
+      return { status: "empty", query: transition.query };
+    case "ready":
+      return { status: "ready", query: transition.query, value: transition.value };
+    case "unavailable":
+      return retained === undefined
+        ? { status: "unavailable", query: transition.query, failure: transition.failure }
+        : { status: "unavailable", query: transition.query, failure: transition.failure, retained };
+    case "waiting":
+      return retained === undefined
+        ? { status: "waiting", query: transition.query, refreshAfter: transition.refreshAfter }
+        : { status: "waiting", query: transition.query, value: retained, refreshAfter: transition.refreshAfter };
+  }
+}
+
+/** Locates every occurrence of the keyword. Matching is case-insensitive, which
+ * leaves CJK text literal; the ranges let callers mark matches with text, not colour. */
