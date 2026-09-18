@@ -2,7 +2,7 @@
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { testAgentSpec } from "../runner/agent-spec.testing.js";
-import type { PiRunner, PromptResult } from "../runner/types.js";
+import { RunnerTimeoutError, type PiRunner, type PromptResult } from "../runner/types.js";
 import { PiPmPort } from "./pi-pm-port.js";
 
 /** A visual direction that satisfies the contract, so a test only has to
@@ -69,6 +69,26 @@ describe("PiPmPort", () => {
     // The tokens were spent whether or not the answer parsed; a lane that only
     // billed successful sessions would under-report exactly the bad ones.
     expect(spent).toMatchObject([{ phase: "CLARIFY" }]);
+  });
+
+  it("resumes a turn whose stream broke instead of losing the whole window", async () => {
+    const instance = runner(JSON.stringify({ status: "ask", questions: ["谁会在夜里看这块屏？"] }));
+    let call = 0;
+    instance.prompt = vi.fn(async (message: string) => {
+      instance.prompts.push(message);
+      if (call++ === 0) throw new RunnerTimeoutError("timed out waiting for agent_settled");
+      return { settled: true, failure: null, usage, events: [] } satisfies PromptResult;
+    });
+
+    await port(instance).run({
+      requirementId: REQUIREMENT_ID,
+      title: "控制台",
+      originalRequest: "我想随时知道现在在做什么。",
+      history: [],
+      maxQuestions: 1,
+      previousRejections: [],
+    });
+    expect(instance.prompts.at(-1)).toBe("continue");
   });
 
   it("asks the clarification contract and hands back the parsed batch", async () => {

@@ -96,6 +96,46 @@ function hostOf(url: string): string | null {
   }
 }
 
+const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]", "::1", "0.0.0.0"]);
+
+/**
+ * Moves a page the blind verifier reached onto the instance this lane started.
+ *
+ * The two lanes each run their own copy of the application, and the verifier's
+ * copy is gone by the time the contract layer runs -- it recorded
+ * `http://127.0.0.1:4311/costs?...` and that port answers nothing any more, so
+ * every page came back unreadable and the one layer that is allowed to refuse
+ * on the token table measured nothing at all.
+ *
+ * Only a loopback origin is rewritten. A page on some other host is not this
+ * application and guessing it is would point the browser somewhere nobody
+ * asked for.
+ */
+export function onAppOrigin(url: string, appUrl: string | undefined): string {
+  if (!appUrl) return url;
+  try {
+    const page = new URL(url);
+    if (!LOOPBACK.has(page.hostname)) return url;
+    const app = new URL(appUrl);
+    page.protocol = app.protocol;
+    page.host = app.host;
+    return page.toString();
+  } catch {
+    // Not a URL either side could open; the collector reports it as it is.
+    return url;
+  }
+}
+
+/**
+ * Why the contract layer read nothing, when the reason is that this lane has no
+ * application of its own to read. It names the setting rather than the symptom:
+ * `verify.appStartCommand` empty is the whole of it, and until it is filled in
+ * the token-table layer measures no repository at all.
+ */
+const NO_APPLICATION =
+  "the contract layer had no application to open: verify.appStartCommand is empty for this repository, "
+  + "so this lane starts nothing and the blind lane's instance has already stopped";
+
 function inconclusiveOf(result: UiReviewResult, fallback: readonly string[], reason: string | null): Array<{ id: string; reason: string }> {
   const listed = result.acceptance
     .filter((entry) => entry.status === "inconclusive")
@@ -155,6 +195,7 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
   private async checkContract(
     pages: ReadonlyArray<{ scenarioId: string; url: string }>,
     reviewable: ReadonlySet<string>,
+    appUrl: string | undefined,
   ): Promise<ContractCheck> {
     const options = this.options.uiContract;
     if (!options || options.enforce === "off") return { violations: [], inaccessible: [], failures: [] };
@@ -164,6 +205,13 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
     if (!tokens || tokens.length === 0) return { violations: [], inaccessible: [], failures: [] };
     const wanted = pages.filter((page) => reviewable.has(page.scenarioId));
     if (wanted.length === 0) return { violations: [], inaccessible: [], failures: [] };
+    // Every URL here belongs to the blind lane's application, which stopped
+    // when that lane finished. Without an instance of our own there is nowhere
+    // to move them to, so the layer cannot read a single page. Said once, in
+    // those words: opening them anyway reported one refused connection per
+    // scenario, which reads like a few flaky pages rather than a layer that
+    // has never run on this repository.
+    if (appUrl === undefined) return { violations: [], inaccessible: [], failures: [NO_APPLICATION] };
 
     const collector = await options.collector();
     const violations: ContractViolation[] = [];
@@ -284,8 +332,17 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
       }
       // While the application is still up: the contract layer opens the pages
       // the round reported reaching and reads their computed styles. After the
-      // finally block there is nothing left to open.
-      contract = await this.checkContract(functional.pages ?? [], reviewable);
+      // finally block there is nothing left to open. The URLs come from the
+      // blind lane, whose own copy of the application is already gone, so they
+      // are moved onto this lane's instance first.
+      contract = await this.checkContract(
+        (functional.pages ?? []).map((page) => ({
+          scenarioId: page.scenarioId,
+          url: onAppOrigin(page.url, appUrl),
+        })),
+        reviewable,
+        appUrl,
+      );
     } finally {
       if (handle) await handle.stop().catch(() => undefined);
     }
@@ -392,6 +449,18 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
         ...contract.inaccessible.map((entry) => entry.page),
       ])].toSorted()
       : [];
+    if (contract.failures.includes(NO_APPLICATION) && this.options.recordFriction) {
+      // Counted like every other gap this file records: 08 section 6 gives the
+      // contract layer a veto once it has earned one, and a layer that has
+      // never opened a page cannot have earned anything. This is the number
+      // that says so.
+      await this.options.recordFriction({
+        cardId: input.context.cardId,
+        runId: input.runId,
+        kind: "ui_contract_no_app",
+        detail: NO_APPLICATION,
+      });
+    }
     if ((contract.violations.length > 0 || contract.inaccessible.length > 0) && this.options.recordFriction) {
       // Recorded whether or not it refused: the count is what decides whether
       // this layer is ready to be given a veto (08 section 6).

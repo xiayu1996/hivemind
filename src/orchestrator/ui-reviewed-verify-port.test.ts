@@ -389,6 +389,15 @@ function collector(styles: PageStyles, violations: AccessibilityViolation[] = []
   };
 }
 
+// The layer reads the pages on an instance this lane started; the blind lane's
+// own copy stopped when it finished, so without this there is nothing to open.
+const CONTRACT_APP = {
+  startCommand: ["npm", "run", "dev"],
+  readyUrl: "http://127.0.0.1:4173/",
+  readyTimeoutMs: 1000,
+  seedCommand: [],
+};
+
 describe("UiReviewedVerifyPort and the interface contract", () => {
   const tokens: DesignToken[] = [{ name: "color.surface", type: "color", value: "#111827" }];
 
@@ -404,10 +413,55 @@ describe("UiReviewedVerifyPort and the interface contract", () => {
     pages: [{ scenarioId: "S-EPIC-01-s0", url: "http://localhost:4000/checkout" }],
   });
 
+  it("opens the pages on the instance this lane started, not on the one that is gone", async () => {
+    // The blind lane runs its own copy and takes it down when it is done, so
+    // the URLs it recorded answer nothing by now. Reading them as they stand
+    // left every page unreadable and the one layer allowed to refuse on the
+    // token table measuring nothing.
+    const styles = collector(offTable);
+    const { instance } = port({
+      functional: functionalResult({
+        pages: [{ scenarioId: "S-EPIC-01-s0", url: "http://127.0.0.1:4311/costs?timeZone=UTC" }],
+      }),
+      app: CONTRACT_APP,
+      appUnderReview: () => fakeApp().handle,
+      uiContract: { enforce: "warn", tokens: async () => tokens, collector: styles.make },
+    });
+
+    await instance.run(verifyInput(dod([["ui"]])));
+
+    expect(styles.opened).toEqual(["http://127.0.0.1:4173/costs?timeZone=UTC"]);
+  });
+
+  it("says it had no application rather than reporting one refused page per scenario", async () => {
+    // With no start command this lane opens nothing, and every URL it was given
+    // belongs to the blind lane's instance, which has already stopped. Three
+    // refused connections read like three flaky pages; on S-R237511CO-02 they
+    // hid a layer that has never once measured this repository.
+    const friction: Array<{ kind: string; detail: string }> = [];
+    const styles = collector(offTable);
+    const { instance } = port({
+      functional,
+      friction: async (given) => { friction.push(given); },
+      uiContract: { enforce: "warn", tokens: async () => tokens, collector: styles.make },
+    });
+
+    const result = await instance.run(verifyInput(dod([["ui"]])));
+
+    expect(styles.opened).toEqual([]);
+    const unreadable = JSON.parse(result.artifact).uiContract.unreadable as string[];
+    expect(unreadable).toHaveLength(1);
+    expect(unreadable[0]).toContain("verify.appStartCommand");
+    expect(friction.map((entry) => entry.kind)).toContain("ui_contract_no_app");
+    expect(result.verdict).toBe("accepted");
+  });
+
   it("delivers the round but records what it found while the layer is only warning", async () => {
     const friction: Array<{ kind: string; detail: string }> = [];
     const styles = collector(offTable);
     const { instance } = port({
+      app: CONTRACT_APP,
+      appUnderReview: () => fakeApp().handle,
       functional,
       friction: async (given) => { friction.push(given); },
       uiContract: { enforce: "warn", tokens: async () => tokens, collector: styles.make },
@@ -424,6 +478,8 @@ describe("UiReviewedVerifyPort and the interface contract", () => {
   it("sends the Story back when the deployment has given the layer a veto", async () => {
     const styles = collector(offTable);
     const { instance } = port({
+      app: CONTRACT_APP,
+      appUnderReview: () => fakeApp().handle,
       functional,
       uiContract: { enforce: "block", tokens: async () => tokens, collector: styles.make },
     });
@@ -443,6 +499,8 @@ describe("UiReviewedVerifyPort and the interface contract", () => {
       nodes: ["#phone"],
     }]);
     const { instance } = port({
+      app: CONTRACT_APP,
+      appUnderReview: () => fakeApp().handle,
       functional,
       uiContract: { enforce: "block", tokens: async () => tokens, collector: styles.make },
     });
@@ -461,6 +519,8 @@ describe("UiReviewedVerifyPort and the interface contract", () => {
       nodes: ["main"],
     }]);
     const { instance } = port({
+      app: CONTRACT_APP,
+      appUnderReview: () => fakeApp().handle,
       functional,
       uiContract: { enforce: "block", tokens: async () => tokens, collector: styles.make },
     });
@@ -471,6 +531,8 @@ describe("UiReviewedVerifyPort and the interface contract", () => {
   it("says nothing about a page whose every value came from the table", async () => {
     const styles = collector(fromTable);
     const { instance } = port({
+      app: CONTRACT_APP,
+      appUnderReview: () => fakeApp().handle,
       functional,
       uiContract: { enforce: "block", tokens: async () => tokens, collector: styles.make },
     });
@@ -484,6 +546,8 @@ describe("UiReviewedVerifyPort and the interface contract", () => {
   it("does not open a browser for a repository that made no promise to keep", async () => {
     const styles = collector(offTable);
     const { instance } = port({
+      app: CONTRACT_APP,
+      appUnderReview: () => fakeApp().handle,
       functional,
       uiContract: { enforce: "block", tokens: async () => null, collector: styles.make },
     });
@@ -497,6 +561,8 @@ describe("UiReviewedVerifyPort and the interface contract", () => {
   it("does not look at all when the deployment switched the layer off", async () => {
     const styles = collector(offTable);
     const { instance } = port({
+      app: CONTRACT_APP,
+      appUnderReview: () => fakeApp().handle,
       functional,
       uiContract: { enforce: "off", tokens: async () => tokens, collector: styles.make },
     });
@@ -509,6 +575,8 @@ describe("UiReviewedVerifyPort and the interface contract", () => {
   it("closes the browser it opened, so a leaked Chromium does not outlive the card", async () => {
     const styles = collector(offTable);
     const { instance } = port({
+      app: CONTRACT_APP,
+      appUnderReview: () => fakeApp().handle,
       functional,
       uiContract: { enforce: "warn", tokens: async () => tokens, collector: styles.make },
     });
@@ -521,6 +589,8 @@ describe("UiReviewedVerifyPort and the interface contract", () => {
   it("reads one screen once even when two scenarios reached the same page", async () => {
     const styles = collector(offTable);
     const { instance } = port({
+      app: CONTRACT_APP,
+      appUnderReview: () => fakeApp().handle,
       functional: functionalResult({
         pages: [
           { scenarioId: "S-EPIC-01-s0", url: "http://localhost:4000/checkout" },
@@ -535,6 +605,6 @@ describe("UiReviewedVerifyPort and the interface contract", () => {
 
     await instance.run(verifyInput(dod([["ui"], ["ui"]])));
 
-    expect(styles.opened).toEqual(["http://localhost:4000/checkout"]);
+    expect(styles.opened).toEqual(["http://127.0.0.1:4173/checkout"]);
   });
 });
