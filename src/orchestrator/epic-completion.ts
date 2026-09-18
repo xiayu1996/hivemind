@@ -2,7 +2,7 @@ import type { Client } from "@libsql/client";
 import type { MergeRequestState, MergeRequestStatePort } from "../vcs/mr/types.js";
 import { EpicAcceptance } from "./epic-acceptance.js";
 import { EPIC_BOARD_STATUS, epicStatusStatement } from "./epic-status-projection.js";
-import { assertEpicTransition } from "./state-machine.js";
+import { epicTransitionStatement } from "./state-machine.js";
 
 export type EpicCompletionOutcome =
   | { epicId: string; kind: "done" }
@@ -84,13 +84,9 @@ export class EpicCompletion {
         outcomes.push({ epicId, kind: "awaiting_acceptance" });
         continue;
       }
-      assertEpicTransition("EPIC_ACCEPT", "DONE");
       const time = this.now();
       const result = await this.client.batch([
-        {
-          sql: "UPDATE epics SET state = 'DONE', updated_at = ? WHERE id = ? AND state = 'EPIC_ACCEPT'",
-          args: [time, epicId],
-        },
+        epicTransitionStatement({ epicId, from: "EPIC_ACCEPT", to: "DONE", at: time }),
         epicStatusStatement(epicId, EPIC_BOARD_STATUS.done, time, "DONE"),
       ], "write");
       if (result[0]?.rowsAffected === 1) outcomes.push({ epicId, kind: "done" });
@@ -99,15 +95,15 @@ export class EpicCompletion {
   }
 
   private async reopenExecution(epicId: string, mrUrl: string, reason: string): Promise<boolean> {
-    assertEpicTransition("EPIC_ACCEPT", "EXECUTING");
     const time = this.now();
     const runId = `epic-review-closed:${epicId}:${time}`;
     const result = await this.client.batch([
-      {
-        sql: `UPDATE epics SET state = 'EXECUTING', mr_url = NULL, updated_at = ?
-               WHERE id = ? AND state = 'EPIC_ACCEPT' AND mr_url = ?`,
-        args: [time, epicId, mrUrl],
-      },
+      // Only if the review request it is being sent back from is still the
+      // one this run read: another process may have raised a newer one.
+      epicTransitionStatement({
+        epicId, from: "EPIC_ACCEPT", to: "EXECUTING", at: time, set: { mrUrl: null },
+        requires: { sql: "mr_url = ?", args: [mrUrl] },
+      }),
       {
         sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
               SELECT ?, (SELECT COALESCE(MAX(seq), -1) + 1 FROM event_log WHERE run_id = ?),

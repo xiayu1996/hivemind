@@ -104,6 +104,8 @@ pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src
 - **界面判据分三层，只有前两层能否决**（08 §6，修订 03 §9.2）：结构层（该场景声明要看见的角色与文本是否出现在 aria 快照里）与契约层（色值/字号/间距是否全部来自 token 表）可否决，因为两者有限可枚举、可收敛；观感永不否决。**像素级一致不做**——它是无限精度的判据，模型每轮都能挑出新的一处差，失败集合永不重复、判据永不生效，卡只会烧完预算。原型的作用是给前两层供数，不是一张要被像素对齐的图。
 - **出口检查只有一套机制**：`evaluate → findings 回喂同一 session → 重解析`，每个 phase 的出口由一张表声明（`pi-phase-port.ts` 的 `builtInGates`），调用方需要现场状态时自己传 gate。会话内回喂是关键：拒绝是一个工作项，不是对 Story 的判决，所以不耗轮次、不算重入，也不用重新加载这个 session 已经读过的东西——S-AGENTRULES-01 就是被两次"换个 session 重做"的 SPECIFY 拒绝停掉的。每个 gate 声明用尽轮次后是 `fail` 还是 `ship`：没有否决权的那些（交付报告、设计摘要）照发，因为卡在文字上比文字不好读更糟。
 
+- **状态只经守卫语句写**：Epic 与 Story 的 state 一律由 `epicTransitionStatement` / `storyTransitionStatement` 生成——声明的边与 `WHERE state = ?` 守卫出自同一对状态，不可能分叉，并发下输的那个拿到 `rowsAffected === 0` 而不是覆盖赢家。它们返回语句而不直接写库：迁移必须和它的事件与看板投影同一 batch 落地，拆开就会有状态变了而没有记录的那一刻。全仓不应再出现手写的 `UPDATE epics/stories SET state`。
+
 - **加一个仓库也是数据改动**：`repositories` 表只存 slug、clone URL 与默认分支，本机 checkout 路径由 `<workRoot>/repos/<name>` 推出来——路径是单机状态，写进库在第二台机器上就是错的。仓库**永远由 hivemind 自己 clone**，不复用操作者的 checkout（那棵树停在谁的分支上都不一定），主 checkout 保持 detached 以便 worktree 取任意分支。需求卡的「目标仓库」只在注册表里选；选了没注册的就留在看板上不入库，人补一下属性下一轮即被接走。
 
 - **加一个 provider 是数据改动，不是代码改动**：`model.providers`（registry 键，console 可编辑，标了 dangerous）声明每家怎么认证、每档用哪个模型；代码里不出现任何字面 model id。加进 `model.failoverChain` 是另一个决策，分开配、分开审计。

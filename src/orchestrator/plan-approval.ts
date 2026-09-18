@@ -3,7 +3,7 @@ import type { Client, InStatement } from "@libsql/client";
 import type { DecompositionCandidate, DecompositionLimits, DecompositionStory } from "./decompose.js";
 import { evaluateDecomposition } from "./decompose.js";
 import { EPIC_BOARD_STATUS, epicStatusStatement } from "./epic-status-projection.js";
-import { assertEpicTransition, type EpicState } from "./state-machine.js";
+import { epicTransitionStatement, type EpicState } from "./state-machine.js";
 
 /** Who decided. `auto` is the system itself, when the deployment has said a
  * person does not review decompositions. */
@@ -129,12 +129,9 @@ export class PlanApprovalStore {
   async requestRevision(epicId: string, eventId: string): Promise<boolean> {
     const epic = await this.getEpic(epicId);
     if (epic.state !== "PLAN_APPROVAL") return false;
-    assertEpicTransition(epic.state, "DECOMPOSE");
-    const result = await this.client.execute({
-      sql: `UPDATE epics SET state = 'DECOMPOSE', updated_at = ?
-            WHERE id = ? AND state = 'PLAN_APPROVAL'`,
-      args: [this.now(), epicId],
-    });
+    const result = await this.client.execute(
+      epicTransitionStatement({ epicId, from: "PLAN_APPROVAL", to: "DECOMPOSE", at: this.now() }),
+    );
     if (result.rowsAffected === 1) {
       await this.client.batch([{
         sql: `INSERT OR IGNORE INTO epic_approval_events (event_id, epic_id, source, created_at)
@@ -160,7 +157,6 @@ export class PlanApprovalStore {
     const time = this.now();
     const epic = await this.getEpic(input.epicId);
     if (epic.state !== "PLAN_APPROVAL") return false;
-    assertEpicTransition(epic.state, "EXECUTING");
     const planRow = (await this.client.execute({ sql: "SELECT body FROM epic_plans WHERE epic_id = ?", args: [input.epicId] })).rows[0];
     if (!planRow) throw new Error(`Epic ${input.epicId} has no accepted plan`);
     const plan = JSON.parse(String(planRow.body)) as { stories: DecompositionStory[] };
@@ -190,12 +186,12 @@ export class PlanApprovalStore {
         args: [story.id, input.epicId, payload, hash(payload), time],
       });
     }
-    statements.push({
-      sql: `UPDATE epics SET state = 'EXECUTING', updated_at = ?
-            WHERE id = ? AND state = 'PLAN_APPROVAL'
-              AND EXISTS (SELECT 1 FROM epic_approval_events WHERE event_id = ?)`,
-      args: [time, input.epicId, input.eventId],
-    });
+    // The approval event has to exist in this same batch: the plan starts
+    // running because a person approved it, not because a run reached here.
+    statements.push(epicTransitionStatement({
+      epicId: input.epicId, from: "PLAN_APPROVAL", to: "EXECUTING", at: time,
+      requires: { sql: "EXISTS (SELECT 1 FROM epic_approval_events WHERE event_id = ?)", args: [input.eventId] },
+    }));
     statements.push(epicStatusStatement(input.epicId, EPIC_BOARD_STATUS.executing, time, "EXECUTING"));
     const result = await this.client.batch(statements, "write");
     const approved = result.at(-2)?.rowsAffected === 1;

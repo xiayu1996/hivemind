@@ -2,7 +2,7 @@ import type { Client } from "@libsql/client";
 import { blockingQuestionStatement } from "./epic-blocker.js";
 import { unrecoveredHeadFailures, type EpicHeadFailure } from "./epic-head-failure.js";
 import type { HumanQuestion } from "./human-question.js";
-import { assertEpicTransition, type StoryStopReason } from "./state-machine.js";
+import { epicTransitionStatement, type StoryStopReason } from "./state-machine.js";
 import text from "./epic-escalation-text.json" with { type: "json" };
 
 export interface EscalationChange {
@@ -130,7 +130,6 @@ export async function escalateParkedStories(
   for (const epicId of executingEpicsToBlock(toBlock, headFailures, await executingEpics(client))) {
     const parked = toBlock.get(epicId) ?? [];
     const headFailure = headFailures.get(epicId);
-    assertEpicTransition("EXECUTING", "BLOCKED");
     const storyIds = parked.map((story) => story.id);
     const question = escalationQuestion(parked, headFailure);
     const time = now();
@@ -140,10 +139,7 @@ export async function escalateParkedStories(
       ...(headFailure ? { headFailure: { check: headFailure.check, failures: headFailure.failures, storyId: headFailure.storyId } } : {}),
     };
     const results = await client.batch([
-      {
-        sql: "UPDATE epics SET state = 'BLOCKED', updated_at = ? WHERE id = ? AND state = 'EXECUTING'",
-        args: [time, epicId],
-      },
+      epicTransitionStatement({ epicId, from: "EXECUTING", to: "BLOCKED", at: time }),
       {
         sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
               SELECT ?, (SELECT COALESCE(MAX(seq), -1) + 1 FROM event_log WHERE run_id = ?), NULL, NULL, 'epic.transition', ?, ?
@@ -164,16 +160,12 @@ export async function escalateParkedStories(
     if (stillParked.has(epicId) || headFailures.has(epicId)) continue;
     const latest = await latestTransition(client, epicId);
     if (latest?.to !== "BLOCKED" || latest.escalation !== true) continue;
-    assertEpicTransition("BLOCKED", "EXECUTING");
     const storyIds = Array.isArray(latest.storyIds) ? latest.storyIds.map(String) : [];
     const time = now();
     const runId = `epic:${epicId}`;
     const data = { from: "BLOCKED", to: "EXECUTING", reason: "the Epic has nothing waiting on a person", escalation: true, storyIds };
     const results = await client.batch([
-      {
-        sql: "UPDATE epics SET state = 'EXECUTING', updated_at = ? WHERE id = ? AND state = 'BLOCKED'",
-        args: [time, epicId],
-      },
+      epicTransitionStatement({ epicId, from: "BLOCKED", to: "EXECUTING", at: time }),
       {
         sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
               SELECT ?, (SELECT COALESCE(MAX(seq), -1) + 1 FROM event_log WHERE run_id = ?), NULL, NULL, 'epic.transition', ?, ?

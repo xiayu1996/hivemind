@@ -4,6 +4,7 @@ import type { Client } from "@libsql/client";
 import { redactForExport } from "../observability/redact.js";
 import {
   assertStoryTransition,
+  storyTransitionStatement,
   isForwardStoryTransition,
   type StoryState,
   type StoryStopReason,
@@ -1143,15 +1144,10 @@ export class StoryExecutionStore {
     detail?: MergeRejectionDetail,
   ): Promise<void> {
     if (reason.trim() === "") throw new Error("merge rejection reason must not be empty");
-    assertStoryTransition("MERGE", "CODE", "system");
     const spent = detail?.attribution !== "baseline_failing" && detail?.attribution !== "environment";
     const time = this.now();
     const [update] = await this.client.batch([
-      {
-        sql: `UPDATE stories SET state = 'CODE', phase = 'CODE', updated_at = ?
-              WHERE id = ? AND state = 'MERGE'`,
-        args: [time, cardId],
-      },
+      storyTransitionStatement({ cardId, from: "MERGE", to: "CODE", at: time, set: { phase: "CODE" } }),
       eventStatement(runId, cardId, "MERGE", type, { reason, ...detail, spent }, time),
       eventStatement(runId, cardId, "CODE", "story.transition", { from: "MERGE", to: "CODE", actor: "system" }, time),
     ], "write");

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Client, InStatement } from "@libsql/client";
 import { EPIC_BOARD_STATUS, epicStatusStatement } from "./epic-status-projection.js";
-import { assertEpicTransition } from "./state-machine.js";
+import { epicTransitionStatement } from "./state-machine.js";
 
 export interface EpicAcceptanceItem {
   prdScenarioId: string;
@@ -205,12 +205,10 @@ export class EpicAcceptance {
     // The batch is not finished after all, so it goes back to work with a
     // review request that will be reopened once the follow-up lands.
     if (String(epic.state) === "EPIC_ACCEPT") {
-      assertEpicTransition("EPIC_ACCEPT", "EXECUTING");
-      statements.push({
-        sql: `UPDATE epics SET state = 'EXECUTING', mr_url = NULL, updated_at = ?
-              WHERE id = ? AND state = 'EPIC_ACCEPT'`,
-        args: [time, epicId],
-      }, epicStatusStatement(epicId, EPIC_BOARD_STATUS.executing, time, "EXECUTING"));
+      statements.push(
+        epicTransitionStatement({ epicId, from: "EPIC_ACCEPT", to: "EXECUTING", at: time, set: { mrUrl: null } }),
+        epicStatusStatement(epicId, EPIC_BOARD_STATUS.executing, time, "EXECUTING"),
+      );
     }
     statements.push(eventStatement(epicId, "epic.acceptance_gap_stories", { storyIds }, time));
     await this.client.batch(statements, "write");
