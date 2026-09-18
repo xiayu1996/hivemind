@@ -245,6 +245,22 @@ export class RequirementStore {
     }
   }
 
+  /** Friction is a count, not a story: it says how often a rule the system
+   * relies on did not hold, so the decision to strengthen it is made on data. */
+  async recordFriction(input: {
+    cardId: string;
+    runId: string;
+    kind: string;
+    detail: string;
+  }): Promise<void> {
+    await this.client.batch([
+      eventStatement(input.runId, input.cardId, "friction.recorded", {
+        kind: input.kind,
+        detail: input.detail,
+      }, this.now()),
+    ], "write");
+  }
+
   /** Why the requirement last stopped for a person, or null if it never did. */
   async latestStop(id: string): Promise<RequirementStop | null> {
     const row = (await this.client.execute({

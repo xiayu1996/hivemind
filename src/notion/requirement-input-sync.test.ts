@@ -6,6 +6,7 @@ import { RequirementStore } from "../orchestrator/requirement-store.js";
 import { migrate } from "../persistence/migrate.js";
 import { CommentIngestor, type NotionComment } from "./comment-ingest.js";
 import type { NotionGateway } from "./gateway.js";
+import type { SystemOne, SystemOneRequest } from "../judge/system-one.js";
 import { NotionRequirementInputSync } from "./requirement-input-sync.js";
 
 const REQUIREMENT_ID = "R-abc123def456";
@@ -31,6 +32,7 @@ describe("NotionRequirementInputSync", () => {
   let status: string;
   let checkedBlocks: Set<string>;
   let sync: NotionRequirementInputSync;
+  let ingestor: CommentIngestor;
 
   function gateway(): NotionGateway {
     return {
@@ -60,7 +62,7 @@ describe("NotionRequirementInputSync", () => {
     comments = [];
     status = "PRD 待确认";
     checkedBlocks = new Set();
-    const ingestor = new CommentIngestor(client, { listComments: async () => comments }, { now: () => MINUTE + 50_000 });
+    ingestor = new CommentIngestor(client, { listComments: async () => comments }, { now: () => MINUTE + 50_000 });
     sync = new NotionRequirementInputSync(client, gateway(), ingestor, store, checklist, () => MINUTE + 50_000);
     await store.createRequirement({ id: REQUIREMENT_ID, notionPageId: PAGE_ID, title: "控制台", originalRequest: "我想随时知道现在在做什么。" });
     await store.transition(REQUIREMENT_ID, "CLARIFY", "PRD_CONFIRM", "system", "run");
@@ -97,6 +99,69 @@ describe("NotionRequirementInputSync", () => {
     const draft = (await client.execute("SELECT created_at FROM requirement_prds WHERE revision = 1")).rows[0];
     comment("c-old", "顺便说一句，这个页面我早就建好了", Number(draft?.created_at) - 60_000);
     await expect(sync.pollComments(REQUIREMENT_ID)).resolves.toMatchObject({ prdConfirmed: false, revisionRequested: false });
+  });
+
+  it("confirms on a wording the four strings miss, once the judge vouched for it", async () => {
+    // Today "批准。" with a full stop rewrites the PRD for nothing, and the
+    // person is never told why the word they wrote did not count.
+    const asked: SystemOneRequest[] = [];
+    const judge: SystemOne = {
+      async ask(request) {
+        asked.push(request);
+        return { answers: { is_approval: { type: "noul", noul: 0.93 } } };
+      },
+    };
+    const friction: { cardId: string; kind: string; detail: string }[] = [];
+    const judged = new NotionRequirementInputSync(
+      client, gateway(), ingestor, store, checklist, () => MINUTE + 50_000,
+      { judge, model: "jev-latest", threshold: 0.8 },
+      async (input) => { friction.push(input); },
+    );
+    comment("c-approve", "批准。", MINUTE + 2_000);
+
+    await expect(judged.pollComments(REQUIREMENT_ID)).resolves.toMatchObject({ prdConfirmed: true });
+
+    expect(asked).toHaveLength(1);
+    expect(asked[0]!.state).toEqual({ comment: "批准。" });
+    expect(friction).toMatchObject([{ cardId: REQUIREMENT_ID, kind: "notion_approval_judged" }]);
+    expect(friction[0]!.detail).toContain("0.93");
+  });
+
+  it("never asks about a wording the four strings already read as approval", async () => {
+    // The whitelist is the floor: what it confirms today it still confirms,
+    // and a judge that answered these could only take one away.
+    const asked: SystemOneRequest[] = [];
+    const judge: SystemOne = {
+      async ask(request) {
+        asked.push(request);
+        return { answers: { is_approval: { type: "noul", noul: 0.01 } } };
+      },
+    };
+    const judged = new NotionRequirementInputSync(
+      client, gateway(), ingestor, store, checklist, () => MINUTE + 50_000,
+      { judge, model: "jev-latest", threshold: 0.8 },
+    );
+    comment("c-approve", "批准", MINUTE + 2_000);
+
+    await expect(judged.pollComments(REQUIREMENT_ID)).resolves.toMatchObject({ prdConfirmed: true });
+    expect(asked).toEqual([]);
+  });
+
+  it("rewrites the draft as it does today when the judge is not sure", async () => {
+    const judge: SystemOne = {
+      async ask() {
+        // Measured: bare praise scores here, and it is not an approval.
+        return { answers: { is_approval: { type: "noul", noul: 0.61 } } };
+      },
+    };
+    const judged = new NotionRequirementInputSync(
+      client, gateway(), ingestor, store, checklist, () => MINUTE + 50_000,
+      { judge, model: "jev-latest", threshold: 0.8 },
+    );
+    comment("c-1", "这个写得不错", MINUTE + 2_000);
+
+    await expect(judged.pollComments(REQUIREMENT_ID))
+      .resolves.toMatchObject({ prdConfirmed: false, revisionRequested: true });
   });
 
   it("carries everything the person asked to change into one rewrite", async () => {

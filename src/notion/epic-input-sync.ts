@@ -3,6 +3,7 @@ import type { Client } from "@libsql/client";
 import { CommentIngestor } from "./comment-ingest.js";
 import type { NotionGateway } from "./gateway.js";
 import { interpretEpicComment, interpretEpicPropertyChange } from "./intent-interpreter.js";
+import { judgeApprovals, renderMovedApprovals, type ApprovalJudgeSettings } from "../judge/approval-intent.js";
 import { answerBlocker } from "../orchestrator/epic-blocker.js";
 import type { PlanApprovalStore } from "../orchestrator/plan-approval.js";
 import { EpicAcceptance } from "../orchestrator/epic-acceptance.js";
@@ -55,6 +56,13 @@ export class NotionEpicInputSync {
     private readonly approvals: PlanApprovalStore,
     private readonly now: () => number = Date.now,
     private readonly acceptance: EpicAcceptance = new EpicAcceptance(client, now),
+    /** Left out where there is no credential; the whitelist then answers alone. */
+    private readonly approvalJudge: ApprovalJudgeSettings | undefined = undefined,
+    /** How often the whitelist missed an approval, so the question earns its
+     * place on measurement rather than on the argument that made it. */
+    private readonly recordFriction:
+      | ((input: { cardId: string; runId: string; kind: string; detail: string }) => Promise<void>)
+      | undefined = undefined,
   ) {}
 
   async pollProperties(pageId: string): Promise<EpicPropertyPollResult> {
@@ -108,6 +116,7 @@ export class NotionEpicInputSync {
             ORDER BY ic.created_time, ic.comment_id`,
       args: [pageId],
     })).rows;
+    const approving = await this.judgeApprovals(comments);
     let approved = 0;
     let revised = 0;
     let answered = 0;
@@ -132,7 +141,7 @@ export class NotionEpicInputSync {
           continue;
         }
       }
-      const intent = interpretEpicComment(state, String(comment.body));
+      const intent = interpretEpicComment(state, String(comment.body), approving);
       if (intent.type === "approve_plan") {
         if (await this.approvals.approve({ epicId, eventId, source: "comment" })) approved++;
       } else if (intent.type === "request_revision") {
@@ -140,6 +149,42 @@ export class NotionEpicInputSync {
       }
     }
     return { ingested: polled.inserted, approved, revised, answered, gaps };
+  }
+
+  /**
+   * Asks the judge about the plan-approval comments the whitelist did not read
+   * as approvals, and about nothing else. On this page an unrecognised comment
+   * falls through to `feedback`, which is silence: the Epic goes on waiting and
+   * the person is never told their approval was not understood. The judge can
+   * only turn one of those into an approval; it never turns an approval back.
+   */
+  private async judgeApprovals(
+    comments: readonly Record<string, unknown>[],
+  ): Promise<ReadonlySet<string>> {
+    const settings = this.approvalJudge;
+    if (!settings?.judge) return new Set();
+    const waiting = comments.filter((comment) => {
+      const state = epicState(comment.state);
+      return state === "PLAN_APPROVAL"
+        && interpretEpicComment(state, String(comment.body)).type !== "approve_plan";
+    });
+    if (waiting.length === 0) return new Set();
+    const judgement = await judgeApprovals(
+      settings.judge,
+      waiting.map((comment) => String(comment.body)),
+      "decomposition plan",
+      { model: settings.model, threshold: settings.threshold },
+    );
+    if (judgement.moved.length > 0) {
+      const epicId = String(waiting[0]!.epic_id);
+      await this.recordFriction?.({
+        cardId: epicId,
+        runId: `epic:${epicId}`,
+        kind: "notion_approval_judged",
+        detail: renderMovedApprovals(judgement.moved),
+      });
+    }
+    return judgement.approving;
   }
 
   /**

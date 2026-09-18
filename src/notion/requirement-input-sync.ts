@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Client } from "@libsql/client";
 import { z } from "zod";
+import { judgeApprovals, renderMovedApprovals, type ApprovalJudgeSettings } from "../judge/approval-intent.js";
 import type { AcceptanceChecklist } from "../orchestrator/acceptance-checklist.js";
 import type { RequirementStore } from "../orchestrator/requirement-store.js";
 import { floorToNotionMinute } from "./comment-ingest.js";
@@ -62,6 +63,13 @@ export class NotionRequirementInputSync {
     private readonly store: RequirementStore,
     private readonly checklist: AcceptanceChecklist,
     private readonly now: () => number = Date.now,
+    /** Left out where there is no credential; the whitelist then answers alone. */
+    private readonly approvalJudge: ApprovalJudgeSettings | undefined = undefined,
+    /** How often the whitelist missed an approval, so the question earns its
+     * place on measurement rather than on the argument that made it. */
+    private readonly recordFriction:
+      | ((input: { cardId: string; runId: string; kind: string; detail: string }) => Promise<void>)
+      | undefined = undefined,
   ) {}
 
   async pollProperties(requirementId: string): Promise<RequirementPropertyPollResult> {
@@ -197,10 +205,11 @@ export class NotionRequirementInputSync {
     if (!draft) return { confirmed: false, revisionRequested: false };
     const revision = Number(draft.revision);
     const unclaimed = await this.unclaimedComments(pageId, Number(draft.created_at));
+    const approving = await this.judgeApprovals(requirementId, state, unclaimed);
     const revisions: Array<{ id: string; body: string }> = [];
     let confirmed = false;
     for (const comment of unclaimed) {
-      const intent = interpretRequirementComment(state, comment.body);
+      const intent = interpretRequirementComment(state, comment.body, approving);
       if ((intent.type === "approve_prd" || intent.type === "approve_solution") && revisions.length === 0) {
         confirmed = prd
           ? await this.store.confirmPrd(requirementId, revision, comment.id, "comment", runId(requirementId))
@@ -223,6 +232,45 @@ export class NotionRequirementInputSync {
       await this.store.claimApprovalEvent(requirementId, item.id, prd ? "prd_revision" : "solution_revision", "comment");
     }
     return { confirmed, revisionRequested };
+  }
+
+  /**
+   * Asks the judge about the comments the whitelist did not read as approvals,
+   * and about nothing else: a comment it already matches is an approval today
+   * and stays one, so the judge can only add. An absent, slow or unsure judge
+   * leaves every comment exactly where the whitelist put it, which is a
+   * rewrite the person did not ask for -- what happens today on every wording
+   * the four strings miss.
+   */
+  private async judgeApprovals(
+    requirementId: string,
+    state: "PRD_CONFIRM" | "SOLUTION",
+    comments: readonly { id: string; body: string }[],
+  ): Promise<ReadonlySet<string>> {
+    const settings = this.approvalJudge;
+    if (!settings?.judge) return new Set();
+    const unrecognised = comments
+      .filter((comment) => {
+        const type = interpretRequirementComment(state, comment.body).type;
+        return type !== "approve_prd" && type !== "approve_solution";
+      })
+      .map((comment) => comment.body);
+    if (unrecognised.length === 0) return new Set();
+    const judgement = await judgeApprovals(
+      settings.judge,
+      unrecognised,
+      state === "PRD_CONFIRM" ? "PRD" : "solution",
+      { model: settings.model, threshold: settings.threshold },
+    );
+    if (judgement.moved.length > 0) {
+      await this.recordFriction?.({
+        cardId: requirementId,
+        runId: runId(requirementId),
+        kind: "notion_approval_judged",
+        detail: renderMovedApprovals(judgement.moved),
+      });
+    }
+    return judgement.approving;
   }
 
   /**

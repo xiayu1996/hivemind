@@ -5,6 +5,7 @@ import { STORY_BOARD_STATUS } from "./board-status.js";
 import {
   HUMAN_WINS_MS,
   interpretComment,
+  interpretEpicComment,
   interpretPropertyChange,
   interpretRequirementComment,
   interpretRequirementPropertyChange,
@@ -118,6 +119,41 @@ describe("requirement comment intent", () => {
 
   it("refuses to interpret an empty comment", () => {
     expect(() => interpretRequirementComment("CLARIFY", "  ")).toThrow(/without text/);
+  });
+
+  it("reads a wording the four strings miss as an approval once a judge vouched for it", () => {
+    // "批准。" with a full stop is today a request to rewrite the PRD.
+    const judged = new Set(["批准。", "确认，可以往下走"]);
+
+    expect(interpretRequirementComment("PRD_CONFIRM", " 批准。 ", judged)).toEqual({ type: "approve_prd" });
+    expect(interpretRequirementComment("SOLUTION", "确认，可以往下走", judged))
+      .toEqual({ type: "approve_solution" });
+  });
+
+  it("keeps the whitelist's answer for a comment the judge did not vouch for", () => {
+    expect(interpretRequirementComment("PRD_CONFIRM", "第二条场景不对", new Set(["批准。"])))
+      .toEqual({ type: "request_revision", body: "第二条场景不对" });
+  });
+
+  it("goes on reading approvals with no judge at all", () => {
+    expect(interpretRequirementComment("PRD_CONFIRM", "批准")).toEqual({ type: "approve_prd" });
+  });
+});
+
+describe("Epic comment intent", () => {
+  it("reads the four strings it always has", () => {
+    expect(interpretEpicComment("PLAN_APPROVAL", " 批准 ")).toEqual({ type: "approve_plan" });
+    expect(interpretEpicComment("PLAN_APPROVAL", "Request changes")).toEqual({ type: "request_revision" });
+    expect(interpretEpicComment("PLAN_APPROVAL", "这个拆解我再想想")).toEqual({ type: "feedback" });
+  });
+
+  it("reads a vouched-for wording as the approval it is", () => {
+    expect(interpretEpicComment("PLAN_APPROVAL", "行，就这么干", new Set(["行，就这么干"])))
+      .toEqual({ type: "approve_plan" });
+  });
+
+  it("never reads one on an Epic that is not waiting for a plan verdict", () => {
+    expect(interpretEpicComment("EXECUTING", "批准", new Set(["批准"]))).toEqual({ type: "feedback" });
   });
 });
 
