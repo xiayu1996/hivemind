@@ -170,6 +170,27 @@ describe("footprints written two ways", () => {
     expect(plan.batches).toEqual([["S-A-01", "S-B-01"]]);
   });
 
+  it("treats a trailing glob as the subtree it walks", async () => {
+    // `src/console/**` came off a real DoD and contained nothing under
+    // src/console, so a card declaring a directory inside it looked independent.
+    const plan = planStoryExecution([
+      { id: "S-A-01", dependsOn: [], predictedFootprint: ["src/console/**"] },
+      { id: "S-B-01", dependsOn: [], predictedFootprint: ["src/console/panels"] },
+      { id: "S-C-01", dependsOn: [], predictedFootprint: ["src/notion/*"] },
+    ], []);
+
+    expect(plan.batches).toEqual([["S-A-01", "S-C-01"], ["S-B-01"]]);
+  });
+
+  it("keeps a name that only looks like a glob", async () => {
+    const plan = planStoryExecution([
+      { id: "S-A-01", dependsOn: [], predictedFootprint: ["src/consoles"] },
+      { id: "S-B-01", dependsOn: [], predictedFootprint: ["src/console/**"] },
+    ], []);
+
+    expect(plan.batches).toEqual([["S-A-01", "S-B-01"]]);
+  });
+
   it("reads a hotspot written with a trailing slash as the directory it names", async () => {
     const plan = planStoryExecution([
       { id: "S-A-01", dependsOn: [], predictedFootprint: ["src/config"] },
