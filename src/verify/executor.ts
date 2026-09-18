@@ -10,6 +10,7 @@ import { splitScenarioFailures } from "../pipeline/failure-classification.js";
 import { validateVerdict, type TrajectoryEvidence, type VerdictDocument } from "../pipeline/verdict.js";
 import type { PiRunner, RpcEvent, TokenUsage } from "../runner/types.js";
 import { promptWithContinueRetry } from "../runner/continue-retry.js";
+import { addUsage } from "../runner/failure.js";
 import { jsonPayloadCandidates } from "../util/json-payload.js";
 import { browserLaneEnv } from "./browser-config.js";
 import type { VisibleRequirement } from "./aria-snapshot.js";
@@ -119,6 +120,19 @@ export interface BlindVerifyResult {
   usage: TokenUsage;
   messages: unknown[];
 }
+
+/**
+ * How many times a reply that did not parse is handed back inside the same
+ * session. Small on purpose: a verifier that cannot restate its own verdict
+ * twice is not going to on the third ask, and the round ends inconclusive as
+ * it did before.
+ */
+const VERDICT_HANDBACKS = 2;
+
+const VERDICT_HANDBACK_PROMPT =
+  "Your last message carried no verdict this system can read. Send the verdict again as one JSON object "
+  + "and nothing else: no prose around it, no code fence, every field of the contract present. "
+  + "Judge nothing further and run no tools -- restate what you already decided.";
 
 function assistantText(events: readonly RpcEvent[]): string | null {
   for (const event of events.toReversed()) {
@@ -234,6 +248,20 @@ function textOfContent(content: unknown): string {
       .map((part) => part.text)
       .join("\n")
     : "";
+}
+
+/**
+ * The verdict in a reply, or undefined when there is none to read. The last
+ * well-formed payload wins: an earlier one is a draft the verifier wrote while
+ * reasoning and then replaced.
+ */
+function readVerdict(events: readonly RpcEvent[]): z.infer<typeof verifierReplySchema> | undefined {
+  const raw = assistantText(events);
+  if (!raw) return undefined;
+  return jsonPayloadCandidates(raw)
+    .map((candidate) => verifierReplySchema.safeParse(candidate))
+    .flatMap((candidate) => (candidate.success ? [candidate.data] : []))
+    .at(-1);
 }
 
 function toVerdictDocument(value: z.infer<typeof verifierReplySchema>): VerdictDocument {
@@ -404,21 +432,32 @@ export class BlindVerifyExecutor {
       }
       events = [...result.events];
       usage = result.usage;
-      messages = await runner.getMessages();
       if (result.failure) {
         providerFailure = result.failure.errorMessage;
         throw new Error(result.failure.errorMessage);
       }
-      const raw = assistantText(events);
-      if (!raw) throw new Error("VERIFY returned no assistant verdict");
-      const candidates = jsonPayloadCandidates(raw);
-      if (candidates.length === 0) throw new Error("VERIFY returned no parseable JSON verdict");
-      // The last well-formed payload is the verdict; an earlier one is a draft
-      // the verifier wrote while reasoning and then replaced.
-      const verdicts = candidates.map((candidate) => verifierReplySchema.safeParse(candidate))
-        .flatMap((candidate) => (candidate.success ? [candidate.data] : []));
-      const parsed = verdicts.at(-1);
-      if (!parsed) throw new Error("VERIFY returned a malformed verdict");
+      // A reply that does not parse is told so and asked again in the same
+      // session, the way every other phase is. Re-running the round instead
+      // showed the verifier nothing about what was wrong with the last answer,
+      // so the second attempt was the first one repeated: S-R237511TD-01 was
+      // parked on retry_limit_exceeded after two identical "malformed verdict"
+      // rounds, having been judged on nothing. Reading the verdict costs no
+      // tools and moves no files, and the tree pin below still holds.
+      let parsed = readVerdict(events);
+      for (let handback = 0; parsed === undefined && handback < VERDICT_HANDBACKS; handback += 1) {
+        const retry = await promptWithContinueRetry(runner, VERDICT_HANDBACK_PROMPT, {
+          maxContinueRetries: input.maxContinueRetries ?? 8,
+        });
+        events = [...events, ...retry.events];
+        usage = addUsage(usage, retry.usage);
+        if (retry.failure) {
+          providerFailure = retry.failure.errorMessage;
+          throw new Error(retry.failure.errorMessage);
+        }
+        parsed = readVerdict(retry.events);
+      }
+      messages = await runner.getMessages();
+      if (parsed === undefined) throw new Error("VERIFY returned a malformed verdict");
       document = toVerdictDocument(parsed);
     } catch (cause) {
       runnerError = cause instanceof Error ? cause.message : "VERIFY failed";
