@@ -363,11 +363,11 @@ function renderRequirementLimitPanel(limit: RequirementCostLimitPageView): strin
     : `<p class="metric-detail" role="status">${escapeHtml(limit.form.confirmationText)}</p>`;
   return `<section class="panel section" aria-labelledby="requirement-limit-title">`
     + `<div class="section-head"><div><h2 id="requirement-limit-title">需求费用上限</h2>`
-    + `<p class="metric-detail">全部轮次累计费用 <strong class="money">${escapeHtml(metric.cumulativeAmount)}</strong></p></div></div>`
+    + `<p class="metric-detail">全部轮次累计费用 <span class="money">${escapeHtml(metric.cumulativeAmount)}</span></p></div></div>`
     + `<div class="metric${metric.status === "over_limit" ? " danger" : ""}">`
-    + `<div class="metric-name">需求费用上限</div>`
-    + `<div class="metric-value money">${escapeHtml(limitText)}</div>`
-    + `<div class="metric-detail">${statusLine}</div></div>`
+    + `<span class="metric-name">需求费用上限</span>`
+    + `<div class="metric-value money"><span>${escapeHtml(limitText)}</span></div>`
+    + `<div class="metric-detail" role="status">${statusLine}</div></div>`
     + `<form method="post" action="/costs/requirement-limit">`
     + `<input type="hidden" name="requirementId" value="${escapeHtml(limit.form.requirementId)}">`
     + `<input type="hidden" name="expectedVersion" value="${limit.form.version === null ? "" : String(limit.form.version)}">`
