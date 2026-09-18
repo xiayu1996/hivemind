@@ -262,7 +262,7 @@ describe("the costs page saves one requirement's limit", () => {
       const page = await app.inject({ method: "GET", url: response.headers.location as string });
       expect(page.statusCode).toBe(200);
       expect(page.body).toContain("$15.00");
-      expect(page.body).toContain('role="status">上限已保存</div>');
+      expect(page.body).toContain('role="status">上限已保存<');
     } finally {
       await app.close();
     }

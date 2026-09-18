@@ -50,6 +50,10 @@ export interface ConsoleDataSource {
   requirementCostWithLimit?(requirementId: string): Promise<RequirementCostWithLimitSnapshot | null>;
   /** Every requirement that already exceeds its own limit, for the overview. */
   overLimitRequirements?(): Promise<readonly OverLimitRequirementSnapshot[]>;
+  /** The write surface for requirement limits. A source holding the central
+   * store publishes it here, so the console can offer the one write it owes
+   * without every caller having to remember a second port. */
+  requirementCostLimitStore?: RequirementCostLimitStore;
 }
 
 export interface ConsoleConfigWritePort {
@@ -106,10 +110,15 @@ export async function createConsoleServer(
   options: ConsoleServerOptions = {},
 ): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
+  // The limit write surface is the data source's own store when the caller does
+  // not hand one over: the process that can read the limit is the process that
+  // can write it, and a mount point that forgot the port used to leave the form
+  // with no destination at all.
+  const costLimitStore = options.costLimitStore ?? data.requirementCostLimitStore;
   const writable = new Set(options.configWriter
     ? ["/api/config/value", "/api/config/rollback"]
     : []);
-  if (options.costLimitStore) writable.add("/costs/requirement-limit");
+  if (costLimitStore) writable.add("/costs/requirement-limit");
   app.addContentTypeParser(
     "application/x-www-form-urlencoded",
     { parseAs: "string" },
@@ -166,7 +175,7 @@ export async function createConsoleServer(
   // form. Validation failures and stale forms come back as values, and a stale
   // form is a conflict rather than a silent overwrite.
   app.post("/costs/requirement-limit", async (request, reply) => {
-    const store = options.costLimitStore;
+    const store = costLimitStore;
     if (!store) return reply.code(404).send({ error: "requirement cost limits are not writable" });
     const body = (request.body ?? {}) as Record<string, string | undefined>;
     const requirementId = body.requirementId ?? "";
