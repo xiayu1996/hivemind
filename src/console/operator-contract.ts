@@ -661,6 +661,24 @@ function renderDetailBody(detail: OperatorDetail, selectedRound: number | undefi
     + "</div>";
 }
 
+function renderEmptyState(heading: string, body: string, action: { href: string; label: string }): string {
+  return `<div class="state-page"><div class="state-card"><h2>${escapeHtml(heading)}</h2><p>${escapeHtml(body)}</p>`
+    + `<div class="actions"><a class="button" href="${action.href}">${escapeHtml(action.label)}</a></div></div></div>`;
+}
+
+function renderTodoPageBody(
+  value: OperatorTodoResult,
+  options: { submittedValue?: string; submission?: TodoSubmissionResult },
+): string {
+  if (value.kind === "pending") return renderTodoBody(value.todo, options);
+  return backLink()
+    + `<header class="page-head"><div><h1>${copy.todo.heading}</h1></div></header>`
+    + renderEmptyState(copy.todo.unavailableHeading, copy.todo.unavailableBody, {
+      href: "/operator/overview",
+      label: copy.todo.back,
+    });
+}
+
 export function renderOperatorAccessPage(): string {
   const denied = copy.access;
   return documentHtml({
@@ -697,7 +715,7 @@ export function renderOperatorTodoPage(
   options: { submission?: TodoSubmissionResult; submittedValue?: string } = {},
 ): string {
   const value = state.kind === "ready" || state.kind === "waiting" ? state.value : state.previous;
-  const body = value?.kind === "pending" ? renderTodoBody(value.todo, options) : "";
+  const body = value === undefined ? "" : renderTodoPageBody(value, options);
   return shell({
     title: copy.titles.todo,
     current: "overview",
@@ -705,12 +723,22 @@ export function renderOperatorTodoPage(
   });
 }
 
+function renderDetailPageBody(value: OperatorDetailResult, selectedRound: number | undefined): string {
+  if (value.kind === "available") return renderDetailBody(value.detail, selectedRound);
+  return backLink()
+    + `<header class="page-head"><div><h1>${escapeHtml(value.subject.title)}</h1></div></header>`
+    + renderEmptyState(copy.detail.noRoundsHeading, copy.detail.noRoundsBody, {
+      href: "/operator/overview",
+      label: copy.detail.back,
+    });
+}
+
 export function renderOperatorDetailPage(
   state: ConsolePageState<OperatorDetailResult>,
   selectedRound?: number,
 ): string {
   const value = state.kind === "ready" || state.kind === "waiting" ? state.value : state.previous;
-  const body = value?.kind === "available" ? renderDetailBody(value.detail, selectedRound) : "";
+  const body = value === undefined ? "" : renderDetailPageBody(value, selectedRound);
   return shell({
     title: copy.titles.detail,
     current: "overview",
