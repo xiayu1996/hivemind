@@ -10,6 +10,10 @@ export interface OverviewPageView {
   alert: OverviewCostAlertsView;
 }
 
+/** Requirement states where the system is still doing the work. Waiting on a
+ * person is a different situation and gets no running chip. */
+const RUNNING_STATES = new Set(["DECOMPOSING", "EXECUTING", "ACCEPTANCE"]);
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -19,9 +23,14 @@ function escapeHtml(value: string): string {
 }
 
 function renderAlertRow(row: OverviewCostAlertRow): string {
+  // The first screen shows what the requirement is doing as well as the alert:
+  // work that continues past its limit has to read as running, not as parked.
+  const running = RUNNING_STATES.has(row.requirementState)
+    ? `<span class="status running" role="status">运行中</span>`
+    : "";
   return `<li class="ledger-row">`
-    + `<div><strong>${escapeHtml(row.requirementTitle)}</strong>`
-    + `<span class="meta">${escapeHtml(row.requirementState)}</span></div>`
+    + `<div><strong>${escapeHtml(row.requirementTitle)}</strong></div>`
+    + running
     + `<span class="status danger" role="status">${escapeHtml(row.statusText)}</span>`
     + `<div><span>${escapeHtml(row.continuationText)}</span></div></li>`;
 }
