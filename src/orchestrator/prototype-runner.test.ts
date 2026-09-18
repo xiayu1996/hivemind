@@ -12,6 +12,10 @@ import {
   type PrototypeResult,
 } from "./prototype-runner.js";
 
+/** A visual direction that satisfies the contract, so a test only has to
+ * break the one thing it is about. */
+const DIRECTION = { summary: "深色底、字大、一屏一件事，给值班的人走着看。", alternatives: [{ option: "浅色密集表格", reason: "值班的人不会坐下来逐行读。" }] };
+
 const scenarios = [{ id: "R-1-01", given: "看板上有任务", when: "打开首页", then: "看得见任务列表" }];
 
 function solution(overrides: Partial<SolutionBody> = {}): SolutionBody {
@@ -20,7 +24,7 @@ function solution(overrides: Partial<SolutionBody> = {}): SolutionBody {
     stackChanges: [],
     openDecisions: [],
     qualityGates: [],
-    interface: { kind: "web", pages: [{ name: "任务看板", purpose: "看今天要做什么" }] },
+    interface: { kind: "web", direction: DIRECTION, pages: [{ name: "任务看板", purpose: "看今天要做什么" }] },
     ...overrides,
   };
 }

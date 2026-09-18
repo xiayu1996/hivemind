@@ -6,6 +6,10 @@ import { RequirementStore } from "./requirement-store.js";
 import { SolutionRunner, type SolutionPort, type SolutionRequest } from "./solution-runner.js";
 import type { PrototypeOutcome, PrototypeRunner } from "./prototype-runner.js";
 
+/** A visual direction that satisfies the contract, so a test only has to
+ * break the one thing it is about. */
+const DIRECTION = { summary: "深色底、字大、一屏一件事，给值班的人走着看。", alternatives: [{ option: "浅色密集表格", reason: "值班的人不会坐下来逐行读。" }] };
+
 const REQUIREMENT_ID = "R-abc123def456";
 
 function keepsTheStack(): SolutionCandidate {
@@ -24,7 +28,7 @@ function keepsTheStack(): SolutionCandidate {
 function needsScreens(): SolutionCandidate {
   return {
     ...keepsTheStack(),
-    interface: { kind: "web", pages: [{ name: "\u4efb\u52a1\u770b\u677f", purpose: "\u770b\u4eca\u5929\u8981\u505a\u4ec0\u4e48" }] },
+    interface: { kind: "web", direction: DIRECTION, pages: [{ name: "\u4efb\u52a1\u770b\u677f", purpose: "\u770b\u4eca\u5929\u8981\u505a\u4ec0\u4e48" }] },
   };
 }
 

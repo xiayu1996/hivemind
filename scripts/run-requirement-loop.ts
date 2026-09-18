@@ -45,6 +45,7 @@ import { CANONICAL_CAPTURE_ENV } from "../src/observability/capture-contract.js"
 import { needsApiKeyEnv, providerKeyEnv } from "../src/runner/provider-env.js";
 import { defaultModelCatalog } from "../src/runner/catalog.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
+import { defaultDesignLintBinary } from "../src/verify/design-lint-binary.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -207,6 +208,8 @@ async function main(): Promise<void> {
             ...providerEnv,
             [CANONICAL_CAPTURE_ENV]: join(evidenceRoot, "prototype-requests.jsonl"),
           },
+          designLint: { binary: defaultDesignLintBinary() },
+          recordFriction: async (row) => { await store.recordFriction(row); },
           recordUsage: async ({ usage, spec: used }) => {
             await ledger.record({
               runId: `pm-prototype-${Date.now()}`,

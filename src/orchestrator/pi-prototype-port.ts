@@ -11,6 +11,12 @@ import { RpcPiRunner, type RpcRunnerConfig } from "../runner/rpc-runner.js";
 import type { PiRunner, PromptResult } from "../runner/types.js";
 import { jsonPayloadCandidates } from "../util/json-payload.js";
 import { evaluatePrototypeExit, PROTOTYPE_STATES } from "../verify/prototype-exit.js";
+import {
+  describeDesignLintFindings,
+  execDesignLint,
+  runDesignLint,
+  type DesignLintRequest,
+} from "../verify/design-lint.js";
 import { inspectPrototypePages, type PrototypeInspectorPort } from "../verify/prototype-inspector.js";
 import type { PrototypePort, PrototypeRequest, PrototypeResult } from "./prototype-runner.js";
 import { requirementRunId } from "./requirement-draft.js";
@@ -71,6 +77,15 @@ export interface PiPrototypePortOptions {
   extensions?: string[];
   env?: Record<string, string>;
   recordUsage?: (input: { usage: PromptResult["usage"]; spec: ResolvedAgentSpec }) => Promise<void>;
+  /** The anti-pattern detector, if this host has it. It never refuses a
+   * prototype -- every finding becomes a friction row, which is how the
+   * question "does the anti-mean discipline change anything" gets answered
+   * with data rather than with an opinion (design 08 section 3.3). */
+  designLint?: {
+    binary: string;
+    run?: DesignLintRequest["run"];
+  };
+  recordFriction?: (input: { cardId: string; runId: string; kind: string; detail: string }) => Promise<void>;
 }
 
 export class PiPrototypePort implements PrototypePort {
@@ -110,6 +125,7 @@ export class PiPrototypePort implements PrototypePort {
           ? ["最后一条消息里没有按约定输出 JSON 对象"]
           : await this.evaluate(input, answer);
         if (findings.length === 0 && answer !== null) {
+          await this.recordDesignLint(input, answer.pages.map((page) => page.file));
           return { pages: answer.pages, concerns: answer.concerns ?? [] };
         }
         if (attempt >= this.options.maxRounds) throw new PrototypeExitNotMetError(findings);
@@ -164,6 +180,33 @@ export class PiPrototypePort implements PrototypePort {
       await inspector.close().catch(() => undefined);
     }
   }
+
+  /**
+   * Scans the drawn pages and files what it found as friction.
+   *
+   * It runs after the exit has passed rather than beside it, so a detector that
+   * is slow, missing or wrong can never change whether the contract was
+   * accepted. Nothing here throws: a failed scan takes its data with it and
+   * nothing else.
+   */
+  private async recordDesignLint(input: PrototypeRequest, files: readonly string[]): Promise<void> {
+    const lint = this.options.designLint;
+    const record = this.options.recordFriction;
+    if (!lint || !record) return;
+    const runId = requirementRunId(input.requirementId);
+    const outcome = await runDesignLint({
+      binary: lint.binary,
+      root: join(this.options.worktreePath, this.options.contractRoot),
+      files: [...files].toSorted(),
+      run: lint.run ?? execDesignLint,
+    });
+    const rows = outcome.kind === "ran"
+      ? describeDesignLintFindings(outcome.findings).map((detail) => ({ kind: "design_lint_finding", detail }))
+      : [{ kind: "design_lint_unavailable", detail: outcome.reason }];
+    for (const row of rows) {
+      await record({ cardId: input.requirementId, runId, ...row }).catch(() => undefined);
+    }
+  }
 }
 
 function handback(findings: readonly string[]): string {
@@ -182,6 +225,13 @@ function prototypePrompt(input: PrototypeRequest, contractRoot: string): string 
     `契约目录: ${contractRoot}`,
     `## 已确认的业务目标\n\n${input.businessGoal.trim()}`,
     `## 已确认的做法\n\n${input.approach.trim()}`,
+    `## 已确认的视觉方向\n\n${input.direction.summary.trim()}\n\n${
+      input.direction.alternatives.length === 0
+        ? "没有被否的方向。"
+        : `没走的方向:\n${
+          input.direction.alternatives.map((entry) => `- ${entry.option}: ${entry.reason}`).join("\n")
+        }`
+    }`,
     `## 页面清单（${input.interface.kind}）\n\n${
       input.interface.pages.map((page) => `- ${page.name}: ${page.purpose}`).join("\n")
     }`,

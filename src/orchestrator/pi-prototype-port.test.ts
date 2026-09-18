@@ -8,8 +8,12 @@ import { checkFilePath } from "../guard/danger-rules.js";
 import { testAgentSpec } from "../runner/agent-spec.testing.js";
 import type { PiRunner, PromptResult } from "../runner/types.js";
 import type { PrototypeInspectorPort } from "../verify/prototype-inspector.js";
-import { PiPrototypePort, PrototypeExitNotMetError } from "./pi-prototype-port.js";
+import { PiPrototypePort, PrototypeExitNotMetError, type PiPrototypePortOptions } from "./pi-prototype-port.js";
 import type { PrototypeRequest } from "./prototype-runner.js";
+
+/** A visual direction that satisfies the contract, so a test only has to
+ * break the one thing it is about. */
+const DIRECTION = { summary: "深色底、字大、一屏一件事，给值班的人走着看。", alternatives: [{ option: "浅色密集表格", reason: "值班的人不会坐下来逐行读。" }] };
 
 const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, reasoning: 0, costUsd: 0 };
 const SPEC = await testAgentSpec({ purpose: "decompose" });
@@ -21,8 +25,9 @@ const request: PrototypeRequest = {
   repository: "acme/widget",
   businessGoal: "让人看见今天要做什么",
   scenarios: [{ id: "R-1-01", given: "有任务", when: "打开首页", then: "看得见任务列表" }],
-  interface: { kind: "web", pages: [{ name: "任务看板", purpose: "看今天要做什么" }] },
+  interface: { kind: "web", direction: DIRECTION, pages: [{ name: "任务看板", purpose: "看今天要做什么" }] },
   approach: "沿用现有栈",
+  direction: DIRECTION,
   contractRoot: CONTRACT_ROOT,
   revisionFeedback: [],
 };
@@ -98,6 +103,8 @@ function drawingPort(options: {
   snapshot?: (url: string) => string;
   maxRounds?: number;
   seen?: Array<Record<string, unknown>>;
+  designLint?: PiPrototypePortOptions["designLint"];
+  recordFriction?: PiPrototypePortOptions["recordFriction"];
 }) {
   const instance = runner(options.replies);
   const browser = inspector(options.snapshot ?? stateAware);
@@ -113,6 +120,8 @@ function drawingPort(options: {
       auditPath: join(options.worktree, "audit.jsonl"),
       maxRounds: options.maxRounds ?? 2,
       inspector: async () => browser.port,
+      ...(options.designLint ? { designLint: options.designLint } : {}),
+      ...(options.recordFriction ? { recordFriction: options.recordFriction } : {}),
       createRunner: (config) => {
         options.seen?.push(config as unknown as Record<string, unknown>);
         return instance;
@@ -132,6 +141,55 @@ describe("PiPrototypePort", () => {
     });
     expect(drawing.instance.prompts).toHaveLength(1);
     expect(drawing.browser.closed.count).toBe(1);
+  });
+
+  it("files every design finding as friction, and lets the contract through anyway", async () => {
+    const worktree = await contract();
+    const friction: Array<{ kind: string; detail: string }> = [];
+    const drawing = drawingPort({
+      worktree,
+      replies: [GOOD],
+      designLint: {
+        binary: "impeccable",
+        run: async () => ({
+          code: 2,
+          stdout: JSON.stringify([
+            { antipattern: "ai-color-palette", file: "pages/board.html", line: 0, name: "AI palette", snippet: "Purple" },
+          ]),
+          stderr: "",
+        }),
+      },
+      recordFriction: async (row) => { friction.push({ kind: row.kind, detail: row.detail }); },
+    });
+
+    await expect(drawing.port.run(request)).resolves.toMatchObject({ concerns: [] });
+    expect(friction).toEqual([
+      { kind: "design_lint_finding", detail: "ai-color-palette pages/board.html AI palette: Purple" },
+    ]);
+  });
+
+  it("says the detector was unavailable rather than filing a page as clean", async () => {
+    const worktree = await contract();
+    const friction: Array<{ kind: string; detail: string }> = [];
+    const drawing = drawingPort({
+      worktree,
+      replies: [GOOD],
+      designLint: { binary: "impeccable", run: async () => { throw new Error("spawn impeccable ENOENT"); } },
+      recordFriction: async (row) => { friction.push({ kind: row.kind, detail: row.detail }); },
+    });
+
+    await expect(drawing.port.run(request)).resolves.toMatchObject({ concerns: [] });
+    expect(friction).toEqual([{ kind: "design_lint_unavailable", detail: "spawn impeccable ENOENT" }]);
+  });
+
+  it("hands the drawing the direction a person approved, and the ones they did not", async () => {
+    const worktree = await contract();
+    const drawing = drawingPort({ worktree, replies: [GOOD] });
+
+    await drawing.port.run(request);
+
+    expect(drawing.instance.prompts[0]).toContain(DIRECTION.summary);
+    expect(drawing.instance.prompts[0]).toContain(DIRECTION.alternatives[0]!.option);
   });
 
   it("hands the findings back to the same session instead of starting another", async () => {

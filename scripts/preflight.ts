@@ -19,6 +19,7 @@ import { probeProviderReadiness } from "../src/runner/auth-probe.js";
 import { needsApiKeyEnv, providerKeyEnv } from "../src/runner/provider-env.js";
 import { reapStalePiAuthLock } from "../src/runner/auth-lock.js";
 import { probeCredentialRoundTrip } from "../src/runner/credential-roundtrip.js";
+import { defaultDesignLintBinary, pinnedDesignLint } from "../src/verify/design-lint-binary.js";
 import { judgeApprovals, type ApprovalSubject } from "../src/judge/approval-intent.js";
 import { judgeBusinessLanguage } from "../src/judge/business-language.js";
 import { judgeHumanSentences } from "../src/judge/human-sentence.js";
@@ -467,6 +468,22 @@ async function main(): Promise<void> {
       }
     });
   }
+
+  // Warn, not fail: this gate only records friction, so a host without it keeps
+  // delivering. It is probed at all because a gate that quietly does nothing
+  // looks exactly like a gate that keeps finding nothing.
+  await attempt("pinned design detector for the prototype exit", async () => {
+    const pin = pinnedDesignLint();
+    const binary = defaultDesignLintBinary();
+    const reported = await output(binary, ["--version"]);
+    if (reported !== pin.reportedVersion) {
+      throw new Error(
+        `impeccable reports ${reported}, pinned engine-v${pin.engineVersion} reports ${pin.reportedVersion};`
+        + " run scripts/install-design-lint.sh",
+      );
+    }
+    return `impeccable ${reported} (engine-v${pin.engineVersion})`;
+  }, "WARN");
 
   await attempt("headless Chromium for the browser lane", async () => {
     const cli = join(ROOT, "node_modules", ".bin", process.platform === "win32" ? "playwright-cli.cmd" : "playwright-cli");

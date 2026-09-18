@@ -2,6 +2,8 @@ import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readInterfaceContract } from "../src/pipeline/interface-contract.js";
+import { defaultDesignLintBinary } from "../src/verify/design-lint-binary.js";
+import { describeDesignLintFindings, execDesignLint, runDesignLint } from "../src/verify/design-lint.js";
 import { evaluatePrototypeExit } from "../src/verify/prototype-exit.js";
 import { inspectPrototypePages, playwrightPrototypeInspector } from "../src/verify/prototype-inspector.js";
 
@@ -151,6 +153,21 @@ async function main(): Promise<void> {
     console.log("a page that claims what it did not draw, paints outside the table and fails a contrast rule: refused for all three");
   } finally {
     await inspector.close();
+  }
+
+  // The warn-level half, against the real binary when this host has it. It
+  // never refuses anything, so a host without it reports that and moves on.
+  const lint = await runDesignLint({
+    binary: defaultDesignLintBinary(),
+    root,
+    files: read.contract.pages.map((page) => page.file),
+    run: execDesignLint,
+  });
+  if (lint.kind === "unavailable") {
+    console.log(`design detector unavailable, no friction recorded: ${lint.reason}`);
+  } else {
+    for (const row of describeDesignLintFindings(lint.findings)) console.log(`  friction: ${row}`);
+    console.log(`design detector ran on ${read.contract.pages.length} pages: ${lint.findings.length} findings, none of them refusing`);
   }
 }
 

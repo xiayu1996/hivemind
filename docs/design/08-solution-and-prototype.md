@@ -163,6 +163,8 @@ SOLUTION 是只读档，此前没有任何一层能把原型写进仓库。两�
   - **warn 级要自己做**：官方没有 error / warn 分级，退出码只有 0 干净 / 1 扫描出错 / 2 有 finding。封装读 `--json` 的 stdout、**忽略退出码 2**、finding 全部记 friction；退出码 1 只报告为探针失败。摘要里出现的 `severity` 是"该由哪个命令去修"的路由字段，不是严重程度，不拿它分级。
   - **不走 npm 启动器，不允许首次运行下载**：npm 包只是 shim，真二进制按平台可选依赖或首次运行时下载到 `~/.impeccable/bin/`，在凌晨三点的常驻服务上就是一次没人看着的网络失败。`install.sh` 直接从 GitHub release 取 pinned engine 的 linux 二进制并校 sha256，幂等可重跑；`preflight` 探它可执行且版本等于 pin，否则这条 gate 就是静默什么都不做。原型页是静态 HTML，走文件模式，不需要浏览器。
 
+  2026-09-18 实现时实测补充（`fixtures/design-lint/` 是真实采集）：仓库是 `pbakaus/impeccable`，`engine-v0.1.5` 有 darwin/linux/windows 四个平台二进制各带 `.sha256`；`--json` 的 stdout 是**一个扁平数组**，每条 `{antipattern, name, description, severity, category, file, line, snippet}`，`file` 恒为扫描机上的绝对路径（macOS 下还会是 realpath，与传进去的不同），所以封装按传入文件名回填；`line` 对渲染态规则恒为 0。**`--version` 打印的是 skill 包那条线（`engine-v0.1.5` 报 `4.0.0`）**，不是 engine 版本，所以 pin 两个数：`hivemind.impeccableEngineVersion` 决定从哪个 release 取，`hivemind.impeccableReportedVersion` 是探针能比的那个——只 pin 前者的探针在装对了的机器上也会红。
+
   运行永远带 `--no-config`，不读目标仓库的 `.impeccable/` 忽略项，保证每台机器同一结论。prompt 层是三层防线里最弱的一层，所以它只负责提高生成质量，**不负责判决**——审美的判决权在人手里，且只在首次。§3.1 的自我批判同理：模型判自己是最弱的一环，那一问的结论只记 friction，用数据回答"反均值纪律到底有没有用"，不作判决。
 
 ## 4. 人在 Notion 上怎么预览 / 修改 / 确认

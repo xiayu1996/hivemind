@@ -29,6 +29,10 @@ export interface PrototypeRequest {
   /** The approach the person will read beside these screens, so the drawing
    * and the sentence describe the same product. */
   approach: string;
+  /** The visual direction the solution chose, and what it turned down. The
+   * drawing may not pick its own: the direction is a repository-level decision
+   * a person approves once, not a thing each drawing settles again. */
+  direction: NonNullable<SolutionBody["interface"]>["direction"];
   /** Contract directory inside the repository, as configured. */
   contractRoot: string;
   /** What the person asked to change about earlier drafts, oldest first. */
@@ -104,6 +108,7 @@ export class PrototypeRunner {
         scenarios: input.scenarios,
         interface: input.solution.interface,
         approach: input.solution.approach.summary,
+        direction: input.solution.interface.direction,
         contractRoot: input.contractRoot,
         revisionFeedback,
       });
