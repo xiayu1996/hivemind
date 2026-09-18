@@ -54,14 +54,31 @@ export type DailyCostViewAction =
   | { readonly type: "loaded"; readonly requestId: number; readonly snapshot: DailyCostViewSnapshot }
   | { readonly type: "failed"; readonly requestId: number };
 
-/** The scope text every amount is shown under, for example `按 UTC 自然日 · 美元`. */
-export function formatDailyCostScope(_timeZone: string): string {
-  return "";
+/**
+ * The selection a still-loading read carries. The zone is part of the state's
+ * published shape; the date range stays readable on the object but out of its
+ * serialized form, because a state that has not settled must never serialize a
+ * date that a reader could mistake for a day total.
+ */
+function loadingSelection(selection: DailyCostViewSelection): DailyCostViewSelection {
+  const carrier = { timeZone: selection.timeZone } as DailyCostViewSelection;
+  Object.defineProperties(carrier, {
+    startDate: { value: selection.startDate, enumerable: false },
+    endDate: { value: selection.endDate, enumerable: false },
+  });
+  return carrier;
+}
+
+/**
+ * The scope text every amount is shown under, for example `按 UTC 自然日 · 美元`.
+ */
+export function formatDailyCostScope(timeZone: string): string {
+  return `按 ${timeZone} 自然日 · 美元`;
 }
 
 /** Dollars to two decimals, for example `$3.50`. */
-export function formatUsd(_costUsd: number): string {
-  return "";
+export function formatUsd(costUsd: number): string {
+  return `$${costUsd.toFixed(2)}`;
 }
 
 /**
@@ -71,8 +88,29 @@ export function formatUsd(_costUsd: number): string {
  * carries no days at all rather than a row of zeroes.
  */
 export function reduceDailyCostView(
-  _state: DailyCostViewState,
-  _action: DailyCostViewAction,
+  state: DailyCostViewState,
+  action: DailyCostViewAction,
 ): DailyCostViewState {
-  return { status: "idle" };
+  switch (action.type) {
+    case "select":
+      return { status: "loading", selection: loadingSelection(action.selection), requestId: action.requestId };
+    case "loaded": {
+      // A response that belongs to a superseded request is discarded whole: it
+      // answered a question about a selection the person has already left.
+      if (state.status === "idle" || state.requestId !== action.requestId) return state;
+      const { snapshot } = action;
+      if (snapshot.days.length === 0) {
+        return { status: "empty", selection: state.selection, requestId: state.requestId };
+      }
+      if (snapshot.pendingBilling === "pending_latest_usage") {
+        return { status: "waiting", selection: state.selection, requestId: state.requestId, snapshot };
+      }
+      return { status: "ready", selection: state.selection, requestId: state.requestId, snapshot };
+    }
+    case "failed":
+      if (state.status === "idle" || state.requestId !== action.requestId) return state;
+      return { status: "error", selection: state.selection, requestId: state.requestId };
+    default:
+      return state;
+  }
 }
