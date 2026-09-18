@@ -545,6 +545,7 @@ MU-09 拆开的那一项（2026-09-18，MU-03 做完后复核）：“仓库首�
 | W-06 ⬜ | 人只能从 worktree 的 `file://` 路径看原型，背离「只在 Notion 上完成」 | 截图能力（`prototype-screenshots.ts`，四态）与 Notion 上传能力（`sdk-adapters.ts` 的 multipart + `file_upload`，Story 侧已在生产用）都在仓库里，**两者之间没有接线**；MU-09 记的「gateway 没有 multipart 通道」是错的 | 待定：Ryan 倾向接 Cloudflare 一类免费服务给可点原型；截图进 Notion 是另一半，两件事不互斥 |
 | W-11 ✅ | host 十二分钟一张卡没派，日志里每个周期只有一行 `cycle failed: Codex error: The usage limit has been reached` | 周期顺序是 checkouts → intake → projection → **拆解** → **Epic 维护** → 回归 → 派发，而 `step()` 只吞 TRANSPORT；一个拆不动的 Epic 让派发永远走不到。回归道早就因为同样的教训改成了「报告而不上抛」，这两步没跟上 | 拆解与 Epic 维护改成报告而不上抛。一个 Epic 拆不动，与已经拆出来的那些 Story 无关 |
 | W-12 ✅ | `openai-codex` 配额耗尽后，每个周期还在敲同一个账号，`retry_at` 停在 00:48 再没动过 | 拆解这条路只读断路器（`usableProviders(...)[0]`）从不回写；Story 那条路一直是对的（`run-story.ts:622-633`），只有这条漏了。于是 `model.tierFailoverChains` 的降级从来没有机会发生 | 拆解失败按同一判据回写断路器：`classifyError !== UNKNOWN` 才记，我们自己的缺陷不许开别人的闸。实测窗口从 00:48 改写成 02:09，下一周期即取链上下一个 |
+| W-13 ✅ | W-11 修完后浮出来：两个 Epic 反复拆解失败，每个周期重来一次按大脑档计费，看板上没有任何给人看的东西 | 端口在「回复里找不到能解析的候选」时抛普通 `Error`，而 `EpicDecomposer` 的尝试循环没有 catch——抛出去就跳出循环：不消耗尝试、不进 `previousRejections`、不走 `block()`，Epic 留在 `DECOMPOSE`。W-03 加的「四次上限 + 理由不得重复」全在这条路径之外 | `DecompositionContractError`：解析失败当作一次被拒的尝试，理由回喂、消耗一次、同样失败两次即 BLOCKED；provider 失败照旧上抛，它对「拆得对不对」零信息量，由断路器读 |
 
 ---
 
