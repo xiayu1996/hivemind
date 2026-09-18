@@ -763,3 +763,49 @@ CREATE TABLE IF NOT EXISTS notion_media_delivery (
          (status = 'pending' AND upload_id IS NULL AND failure IS NULL))
 );
 CREATE INDEX IF NOT EXISTS idx_notion_media_pending ON notion_media_delivery(status, created_at);
+
+-- Historical USD pricing, one immutable row per non-zero token category of one
+-- provider call. The official per-million price is resolved from the catalog
+-- effective at the instant the call happened, then frozen here together with
+-- the amount it produced, so a later official price change rewrites nothing and
+-- the ceiling's metered-only amount stays derivable from the same rows.
+--
+-- A category with no applicable historical quote is stored as an explicit
+-- unpriced row: it carries neither a zero amount nor a current-price fallback,
+-- and its presence is what keeps a requirement's total marked incomplete.
+CREATE TABLE IF NOT EXISTS requirement_cost_entries (
+  id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+  usage_event_id         TEXT NOT NULL,
+  requirement_id         TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+  work_item_id           TEXT NOT NULL,
+  round_id               TEXT NOT NULL,
+  occurred_at_ms         INTEGER NOT NULL,
+  provider               TEXT NOT NULL,
+  model_id               TEXT NOT NULL,
+  billing_mode           TEXT NOT NULL CHECK (billing_mode IN ('metered','subscription')),
+  category               TEXT NOT NULL CHECK (category IN ('uncached_input','output','cache_read','cache_write')),
+  token_count            INTEGER NOT NULL CHECK (token_count > 0),
+  pricing_status         TEXT NOT NULL CHECK (pricing_status IN ('priced','unpriced')),
+  price_version_id       TEXT,
+  usd_per_million_tokens TEXT,
+  amount_usd             TEXT,
+  price_source_reference TEXT,
+  unpriced_reason        TEXT,
+  created_at             INTEGER NOT NULL,
+  -- One row per category per call: the uniqueness key that makes a retried or
+  -- concurrent recording return the persisted rows instead of repricing them.
+  UNIQUE (usage_event_id, category),
+  CHECK (
+    (pricing_status = 'priced'
+      AND price_version_id IS NOT NULL AND usd_per_million_tokens IS NOT NULL
+      AND amount_usd IS NOT NULL AND price_source_reference IS NOT NULL
+      AND unpriced_reason IS NULL)
+    OR
+    (pricing_status = 'unpriced'
+      AND price_version_id IS NULL AND usd_per_million_tokens IS NULL
+      AND amount_usd IS NULL AND price_source_reference IS NULL
+      AND unpriced_reason IS NOT NULL)
+  )
+);
+CREATE INDEX IF NOT EXISTS idx_requirement_cost_entries_requirement
+  ON requirement_cost_entries(requirement_id, occurred_at_ms, id);
