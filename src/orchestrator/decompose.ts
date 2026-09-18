@@ -69,12 +69,45 @@ const footprint = /^(?:[a-z0-9][a-z0-9-]*(?:\/[a-z0-9][a-z0-9-]*)*)$/;
 // and "实现" to realising a business outcome, so blacklisting those bounces
 // requirements that were written correctly. English "test" is not listed, so
 // its Chinese counterpart is not either.
-const implementationLanguage = /\b(?:api|component|database|function|implementation|module|npm|react|schema|sql|typescript)\b|\b(?:src|lib|app)\/[\w./-]+|```|(?:at\s+\S+\s*\([^)]*:\d+:\d+\))|(?:代码|函数|组件|数据库|模块|文件路径)/i;
+const CONSTRUCTION_TERMS = /\b(?:api|component|database|function|implementation|module|npm|react|schema|sql|typescript)\b|代码|函数|组件|数据库|模块|文件路径/gi;
+
+// Shapes that are never a person's words, whatever the product is about: a
+// path into the tree, a fenced block, a stack frame. Unlike a term, these
+// cannot be excused by the requirement -- a customer does not write a stack
+// frame into what they asked for.
+const CONSTRUCTION_ARTIFACTS = /\b(?:src|lib|app)\/[\w./-]+|```|(?:at\s+\S+\s*\([^)]*:\d+:\d+\))/i;
+
+/**
+ * The construction words that belong to this product rather than to its
+ * plumbing, taken from the requirement a person wrote or approved.
+ *
+ * A word table cannot tell "把这段逻辑抽成一个组件" from "运营在组件库里挑一个
+ *组件放到页面上", and it used to refuse both. The second is a product whose
+ * subject matter is technical, and refusing it is not a nuisance: the
+ * decomposer gets two attempts, the model has nowhere to go because the word
+ * *is* the requirement, and the Epic blocks on a requirement that was written
+ * correctly.
+ *
+ * The requirement settles it. A term the person used is the product's own
+ * vocabulary and a Story may use it back; a term that appears nowhere upstream
+ * and turns up in a Story is the model reaching for implementation language,
+ * which is what the table is for. Nothing here is a judgement call, and the
+ * authority is text a human wrote.
+ */
+export function domainVocabulary(requirement: string): ReadonlySet<string> {
+  return new Set((requirement.match(CONSTRUCTION_TERMS) ?? []).map((term) => term.toLocaleLowerCase()));
+}
 
 /** Finds internal construction language in the lines that are shown to people. */
-export function inspectBusinessLanguage(field: string, text: string): LanguageIssue[] {
+export function inspectBusinessLanguage(
+  field: string,
+  text: string,
+  vocabulary: ReadonlySet<string> = new Set(),
+): LanguageIssue[] {
   return text.split(/\r?\n/).flatMap((line, index) => {
-    if (!implementationLanguage.test(line)) return [];
+    const foreign = (line.match(CONSTRUCTION_TERMS) ?? [])
+      .filter((term) => !vocabulary.has(term.toLocaleLowerCase()));
+    if (foreign.length === 0 && !CONSTRUCTION_ARTIFACTS.test(line)) return [];
     return [{ field, line: index + 1, reason: "contains implementation language; rewrite it as a customer or business outcome" }];
   });
 }
@@ -88,16 +121,21 @@ function normalizeStory(story: DecompositionStory): DecompositionStory {
   };
 }
 
-function validateStory(story: DecompositionStory, index: number, allStoryIds: ReadonlySet<string>): string[] {
+function validateStory(
+  story: DecompositionStory,
+  index: number,
+  allStoryIds: ReadonlySet<string>,
+  vocabulary: ReadonlySet<string>,
+): string[] {
   const prefix = `Story ${story.id || index + 1}`;
   const reasons: string[] = [];
   if (!storyId.test(story.id)) reasons.push(`${prefix} has an invalid Story id`);
   if (story.title.trim() === "") reasons.push(`${prefix} must have a business title`);
-  for (const issue of inspectBusinessLanguage(`${prefix} title`, story.title)) {
+  for (const issue of inspectBusinessLanguage(`${prefix} title`, story.title, vocabulary)) {
     reasons.push(`${issue.field} line ${issue.line} ${issue.reason}`);
   }
   if (story.requirement.trim() === "") reasons.push(`${prefix} must have a business requirement`);
-  for (const issue of inspectBusinessLanguage(`${prefix} requirement`, story.requirement)) {
+  for (const issue of inspectBusinessLanguage(`${prefix} requirement`, story.requirement, vocabulary)) {
     reasons.push(`${issue.field} line ${issue.line} ${issue.reason}`);
   }
   if (story.scenarios.length === 0) reasons.push(`${prefix} must have at least one independently verifiable scenario`);
@@ -108,7 +146,7 @@ function validateStory(story: DecompositionStory, index: number, allStoryIds: Re
     // oxlint-disable-next-line unicorn/no-thenable -- Given/When/Then is the external decomposition contract.
     for (const [field, value] of Object.entries({ given: scenario.given, when: scenario.when, then: scenario.then })) {
       if (value.trim() === "") reasons.push(`${prefix} scenario ${scenario.id} must have ${field}`);
-      for (const issue of inspectBusinessLanguage(`${prefix} scenario ${scenario.id} ${field}`, value)) {
+      for (const issue of inspectBusinessLanguage(`${prefix} scenario ${scenario.id} ${field}`, value, vocabulary)) {
         reasons.push(`${issue.field} line ${issue.line} ${issue.reason}`);
       }
     }
@@ -121,13 +159,13 @@ function validateStory(story: DecompositionStory, index: number, allStoryIds: Re
   if (story.userEntryPoint.trim() === "") {
     reasons.push(`${prefix} must name the user-visible entry point where its outcome can be seen`);
   }
-  for (const issue of inspectBusinessLanguage(`${prefix} user entry point`, story.userEntryPoint)) {
+  for (const issue of inspectBusinessLanguage(`${prefix} user entry point`, story.userEntryPoint, vocabulary)) {
     reasons.push(`${issue.field} line ${issue.line} ${issue.reason}`);
   }
   if (story.verificationPath.trim() === "") {
     reasons.push(`${prefix} must state how it is verified on its own, without a sibling Story`);
   }
-  for (const issue of inspectBusinessLanguage(`${prefix} verification path`, story.verificationPath)) {
+  for (const issue of inspectBusinessLanguage(`${prefix} verification path`, story.verificationPath, vocabulary)) {
     reasons.push(`${issue.field} line ${issue.line} ${issue.reason}`);
   }
   if (story.predictedFootprint.length === 0) reasons.push(`${prefix} must declare a directory or module footprint`);
@@ -172,6 +210,9 @@ function horizontalCuts(stories: readonly DecompositionStory[]): string[] {
 export function evaluateDecomposition(
   candidate: DecompositionCandidate,
   limits: DecompositionLimits = {},
+  /** Construction words the requirement itself uses, from `domainVocabulary`.
+   * Empty means every one of them is the model's own and is refused. */
+  vocabulary: ReadonlySet<string> = new Set(),
 ): DecompositionResult {
   const question = candidate.blockingQuestion === undefined ? null : normalizeQuestion(candidate.blockingQuestion);
   if (question && question.question !== "") {
@@ -185,7 +226,7 @@ export function evaluateDecomposition(
 
   const reasons: string[] = [];
   if (candidate.businessGoal.trim() === "") reasons.push("Epic must state the business outcome to achieve");
-  for (const issue of inspectBusinessLanguage("business goal", candidate.businessGoal)) {
+  for (const issue of inspectBusinessLanguage("business goal", candidate.businessGoal, vocabulary)) {
     reasons.push(`${issue.field} line ${issue.line} ${issue.reason}`);
   }
   if (candidate.stories.length === 0) reasons.push("Epic must contain at least one Story");
@@ -202,7 +243,7 @@ export function evaluateDecomposition(
   }
   const scenarioIds = new Set<string>();
   for (const [index, story] of candidate.stories.entries()) {
-    reasons.push(...validateStory(story, index, allStoryIds));
+    reasons.push(...validateStory(story, index, allStoryIds, vocabulary));
     for (const scenario of story.scenarios) {
       if (scenarioIds.has(scenario.id)) reasons.push(`duplicate scenario id: ${scenario.id}`);
       scenarioIds.add(scenario.id);

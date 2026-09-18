@@ -141,10 +141,18 @@ describe("requirement comment intent", () => {
 });
 
 describe("Epic comment intent", () => {
-  it("reads the four strings it always has", () => {
+  it("reads the approvals it always has", () => {
     expect(interpretEpicComment("PLAN_APPROVAL", " 批准 ")).toEqual({ type: "approve_plan" });
-    expect(interpretEpicComment("PLAN_APPROVAL", "Request changes")).toEqual({ type: "request_revision" });
-    expect(interpretEpicComment("PLAN_APPROVAL", "这个拆解我再想想")).toEqual({ type: "feedback" });
+    expect(interpretEpicComment("PLAN_APPROVAL", "Approved")).toEqual({ type: "approve_plan" });
+  });
+
+  it("sends the plan back carrying anything else the person wrote", () => {
+    // This used to fall through to `feedback`, which does nothing: the person
+    // said the split was wrong and the Epic went on waiting in silence.
+    expect(interpretEpicComment("PLAN_APPROVAL", "这个拆解不对，第二张卡应该拆成两张"))
+      .toEqual({ type: "request_revision", body: "这个拆解不对，第二张卡应该拆成两张" });
+    expect(interpretEpicComment("PLAN_APPROVAL", "Request changes"))
+      .toEqual({ type: "request_revision", body: "Request changes" });
   });
 
   it("reads a vouched-for wording as the approval it is", () => {

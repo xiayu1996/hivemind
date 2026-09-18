@@ -21,9 +21,10 @@ import { JudgeError, type NoulQuestion, type SystemOne } from "./system-one.js";
  * what it is sure about.
  *
  * The criteria say in as many words that a product whose subject matter is
- * technical is still about the person. The table cannot tell those apart and
- * refuses them, which is its other failure mode; this question must at least
- * not make it worse.
+ * technical is still about the person. That matters more since the table began
+ * excusing the words the requirement itself uses: those lines now reach this
+ * question instead of being refused outright, so it is the layer that has to
+ * get them right.
  */
 
 const CRITERIA = {
@@ -46,6 +47,11 @@ export interface BusinessLanguageOptions {
   model: string;
   /** How sure the judge has to be before a line is refused. */
   threshold: number;
+  /** Construction words the requirement itself uses. The table lets these
+   * through, so the judge has to be asked about them rather than skip them as
+   * already refused -- and its criteria say a product whose subject matter is
+   * technical is still about the person. */
+  vocabulary?: ReadonlySet<string> | undefined;
 }
 
 /** One line of a plan, with the field name a person would recognise it by. */
@@ -90,13 +96,16 @@ export function businessLanguageQuestion(): NoulQuestion {
  * is one question, and two runs of one plan produce the same requests in the
  * same order.
  */
-export function unjudgedLines(lines: readonly JudgedLine[]): JudgedLine[] {
+export function unjudgedLines(
+  lines: readonly JudgedLine[],
+  vocabulary: ReadonlySet<string> = new Set(),
+): JudgedLine[] {
   const seen = new Set<string>();
   const kept: JudgedLine[] = [];
   for (const line of lines) {
     const text = line.text.trim();
     if (text === "" || seen.has(text)) continue;
-    if (inspectBusinessLanguage(line.field, text).length > 0) continue;
+    if (inspectBusinessLanguage(line.field, text, vocabulary).length > 0) continue;
     seen.add(text);
     kept.push({ ...line, text });
   }
@@ -119,7 +128,7 @@ export async function judgeBusinessLanguage(
   options: BusinessLanguageOptions,
 ): Promise<BusinessLanguageJudgement> {
   if (!judge) return NOTHING;
-  const candidates = unjudgedLines(lines);
+  const candidates = unjudgedLines(lines, options.vocabulary);
   if (candidates.length === 0) return NOTHING;
   const asked = candidates.slice(0, MAX_LINES_PER_DECOMPOSITION);
   const skipped = candidates.length - asked.length;
