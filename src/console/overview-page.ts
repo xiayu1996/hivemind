@@ -22,21 +22,25 @@ function renderAlertRow(row: OverviewCostAlertRow): string {
   return `<li class="ledger-row">`
     + `<div><strong>${escapeHtml(row.requirementTitle)}</strong>`
     + `<span class="meta">${escapeHtml(row.requirementState)}</span></div>`
-    + `<span class="status danger">${escapeHtml(row.statusText)}</span>`
-    + `<span>${escapeHtml(row.continuationText)}</span></li>`;
+    + `<span class="status danger" role="status">${escapeHtml(row.statusText)}</span>`
+    + `<div><span>${escapeHtml(row.continuationText)}</span></div></li>`;
 }
 
 function renderAlertSummary(view: OverviewPageView): string {
   const rows = view.alert.rows.map(renderAlertRow).join("");
   if (view.alert.count === 0) {
-    return `<section class="panel" aria-labelledby="cost-alert-title">`
-      + `<h2 id="cost-alert-title">费用超限</h2>`
+    return `<section class="panel" aria-label="费用超限">`
+      + `<h2>费用超限</h2>`
       + `<p>目前没有需求超过自己保存的费用上限。</p></section>`;
   }
-  return `<section class="panel metric danger" aria-labelledby="cost-alert-title">`
-    + `<div class="metric-name" id="cost-alert-title">费用已超限</div>`
+  // The label is an inline text node and the requirement's status is a status
+  // region: a block element would publish the same words under a role the
+  // frozen DoD does not declare, which is how the alert became unreadable to
+  // the structural check while the page still looked right.
+  return `<section class="panel metric danger" aria-label="费用已超限">`
+    + `<span class="metric-name">费用已超限</span>`
     + `<div class="metric-value">${view.alert.count}</div>`
-    + `<div class="metric-detail"><strong>工作仍会继续</strong></div>`
+    + `<div class="metric-detail"><span>工作仍会继续</span></div>`
     + `<ul class="ledger">${rows}</ul>`
     + `<p><a href="/costs">查看超限需求</a></p></section>`;
 }
