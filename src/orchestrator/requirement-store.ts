@@ -63,9 +63,11 @@ export type ApprovalKind =
   | "solution_revision"
   | "acceptance"
   | "resume_answer";
-export type ApprovalSource = "comment" | "drag" | "auto";
+/** A tick is its own gesture: it is neither a sentence somebody wrote nor a
+ * column they dragged, and reading it as either would lose who did what. */
+export type ApprovalSource = "comment" | "drag" | "auto" | "check";
 
-export type RequirementNotionSection = "callout" | "clarify" | "prd" | "delivery";
+export type RequirementNotionSection = "callout" | "clarify" | "prd" | "solution" | "delivery";
 
 export interface RequirementStop {
   /** The state the requirement was in when it stopped; it resumes from there. */

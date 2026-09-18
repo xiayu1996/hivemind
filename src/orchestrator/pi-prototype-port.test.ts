@@ -137,8 +137,11 @@ describe("PiPrototypePort", () => {
     const worktree = await contract();
     const drawing = drawingPort({ worktree, replies: [GOOD] });
 
-    await expect(drawing.port.run(request)).resolves.toEqual({
+    // The names come off the pages themselves, not off the model's answer: the
+     // solution section a person reads names screens, and a file path is not one.
+     await expect(drawing.port.run(request)).resolves.toEqual({
       pages: [{ file: "pages/board.html", scenarios: ["R-1-01"], visible: [{ role: "button", text: "新建任务" }] }],
+      described: [{ file: "pages/board.html", name: "任务看板", purpose: "看今天要做什么" }],
       concerns: [],
     });
     expect(drawing.instance.prompts).toHaveLength(1);

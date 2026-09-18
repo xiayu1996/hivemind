@@ -1,3 +1,4 @@
+import type { PrototypePage } from "../pipeline/interface-contract.js";
 import type { PrototypePageClaim } from "../verify/prototype-exit.js";
 import type { RequirementPagePublisher } from "./clarify-loop.js";
 import type { PrdScenario } from "./requirement-artifacts.js";
@@ -41,6 +42,10 @@ export interface PrototypeRequest {
 
 export interface PrototypeResult {
   pages: readonly PrototypePageClaim[];
+  /** What each drawn page calls itself and what it is for, read off the page's
+   * own `<title>` and description. The solution section a person reads is
+   * written from these; the claims above are what the exit checks judge. */
+  described: readonly PrototypePage[];
   /** Problems with the direction or the page list itself, written for the
    * person who approves the solution. The prototype may not fix these: a
    * drawing that changes the plan is a plan nobody approved. */
@@ -131,7 +136,7 @@ export class PrototypeRunner {
     await this.store.saveSolutionPrototype(
       input.requirementId,
       input.revision,
-      JSON.stringify({ pages: result.pages, concerns: result.concerns }),
+      JSON.stringify({ pages: result.pages, described: result.described, concerns: result.concerns }),
       published?.url ?? null,
       runId(input.requirementId),
     );

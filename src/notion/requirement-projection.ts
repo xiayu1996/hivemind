@@ -4,12 +4,21 @@ import type {
   AcceptanceItem,
   ClarifyRound,
   PrdRevision,
+  PrototypeRevision,
   RequirementSnapshot,
   RequirementStop,
   RequirementStore,
+  SolutionRevision,
 } from "../orchestrator/requirement-store.js";
+import type { SolutionBody } from "../orchestrator/requirement-solution.js";
+import type { PrototypePage } from "../pipeline/interface-contract.js";
 import { annotateReply, questionLines } from "../orchestrator/human-question.js";
-import type { DesiredClarifyRound, DesiredRequirementPage } from "./blocks/requirement-page.js";
+import type {
+  DesiredClarifyRound,
+  DesiredRequirementPage,
+  DesiredSolution,
+  DesiredSolutionPage,
+} from "./blocks/requirement-page.js";
 import type { NotionOutbox } from "./outbox.js";
 import schema from "./notion-schema.json" with { type: "json" };
 import { quietText, waitingText } from "./display-text.js";
@@ -53,6 +62,9 @@ export interface RequirementPageInput {
   clarify: readonly ClarifyRound[];
   prd: PrdRevision | null;
   acceptance: readonly AcceptanceItem[];
+  /** The solution revision the page shows, and the screens drawn for it. */
+  solution?: SolutionRevision | null;
+  prototype?: PrototypeRevision | null;
   /** The last stop, shown only while `requirement.stopReason` is still set. */
   stop?: RequirementStop | null;
 }
@@ -64,11 +76,72 @@ interface PrdBody {
   openQuestions?: string[];
 }
 
-/** Which of the two situations a requirement waits in, if any. Everything else
- * the board column already says, and the page does not repeat it. */
-function situation(requirement: RequirementSnapshot): "CLARIFY" | "PRD_CONFIRM" | undefined {
+/** Which situation a requirement waits in, if any. Everything else the board
+ * column already says, and the page does not repeat it. */
+function situation(requirement: RequirementSnapshot): "CLARIFY" | "PRD_CONFIRM" | "SOLUTION" | undefined {
   if (requirement.stopReason) return "CLARIFY";
-  return requirement.state === "CLARIFY" || requirement.state === "PRD_CONFIRM" ? requirement.state : undefined;
+  if (requirement.state === "CLARIFY" || requirement.state === "PRD_CONFIRM") return requirement.state;
+  return requirement.state === "SOLUTION" ? "SOLUTION" : undefined;
+}
+
+interface PrototypeBody {
+  pages?: Array<{ file: string; scenarios?: string[]; visible?: Array<{ role: string; text: string }> }>;
+  described?: PrototypePage[];
+  concerns?: string[];
+}
+
+/**
+ * The screens as a list a person reads: the name each page gave itself, what
+ * it is for, and what the drawing said it carries. A record drawn before the
+ * pages carried their own names falls back to the plan, which has the names
+ * but not the scenarios -- fewer facts, never a file path in place of a name.
+ */
+function solutionPages(
+  plan: SolutionBody["interface"],
+  prototype: PrototypeBody | null,
+): DesiredSolutionPage[] {
+  const described = prototype?.described ?? [];
+  if (described.length === 0) {
+    return (plan?.pages ?? []).map((page) => ({
+      name: page.name,
+      purpose: page.purpose,
+      scenarios: [],
+      visible: [],
+    }));
+  }
+  const claims = new Map((prototype?.pages ?? []).map((claim) => [claim.file, claim]));
+  return [...described]
+    .toSorted((left, right) => (left.file < right.file ? -1 : left.file > right.file ? 1 : 0))
+    .map((page) => {
+      const claim = claims.get(page.file);
+      return {
+        name: page.name,
+        purpose: page.purpose,
+        scenarios: claim?.scenarios ?? [],
+        visible: (claim?.visible ?? []).map((item) => item.text),
+      };
+    });
+}
+
+/** The solution the page shows, or nothing at all before one is drafted. */
+function solutionSection(
+  revision: SolutionRevision | null | undefined,
+  prototype: PrototypeRevision | null | undefined,
+): DesiredSolution | null {
+  if (!revision) return null;
+  const body = JSON.parse(revision.body) as SolutionBody;
+  const drawn = prototype ? JSON.parse(prototype.body) as PrototypeBody : null;
+  return {
+    approach: { summary: body.approach.summary, alternatives: body.approach.alternatives },
+    direction: body.interface?.direction ?? null,
+    stackChanges: body.stackChanges ?? [],
+    qualityGates: (body.qualityGates ?? []).map((gate) => ({ name: gate.name, covers: gate.covers })),
+    pages: solutionPages(body.interface ?? null, drawn),
+    prototypeUrl: prototype?.mrUrl ?? null,
+    concerns: drawn?.concerns ?? [],
+    openDecisions: body.openDecisions ?? [],
+    confirmed: revision.status === "confirmed",
+  };
 }
 
 /** One clarification round as the page folds it. */
@@ -118,6 +191,7 @@ export function buildRequirementPage(input: RequirementPageInput): DesiredRequir
         frozen: input.prd?.status === "confirmed",
       }
       : null,
+    solution: solutionSection(input.solution, input.prototype),
     delivery,
   };
 }
@@ -135,13 +209,15 @@ export class RequirementPageProjector implements RequirementPagePublisher {
 
   async publish(requirementId: string): Promise<void> {
     const requirement = await this.store.getRequirement(requirementId);
-    const [clarify, prd, acceptance, stop] = await Promise.all([
+    const [clarify, prd, acceptance, stop, solution] = await Promise.all([
       this.store.clarifyHistory(requirementId),
       this.store.getPrd(requirementId),
       this.store.acceptanceItems(requirementId),
       requirement.stopReason ? this.store.latestStop(requirementId) : Promise.resolve(null),
+      this.store.getSolution(requirementId),
     ]);
-    const desired = buildRequirementPage({ requirement, clarify, prd, acceptance, stop });
+    const prototype = solution ? await this.store.getSolutionPrototype(requirementId, solution.revision) : null;
+    const desired = buildRequirementPage({ requirement, clarify, prd, acceptance, stop, solution, prototype });
     await this.outbox.enqueue({
       cardId: requirementId,
       priority: 1,

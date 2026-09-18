@@ -132,8 +132,8 @@ CREATE TABLE IF NOT EXISTS requirement_approval_events (
   kind           TEXT NOT NULL CHECK (kind IN (
                    'prd_confirm','prd_revision','solution_confirm','solution_revision','acceptance','resume_answer')),
   -- `auto` is the system itself: scenario verdicts are made on each Epic, and
-  -- the requirement only copies them in.
-  source         TEXT NOT NULL CHECK (source IN ('comment','drag','auto')),
+  -- the requirement only copies them in. `check` is a box ticked on the page.
+  source         TEXT NOT NULL CHECK (source IN ('comment','drag','auto','check')),
   created_at     INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_requirement_approval_events ON requirement_approval_events(requirement_id);
@@ -142,7 +142,7 @@ CREATE INDEX IF NOT EXISTS idx_requirement_approval_events ON requirement_approv
 -- updates in place instead of appending a second copy.
 CREATE TABLE IF NOT EXISTS requirement_notion_sections (
   requirement_id  TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
-  section         TEXT NOT NULL CHECK (section IN ('callout','clarify','prd','delivery')),
+  section         TEXT NOT NULL CHECK (section IN ('callout','clarify','prd','solution','delivery')),
   anchor_block_id TEXT NOT NULL UNIQUE,
   PRIMARY KEY (requirement_id, section)
 );

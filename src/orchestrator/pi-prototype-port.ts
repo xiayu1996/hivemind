@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { assembleGuardPolicy, POLICY_ENV_VAR, serializeGuardPolicy } from "../guard/policy.js";
 import { prototypeFencePatterns } from "../guard/prototype-fence.js";
-import { readInterfaceContract } from "../pipeline/interface-contract.js";
+import { readInterfaceContract, type PrototypePage } from "../pipeline/interface-contract.js";
 import {
   describeChecklistFindings,
   flippedItems,
@@ -106,6 +106,10 @@ export interface PiPrototypePortOptions {
  * handed back while rounds remain and shipped with when they run out, because
  * a probability that never settles would otherwise burn the whole budget. */
 interface ExitFindings {
+  /** What each page that opened calls itself, read off the page rather than
+   * taken from the model's answer: the section a person reads names screens,
+   * and a file path is not a name. */
+  described: readonly PrototypePage[];
   blocking: string[];
   semantic: readonly ChecklistFinding[];
   checklist: readonly ChecklistFinding[];
@@ -146,7 +150,7 @@ export class PiPrototypePort implements PrototypePort {
       let previous: readonly ChecklistFinding[] = [];
       for (let attempt = 1; ; attempt++) {
         const found: ExitFindings = answer === null
-          ? { blocking: ["最后一条消息里没有按约定输出 JSON 对象"], semantic: [], checklist: [] }
+          ? { described: [], blocking: ["最后一条消息里没有按约定输出 JSON 对象"], semantic: [], checklist: [] }
           : await this.evaluate(input, answer);
         if (attempt > 1) await this.recordFlips(input, previous, found.checklist);
         previous = found.checklist;
@@ -154,7 +158,7 @@ export class PiPrototypePort implements PrototypePort {
         const soft = describeChecklistFindings(found.semantic);
         if (found.blocking.length === 0 && soft.length === 0 && answer !== null) {
           await this.recordDesignLint(input, answer.pages.map((page) => page.file));
-          return { pages: answer.pages, concerns: answer.concerns ?? [] };
+          return { pages: answer.pages, described: found.described, concerns: answer.concerns ?? [] };
         }
         if (attempt >= this.options.maxRounds) {
           // The semantic items ship: they are a probability, and a gate that
@@ -164,7 +168,7 @@ export class PiPrototypePort implements PrototypePort {
           if (answer === null) throw new PrototypeExitNotMetError(["最后一条消息里没有按约定输出 JSON 对象"]);
           await this.recordShippedChecklist(input, found.semantic);
           await this.recordDesignLint(input, answer.pages.map((page) => page.file));
-          return { pages: answer.pages, concerns: answer.concerns ?? [] };
+          return { pages: answer.pages, described: found.described, concerns: answer.concerns ?? [] };
         }
         answer = await this.ask(runner, handback([...found.blocking, ...soft]));
       }
@@ -243,6 +247,7 @@ export class PiPrototypePort implements PrototypePort {
     );
 
     return {
+      described: read.kind === "present" ? read.contract.pages : [],
       blocking: [...exit, ...describeChecklistFindings(mechanical)],
       semantic: judged.findings,
       checklist: [...mechanical, ...judged.findings],

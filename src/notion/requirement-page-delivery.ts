@@ -4,9 +4,12 @@ import {
   REQUIREMENT_SECTION_ORDER,
   planRequirementPageUpdate,
   prdFrozenLine,
+  solutionBlocks,
   type DesiredClarifyRound,
   type DesiredPrd,
   type DesiredRequirementPage,
+  type DesiredSolution,
+  type SolutionBlock,
   type RequirementPageOperation,
   type RequirementPageSnapshot,
   type RequirementSection,
@@ -18,15 +21,19 @@ import schema from "./notion-schema.json" with { type: "json" };
 import { quietText, requirementSectionForTitle, requirementSectionTitle } from "./display-text.js";
 import {
   bold,
+  bullet,
   callout,
   code,
   heading2,
+  heading3,
   italic,
+  link,
   numbered,
   paragraph,
   quote,
   runs,
   t,
+  todo,
   toggle,
   type Block,
 } from "./rich-text.js";
@@ -61,6 +68,33 @@ const desiredSchema = z.object({
     })),
     openQuestions: z.array(z.string()),
     frozen: z.boolean(),
+  }).nullable(),
+  solution: z.object({
+    approach: z.object({
+      summary: z.string(),
+      alternatives: z.array(z.object({ option: z.string(), reason: z.string() })),
+    }),
+    direction: z.object({
+      summary: z.string(),
+      alternatives: z.array(z.object({ option: z.string(), reason: z.string() })),
+    }).nullable(),
+    stackChanges: z.array(z.object({
+      kind: z.string(),
+      name: z.string(),
+      reason: z.string(),
+      impact: z.string(),
+    })),
+    qualityGates: z.array(z.object({ name: z.string(), covers: z.string() })),
+    pages: z.array(z.object({
+      name: z.string(),
+      purpose: z.string(),
+      scenarios: z.array(z.string()),
+      visible: z.array(z.string()),
+    })),
+    prototypeUrl: z.string().nullable(),
+    concerns: z.array(z.string()),
+    openDecisions: z.array(z.object({ question: z.string(), recommendation: z.string() })),
+    confirmed: z.boolean(),
   }).nullable(),
   delivery: z.string(),
 }) as unknown as z.ZodType<DesiredRequirementPage>;
@@ -160,6 +194,44 @@ function prdBlocks(prd: DesiredPrd): Block[] {
   }
   for (const question of prd.openQuestions) blocks.push(paragraph(t(`\u7b49\u4f60\u88c1\u51b3\uff1a${question}`)));
   return blocks;
+}
+
+/**
+ * The solution section as Notion blocks. The mapping is one block per declared
+ * line, so what the planner compared and what the page shows are the same list
+ * read twice.
+ */
+function solutionBlockOf(entry: SolutionBlock): Block {
+  switch (entry.kind) {
+    case "heading": {
+      return heading3(t(entry.line));
+    }
+    case "label": {
+      return paragraph(bold(entry.line));
+    }
+    case "bullet": {
+      return bullet(t(entry.line));
+    }
+    case "note": {
+      return callout(t(entry.line), "\u2705", "green_background");
+    }
+    case "link": {
+      return paragraph(entry.url === undefined ? t(entry.line) : link(entry.line, entry.url));
+    }
+    case "page": {
+      return toggle(bold(entry.line), (entry.children ?? []).map((child) => paragraph(t(child))));
+    }
+    case "todo": {
+      return todo(t(entry.line), entry.checked === true);
+    }
+    default: {
+      return paragraph(t(entry.line));
+    }
+  }
+}
+
+function solutionSectionBlocks(solution: DesiredSolution): Block[] {
+  return solutionBlocks(solution).map((entry) => solutionBlockOf(entry));
 }
 
 /** Every outbox operation this delivery owns, for the replay filter. */
@@ -284,6 +356,10 @@ export class NotionRequirementPageDelivery implements NotionOutboxDelivery {
         if (round) await this.append(pageId, [toggle(t(round.line), roundChildren(round))], operation.afterBlockId);
       } else if (operation.type === "insert_prd") {
         if (desired.prd) await this.append(pageId, prdBlocks(desired.prd), operation.afterBlockId);
+      } else if (operation.type === "insert_solution") {
+        if (desired.solution) {
+          await this.append(pageId, solutionSectionBlocks(desired.solution), operation.afterBlockId);
+        }
       } else if (operation.type === "insert_prd_banner") {
         await this.append(pageId, [callout(t(prdFrozenLine()), "\u2705", "green_background")], operation.afterBlockId);
       } else if (operation.type === "insert_delivery") {

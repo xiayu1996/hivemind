@@ -35,6 +35,41 @@ const FORBIDDEN = [
   "Image unavailable", "Story stopped",
 ];
 
+/** A solution with every part a page can show: a stack it changes, a screen it
+ * puts up, a fork it left open. Every one of those is a sentence somebody has
+ * to read, so every one of them is scanned. */
+const SOLUTION = {
+  revision: 1,
+  status: "draft" as const,
+  body: JSON.stringify({
+    approach: {
+      summary: "在现有内网控制台里补齐，不另起一套。",
+      alternatives: [{ option: "另起一个前端单页应用", reason: "换一套框架只是把同样的内容多搬一次。" }],
+    },
+    stackChanges: [{ kind: "added", name: "playwright", reason: "界面要能自动走一遍。", impact: "构建机要多装一个浏览器。" }],
+    openDecisions: [{ question: "历史记录保留多久", recommendation: "先不设上限" }],
+    qualityGates: [{ name: "界面走查", command: ["npm", "run", "e2e"], covers: "页面打不开会当场红。" }],
+    interface: {
+      kind: "web",
+      direction: {
+        summary: "深色底、字偏大、一屏一件事。",
+        alternatives: [{ option: "浅色密集表格", reason: "每一行都一样重，最该被看见的反而看不见。" }],
+      },
+      pages: [{ name: "任务看板", purpose: "看今天要做什么" }],
+    },
+  }),
+};
+
+const PROTOTYPE = {
+  revision: 1,
+  mrUrl: "https://example.invalid/mr/7",
+  body: JSON.stringify({
+    pages: [{ file: "pages/board.html", scenarios: ["R-1-01"], visible: [{ role: "button", text: "新建任务" }] }],
+    described: [{ file: "pages/board.html", name: "任务看板", purpose: "看今天要做什么" }],
+    concerns: ["页面清单里少了一个筛选页"],
+  }),
+};
+
 function assertReadable(where: string, values: string[]): void {
   for (const value of values) {
     const scanned = value.replaceAll(IDS, "");
@@ -99,6 +134,8 @@ describe("what Notion is written with", () => {
           clarify: [],
           prd: null,
           acceptance: [],
+          solution: SOLUTION,
+          prototype: PROTOTYPE,
           stop: stopReason ? { state, detail: "有个问题等你回答", stoppedAt: 10 } : null,
         });
         assertReadable(`requirement page ${state}/${stopReason}`, strings(page));

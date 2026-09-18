@@ -31,6 +31,7 @@ function solution(overrides: Partial<SolutionBody> = {}): SolutionBody {
 
 const drawn: PrototypeResult = {
   pages: [{ file: "pages/board.html", scenarios: ["R-1-01"], visible: [{ role: "button", text: "新建任务" }] }],
+  described: [{ file: "pages/board.html", name: "任务看板", purpose: "看今天要做什么" }],
   concerns: [],
 };
 
@@ -156,7 +157,7 @@ describe("PrototypeRunner", () => {
 
   it("redrawing one revision replaces its contract instead of adding a second", async () => {
     await runner().draw(request());
-    const second = { pages: drawn.pages, concerns: ["页面清单里少了一个筛选页"] };
+    const second = { pages: drawn.pages, described: drawn.described, concerns: ["页面清单里少了一个筛选页"] };
 
     await runner({ port: port(async () => second) }).draw(request());
 

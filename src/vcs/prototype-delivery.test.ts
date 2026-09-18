@@ -9,6 +9,10 @@ const result: PrototypeResult = {
     { file: "pages/board.html", scenarios: ["R-1-01"], visible: [{ role: "button", text: "新建任务" }] },
     { file: "pages/detail.html", scenarios: ["R-1-02"], visible: [{ role: "heading", text: "任务详情" }] },
   ],
+  described: [
+    { file: "pages/board.html", name: "任务看板", purpose: "看今天要做什么" },
+    { file: "pages/detail.html", name: "任务详情", purpose: "看一张卡这一轮做了什么" },
+  ],
   concerns: ["页面清单里少了一个筛选页"],
 };
 

@@ -285,6 +285,10 @@ async function main(): Promise<void> {
         console.log(`${requirementId} status drag: ${property.intent}${property.applied ? "" : " (not applied)"}`);
       }
       const state = String(row.state);
+      if (state === "SOLUTION" && row.stop_reason === null) {
+        const ticked = await humanInput.pollContent(requirementId);
+        if (ticked.confirmed) console.log(`${requirementId} solution confirmed by tick`);
+      }
       // A stopped requirement, whatever its state, is waiting for a comment.
       if (state === "PRD_CONFIRM" || state === "SOLUTION" || state === "ACCEPTANCE" || row.stop_reason !== null) {
         const commented = await humanInput.pollComments(requirementId);
