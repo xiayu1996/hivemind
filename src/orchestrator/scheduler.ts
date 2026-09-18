@@ -147,6 +147,15 @@ export interface StoryExecutionOptions {
    * front-end directory that did not exist looked like from inside.
    */
   maxPerBatch?: number;
+  /**
+   * Stories already executing on this installation, by id.
+   *
+   * They hold their footprint for as long as they run, so they seed the first
+   * batch and nothing that conflicts with them joins it. Without this the plan
+   * describes a machine on which nothing has started yet, and the caller then
+   * dispatches into a directory a live worktree is already writing.
+   */
+  running?: readonly string[];
 }
 
 export function planStoryExecution(
@@ -159,10 +168,23 @@ export function planStoryExecution(
 
   const remaining = [...stories];
   const completed = new Set<string>();
+  const running = new Set(options.running ?? []);
   const batches: string[][] = [];
   while (remaining.length > 0) {
     const batch: SchedulableStory[] = [];
+    // A Story that is already executing holds its footprint until it finishes,
+    // so the first batch is whatever is running plus whatever may run beside
+    // it. Planning from scratch every cycle put a card into batch one while a
+    // card sharing its directories sat in batch six and was already in a
+    // worktree: S-R237511CO-03 and S-R237511MB-01 both took src/console on
+    // 2026-09-19, which is the conflict at merge that footprints exist to
+    // prevent. A running Story's dependencies are satisfied by the fact that it
+    // is running, so it is seeded before the dependency check rather than
+    // through it.
+    const seeding = batches.length === 0 && running.size > 0;
+    if (seeding) for (const story of remaining) if (running.has(story.id)) batch.push(story);
     for (const story of remaining) {
+      if (seeding && running.has(story.id)) continue;
       if (!story.dependsOn.every((dependency) => completed.has(dependency))) continue;
       if (batch.some((candidate) => storiesConflict(story, candidate, hotspots))) continue;
       if (options.maxPerBatch !== undefined && batch.length >= options.maxPerBatch) break;

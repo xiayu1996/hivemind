@@ -1129,9 +1129,17 @@ async function main(): Promise<void> {
       // order within a batch that is already free of conflicts. Each repository
       // is planned against its own hotspot paths, because a hotspot is a path
       // in one repository's tree.
+      // Whoever holds a live lease is writing a worktree right now, on this
+      // host or another. Read from the lease table rather than this process's
+      // own in-flight map, for the same reason the dispatch filter below does:
+      // a restarted orchestrator has an empty map and a full table.
+      const dispatchQueue = new DispatchQueue(handle.client);
+      const heldNow = new Set((await dispatchQueue.held()).map((lease) => lease.cardId));
       const plan = planDispatchAcrossRepositories(await Promise.all(slugs.map(async (slug) => ({
         slug,
         hotspotPaths: (await configFor(slug)).get("schedule.hotspotPaths"),
+        running: rows.filter((row) => String(row.repo) === slug && heldNow.has(String(row.id)))
+          .map((row) => String(row.id)),
         // Read off the checkout, which the cycle refreshed to the default
         // branch: until a contract is on the branch, the first card is the one
         // that puts it there and the rest would each invent their own.
@@ -1216,7 +1224,7 @@ async function main(): Promise<void> {
       // A card a live lease already holds is not dispatchable, whoever holds
       // it. Asking the lease table rather than this process's own map is what
       // keeps a restart from forking a second subprocess onto a running card.
-      const free = await new DispatchQueue(handle.client).dispatchable(batch);
+      const free = await dispatchQueue.dispatchable(batch);
       for (const cardId of free) {
         if (inFlight.size >= limit) break;
         const row = byId.get(cardId);
