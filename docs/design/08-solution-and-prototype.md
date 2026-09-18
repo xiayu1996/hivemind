@@ -122,7 +122,7 @@ SOLUTION 是只读档，此前没有任何一层能把原型写进仓库。两�
 | **四态可达** | 每页能否靠 `?state= 取 empty / loading / error / waiting` 切到四态 | 截图道逐态打开，渲染不出即缺 | 能 | fail |
 | **只消费 token** | 计算样式的色值/字号/间距/圆角是否全部来自 `tokens.json` | 复用 MU-06 的 token 比对 | 能 | fail |
 | **可访问性** | WCAG 违规 | axe-core，`serious` / `critical` 级别 | 能 | fail |
-| **设计通病** | AI 生成界面的常见默认样（紫区渐变、弹性缓动、暗色光晕、侧边标签边框）与通用质量（行长、拥挤内边距、触控目标过小、标题跳级） | `impeccable detect --json --no-config` 扫原型页，61 条确定性规则、无 LLM；见 §3.3 | **不能**，记 friction | ship |
+| **设计通病** | AI 生成界面的常见默认样（紫区渐变、弹性缓动、暗色光晕、侧边标签边框）与通用质量（行长、拥挤内边距、触控目标过小、标题跳级） | `impeccable detect --json --no-config` 扫原型页文件，61 条确定性规则、无 LLM，忽略退出码 2；见 §3.3 | **不能**，记 friction | ship |
 | **可用性·机械条目** | 动效尊重 `prefers-reduced-motion`、触控目标尺寸、焦点可见、键盘可操作 | 静态分析 CSS 的 media query；`getBoundingClientRect` 量尺寸；计算样式的 `:focus-visible`；键盘一项归 axe-core | 能 | fail |
 | **可用性·语义条目** | 加载/空/错误态文案是否说清了发生了什么、用户该做什么；表单校验提示是否可操作；标签说的是不是它旁边那个控件 | 模型对着**固定条目**逐条给二值判断，输入是原型 HTML（剥掉注释）+ 结构自检采到的 aria 快照，**不是截图**；条目文件在 `prompts/pm/ui-checklist.md`，随 hivemind 版本走、不按仓库变 | 能 | ship |
 | **语言** | `design.md` / `components.md` 里给人读的段落 | `lintHumanSentence` | 能 | ship |
@@ -149,7 +149,14 @@ SOLUTION 是只读档，此前没有任何一层能把原型写进仓库。两�
 - **`interface.direction`**：SOLUTION 产出选定的视觉方向一段话 + 被否的备选与理由，结构与 `approach.alternatives` 对称。它进 `openDecisions` 的停人逻辑——`interface` 非空本来就停人，方向是人在那一站要勾的一项。
 - **仓库首次建立契约时给人挑，不让人凭空描述**。目标仓库 `prototype.root` 尚无契约时，原型档对**同一页**画 `prototype.directionVariants` 个方向（默认 3）的原型并截图，人在 Notion 方案区段里勾一个；已有契约的仓库跳过这一步，方向继承。人擅长在选项间挑、不擅长对着一张图说"不太好看"，这一步把审美从描述题变成选择题，且只在首次付一次成本。
 - **`design.md` 是理由层**。Google DESIGN.md 规范的核心洞察是纯 JSON token 缺"为什么"：agent 拿到语义角色（这个色是 surface 还是 accent、什么时候用）才不会张冠李戴。我们不换格式——`tokens.json` 仍是机器真相（W3C、可导入导出、已实现），`design.md` 借 DESIGN.md 的九节骨架：视觉主题与界面类型、色板与角色、字体规则、组件样式、布局原则、层级与深度、该做与不该做、响应式行为、给后续每张卡的提示。需求明说要贴合某个既有品牌时，把对方的 DESIGN.md 放进 `prototype.root` 当上游输入；不明说就不用任何品牌样本当默认参考，避免仓库无意长成某家的皮。它整篇注入下游（与 `components.md` 同一段），所以要过语言检查，且只能引用 `tokens.json` 里存在的 token 名（注入前校验，引了不存在的名字即缺项，整份契约不注入）。
-- **反均值纪律进原型档 prompt，能下沉的下沉成代码**：禁用清单（上面那五种）与"把大胆花在一处、其余克制"的原则写进 prompt；机械可判的部分不自己手写规则，接 impeccable 的独立检测器（Apache 2.0，Rust 二进制，无 LLM、无凭据，`--json` 输出、退出码 0 / 2 / 1 分别是干净 / 有 finding / 扫描失败，扫 HTML 文件或 URL）：61 条规则覆盖紫区渐变、弹性缓动、暗色光晕、常用默认字体、行长、拥挤内边距、触控目标、标题跳级等。它作为原型出口的 warn 级检查只记 friction 不否决——规则作者自己的话是"干净的扫描是证据不是证明"。版本 pin 在 `package.json` 的 `hivemind.impeccableVersion`，`install.sh` 装到本机，与 pi 同一套做法；运行永远带 `--no-config`，不读目标仓库的 `.impeccable/` 忽略项，保证每台机器同一结论。prompt 层是三层防线里最弱的一层，所以它只负责提高生成质量，**不负责判决**——审美的判决权在人手里，且只在首次。§3.1 的自我批判同理：模型判自己是最弱的一环，那一问的结论只记 friction，用数据回答"反均值纪律到底有没有用"，不作判决。
+- **反均值纪律进原型档 prompt，能下沉的下沉成代码**：禁用清单（上面那五种）与"把大胆花在一处、其余克制"的原则写进 prompt；机械可判的部分不自己手写规则，接 impeccable 的独立检测器（Apache 2.0，Rust 二进制，无 LLM、无凭据，`--json` 输出、退出码 0 / 2 / 1 分别是干净 / 有 finding / 扫描失败，扫 HTML 文件或 URL）：61 条规则覆盖紫区渐变、弹性缓动、暗色光晕、常用默认字体、行长、拥挤内边距、触控目标、标题跳级等。它作为原型出口的 warn 级检查只记 friction 不否决——规则作者自己的话是"干净的扫描是证据不是证明"。接法上四条实测结论（2026-09-18，另一 session 核实）：
+
+  - **它不是可访问性工具**，61 条里可访问性只占对比度那一小块，主体是审美反模式；与 axe-core 互补不重叠，MU-08 照做。
+  - **pin 的是 engine 版本线，不是 skill**：仓库分 `skill-v*` 与 `engine-v*` 两条 tag，二进制随 `engine-v*` 发（`impeccable-linux-x64` 等 + `.sha256`）。`hivemind.impeccableEngineVersion` 写 engine 那条；它仍是 0.x，规则集会变——对只记 friction 的 gate 无所谓，哪天想升到能否决，先确认规则集稳定。
+  - **warn 级要自己做**：官方没有 error / warn 分级，退出码只有 0 干净 / 1 扫描出错 / 2 有 finding。封装读 `--json` 的 stdout、**忽略退出码 2**、finding 全部记 friction；退出码 1 只报告为探针失败。摘要里出现的 `severity` 是"该由哪个命令去修"的路由字段，不是严重程度，不拿它分级。
+  - **不走 npm 启动器，不允许首次运行下载**：npm 包只是 shim，真二进制按平台可选依赖或首次运行时下载到 `~/.impeccable/bin/`，在凌晨三点的常驻服务上就是一次没人看着的网络失败。`install.sh` 直接从 GitHub release 取 pinned engine 的 linux 二进制并校 sha256，幂等可重跑；`preflight` 探它可执行且版本等于 pin，否则这条 gate 就是静默什么都不做。原型页是静态 HTML，走文件模式，不需要浏览器。
+
+  运行永远带 `--no-config`，不读目标仓库的 `.impeccable/` 忽略项，保证每台机器同一结论。prompt 层是三层防线里最弱的一层，所以它只负责提高生成质量，**不负责判决**——审美的判决权在人手里，且只在首次。§3.1 的自我批判同理：模型判自己是最弱的一环，那一问的结论只记 friction，用数据回答"反均值纪律到底有没有用"，不作判决。
 
 ## 4. 人在 Notion 上怎么预览 / 修改 / 确认
 
@@ -246,7 +253,7 @@ CREATE TABLE IF NOT EXISTS requirement_solutions (
 - `story_specs` 增加 `visible_json TEXT`（可空，仅 `ui` / `e2e` 场景；`json_valid` 约束）。
 - 配置：`prototype.root`（per-repo，默认 `docs/prototype`）、`prototype.directionVariants`（global，默认 3，仅仓库首次建立契约时生效）、`uiContract.enforce`（global, hot，默认 `warn`；同时管 token 比对与 axe-core）、`solution.maxRounds`（出口回喂轮次，默认 3，与 `specifyExit.maxRounds` 同族；原型档共用）。
 - `requirement_solutions.body` 的 `interface` 增加 `direction {summary, alternatives[]}`；方向的人选结果落 `requirement_acceptance_items`（每个候选一条 item，勾中即 accepted），不另起表。
-- 依赖：impeccable 检测器版本 pin 在 `package.json` 的 `hivemind.impeccableVersion`，代码与 shell 都从那里取，不出现字面版本号；`preflight` 探它是否可执行。
+- 依赖：impeccable 检测引擎版本 pin 在 `package.json` 的 `hivemind.impeccableEngineVersion`（engine 版本线），代码与 shell 都从那里取，不出现字面版本号；`install.sh` 从 release 取二进制并校 sha256，`preflight` 探可执行且版本等于 pin。
 - guard：`PROTOTYPE` 档不在 `READ_ONLY_PHASES`，写路径围栏为 `prototype.root` 之内；围栏外的写入按 danger-rules 拒绝并记 friction。
 - 角色与模型：SOLUTION 走大脑档（同 decompose / UI 走查），理由同 03 §3——它读的是人话、判的是屏幕。
 
