@@ -47,6 +47,7 @@ import { NotionGateway, NotionGatewayError } from "../src/notion/gateway.js";
 import { NotionMediaReconciler } from "../src/notion/media-reconciler.js";
 import { NotionMediaPipeline } from "../src/notion/media.js";
 import { NotionOutbox } from "../src/notion/outbox.js";
+import { createTodoDecisionDelivery } from "../src/notion/todo-decision-delivery.js";
 import { NotionUserDirectory } from "../src/notion/user-directory.js";
 import {
   NotionGatewayCommentSource,
@@ -85,6 +86,9 @@ import { CostLedger } from "../src/observability/cost-ledger.js";
 import { CANONICAL_CAPTURE_ENV } from "../src/observability/capture-contract.js";
 import { createConsoleServer, listenConsole } from "../src/console/server.js";
 import { LibsqlConsoleDataSource } from "../src/console/libsql-data-source.js";
+import type { ConsoleTodoReadPort } from "../src/console/todo-contract.js";
+import { listPendingTodos, readPendingTodo } from "../src/orchestrator/pending-todo.js";
+import { createTodoDecisionDrain, createTodoDecisionStore } from "../src/orchestrator/todo-decision.js";
 import { ProjectionService } from "../src/observability/projections/service.js";
 import { ConsoleConfigWriter } from "../src/console/config-writer.js";
 import { resolveAgentSpec } from "../src/runner/agent-spec.js";
@@ -323,6 +327,25 @@ async function main(): Promise<void> {
     { onError: (error) => console.error("Notion media delivery failed:", (error as Error).message) },
   );
   const outbox = new NotionOutbox(handle.client);
+  // The console's write: a decision on a todo the ledger already says is
+  // waiting. It shares this outbox; each operation replays only its own rows.
+  const todoDecisionDrain = createTodoDecisionDrain({
+    client: handle.client,
+    outbox,
+    delivery: createTodoDecisionDelivery({ gateway }),
+  });
+  const todoDecisionStore = createTodoDecisionStore({
+    client: handle.client,
+    outbox,
+    drain: todoDecisionDrain,
+  });
+  const todoReadPort: ConsoleTodoReadPort = {
+    listTodos: async () => {
+      const todos = await listPendingTodos(handle.client);
+      return { todos, openTodoId: todos[0]?.todoId ?? null };
+    },
+    readTodo: (todoId) => readPendingTodo(handle.client, todoId),
+  };
   const projection = new NotionStoryProjection(handle.client);
   const delivery = new NotionStoryDelivery(
     new NotionStoryPageDelivery(handle.client, gateway),
@@ -400,6 +423,10 @@ async function main(): Promise<void> {
         new Error(`${letter.attempts} attempts; last error: ${letter.lastError ?? "unknown"}`),
       );
     }
+    // The todo decision writes are their own operation; the cycle carries them
+    // the same way it carries the page projections, so a decision submitted
+    // while the console was up is delivered even if nobody opens the page again.
+    await todoDecisionDrain.drain();
     await media.reconcile();
     await registerActiveStories();
   };
@@ -1197,6 +1224,8 @@ async function main(): Promise<void> {
         uiRoot,
         serveUi: await exists(join(uiRoot, "index.html")),
         configWriter: new ConsoleConfigWriter(config, handle.client),
+        todoRead: todoReadPort,
+        todoCommands: todoDecisionStore,
       },
     );
     const address = await listenConsole(operationsConsole, {
