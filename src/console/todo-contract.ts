@@ -62,7 +62,20 @@ export const CONSOLE_WRITE_ROUTES: readonly { readonly method: string; readonly 
  * `/api/todos/a/b/decision` are not the todo route, and the query string is
  * not part of the path. */
 export function isConsoleWriteRequest(method: string, path: string): boolean {
-  throw new Error(`matching the console write routes is not implemented yet: ${method} ${path}`);
+  if (method !== "POST") return false;
+  const segments = (path.split("?")[0] ?? "").split("/");
+  return CONSOLE_WRITE_ROUTES.some((route) => {
+    if (route.method !== method) return false;
+    const expected = route.path.split("/");
+    if (expected.length !== segments.length) return false;
+    return expected.every((segment, index) => {
+      // A `:name` segment stands for exactly one non-empty segment. Anything
+      // longer or shorter is a different route, which is what keeps
+      // `/api/todos/a/b/decision` and `/api/todos/../config/value` out.
+      if (segment.startsWith(":")) return (segments[index] ?? "") !== "";
+      return segment === segments[index];
+    });
+  });
 }
 
 /** The todo list, oldest waiting first, plus the id the page opens on when no

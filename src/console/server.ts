@@ -3,8 +3,10 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
+  isConsoleWriteRequest,
   type ConsoleTodoCommandPort,
   type ConsoleTodoReadPort,
+  type TodoDecisionResponse,
 } from "./todo-contract.js";
 
 export interface ConsoleDataSource {
@@ -58,14 +60,17 @@ export async function createConsoleServer(
   options: ConsoleServerOptions = {},
 ): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
-  const writable = new Set(options.configWriter
-    ? ["/api/config/value", "/api/config/rollback"]
-    : []);
+  // The write surface is an allowlist, not a rule: a POST is admitted only when
+  // it is one of the declared write routes AND the port that answers it is
+  // wired. Everything else -- creating a requirement, editing a task, moving
+  // work on -- is refused here, before any handler could exist for it.
   app.addHook("onRequest", async (request, reply) => {
     if (request.method === "GET" || request.method === "HEAD") return;
-    // Config is the only thing an operator may change from here, and only
-    // through the two routes the registry validates.
-    if (request.method === "POST" && writable.has(request.url.split("?")[0] ?? "")) return;
+    if (request.method === "POST" && isConsoleWriteRequest(request.method, request.url)) {
+      const path = request.url.split("?")[0] ?? "";
+      const isConfigWrite = path === "/api/config/value" || path === "/api/config/rollback";
+      if (isConfigWrite ? options.configWriter !== undefined : options.todoCommands !== undefined) return;
+    }
     await reply.code(405).send({ error: "console is read-only" });
   });
 
@@ -77,6 +82,45 @@ export async function createConsoleServer(
   app.get("/api/stats", async () => data.stats());
   app.get("/api/providers", async () => data.providers());
   app.get("/api/queue", async () => data.queue());
+
+  const todoRead = options.todoRead;
+  if (todoRead) {
+    app.get("/api/todos", async () => todoRead.listTodos());
+    app.get("/api/todos/:todoId", async (request, reply) => {
+      const { todoId } = request.params as { todoId: string };
+      const todo = await todoRead.readTodo(todoId);
+      if (todo === null) return reply.code(404).send({ error: "todo not found" });
+      return todo;
+    });
+  }
+
+  const todoCommands = options.todoCommands;
+  if (todoCommands) {
+    app.post("/api/todos/:todoId/decision", async (request, reply) => {
+      const { todoId } = request.params as { todoId: string };
+      const outcome = await todoCommands.submit(todoId, request.body as Parameters<ConsoleTodoCommandPort["submit"]>[1]);
+      if (outcome.kind === "accepted") {
+        const body: TodoDecisionResponse = { ok: true, state: outcome.state };
+        return reply.code(200).send(body);
+      }
+      if (outcome.kind === "gone") {
+        const body: TodoDecisionResponse = { ok: false, reason: "gone" };
+        return reply.code(404).send(body);
+      }
+      const body: TodoDecisionResponse = { ok: false, reason: "invalid", issues: outcome.issues };
+      return reply.code(422).send(body);
+    });
+    app.post("/api/todos/:todoId/save-check", async (request, reply) => {
+      const { todoId } = request.params as { todoId: string };
+      const state = await todoCommands.recheck(todoId);
+      if (state === null) {
+        const body: TodoDecisionResponse = { ok: false, reason: "gone" };
+        return reply.code(404).send(body);
+      }
+      const body: TodoDecisionResponse = { ok: true, state };
+      return reply.code(200).send(body);
+    });
+  }
 
   const writer = options.configWriter;
   if (writer) {
@@ -116,7 +160,7 @@ export async function createConsoleServer(
     });
     const index = await readFile(join(uiRoot, "index.html"), "utf8");
     app.get("/", async (_request, reply) => reply.type("text/html").send(index));
-    for (const route of ["/nodes", "/tasks", "/costs", "/config", "/stats", "/providers", "/queue"]) {
+    for (const route of ["/nodes", "/tasks", "/costs", "/config", "/stats", "/providers", "/queue", "/todos"]) {
       app.get(route, async (_request, reply) => reply.type("text/html").send(index));
     }
   }
