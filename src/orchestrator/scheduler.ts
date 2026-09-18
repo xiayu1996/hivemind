@@ -63,22 +63,32 @@ function findDependencyCycle(stories: readonly SchedulableStory[]): readonly str
 }
 
 /**
- * A trailing slash names the same directory, so it must not change the answer.
- * Without this, `src/console/` did not contain `src/console/tabs` while
- * `src/console` did, and the two Stories ran side by side in one subtree. The
- * shapes differ because the DoD rewrites the footprint the decomposition
- * validated (`predicted_footprint` is a bare string array there), so both
- * spellings reach this comparison from real cards.
+ * The directory a footprint entry names, whichever way it was spelled.
+ *
+ * A trailing slash and a trailing glob both name the subtree they are attached
+ * to, and neither may change the answer. Untrimmed, `src/console/` and
+ * `src/console/**` each failed to contain `src/console/tabs` while
+ * `src/console` contained it, so two Stories in one subtree could be planned
+ * side by side. All three spellings come from real cards: the DoD rewrites the
+ * footprint the decomposition validated and asks only for non-empty strings.
+ *
+ * Only a whole segment is dropped, so `src/consoles` and a file named `*`
+ * keep their own names.
  */
-function withoutTrailingSlash(path: string): string {
+function directoryOf(path: string): string {
   let end = path.length;
-  while (end > 1 && path[end - 1] === "/") end -= 1;
-  return path.slice(0, end);
+  for (;;) {
+    while (end > 1 && path[end - 1] === "/") end -= 1;
+    const segment = path.lastIndexOf("/", end - 1) + 1;
+    const last = path.slice(segment, end);
+    if (segment === 0 || (last !== "*" && last !== "**")) return path.slice(0, end);
+    end = segment;
+  }
 }
 
 function pathsIntersect(rawLeft: string, rawRight: string): boolean {
-  const left = withoutTrailingSlash(rawLeft);
-  const right = withoutTrailingSlash(rawRight);
+  const left = directoryOf(rawLeft);
+  const right = directoryOf(rawRight);
   return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
 }
 
