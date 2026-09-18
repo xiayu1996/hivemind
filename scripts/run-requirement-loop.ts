@@ -13,7 +13,7 @@ import {
   REQUIREMENT_OUTBOX_OPERATIONS,
 } from "../src/notion/requirement-page-delivery.js";
 import { RequirementPageProjector } from "../src/notion/requirement-projection.js";
-import { approvalJudgeSetup, describeJudgeSetup, judgeConfigFrom } from "../src/judge/settings.js";
+import { approvalJudgeSetup, describeJudgeSetup, judgeConfigFrom, usabilityJudgeSetup } from "../src/judge/settings.js";
 import { NotionRequirementInputSync } from "../src/notion/requirement-input-sync.js";
 import { ingestRequirements } from "../src/notion/requirement-intake.js";
 import { NotionGatewayCommentSource, createNotionHttpTransport } from "../src/notion/sdk-adapters.js";
@@ -169,6 +169,9 @@ async function main(): Promise<void> {
   // named after the requirement, fenced to the contract directory, reused
   // across redraws so the second attempt starts from what the first left.
   const prototypeLayout = worktreeLayout(workRoot);
+  // The three semantic checklist items. Absent on a host without the judge
+  // credential, and then the mechanical four are the whole checklist.
+  const usabilityJudge = usabilityJudgeSetup(judgeConfigFrom(config), stored);
   const prototypeRunner = new PrototypeRunner(
     store,
     {
@@ -209,6 +212,7 @@ async function main(): Promise<void> {
             [CANONICAL_CAPTURE_ENV]: join(evidenceRoot, "prototype-requests.jsonl"),
           },
           designLint: { binary: defaultDesignLintBinary() },
+          ...(usabilityJudge.settings ? { usability: usabilityJudge.settings } : {}),
           recordFriction: async (row) => { await store.recordFriction(row); },
           recordUsage: async ({ usage, spec: used }) => {
             await ledger.record({

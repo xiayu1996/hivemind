@@ -683,6 +683,13 @@ export const CONFIG_KEYS = {
     reload: "hot",
     description: "How sure the judge has to be that a sentence in a design summary or a delivery report describes how the system was built, before that sentence is sent back to be rewritten. Lower than judge.businessLanguageThreshold although it is the same question, because the costs are not the same: these two gates declare exhausted: \"ship\", so a finding the judge invents costs one rewrite and the artifact goes out anyway, while the same mistake in the decomposer blocks an Epic. Measured 2026-09-18 over twelve report sentences, twice: implementation prose scored 0.84 to 0.97 and sentences that must survive 0.04 to 0.18. The deterministic linter flags none of the twelve, in either direction.",
   }),
+  "judge.usabilityThreshold": def({
+    schema: z.number().min(0.5).max(1),
+    default: 0.75,
+    scope: "global",
+    reload: "hot",
+    description: "How sure the judge has to be that a prototype page fails one of the three semantic usability items before that item is handed back to be redrawn. Its own key rather than a shared one because the safe direction here is the opposite of judge.environmentThreshold's: adding a finding costs a redrawing round and can use up the prototype's whole budget, while missing one costs a screen that is slightly less clear than it could be, which a person still sees before anything is built on it. Chinese prototypes score about 0.1 lower than the same page written in English, so the bar leaves room below it.",
+  }),
   "judge.environmentThreshold": def({
     schema: z.number().min(0.5).max(1),
     default: 0.7,

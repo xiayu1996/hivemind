@@ -105,6 +105,7 @@ function drawingPort(options: {
   seen?: Array<Record<string, unknown>>;
   designLint?: PiPrototypePortOptions["designLint"];
   recordFriction?: PiPrototypePortOptions["recordFriction"];
+  usability?: PiPrototypePortOptions["usability"];
 }) {
   const instance = runner(options.replies);
   const browser = inspector(options.snapshot ?? stateAware);
@@ -122,6 +123,7 @@ function drawingPort(options: {
       inspector: async () => browser.port,
       ...(options.designLint ? { designLint: options.designLint } : {}),
       ...(options.recordFriction ? { recordFriction: options.recordFriction } : {}),
+      ...(options.usability ? { usability: options.usability } : {}),
       createRunner: (config) => {
         options.seen?.push(config as unknown as Record<string, unknown>);
         return instance;
@@ -180,6 +182,35 @@ describe("PiPrototypePort", () => {
 
     await expect(drawing.port.run(request)).resolves.toMatchObject({ concerns: [] });
     expect(friction).toEqual([{ kind: "design_lint_unavailable", detail: "spawn impeccable ENOENT" }]);
+  });
+
+  it("refuses a page whose motion nothing can turn off, like any other exit finding", async () => {
+    const worktree = await contract({
+      "pages/board.html": "<title>任务看板</title><style>button { transition: all 200ms; }</style>",
+    });
+    const drawing = drawingPort({ worktree, replies: [GOOD, GOOD], maxRounds: 2 });
+
+    await expect(drawing.port.run(request)).rejects.toThrow(/M1/);
+  });
+
+  it("ships the items a probability decided, and files them where they can be counted", async () => {
+    const worktree = await contract();
+    const friction: Array<{ kind: string; detail: string }> = [];
+    const drawing = drawingPort({
+      worktree,
+      replies: [GOOD],
+      maxRounds: 1,
+      usability: {
+        judge: { ask: async (call) => ({ answers: Object.fromEntries(Object.keys(call.questions).map((id) => [id, { type: "noul" as const, noul: id === "S1" ? 0.95 : 0.1 }])) }) },
+        model: "jev",
+        threshold: 0.75,
+      },
+      recordFriction: async (row) => { friction.push({ kind: row.kind, detail: row.detail }); },
+    });
+
+    await expect(drawing.port.run(request)).resolves.toMatchObject({ concerns: [] });
+    expect(friction.map((row) => row.kind)).toEqual(["ui_checklist_shipped"]);
+    expect(friction[0]!.detail).toContain("S1");
   });
 
   it("hands the drawing the direction a person approved, and the ones they did not", async () => {

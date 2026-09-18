@@ -62,12 +62,22 @@ export async function loadPromptLayers(promptRoot: string, phase: Phase): Promis
   return { baseline, phase: phaseText, combined };
 }
 
+/** Phases that are judged against a shared list, and so must be given it. The
+ * list is one file rather than a paragraph in each phase: the exit keys its
+ * findings by the item numbers in it, and two copies would drift into two
+ * numbering schemes. */
+const PM_EXTRA_FILES: Partial<Record<PmPhase, string[]>> = {
+  PROTOTYPE: ["ui-checklist.md"],
+};
+
 /** Loads the product manager's own discipline, then the phase contract. */
 export async function loadPmPromptLayers(promptRoot: string, phase: PmPhase): Promise<PromptLayers> {
-  const [baseline, phaseText] = await Promise.all([
+  const [baseline, phaseText, ...extras] = await Promise.all([
     loadFile(join(promptRoot, "pm", "baseline.md")),
     loadFile(join(promptRoot, "pm", PM_FILES[phase])),
+    ...(PM_EXTRA_FILES[phase] ?? []).map((file) => loadFile(join(promptRoot, "pm", file))),
   ]);
-  const combined = `${baseline.trim()}\n\n${phaseText.trim()}\n`;
+  const sections = [phaseText, ...extras].map((text) => text.trim());
+  const combined = `${baseline.trim()}\n\n${sections.join("\n\n")}\n`;
   return { baseline, phase: phaseText, combined };
 }

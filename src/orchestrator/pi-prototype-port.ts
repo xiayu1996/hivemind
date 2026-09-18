@@ -1,8 +1,17 @@
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { assembleGuardPolicy, POLICY_ENV_VAR, serializeGuardPolicy } from "../guard/policy.js";
 import { prototypeFencePatterns } from "../guard/prototype-fence.js";
 import { readInterfaceContract } from "../pipeline/interface-contract.js";
+import {
+  describeChecklistFindings,
+  flippedItems,
+  stripForJudge,
+  type ChecklistFinding,
+} from "../pipeline/ui-checklist.js";
+import { judgeUsability, type UsabilityJudgeSettings } from "../judge/usability.js";
+import { mechanicalFindings } from "../verify/usability-mechanical.js";
 import { loadPmPromptLayers } from "../pipeline/prompt-loader.js";
 import { lastAssistantText } from "../runner/assistant-text.js";
 import type { ResolvedAgentSpec } from "../runner/agent-spec.js";
@@ -86,6 +95,20 @@ export interface PiPrototypePortOptions {
     run?: DesignLintRequest["run"];
   };
   recordFriction?: (input: { cardId: string; runId: string; kind: string; detail: string }) => Promise<void>;
+  /** The judge that decides the three semantic usability items. Left out on a
+   * deployment without the credential, and then the mechanical half is the
+   * whole checklist -- which is the floor, not a degraded mode. */
+  usability?: UsabilityJudgeSettings;
+}
+
+/** What one round of checks found, split by what each half may do about it.
+ * Mechanical findings refuse like any other exit finding; semantic ones are
+ * handed back while rounds remain and shipped with when they run out, because
+ * a probability that never settles would otherwise burn the whole budget. */
+interface ExitFindings {
+  blocking: string[];
+  semantic: readonly ChecklistFinding[];
+  checklist: readonly ChecklistFinding[];
 }
 
 export class PiPrototypePort implements PrototypePort {
@@ -120,16 +143,30 @@ export class PiPrototypePort implements PrototypePort {
       await runner.start();
       await runner.setAutoRetry(false);
       let answer = await this.ask(runner, prototypePrompt(input, this.options.contractRoot));
+      let previous: readonly ChecklistFinding[] = [];
       for (let attempt = 1; ; attempt++) {
-        const findings = answer === null
-          ? ["最后一条消息里没有按约定输出 JSON 对象"]
+        const found: ExitFindings = answer === null
+          ? { blocking: ["最后一条消息里没有按约定输出 JSON 对象"], semantic: [], checklist: [] }
           : await this.evaluate(input, answer);
-        if (findings.length === 0 && answer !== null) {
+        if (attempt > 1) await this.recordFlips(input, previous, found.checklist);
+        previous = found.checklist;
+
+        const soft = describeChecklistFindings(found.semantic);
+        if (found.blocking.length === 0 && soft.length === 0 && answer !== null) {
           await this.recordDesignLint(input, answer.pages.map((page) => page.file));
           return { pages: answer.pages, concerns: answer.concerns ?? [] };
         }
-        if (attempt >= this.options.maxRounds) throw new PrototypeExitNotMetError(findings);
-        answer = await this.ask(runner, handback(findings));
+        if (attempt >= this.options.maxRounds) {
+          // The semantic items ship: they are a probability, and a gate that
+          // can refuse forever on one would spend the budget without ever
+          // being satisfied. A person reads these screens next in any case.
+          if (found.blocking.length > 0) throw new PrototypeExitNotMetError(found.blocking);
+          if (answer === null) throw new PrototypeExitNotMetError(["最后一条消息里没有按约定输出 JSON 对象"]);
+          await this.recordShippedChecklist(input, found.semantic);
+          await this.recordDesignLint(input, answer.pages.map((page) => page.file));
+          return { pages: answer.pages, concerns: answer.concerns ?? [] };
+        }
+        answer = await this.ask(runner, handback([...found.blocking, ...soft]));
       }
     } finally {
       await runner.stop().catch(() => undefined);
@@ -155,7 +192,7 @@ export class PiPrototypePort implements PrototypePort {
   private async evaluate(
     input: PrototypeRequest,
     answer: z.infer<typeof prototypeSchema>,
-  ): Promise<string[]> {
+  ): Promise<ExitFindings> {
     const root = join(this.options.worktreePath, this.options.contractRoot);
     const read = await readInterfaceContract(root);
     const contractPages = read.kind === "present" ? read.contract.pages.map((page) => page.file) : [];
@@ -166,18 +203,86 @@ export class PiPrototypePort implements PrototypePort {
       : read.reasons;
 
     const inspector = await this.options.inspector();
+    let evidence;
     try {
-      const evidence = await inspectPrototypePages({ root, pages: contractPages, port: inspector });
-      return evaluatePrototypeExit({
-        claims: answer.pages,
-        evidence,
-        contractPages,
-        scenarios: input.scenarios.map((scenario) => scenario.id),
-        tokens: read.kind === "present" ? read.contract.tokens : [],
-        contractReasons,
-      });
+      evidence = await inspectPrototypePages({ root, pages: contractPages, port: inspector });
     } finally {
       await inspector.close().catch(() => undefined);
+    }
+    const exit = evaluatePrototypeExit({
+      claims: answer.pages,
+      evidence,
+      contractPages,
+      scenarios: input.scenarios.map((scenario) => scenario.id),
+      tokens: read.kind === "present" ? read.contract.tokens : [],
+      contractReasons,
+    });
+
+    const sources = new Map<string, string>();
+    for (const file of contractPages) {
+      const html = await readFile(join(root, file), "utf8").catch(() => null);
+      if (html !== null) sources.set(file, html);
+    }
+    const mechanical = [...sources].flatMap(([file, html]) => mechanicalFindings({
+      file,
+      html,
+      violations: evidence.find((page) => page.file === file)?.violations ?? [],
+    }));
+    // Asked only about pages that opened: a page with no accessibility tree is
+    // already refused above, and asking about it would spend three requests to
+    // learn the same thing.
+    const judged = await judgeUsability(
+      evidence
+        .filter((page) => page.snapshot !== null && sources.has(page.file))
+        .map((page) => ({
+          file: page.file,
+          page: stripForJudge(sources.get(page.file)!),
+          snapshot: page.snapshot!,
+        })),
+      this.options.usability ?? { model: "", threshold: 1 },
+    );
+
+    return {
+      blocking: [...exit, ...describeChecklistFindings(mechanical)],
+      semantic: judged.findings,
+      checklist: [...mechanical, ...judged.findings],
+    };
+  }
+
+  /** Items that were a finding in exactly one of two consecutive rounds. It is
+   * a friction row, not a gate: an item that flips while the page is being
+   * fixed is ordinary, and one that flips round after round is the judge
+   * disagreeing with itself, which is a thing to learn from data. */
+  private async recordFlips(
+    input: PrototypeRequest,
+    previous: readonly ChecklistFinding[],
+    current: readonly ChecklistFinding[],
+  ): Promise<void> {
+    const record = this.options.recordFriction;
+    const flipped = flippedItems(previous, current);
+    if (!record || flipped.length === 0) return;
+    await record({
+      cardId: input.requirementId,
+      runId: requirementRunId(input.requirementId),
+      kind: "ui_checklist_unstable",
+      detail: flipped.join("、"),
+    }).catch(() => undefined);
+  }
+
+  /** The semantic items that were still open when the rounds ran out. */
+  private async recordShippedChecklist(
+    input: PrototypeRequest,
+    findings: readonly ChecklistFinding[],
+  ): Promise<void> {
+    const record = this.options.recordFriction;
+    if (!record || findings.length === 0) return;
+    for (const detail of describeChecklistFindings(findings)) {
+      await record({
+        cardId: input.requirementId,
+        runId: requirementRunId(input.requirementId),
+        kind: "ui_checklist_shipped",
+        detail,
+      }).catch(() => undefined);
     }
   }
 

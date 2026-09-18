@@ -125,6 +125,8 @@ SOLUTION 是只读档，此前没有任何一层能把原型写进仓库。两�
 | **设计通病** | AI 生成界面的常见默认样（紫区渐变、弹性缓动、暗色光晕、侧边标签边框）与通用质量（行长、拥挤内边距、触控目标过小、标题跳级） | `impeccable detect --json --no-config` 扫原型页文件，61 条确定性规则、无 LLM，忽略退出码 2；见 §3.3 | **不能**，记 friction | ship |
 | **可用性·机械条目** | 动效尊重 `prefers-reduced-motion`、触控目标尺寸、焦点可见、键盘可操作 | 静态分析 CSS 的 media query；`getBoundingClientRect` 量尺寸；计算样式的 `:focus-visible`；键盘一项归 axe-core | 能 | fail |
 | **可用性·语义条目** | 加载/空/错误态文案是否说清了发生了什么、用户该做什么；表单校验提示是否可操作；标签说的是不是它旁边那个控件 | 模型对着**固定条目**逐条给二值判断，输入是原型 HTML（剥掉注释）+ 结构自检采到的 aria 快照，**不是截图**；条目文件在 `prompts/pm/ui-checklist.md`，随 hivemind 版本走、不按仓库变 | 能 | ship |
+2026-09-18 实现时（MU-10）：可用性清单落在 `prompts/pm/ui-checklist.md`（编号 M1–M4 / S1–S3，随 PROTOTYPE 一起注入画图会话）。机械四条由 `src/verify/usability-mechanical.ts` 读页面自己的 `<style>` 与标记、再加 axe 的 `target-size` / `scrollable-region-focusable` / `nested-interactive` 三条规则判定，进 blocking 集合；语义三条走 `src/judge/usability.ts`，一条一个请求，轮次用尽即 ship 并记 `ui_checklist_shipped`，连续两轮翻转记 `ui_checklist_unstable`。
+
 | **语言** | `design.md` / `components.md` 里给人读的段落 | `lintHumanSentence` | 能 | ship |
 
 三条设计要点：
