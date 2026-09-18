@@ -40,6 +40,7 @@ describe("BlindVerifyStoryPort", () => {
         createdAt: 1,
       },
       screenshots: [],
+      pages: [],
         reasons: [],
       validationErrors: [],
       treeChanged: false,

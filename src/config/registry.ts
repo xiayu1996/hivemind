@@ -522,6 +522,13 @@ export const CONFIG_KEYS = {
     reload: "hot",
     description: "Where the repository keeps the interface contract a requirement with screens is built against: the token table, the component inventory and the runnable page prototypes. It is read from the branch a round runs on and injected into the phases that build screens, so a repository that keeps it elsewhere says so here rather than having two copies.",
   }),
+  "uiContract.enforce": def({
+    schema: z.enum(["off", "warn", "block"]),
+    default: "warn",
+    scope: "global",
+    reload: "hot",
+    description: "How much power the interface contract layer has: whether every colour and size on a screen came from the token table. `warn` records the findings and lets the round through, `block` fails the scenarios that carry them, `off` does not look. It starts at warn deliberately (design 08 section 6): the criterion is finite and can converge, but giving it a veto before one requirement's worth of real findings has been read risks spending a card's whole budget on a rule nobody has checked the shape of yet. It governs the prototype's own exit as well, so a prototype is held to what the code after it will be held to.",
+  }),
   "guard.e2eHostAllowlist": def({
     schema: z.array(z.string()),
     default: ["localhost", "127.0.0.1"],

@@ -132,6 +132,7 @@ export class BlindVerifyStoryPort implements StoryVerifyPort {
       codeFailedScenarios: split.code,
       evidenceDir: result.record.evidenceDir,
       screenshots: result.screenshots,
+      pages: result.pages,
       artifact: verificationArtifact(result),
     };
   }

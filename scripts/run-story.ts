@@ -13,6 +13,8 @@ import { phaseEvidenceSink } from "../src/observability/phase-evidence-sink.js";
 import { BlindVerifyStoryPort } from "../src/orchestrator/blind-verify-port.js";
 import { UiReviewedVerifyPort } from "../src/orchestrator/ui-reviewed-verify-port.js";
 import { UiReviewExecutor } from "../src/verify/ui-review.js";
+import { playwrightStyleCollector } from "../src/verify/ui-contract-collector.js";
+import { contractEnforcement } from "../src/verify/ui-contract.js";
 import { loadPmPromptLayers } from "../src/pipeline/prompt-loader.js";
 import { PiStoryPhasePort } from "../src/orchestrator/pi-phase-port.js";
 import { EpicIntegrator } from "../src/orchestrator/epic-integration.js";
@@ -499,6 +501,18 @@ async function main(): Promise<void> {
           return { title: snapshot.title, businessGoal: snapshot.requirement };
         },
         recordFriction: (friction) => store.recordFriction(friction),
+        // The contract layer: the screens the round reached, measured against
+        // the token table on the branch under review. Read per round for the
+        // same reason the phases read it per phase - a card that added a token
+        // in this round must be judged against the table it just wrote.
+        uiContract: {
+          enforce: contractEnforcement(config.get("uiContract.enforce")),
+          tokens: async () => {
+            const read = await readInterfaceContract(join(worktreePath, config.get("prototype.root")));
+            return read.kind === "present" ? read.contract.tokens : null;
+          },
+          collector: playwrightStyleCollector,
+        },
         // The lane the table misses most: the reviewer stands its own harness
         // up, so what it refuses on is prose about a box it built itself.
         ...(environmentJudge ? { environmentJudge } : {}),

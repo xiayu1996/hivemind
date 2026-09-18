@@ -99,6 +99,10 @@ export interface TreePinPort {
 export interface BlindVerifyResult {
   record: VerifyRecord;
   screenshots: Array<{ scenarioId: string; path: string }>;
+  /** The page each scenario reported reaching. The contract layer opens these
+   * again while the application is still up, so it judges the screen a person
+   * would see rather than a route somebody guessed. */
+  pages: Array<{ scenarioId: string; url: string }>;
   /** Why each non-passing scenario did not pass, in the verifier's words. */
   reasons: Array<{ scenarioId: string; reason: string }>;
   /** Reasons the judge said were about the box although the pattern table did
@@ -529,6 +533,8 @@ export class BlindVerifyExecutor {
     await this.records.insert(record);
     const screenshots = document?.scenarios.flatMap((scenario) =>
       (scenario.screenshots ?? []).map((path) => ({ scenarioId: scenario.id, path }))) ?? [];
-    return { record, screenshots, reasons: scenarioReasons, environmentalReasons: judged.environmental, validationErrors, treeChanged: !pin.matches, runnerFailure: runnerError, events, usage, messages };
+    const pages = document?.scenarios.flatMap((scenario) =>
+      scenario.url ? [{ scenarioId: scenario.id, url: scenario.url }] : []) ?? [];
+    return { record, screenshots, pages, reasons: scenarioReasons, environmentalReasons: judged.environmental, validationErrors, treeChanged: !pin.matches, runnerFailure: runnerError, events, usage, messages };
   }
 }

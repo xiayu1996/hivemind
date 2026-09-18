@@ -116,6 +116,9 @@ export interface ManagedVerifyResult {
   codeFailedScenarios?: string[];
   evidenceDir?: string;
   screenshots?: Array<{ scenarioId: string; path: string }>;
+  /** The page each scenario reached, for a lane that opens it again while the
+   * application is still up. */
+  pages?: Array<{ scenarioId: string; url: string }>;
   artifact: string;
 }
 
