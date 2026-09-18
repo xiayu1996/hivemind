@@ -602,3 +602,51 @@ export function createRoleConfigurationPort(seed: ConsoleRoleConfigurationSeed):
     },
   };
 }
+
+/** Dotted IPv4 as an unsigned integer; null means the text is not an IPv4 address. */
+function ipv4ToNumber(address: string): number | null {
+  const octets = address.split(".");
+  if (octets.length !== 4) return null;
+  let value = 0;
+  for (const octet of octets) {
+    if (!/^\d{1,3}$/.test(octet)) return null;
+    const part = Number(octet);
+    if (part > 255) return null;
+    value = value * 256 + part;
+  }
+  return value;
+}
+
+/** Whether an address sits inside one CIDR block; anything not IPv4 fails closed. */
+function addressInCidr(address: string, cidr: string): boolean {
+  const [range, prefixText] = cidr.split("/");
+  const prefix = prefixText === undefined ? 32 : Number(prefixText);
+  const rangeNumber = range === undefined ? null : ipv4ToNumber(range);
+  const addressNumber = ipv4ToNumber(address);
+  if (rangeNumber === null || addressNumber === null || !Number.isInteger(prefix) || prefix < 0 || prefix > 32) {
+    return false;
+  }
+  if (prefix === 0) return true;
+  const mask = (0xffffffff << (32 - prefix)) >>> 0;
+  return ((addressNumber & mask) >>> 0) === ((rangeNumber & mask) >>> 0);
+}
+
+/**
+ * The access boundary that runs before the console shell and its data routes.
+ * It compares the direct peer address against the allowed network ranges and,
+ * when nothing matches, returns only the labels a person may see plus the path
+ * that rechecks the network -- never any operator data or backend navigation.
+ */
+export function decideConsoleAccess(input: {
+  remoteAddress: string;
+  ranges: readonly ConsoleNetworkRange[];
+  recheckPath: string;
+}): ConsoleAccessDecision {
+  const matched = input.ranges.find((range) => range.cidrs.some((cidr) => addressInCidr(input.remoteAddress, cidr)));
+  if (matched) return { allowed: true, networkId: matched.id };
+  return {
+    allowed: false,
+    allowedNetworkLabels: [...new Set(input.ranges.map((range) => range.label))],
+    recheckPath: input.recheckPath,
+  };
+}
