@@ -1,5 +1,18 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { CONFIG_KEYS } from "../config/registry.js";
 import { HttpSystemOne, JudgeError, type SystemOneRequest } from "./system-one.js";
+
+interface CapturedExchange {
+  want: "environment" | "code";
+  request: SystemOneRequest;
+  response: unknown;
+}
+
+/** Two real exchanges, recorded 2026-09-18 against the live service. */
+const CAPTURED = (JSON.parse(
+  readFileSync(new URL("../../fixtures/judge/environment-reasons.json", import.meta.url), "utf8"),
+) as { exchanges: CapturedExchange[] }).exchanges;
 
 const REQUEST: SystemOneRequest = {
   model: "jev-latest",
@@ -90,5 +103,39 @@ describe("HttpSystemOne", () => {
         (init as RequestInit).signal?.addEventListener("abort", () => reject(new Error("aborted")));
       }), 10);
     await expect(judge.ask(REQUEST)).rejects.toMatchObject({ kind: "transport" });
+  });
+});
+
+describe("the recorded exchanges", () => {
+  it("parses what the service actually returned", async () => {
+    // Written against the documented shape, tested against the observed one:
+    // a change in either is meant to fail here rather than to become a judge
+    // that quietly answers nothing.
+    for (const exchange of CAPTURED) {
+      const judge = client(async () => json(exchange.response));
+
+      const response = await judge.ask(exchange.request);
+
+      expect(Object.keys(response.answers)).toEqual(Object.keys(exchange.request.questions));
+    }
+  });
+
+  it("puts both recorded answers on the side the configured threshold expects", async () => {
+    const threshold = CONFIG_KEYS["judge.environmentThreshold"].default;
+
+    for (const exchange of CAPTURED) {
+      const judge = client(async () => json(exchange.response));
+      const response = await judge.ask(exchange.request);
+      const probability = Object.values(response.answers)[0]!.noul;
+
+      expect(probability >= threshold).toBe(exchange.want === "environment");
+    }
+  });
+
+  it("carries exactly one reason per recorded request", async () => {
+    for (const exchange of CAPTURED) {
+      expect(Object.keys(exchange.request.questions)).toHaveLength(1);
+      expect(exchange.request.state).toHaveProperty("reason");
+    }
   });
 });

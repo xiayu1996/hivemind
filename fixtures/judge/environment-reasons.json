@@ -1,0 +1,71 @@
+{
+  "capturedAt": "2026-09-18",
+  "endpoint": "https://api.typesafe.ai/v1/systemone",
+  "note": "Two real exchanges, one request per reason as the code sends them. The reasons are the two shapes the split has to tell apart: a walkthrough's own stand-in failing, and an assertion that did not hold. Recorded so the parser is tested against what the service returns rather than against the documented shape, and so a change in that shape is visible as a failing test rather than as a judge that quietly answers nothing.",
+  "exchanges": [
+    {
+      "want": "environment",
+      "request": {
+        "model": "jev-latest",
+        "state": {
+          "reason": "走查自己起的那个替身服务中途不再响应，因此这一屏没能打开。"
+        },
+        "questions": {
+          "is_environment": {
+            "type": "noul",
+            "instructions": "The text at `reason` is why one verification scenario was rejected. Does it describe the machine the check ran on, rather than a defect in the code being checked?",
+            "criteria": {
+              "true": "The reason is about the machine the check ran on: a server or port that was not listening, a connection refused, reset or timed out, a DNS or TLS failure, a browser that would not launch, a missing tool or dependency, a 5xx raised by scaffolding the checker itself started, a page or route served by a build other than the one under test, or evidence the checker failed to leave for itself.",
+              "false": "The reason is about the code being checked: an assertion that did not hold, an element or text missing from a page the code renders, wrong data, wrong wording, wrong behaviour, or a test that failed on its own terms."
+            }
+          }
+        }
+      },
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "is_environment": {
+            "type": "noul",
+            "noul": 0.81
+          }
+        },
+        "usage": {
+          "input_tokens": 486,
+          "output_tokens": 21
+        }
+      }
+    },
+    {
+      "want": "code",
+      "request": {
+        "model": "jev-latest",
+        "state": {
+          "reason": "汇总行显示的总数是 0，应该是 3，说明统计没有把已完成的三条算进去。"
+        },
+        "questions": {
+          "is_environment": {
+            "type": "noul",
+            "instructions": "The text at `reason` is why one verification scenario was rejected. Does it describe the machine the check ran on, rather than a defect in the code being checked?",
+            "criteria": {
+              "true": "The reason is about the machine the check ran on: a server or port that was not listening, a connection refused, reset or timed out, a DNS or TLS failure, a browser that would not launch, a missing tool or dependency, a 5xx raised by scaffolding the checker itself started, a page or route served by a build other than the one under test, or evidence the checker failed to leave for itself.",
+              "false": "The reason is about the code being checked: an assertion that did not hold, an element or text missing from a page the code renders, wrong data, wrong wording, wrong behaviour, or a test that failed on its own terms."
+            }
+          }
+        }
+      },
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "is_environment": {
+            "type": "noul",
+            "noul": 0.03
+          }
+        },
+        "usage": {
+          "input_tokens": 492,
+          "output_tokens": 21
+        }
+      }
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -18,6 +19,8 @@ import { probeProviderReadiness } from "../src/runner/auth-probe.js";
 import { needsApiKeyEnv, providerKeyEnv } from "../src/runner/provider-env.js";
 import { reapStalePiAuthLock } from "../src/runner/auth-lock.js";
 import { probeCredentialRoundTrip } from "../src/runner/credential-roundtrip.js";
+import { judgeEnvironmentReasons } from "../src/judge/environment-reasons.js";
+import { environmentJudgeSetup } from "../src/judge/settings.js";
 import { assertErrorFixtureCoverage } from "../src/runner/error-fixtures.js";
 import { assertProviderRetriesDisabled } from "../src/runner/failover.js";
 import { assertModelPolicy, ModelPolicy } from "../src/runner/model-policy.js";
@@ -58,6 +61,19 @@ function optional(name: string): string | undefined {
   const index = process.argv.indexOf(name);
   return index >= 0 ? process.argv[index + 1] : undefined;
 }
+
+/** One real refusal, from the recorded exchange, so the probe asks the judge
+ * something a card actually produced rather than a sentence written for it. */
+function knownEnvironmentRefusal(): string {
+  const recorded = JSON.parse(
+    readFileSync(new URL("../fixtures/judge/environment-reasons.json", import.meta.url), "utf8"),
+  ) as { exchanges: { want: string; request: { state: { reason: string } } }[] };
+  const environment = recorded.exchanges.find((exchange) => exchange.want === "environment");
+  if (!environment) throw new Error("the recorded judge exchanges carry no environment case");
+  return environment.request.state.reason;
+}
+
+let judgeProbe: number | undefined;
 
 async function output(binary: string, args: string[], cwd?: string): Promise<string> {
   return (await execFileAsync(binary, args, { cwd, windowsHide: true, maxBuffer: 4 * 1024 * 1024 })).stdout.trim();
@@ -220,6 +236,47 @@ async function main(): Promise<void> {
         await probeCredentialRoundTrip({ binary: piBinary, provider, model, env: spawnEnv });
         return model.id;
       }, severity);
+    }
+    // Bound here because the narrowing above does not survive into the async
+    // probe bodies below.
+    const judgeConfig = config;
+    // The judge is a second model path, outside pi and outside the failover
+    // chain. It has no veto anywhere -- unreachable means the pattern tables
+    // answer alone -- so only a switch that is on with nothing behind it is a
+    // failure: that reads exactly like a judge that is answering.
+    await attempt("structured judge", async () => {
+      const setup = environmentJudgeSetup({
+        enabled: judgeConfig.get("judge.enabled"),
+        endpoint: judgeConfig.get("judge.endpoint"),
+        model: judgeConfig.get("judge.model"),
+        timeoutMs: judgeConfig.get("judge.timeoutMs"),
+        environmentThreshold: judgeConfig.get("judge.environmentThreshold"),
+      }, stored);
+      if (setup.kind === "off") return "off; the pattern tables answer alone";
+      if (setup.kind === "no_credential") {
+        throw new Error(`enabled but ${setup.key} is missing from ${secretsPath}`);
+      }
+      const started = Date.now();
+      const judgement = await judgeEnvironmentReasons(setup.settings.judge, [knownEnvironmentRefusal()], {
+        model: setup.settings.model,
+        // Asked at zero so the round trip is proved here and the calibration is
+        // judged on its own line: a judge that answers is a different fact from
+        // a judge that still answers this one the way it used to.
+        threshold: 0,
+      });
+      if (judgement.error) throw new Error(judgement.error);
+      if (judgement.moved.length === 0) throw new Error("the judge returned no answer for the probe refusal");
+      judgeProbe = judgement.moved[0]!.probability;
+      return `${judgeConfig.get("judge.model")} answered in ${Date.now() - started}ms`;
+    });
+    if (judgeProbe !== undefined) {
+      await attempt("judge still reads a known environment refusal as one", async () => {
+        const threshold = judgeConfig.get("judge.environmentThreshold");
+        if (judgeProbe! < threshold) {
+          throw new Error(`the recorded refusal scored ${judgeProbe!.toFixed(2)}, below the ${threshold} threshold; the tables still answer, but the judge is adding nothing`);
+        }
+        return `${judgeProbe!.toFixed(2)} against a ${threshold} threshold`;
+      }, "WARN");
     }
     for (const purpose of ["product_manager", "decompose", "code", "verify"] as const) {
       await attempt(`a provider serves the ${purpose} tier`, async () => {
