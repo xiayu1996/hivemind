@@ -200,4 +200,71 @@ describe("the costs page saves one requirement's limit", () => {
       await app.close();
     }
   });
+
+  it("@scenario S-R237511CO-03-costinfo 费用分析用清单约定的角色显示累计、上限和超限说明", async () => {
+    const record: RequirementCostLimitRecord = {
+      requirementId: "R-main",
+      limitUsdCents: cents(1_500),
+      version: 1,
+      updatedAtMs: 1_700_000_000_000,
+      updatedBy: "owner",
+    };
+
+    const html = await renderCostsRoute(
+      { requirement: "R-main", timeZone: "Asia/Shanghai" },
+      zones,
+      (selection) => Promise.resolve({
+        kind: "ok",
+        snapshot: { selection, days: [], totalUsd: 0, pendingBilling: "settled", generatedAt: 1 },
+      }),
+      0,
+      async () => ({
+        cost: costSnapshot("R-main", "17.22"),
+        limit: record,
+        assessment: {
+          status: "over_limit",
+          totalUsdCents: cents(1_722),
+          limitUsdCents: cents(1_500),
+          excessUsdCents: cents(222),
+        },
+      }),
+    );
+
+    // The DoD declares the cumulative label, both amounts and the limit label
+    // as text nodes, and the excess sentence as a status region. Block
+    // containers render as `generic`, so each figure is an inline text node
+    // and the sentence carries its own role.
+    expect(html).toContain("<h1>费用分析</h1>");
+    expect(html).toContain('全部轮次累计费用 <span class="money">$17.22</span>');
+    expect(html).toContain('<span class="metric-name">需求费用上限</span>');
+    expect(html).toContain('<div class="metric-value money"><span>$15.00</span></div>');
+    expect(html).toContain('role="status">已超限 $2.22，工作仍会继续</div>');
+  });
+
+  it("@scenario S-R237511CO-03-setlimit 没有显式写入端口时费用分析页仍能保存当前需求上限", async () => {
+    const store = new MemoryLimitStore();
+    const data = consoleData(async (requirementId) =>
+      requirementId === "R-none" ? snapshotOf("R-none", "0.00", await store.readRequirementCostLimit("R-none")) : null);
+    // The central store is handed over by the data source itself: a caller that
+    // mounts the console should not have to remember a second write port.
+    data.requirementCostLimitStore = store;
+    const app = await createConsoleServer(data, { serveUi: false });
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/costs/requirement-limit",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        payload: "requirementId=R-none&limitUsd=15",
+      });
+      expect(response.statusCode).toBe(303);
+      expect(await store.readRequirementCostLimit("R-none")).toMatchObject({ limitUsdCents: 1_500 });
+
+      const page = await app.inject({ method: "GET", url: response.headers.location as string });
+      expect(page.statusCode).toBe(200);
+      expect(page.body).toContain("$15.00");
+      expect(page.body).toContain('role="status">上限已保存</div>');
+    } finally {
+      await app.close();
+    }
+  });
 });

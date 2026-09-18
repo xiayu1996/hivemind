@@ -76,4 +76,36 @@ describe("the overview screen states a requirement cost alert without pausing it
     });
     expect(JSON.stringify(view)).not.toContain("已暂停");
   });
+
+  it("@scenario S-R237511CO-03-overview 首屏用清单约定的角色标出费用已超限和继续运行", async () => {
+    const app = await createConsoleServer(dataWithAlerts(), { serveUi: false });
+    try {
+      const html = (await app.inject({ method: "GET", url: "/" })).body;
+      // The DoD declares these three as a text node and a status region. A
+      // block element renders as `generic` and a heading as `heading`, so the
+      // summary label and the promise are inline text, and the status is an
+      // explicit status region rather than a styled span.
+      expect(html).toContain('<span class="metric-name">费用已超限</span>');
+      expect(html).toContain('role="status">已超限</span>');
+      expect(html).toContain("<span>工作仍会继续</span>");
+      expect(html).not.toContain("已暂停");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("@scenario S-R237511CO-03-continue 首屏把仍有工作的超限需求标为运行中", async () => {
+    const app = await createConsoleServer(dataWithAlerts(), { serveUi: false });
+    try {
+      const html = (await app.inject({ method: "GET", url: "/" })).body;
+      // Continuing work must be readable as running, not as waiting on a
+      // person to raise the limit.
+      expect(html).toContain('role="status">运行中</span>');
+      expect(html).toContain('role="status">已超限</span>');
+      expect(html).toContain("<span>工作仍会继续</span>");
+      expect(html).not.toContain("等待本人提高费用上限");
+    } finally {
+      await app.close();
+    }
+  });
 });

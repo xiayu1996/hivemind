@@ -191,6 +191,28 @@ describe("costs page is reachable and shows the amount for each state", () => {
     expect(firstRow).toContain("$1.20");
   });
 
+  it("@scenario S-R237511CO-03-nodaily 每日范围金额作为正文出现且页面不提供每日上限", async () => {
+    const html = await renderCostsRoute(
+      { timeZone: "Asia/Shanghai", range: "2025-06-20|2025-06-20" },
+      zones,
+      (selection) => Promise.resolve({
+        kind: "ok",
+        snapshot: snapshotOf(selection, [{ date: "2025-06-20", costUsd: 20, count: 1 }]),
+      }),
+    );
+
+    // The DoD names the day total as a text node: a block container renders as
+    // `generic`, so the range total is an inline text node under the selected
+    // zone. Daily money stays an analysis figure; no daily ceiling exists.
+    expect(html).toContain("<h1>费用分析</h1>");
+    expect(html).toContain('<h2 id="daily-title">每日费用</h2>');
+    expect(html).toContain("按 Asia/Shanghai 自然日");
+    expect(html).toContain("<span>$20.00</span>");
+    expect(html).not.toContain("每日总费用上限");
+    expect(html).not.toContain("今日已超限");
+    expect(html).not.toContain("已暂停");
+  });
+
   it("serves the costs page from a console that has no built bundle", async () => {
     const data: ConsoleDataSource = {
       nodes: async () => [],
