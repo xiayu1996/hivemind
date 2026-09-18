@@ -463,3 +463,118 @@ export function readWorkRecord(
   };
   return options.refreshAfter === undefined ? detail : { ...detail, refreshAfter: options.refreshAfter };
 }
+
+/** Labels each field that differs between the next and the current value. */
+function diffConfigurations(left: RoleConfiguration, right: RoleConfiguration): RoleConfigurationDifference[] {
+  const differences: RoleConfigurationDifference[] = [];
+  for (const field of ROLE_CONFIGURATION_FIELDS) {
+    const leftValue = left[field];
+    const rightValue = right[field];
+    const hasLeft = leftValue !== "";
+    const hasRight = rightValue !== "";
+    if (hasLeft && !hasRight) differences.push({ field, kind: "removed", previous: rightValue });
+    else if (!hasLeft && hasRight) differences.push({ field, kind: "added", current: leftValue });
+    else if (leftValue !== rightValue) differences.push({ field, kind: "changed", current: leftValue, previous: rightValue });
+  }
+  return differences;
+}
+
+/**
+ * In-memory reference for the role aggregate. It is the same shape the durable
+ * adapter must honour: save and restore append immutable versions and compare
+ * the expected current version, so a concurrent loser sees a conflict rather
+ * than silently overwriting the winner. Restore copies a snapshot into a new
+ * version instead of moving or deleting history.
+ */
+export function createRoleConfigurationPort(seed: ConsoleRoleConfigurationSeed): ConsoleRoleConfigurationPort {
+  const history = new Map<string, RoleConfigurationVersion[]>();
+  for (const version of seed.versions) {
+    const list = history.get(version.configuration.role) ?? [];
+    list.push(version);
+    history.set(version.configuration.role, list);
+  }
+  for (const list of history.values()) list.sort((left, right) => left.version - right.version);
+  const mutations = new Map<string, RoleMutationResult>();
+
+  function versionsOf(role: string): RoleConfigurationVersion[] {
+    const existing = history.get(role);
+    if (existing) return existing;
+    const created: RoleConfigurationVersion[] = [];
+    history.set(role, created);
+    return created;
+  }
+
+  return {
+    async readRole(role) {
+      const versions = history.get(role);
+      const current = versions?.at(-1);
+      if (!current || !versions) return null;
+      return {
+        current,
+        previous: null,
+        differences: [],
+        availableProviders: seed.availableProviders,
+      };
+    },
+
+    previewRoleChange(current, next, availableProviders) {
+      const issues: Array<{
+        field: "provider" | "modelId";
+        code: "unknown_provider" | "model_not_offered_by_provider";
+        detail: string;
+      }> = [];
+      const offered = availableProviders.find((candidate) => candidate.provider === next.provider);
+      if (!offered) issues.push({ field: "provider", code: "unknown_provider", detail: `Unknown provider ${next.provider}` });
+      else if (!offered.modelIds.includes(next.modelId)) {
+        issues.push({
+          field: "modelId",
+          code: "model_not_offered_by_provider",
+          detail: `Model ${next.modelId} is not offered by ${next.provider}`,
+        });
+      }
+      return {
+        role: next.role,
+        expectedCurrentVersion: current.version,
+        next,
+        differences: diffConfigurations(next, current.configuration),
+        affects: "future-starts-only",
+        valid: issues.length === 0,
+        validationIssues: issues,
+      };
+    },
+
+    async saveRole(command) {
+      const replayed = mutations.get(command.idempotencyKey);
+      if (replayed) return replayed;
+      const { preview } = command;
+      if (!preview.valid) return { status: "invalid", issues: preview.validationIssues };
+      const versions = versionsOf(preview.role);
+      const currentVersion = versions.at(-1)?.version ?? 0;
+      if (currentVersion !== preview.expectedCurrentVersion) {
+        return {
+          status: "conflict",
+          currentVersion,
+          detail: `Current version is ${currentVersion}, expected ${preview.expectedCurrentVersion}`,
+        };
+      }
+      const version: RoleConfigurationVersion = {
+        version: currentVersion + 1,
+        configuration: preview.next,
+        createdAt: seed.now(),
+        createdBy: command.updatedBy,
+      };
+      versions.push(version);
+      const result: RoleMutationResult = { status: "saved", current: version };
+      mutations.set(command.idempotencyKey, result);
+      return result;
+    },
+
+    async restoreRole() {
+      return { status: "invalid", issues: [] };
+    },
+
+    async readMutation(idempotencyKey) {
+      return mutations.get(idempotencyKey) ?? null;
+    },
+  };
+}
