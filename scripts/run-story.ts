@@ -350,6 +350,7 @@ async function main(): Promise<void> {
         maxRounds: config.get("codeExit.maxRounds"),
         testPathPatterns: config.get("codeExit.testPathPatterns"),
         protectedPaths: config.get("codeExit.protectedPaths"),
+        dependencyManifests: config.get("codeExit.dependencyManifests"),
         // Only set once SPECIFY has frozen something; a card driven without it
         // is measured by the checks that still apply rather than by a diff
         // against a commit that does not exist.

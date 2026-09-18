@@ -12,9 +12,11 @@ import { parseTestContract, type TestContract } from "../pipeline/test-contract.
 import { costCeilingVerdict, renderCostCeilingReport, type CardSpend } from "../pipeline/cost-ceiling.js";
 import {
   DoDValidationError,
+  hasScreen,
   lintDoDLanguage,
   parseDoD,
   renderDoDLanguageFindings,
+  renderMissingInterfaceContract,
   renderMissingVisible,
   scenariosMissingVisible,
   type DefinitionOfDone,
@@ -821,6 +823,29 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
           await this.store.refreezeDefinitionOfDone(cardId, definitionOfDone);
         } else {
           await this.store.freezeDefinitionOfDone(cardId, definitionOfDone);
+        }
+        // A card with screens and no interface contract on the branch is the
+        // failure design 08 exists to stop: it would invent a look of its own,
+        // and the next card would invent a different one. Which contract the
+        // repository gets is a requirement-level decision, so this is a
+        // person's call rather than something SHAPE can rewrite its way out
+        // of -- the findings loop above cannot put a token table in a tree.
+        const screens = definitionOfDone.scenarios.filter((scenario) => hasScreen(scenario));
+        if (screens.length > 0 && this.interfaceContract && (await this.interfaceContract()) === null) {
+          const detail = renderMissingInterfaceContract(screens.map((scenario) => scenario.id));
+          await this.friction?.record({ cardId, runId, kind: "interface_contract_missing", detail });
+          await this.store.stopForInput(cardId, "SHAPE", "blocking_question", runId);
+          return {
+            definitionOfDone,
+            runId,
+            stopped: {
+              state: "NEEDS_INPUT",
+              rounds: 0,
+              mrUrl: null,
+              stopReason: "blocking_question",
+              stopReport: detail,
+            },
+          };
         }
         const blocking = await this.store.unansweredBlockingQuestions(cardId);
         if (blocking.length > 0) {

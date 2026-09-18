@@ -578,6 +578,20 @@ export const CONFIG_KEYS = {
     reload: "hot",
     description: "The repository's own gate commands (format, lint, typecheck, tests) as argv, run at the CODE exit. Declared per repository because hivemind does not get to decide how somebody else's repository is checked; empty means the exit rests on the commit, evidence and marker checks alone. A check may name the file globs that make it relevant (when), the checks that must run before it (requires), and the generated paths it must leave untouched (assertCleanPaths).",
   }),
+  "codeExit.dependencyManifests": def({
+    schema: z.array(repositoryRelativePath),
+    default: [
+      "Cargo.toml",
+      "go.mod",
+      "package.json",
+      "pom.xml",
+      "pyproject.toml",
+      "requirements.txt",
+    ],
+    scope: "per-repo",
+    reload: "next-spawn",
+    description: "Files that say what the repository is built with. A card that changes one is deciding for every other card, which is what the requirement's solution gate exists to put in front of a person (design 08 section 1); the CODE exit refuses the change and tells the card to say so in its artifact instead. Lock files are deliberately absent: they change as a side effect of an install nobody asked for, and refusing them would send cards into a loop over a file they did not mean to touch.",
+  }),
   "codeExit.protectedPaths": def({
     schema: z.array(repositoryRelativePath),
     default: [],

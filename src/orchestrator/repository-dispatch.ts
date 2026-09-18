@@ -5,6 +5,9 @@ export interface RepositoryDispatchInput {
   /** Every Story the repository owns, in the priority order it is read in. */
   stories: readonly RepositoryStory[];
   hotspotPaths: readonly string[];
+  /** False when the repository has no interface contract on its default branch
+   * yet, which makes this cycle dispatch one card for it. */
+  hasInterfaceContract?: boolean;
 }
 
 export interface RepositoryDispatchPlan {
@@ -31,7 +34,11 @@ export function planDispatchAcrossRepositories(
   const cycles: { slug: string; cycle: readonly string[] }[] = [];
   const stranded: { slug: string; cardIds: readonly string[] }[] = [];
   for (const repository of repositories) {
-    const plan = planStoryExecution(dispatchableStories(repository.stories), repository.hotspotPaths);
+    const plan = planStoryExecution(
+      dispatchableStories(repository.stories),
+      repository.hotspotPaths,
+      repository.hasInterfaceContract === false ? { maxPerBatch: 1 } : {},
+    );
     if (plan.kind === "dependency_cycle") {
       cycles.push({ slug: repository.slug, cycle: plan.cycle });
       continue;

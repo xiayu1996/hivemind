@@ -84,6 +84,7 @@ export interface CodeExitOptions {
   testPathPatterns?: readonly string[] | undefined;
   /** Generated outputs no phase may edit by hand. */
   protectedPaths?: readonly string[] | undefined;
+  dependencyManifests?: readonly string[] | undefined;
   /** The commit SPECIFY froze the tests in; the base of the frozen-test diff.
    * Absent on a card driven without SPECIFY, which then rests on the checks
    * that still apply. */
@@ -623,6 +624,7 @@ export class PiStoryPhasePort implements StoryPhasePort {
       projectChecks: options.projectChecks,
       ...(options.testPathPatterns ? { testPathPatterns: options.testPathPatterns } : {}),
       ...(options.protectedPaths ? { protectedPaths: options.protectedPaths } : {}),
+      ...(options.dependencyManifests ? { dependencyManifests: options.dependencyManifests } : {}),
       ...(options.frozenTestCommit ? { frozenTestCommit: options.frozenTestCommit } : {}),
     });
   }

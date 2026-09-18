@@ -247,6 +247,23 @@ export function scenariosMissingVisible(definition: DefinitionOfDone): string[] 
 }
 
 /** What the session is asked to add, in the words it wrote the DoD in. */
+/**
+ * What a person is told when a card has screens and its repository has no
+ * interface contract for them.
+ *
+ * Addressed to a person rather than to the phase: no round of SHAPE can put a
+ * token table in the tree, and which one the repository gets is decided once
+ * for every card, at the requirement's solution gate (design 08 section 1).
+ */
+export function renderMissingInterfaceContract(scenarioIds: readonly string[]): string {
+  const ids = [...scenarioIds].toSorted().join("、");
+  return [
+    `这张卡有要看的界面（${ids}），但目标分支上还没有界面契约。`,
+    "没有契约的话，这张卡只能自己发明一套样子，下一张卡会发明另一套。",
+    "先在需求的方案关确认一份界面契约（token 表、组件清单、可运行的页面原型），再把这张卡放回去。",
+  ].join("\n");
+}
+
 export function renderMissingVisible(ids: readonly string[]): string {
   return [
     "这些 scenario 要靠打开页面才能判定，所以每条都要写 `visible`：一个人验收通过时，在那一页上必须看见哪些东西。",
