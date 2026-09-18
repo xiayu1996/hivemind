@@ -401,6 +401,10 @@ function todoKindWord(kind: OperatorTodoKind): string {
   return copy.todoKinds[kind];
 }
 
+function backLink(): string {
+  return `<a class="back-link" href="/operator/overview">${copy.overview.back}</a>`;
+}
+
 function waitingMinutes(waitingSince: number, now: number): number {
   return Math.max(0, Math.floor((now - waitingSince) / 60_000));
 }
@@ -474,6 +478,61 @@ function renderOverviewBody(value: OperatorOverview, now: number): string {
     + `</div>${summary}</div>`;
 }
 
+function renderOptionField(option: TodoOption, input: { name: string; checkedId?: string }): string {
+  const checked = input.checkedId === option.id ? " checked" : "";
+  const description = option.description ? `<br><span class="meta">${escapeHtml(option.description)}</span>` : "";
+  return `<label class="choice"><input type="radio" name="${input.name}" value="${escapeHtml(option.id)}"${checked}>`
+    + `<span><strong>${escapeHtml(option.label)}</strong>${description}</span></label>`;
+}
+
+function renderTodoSummary(todo: OperatorTodo): string {
+  return `<aside class="stack"><section class="panel"><h2>${copy.todo.summaryHeading}</h2><hr class="divider">`
+    + `<div class="row"><span>${copy.todo.summaryType}</span><strong>${todoKindWord(todo.kind)}</strong></div>`
+    + `<div class="row"><span>${copy.todo.summarySource}</span><strong>${escapeHtml(todo.sourceLabel)}</strong></div>`
+    + `<div class="row"><span>${copy.todo.summaryDestination}</span><strong>${copy.todo.destinationValue}</strong></div>`
+    + "</section></aside>";
+}
+
+function renderTodoFields(todo: OperatorTodo, submittedValue: string): string {
+  const submitted = escapeHtml(submittedValue);
+  if (todo.kind === "reply") {
+    return `<div><label for="todo-reply">${escapeHtml(todo.answerLabel)}</label>`
+      + `<textarea id="todo-reply" name="text">${submitted}</textarea>`
+      + `<p class="field-help">${copy.todo.replyHelp}</p></div>`
+      + `<div class="actions"><button class="primary-action" type="submit">${copy.todo.submitReply}</button></div>`;
+  }
+  if (todo.kind === "approval") {
+    const first = todo.options[0];
+    return `<fieldset><legend>${copy.todo.approveLegend}</legend>`
+      + todo.options.map((option) => renderOptionField(option, { name: "decision", checkedId: first.id })).join("")
+      + "</fieldset>"
+      + `<div><label for="todo-note">${escapeHtml(todo.noteLabel)}</label>`
+      + `<textarea id="todo-note" name="note">${submitted}</textarea>`
+      + `<p class="field-help">${copy.todo.noteHelp}</p></div>`
+      + `<div class="actions"><button class="primary-action" type="submit">${copy.todo.submitApproval}</button></div>`;
+  }
+  return `<fieldset><legend>${copy.todo.choiceLegend}</legend>`
+    + todo.options.map((option) => renderOptionField(option, { name: "option" })).join("")
+    + "</fieldset>"
+    + `<div class="actions"><button class="primary-action" type="submit">${copy.todo.submitChoice}</button></div>`;
+}
+
+function renderTodoBody(todo: OperatorTodo, options: { submittedValue?: string }): string {
+  const subject = `${escapeHtml(todo.subject.title)} · ${subjectKindWord(todo.subject.kind)} · ${escapeHtml(todo.sourceLabel)}`;
+  return backLink()
+    + `<header class="page-head"><div><h1>${copy.todo.heading}</h1><p>${subject}</p></div>`
+    + `<span class="status attention">${todoKindWord(todo.kind)}</span></header>`
+    + `<div class="split"><div>`
+    + `<div class="notice attention"><h2>${copy.todo.questionHeading}</h2><p>${escapeHtml(todo.question)}</p></div>`
+    + `<section class="panel section"><h2>${copy.todo.contextHeading}</h2><p>${escapeHtml(todo.context)}</p></section>`
+    + `<form class="panel section" method="post" action="/operator/todos/${encodeURIComponent(todo.id)}">`
+    + `<input type="hidden" name="revision" value="${escapeHtml(todo.revision)}">`
+    + renderTodoFields(todo, options.submittedValue ?? "")
+    + "</form></div>"
+    + renderTodoSummary(todo)
+    + "</div>";
+}
+
 export function renderOperatorAccessPage(): string {
   const denied = copy.access;
   return documentHtml({
@@ -509,9 +568,13 @@ export function renderOperatorTodoPage(
   state: ConsolePageState<OperatorTodoResult>,
   options: { submission?: TodoSubmissionResult; submittedValue?: string } = {},
 ): string {
-  void state;
-  void options;
-  return "";
+  const value = state.kind === "ready" || state.kind === "waiting" ? state.value : state.previous;
+  const body = value?.kind === "pending" ? renderTodoBody(value.todo, options) : "";
+  return shell({
+    title: copy.titles.todo,
+    current: "overview",
+    body,
+  });
 }
 
 export function renderOperatorDetailPage(
@@ -523,15 +586,26 @@ export function renderOperatorDetailPage(
   return "";
 }
 
+/** Registers the console routes behind one read port and one command port. */
+function sendHtml(reply: FastifyReply, body: string): FastifyReply {
+  return reply.code(200).type("text/html; charset=utf-8").send(body);
+}
+
+/** A read that failed is reported as such and never guessed at: the page names
+ * what it could not read and offers a retry in place of stale content. */
+async function loadPageState<T>(load: () => Promise<T>): Promise<ConsolePageState<T>> {
+  try {
+    return { kind: "ready", value: await load(), refreshing: false };
+  } catch {
+    return { kind: "failed" };
+  }
+}
+
 /**
  * Registers the access gate, overview, todo and detail HTTP surfaces. The gate
  * must run before every data route and before the application shell is sent;
  * denied requests receive only the access screen and never call another port.
  */
-function sendHtml(reply: FastifyReply, body: string): FastifyReply {
-  return reply.code(200).type("text/html; charset=utf-8").send(body);
-}
-
 export async function registerOperatorConsoleRoutes(
   app: FastifyInstance,
   dependencies: OperatorConsoleDependencies,
@@ -553,14 +627,14 @@ export async function registerOperatorConsoleRoutes(
 
   app.get("/operator/overview", async (request, reply) => {
     if (!(await allow(request, reply))) return reply;
-    let state: ConsolePageState<OperatorOverview>;
-    try {
-      state = { kind: "ready", value: await dependencies.reads.overview(), refreshing: false };
-    } catch {
-      // A read failure is a transport failure, not a judgement about the
-      // work: the page reports it and leaves the previous view in place.
-      state = { kind: "failed" };
-    }
+    const state = await loadPageState(() => dependencies.reads.overview());
     return sendHtml(reply, renderOperatorOverviewPage(state, Date.now()));
+  });
+
+  app.get("/operator/todos/:todoId", async (request, reply) => {
+    if (!(await allow(request, reply))) return reply;
+    const { todoId } = request.params as { todoId: string };
+    const state = await loadPageState(() => dependencies.reads.todo(todoId));
+    return sendHtml(reply, renderOperatorTodoPage(state));
   });
 }
