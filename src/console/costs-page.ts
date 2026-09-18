@@ -5,7 +5,8 @@ import {
   type DailyCostSnapshot,
   type DailyCostTimeZoneOption,
 } from "./daily-costs.js";
-import type { RequirementCostSnapshot } from "../persistence/requirement-cost-ledger.js";
+import type { RequirementCostWithLimitSnapshot } from "../persistence/requirement-cost-limit.js";
+import { presentRequirementCostLimit, type RequirementCostLimitPageView } from "./requirement-cost-limit.js";
 import { formatDailyCostScope, formatUsd, renderDailyCostPanel, type DailyCostViewSnapshot } from "../../console-ui/src/costs/contracts.js";
 import { COSTS_PAGE_STYLE } from "../../console-ui/src/costs/page-style.js";
 import { renderRequirementCostSection } from "./requirement-cost-view.js";
@@ -52,6 +53,8 @@ export interface CostsPageRequest {
   forcedState: CostsPageState | null;
   /** The requirement the page is scoped to, when a person came from one. */
   requirementId: string | null;
+  /** Whether the page was reached by saving a requirement limit just now. */
+  limitSaved: boolean;
 }
 
 export interface CostsPageView {
@@ -62,8 +65,10 @@ export interface CostsPageView {
   zones: readonly DailyCostTimeZoneOption[];
   snapshot?: DailyCostViewSnapshot;
   requirementId: string | null;
-  /** The requirement's whole-history cost, when the page was scoped to one. */
-  requirementSnapshot?: RequirementCostSnapshot;
+  /** The requirement's whole-history cost and configured limit, when the page
+   * was scoped to one. */
+  requirement?: RequirementCostWithLimitSnapshot;
+  limitSaved: boolean;
 }
 
 /** The page's view of a ledger snapshot: the same days under the scope they are read in. */
@@ -150,6 +155,7 @@ export function resolveCostsPageRequest(
     rangeLabel,
     forcedState,
     requirementId: requirement === undefined || requirement === "" ? null : requirement,
+    limitSaved: query.limitSaved === "1",
   };
 }
 
@@ -159,13 +165,13 @@ export async function loadCostsPage(
   zones: readonly DailyCostTimeZoneOption[],
   read: (selection: DailyCostSelection) => Promise<DailyCostReadResult>,
   now: number = Date.now(),
-  requirementRead?: (requirementId: string) => Promise<RequirementCostSnapshot | null>,
+  requirementRead?: (requirementId: string) => Promise<RequirementCostWithLimitSnapshot | null>,
 ): Promise<CostsPageView> {
   const request = resolveCostsPageRequest(query, new Set(zones.map((zone) => zone.id)), now);
   // A requirement the person came from is read whatever the daily band's own
   // state is: the cumulative figure is a different question from the day view,
   // and an empty day range must not hide it.
-  const requirementSnapshot = request.requirementId !== null && requirementRead
+  const requirement = request.requirementId !== null && requirementRead
     ? (await requirementRead(request.requirementId)) ?? undefined
     : undefined;
   const base = {
@@ -174,7 +180,8 @@ export async function loadCostsPage(
     rangeLabel: request.rangeLabel,
     zones,
     requirementId: request.requirementId,
-    ...(requirementSnapshot === undefined ? {} : { requirementSnapshot }),
+    limitSaved: request.limitSaved,
+    ...(requirement === undefined ? {} : { requirement }),
   };
   const forced = request.forcedState;
   // A state a person asked to see is not read from the ledger: loading and
@@ -326,13 +333,16 @@ export function renderCostsPage(view: CostsPageView): string {
           : renderReadyBody(view);
   // A requirement-scoped visit keeps the whole-history breakdown visible under
   // every daily state: the day range answering "nothing here" says nothing
-  // about whether the requirement itself has recorded usage.
-  const requirement = view.requirementSnapshot === undefined
+  // about whether the requirement itself has recorded usage. The limit panel is
+  // read from the same snapshot, so the figure and the alert cannot disagree.
+  const requirement = view.requirement === undefined
     ? ""
-    : `<div class="section">${renderRequirementCostSection(view.requirementSnapshot, {
+    : `<div class="section">${renderRequirementCostSection(view.requirement.cost, {
       locale: "zh-CN",
       timeZone: view.selection.timeZone,
-    })}</div>`;
+    })}${renderRequirementLimitPanel(
+      presentRequirementCostLimit(view.requirement, view.limitSaved ? "saved" : "none"),
+    )}</div>`;
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">`
     + `<meta name="viewport" content="width=device-width,initial-scale=1">`
     + `<title>费用分析｜Hivemind</title><style>${COSTS_PAGE_STYLE}</style></head><body>`
@@ -341,13 +351,40 @@ export function renderCostsPage(view: CostsPageView): string {
     + `</body></html>`;
 }
 
+/** A requirement's cumulative figure and configured limit, with the save form. */
+function renderRequirementLimitPanel(limit: RequirementCostLimitPageView): string {
+  const metric = limit.metric;
+  const limitText = metric.configuredLimit ?? "未设置";
+  const statusLine = metric.continuationText === null
+    ? escapeHtml(metric.statusText)
+    : `${escapeHtml(metric.statusText)}，${escapeHtml(metric.continuationText)}`;
+  const confirmation = limit.form.confirmationText === null
+    ? ""
+    : `<p class="metric-detail" role="status">${escapeHtml(limit.form.confirmationText)}</p>`;
+  return `<section class="panel section" aria-labelledby="requirement-limit-title">`
+    + `<div class="section-head"><div><h2 id="requirement-limit-title">需求费用上限</h2>`
+    + `<p class="metric-detail">全部轮次累计费用 <strong class="money">${escapeHtml(metric.cumulativeAmount)}</strong></p></div></div>`
+    + `<div class="metric${metric.status === "over_limit" ? " danger" : ""}">`
+    + `<div class="metric-name">需求费用上限</div>`
+    + `<div class="metric-value money">${escapeHtml(limitText)}</div>`
+    + `<div class="metric-detail">${statusLine}</div></div>`
+    + `<form method="post" action="/costs/requirement-limit">`
+    + `<input type="hidden" name="requirementId" value="${escapeHtml(limit.form.requirementId)}">`
+    + `<input type="hidden" name="expectedVersion" value="${limit.form.version === null ? "" : String(limit.form.version)}">`
+    + `<div><label for="requirement-limit-input">需求费用上限</label>`
+    + `<input id="requirement-limit-input" name="limitUsd" type="number" min="0" step="0.01" inputmode="decimal" value="${escapeHtml(limit.form.currentLimit ?? "")}"></div>`
+    + `<button type="submit">保存上限</button></form>`
+    + confirmation
+    + `</section>`;
+}
+
 /** Reads one request and renders it: what the console route hands back. */
 export async function renderCostsRoute(
   query: Readonly<Record<string, string | undefined>>,
   zones: readonly DailyCostTimeZoneOption[],
   read: (selection: DailyCostSelection) => Promise<DailyCostReadResult>,
   now: number = Date.now(),
-  requirementRead?: (requirementId: string) => Promise<RequirementCostSnapshot | null>,
+  requirementRead?: (requirementId: string) => Promise<RequirementCostWithLimitSnapshot | null>,
 ): Promise<string> {
   return renderCostsPage(await loadCostsPage(query, zones, read, now, requirementRead));
 }

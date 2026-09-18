@@ -11,6 +11,7 @@ export const COSTS_PAGE_STYLE = `
 :root{
   --color-page:#f4f7fa;--color-surface:#ffffff;--color-text:#172b3a;--color-text-muted:#526477;
   --color-border:#cbd5df;--color-action:#173f63;--color-danger:#b42318;--color-focus:#0b6bcb;
+  --color-surface-danger:#fff0ef;
   --color-surface-selected:#e9f1f8;
   --space-inline-tight:4px;--space-control-gap:8px;--space-content-gap:12px;--space-section-gap:20px;
   --space-page-gutter:28px;--space-page-gutter-mobile:16px;
@@ -59,10 +60,16 @@ main{min-width:0;padding:24px var(--space-page-gutter) 72px;max-width:1440px;wid
 .metric-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--space-content-gap)}
 .metric{padding:16px;background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-panel)}
 .metric-name{color:var(--color-text-muted);font-size:var(--font-caption)}
+.metric.danger{background:var(--color-surface-danger);border-color:var(--color-danger)}
+.metric.danger .metric-value{color:var(--color-danger)}
 .metric-value{font-family:var(--font-numeric);font-size:var(--font-metric);font-weight:var(--weight-strong);line-height:1.2;margin-top:4px}
 .metric-detail{font-size:var(--font-caption);margin-top:5px}
 .money,.number{font-family:var(--font-numeric);font-variant-numeric:tabular-nums;text-align:right}
 .stack{display:grid;gap:var(--space-section-gap)}
+.status{display:inline-flex;align-items:center;border:1px solid var(--color-border);border-radius:var(--radius-pill);padding:1px 9px;font-size:var(--font-caption);font-weight:var(--weight-medium)}
+.status.danger{color:var(--color-danger);border-color:var(--color-danger);background:var(--color-surface-danger)}
+.ledger{list-style:none;margin:var(--space-content-gap) 0 0;padding:0}
+.ledger-row{display:flex;align-items:baseline;justify-content:space-between;gap:var(--space-content-gap);padding:var(--space-control-gap) 0;border-top:1px solid var(--color-border)}
 .divider{border:0;border-top:1px solid var(--color-border);margin:var(--space-content-gap) 0}
 .row{display:flex;align-items:baseline;justify-content:space-between;gap:var(--space-content-gap);padding:var(--space-inline-tight) 0}
 table{width:100%;border-collapse:collapse}
