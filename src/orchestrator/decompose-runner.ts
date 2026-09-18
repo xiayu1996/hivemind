@@ -6,6 +6,7 @@ import {
   type JudgedLine,
 } from "../judge/business-language.js";
 import {
+  DEFAULT_MAX_STORIES,
   domainVocabulary,
   evaluateDecomposition,
   type DecompositionCandidate,
@@ -33,6 +34,11 @@ export interface DecomposeRequest {
   requirement: string;
   /** Why earlier attempts were refused, so the next one does not repeat them. */
   previousRejections: readonly string[];
+  /** The Story ceiling this attempt is judged against. Carried in the request
+   * rather than written into the phase prompt because it is configuration: a
+   * prompt that says a limit exists without naming it asks the model to guess,
+   * and the first Epic through this path guessed five against a limit of four. */
+  maxStories: number;
 }
 
 export interface DecomposePort {
@@ -66,7 +72,23 @@ export interface DecomposeJudgement {
   recordFriction?: (input: { cardId: string; runId: string; kind: string; detail: string }) => Promise<void>;
 }
 
-const MAX_ATTEMPTS = 2;
+/**
+ * The ceiling on attempts, not the budget. What ends the loop early is the same
+ * invariant the inner loop converges on: a set of reasons that repeats means
+ * the next attempt is one already made. Two fixed attempts stopped three Epics
+ * of one requirement on 2026-09-18 while every attempt was still making
+ * progress -- the first spent on id shapes nothing had ever stated, the second
+ * on the business language those ids had been hiding.
+ */
+const MAX_ATTEMPTS = 4;
+
+/** True when this round's refusals are ones no earlier round already made. */
+function isNewRefusal(seen: Set<string>, reasons: readonly string[]): boolean {
+  const signature = [...new Set(reasons)].toSorted().join("\n");
+  if (seen.has(signature)) return false;
+  seen.add(signature);
+  return true;
+}
 
 /**
  * Produces the decomposition the approval gate waits for. Nothing else in the
@@ -101,12 +123,14 @@ export class EpicDecomposer {
     // includes what they answered and what they asked to be changed.
     const vocabulary = domainVocabulary(requirement);
 
+    const seen = new Set<string>();
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       const candidate = await this.port.run({
         epicId: epic.id,
         title: epic.title,
         requirement,
         previousRejections: [...rejections],
+        maxStories: this.limits.maxStories ?? DEFAULT_MAX_STORIES,
       });
       const evaluated = evaluateDecomposition(candidate, this.limits, vocabulary);
 
@@ -131,6 +155,7 @@ export class EpicDecomposer {
         ];
         if (refused.length > 0) {
           rejections.push(...refused);
+          if (!isNewRefusal(seen, refused)) break;
           continue;
         }
         await this.approvals.present({
@@ -143,6 +168,7 @@ export class EpicDecomposer {
         return { kind: "presented", stories: evaluated.stories.length };
       }
       rejections.push(...evaluated.reasons);
+      if (!isNewRefusal(seen, evaluated.reasons)) break;
     }
 
     await this.block(epic.id, `decomposition rejected: ${rejections.join("; ")}`);

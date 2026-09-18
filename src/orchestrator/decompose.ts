@@ -64,6 +64,34 @@ export type DecompositionResult = AcceptedDecomposition | RejectedDecomposition 
 const storyId = /^S-[A-Z0-9]+-\d{2}$/;
 const scenarioId = /^S-[A-Z0-9]+-\d{2}-[a-z0-9]+$/;
 const footprint = /^(?:[a-z0-9][a-z0-9-]*(?:\/[a-z0-9][a-z0-9-]*)*)$/;
+
+/**
+ * The id shapes, written out wherever one is refused.
+ *
+ * A rejection that names only the rule it broke is one the next attempt cannot
+ * act on. Two Epics in a row were blocked here: one invented `<EPIC>-S01` twice
+ * running because "has an invalid Story id" never said what a valid one looks
+ * like, and one carried the PRD's own scenario ids into its Stories because
+ * nothing said those are a different namespace. Both shapes are stated in the
+ * phase prompt as well; this is the layer that survives the model ignoring it.
+ */
+/** The Story-id stem this Epic's ids are built on, or null when the Epic id
+ * cannot make one this file would accept. An example that is itself invalid is
+ * worse than none, because the next attempt copies it. */
+export function storyIdStem(epicId: string): string | null {
+  const stem = epicId.replace(/^E-/, "");
+  return /^[A-Z0-9]+$/.test(stem) ? stem : null;
+}
+
+export function storyIdShape(epicId: string): string {
+  const stem = storyIdStem(epicId) ?? "<EPIC>";
+  return `Story ids are S-${stem}-01, S-${stem}-02 and so on, numbered in listing order`;
+}
+
+export function scenarioIdShape(storyIdValue: string): string {
+  return `scenario ids are the Story id followed by a lowercase suffix, like ${storyIdValue}-a`
+    + ", and are this Epic's own: a PRD scenario id is not one";
+}
 // Words that only ever describe construction. Deliberately narrower than it
 // looks: "code" belongs to a promotion code, "class" to a class of customers
 // and "实现" to realising a business outcome, so blacklisting those bounces
@@ -126,10 +154,12 @@ function validateStory(
   index: number,
   allStoryIds: ReadonlySet<string>,
   vocabulary: ReadonlySet<string>,
+  epicId: string,
 ): string[] {
   const prefix = `Story ${story.id || index + 1}`;
   const reasons: string[] = [];
-  if (!storyId.test(story.id)) reasons.push(`${prefix} has an invalid Story id`);
+  const idValid = storyId.test(story.id);
+  if (!idValid) reasons.push(`${prefix} has an invalid Story id "${story.id}": ${storyIdShape(epicId)}`);
   if (story.title.trim() === "") reasons.push(`${prefix} must have a business title`);
   for (const issue of inspectBusinessLanguage(`${prefix} title`, story.title, vocabulary)) {
     reasons.push(`${issue.field} line ${issue.line} ${issue.reason}`);
@@ -140,8 +170,11 @@ function validateStory(
   }
   if (story.scenarios.length === 0) reasons.push(`${prefix} must have at least one independently verifiable scenario`);
   for (const scenario of story.scenarios) {
-    if (!scenarioId.test(scenario.id) || !scenario.id.startsWith(`${story.id}-`)) {
-      reasons.push(`${prefix} has an invalid scenario id: ${scenario.id}`);
+    // Only when the Story id itself is sound. Every scenario id is built on it,
+    // so one wrong Story id otherwise turns into a refusal per scenario and
+    // buries the reason the split was actually rejected under its own echo.
+    if (idValid && (!scenarioId.test(scenario.id) || !scenario.id.startsWith(`${story.id}-`))) {
+      reasons.push(`${prefix} has an invalid scenario id "${scenario.id}": ${scenarioIdShape(story.id)}`);
     }
     // oxlint-disable-next-line unicorn/no-thenable -- Given/When/Then is the external decomposition contract.
     for (const [field, value] of Object.entries({ given: scenario.given, when: scenario.when, then: scenario.then })) {
@@ -183,7 +216,7 @@ function validateStory(
  * Validates an all-or-nothing DECOMPOSE artifact. Input order is retained because
  * it is the approved dependency order; only set-like fields are canonicalized.
  */
-const DEFAULT_MAX_STORIES = 4;
+export const DEFAULT_MAX_STORIES = 4;
 
 /** Two Stories that show their outcome in the same place are one Story cut
  * horizontally, whatever their titles say. */
@@ -243,7 +276,7 @@ export function evaluateDecomposition(
   }
   const scenarioIds = new Set<string>();
   for (const [index, story] of candidate.stories.entries()) {
-    reasons.push(...validateStory(story, index, allStoryIds, vocabulary));
+    reasons.push(...validateStory(story, index, allStoryIds, vocabulary, candidate.epicId));
     for (const scenario of story.scenarios) {
       if (scenarioIds.has(scenario.id)) reasons.push(`duplicate scenario id: ${scenario.id}`);
       scenarioIds.add(scenario.id);
