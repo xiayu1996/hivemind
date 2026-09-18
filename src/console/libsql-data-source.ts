@@ -7,6 +7,12 @@ import { summarizeFootprintDeviation } from "../orchestrator/footprint-deviation
 import { LibsqlDailyCostReadPort, type DailyCostReadResult, type DailyCostSelection, type DailyCostTimeZoneOption } from "./daily-costs.js";
 import { LibsqlRequirementCostReadPort } from "../persistence/requirement-cost-ledger.js";
 import type { RequirementCostSnapshot } from "../persistence/requirement-cost-ledger.js";
+import {
+  LibsqlRequirementCostLimitReadPort,
+  LibsqlRequirementCostLimitStore,
+  type OverLimitRequirementSnapshot,
+  type RequirementCostWithLimitSnapshot,
+} from "../persistence/requirement-cost-limit.js";
 import type { RequirementSummaryRow } from "./requirement-detail-page.js";
 import type { ConsoleDataSource } from "./server.js";
 
@@ -17,6 +23,8 @@ function plain(row: Row): Record<string, unknown> {
 export class LibsqlConsoleDataSource implements ConsoleDataSource {
   private readonly dailyCostPort: LibsqlDailyCostReadPort;
   private readonly requirementCostPort: LibsqlRequirementCostReadPort;
+  readonly requirementCostLimitStore: LibsqlRequirementCostLimitStore;
+  private readonly requirementCostLimitPort: LibsqlRequirementCostLimitReadPort;
 
   constructor(
     private readonly client: Client,
@@ -28,6 +36,12 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
   ) {
     this.dailyCostPort = new LibsqlDailyCostReadPort(client);
     this.requirementCostPort = new LibsqlRequirementCostReadPort(client);
+    this.requirementCostLimitStore = new LibsqlRequirementCostLimitStore(client);
+    this.requirementCostLimitPort = new LibsqlRequirementCostLimitReadPort(
+      client,
+      this.requirementCostPort,
+      this.requirementCostLimitStore,
+    );
   }
 
   nodes(): Promise<unknown[]> {
@@ -174,6 +188,16 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
     });
     if (exists.rows.length === 0) return null;
     return this.requirementCostPort.readRequirementCost(requirementId);
+  }
+
+  /** The same whole-history read plus the requirement's configured limit. */
+  requirementCostWithLimit(requirementId: string): Promise<RequirementCostWithLimitSnapshot | null> {
+    return this.requirementCostLimitPort.readRequirementCostWithLimit(requirementId);
+  }
+
+  /** Every requirement already over its own limit, for the overview summary. */
+  overLimitRequirements(): Promise<readonly OverLimitRequirementSnapshot[]> {
+    return this.requirementCostLimitPort.listOverLimitRequirements();
   }
 
   async config(): Promise<unknown[]> {

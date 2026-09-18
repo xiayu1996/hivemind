@@ -5,6 +5,9 @@ import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { costsPageZones, renderCostsRoute } from "./costs-page.js";
+import { toOverviewCostAlertsView } from "./overview-cost-alerts.js";
+import { renderOverviewPage } from "./overview-page.js";
+import { saveRequirementCostLimit } from "./requirement-cost-limit.js";
 import {
   renderRequirementDetailPage,
   renderRequirementListPage,
@@ -17,6 +20,11 @@ import type {
   DailyCostTimeZoneOption,
 } from "./daily-costs.js";
 import type { RequirementCostSnapshot } from "../persistence/requirement-cost-ledger.js";
+import type {
+  OverLimitRequirementSnapshot,
+  RequirementCostLimitStore,
+  RequirementCostWithLimitSnapshot,
+} from "../persistence/requirement-cost-limit.js";
 
 export interface ConsoleDataSource {
   nodes(): Promise<unknown[]>;
@@ -38,6 +46,10 @@ export interface ConsoleDataSource {
   requirements?(): Promise<readonly RequirementSummaryRow[]>;
   /** One requirement's whole-history cost, or null when the id is unknown. */
   requirementCost?(requirementId: string): Promise<RequirementCostSnapshot | null>;
+  /** One requirement's whole-history cost with its configured limit, or null. */
+  requirementCostWithLimit?(requirementId: string): Promise<RequirementCostWithLimitSnapshot | null>;
+  /** Every requirement that already exceeds its own limit, for the overview. */
+  overLimitRequirements?(): Promise<readonly OverLimitRequirementSnapshot[]>;
 }
 
 export interface ConsoleConfigWritePort {
@@ -52,6 +64,9 @@ export interface ConsoleServerOptions {
   serveUi?: boolean;
   /** The one write surface. Without it the console stays entirely read-only. */
   configWriter?: ConsoleConfigWritePort;
+  /** The requirement-limit write surface. Without it the limit form has no
+   * destination and the console stays read-only on this too. */
+  costLimitStore?: RequirementCostLimitStore;
 }
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
@@ -94,6 +109,18 @@ export async function createConsoleServer(
   const writable = new Set(options.configWriter
     ? ["/api/config/value", "/api/config/rollback"]
     : []);
+  if (options.costLimitStore) writable.add("/costs/requirement-limit");
+  app.addContentTypeParser(
+    "application/x-www-form-urlencoded",
+    { parseAs: "string" },
+    (_request, body, done) => {
+      try {
+        done(null, Object.fromEntries(new URLSearchParams(body as string)));
+      } catch (cause) {
+        done(cause as Error);
+      }
+    },
+  );
   app.addHook("onRequest", async (request, reply) => {
     if (request.method === "GET" || request.method === "HEAD") return;
     // Config is the only thing an operator may change from here, and only
@@ -118,15 +145,43 @@ export async function createConsoleServer(
       data.dailyCosts
         ? data.dailyCosts(selection)
         : Promise.resolve({ kind: "failed", message: "daily costs are not available" });
-    const requirementRead = (requirementId: string): Promise<RequirementCostSnapshot | null> =>
-      data.requirementCost
-        ? data.requirementCost(requirementId)
+    const requirementRead = (requirementId: string): Promise<RequirementCostWithLimitSnapshot | null> =>
+      data.requirementCostWithLimit
+        ? data.requirementCostWithLimit(requirementId)
         : Promise.resolve(null);
     const html = await renderCostsRoute(query, zones, read, Date.now(), requirementRead);
     return reply.type("text/html").send(html);
   };
-  app.get("/", renderCosts);
   app.get("/costs", renderCosts);
+
+  // The overview is the first screen: what needs a person, what is running, and
+  // which requirements are over their own limit. The alert is stated in words
+  // and never translated into a paused state.
+  app.get("/", async (_request, reply) => {
+    const snapshots = data.overLimitRequirements ? await data.overLimitRequirements() : [];
+    return reply.type("text/html").send(renderOverviewPage({ alert: toOverviewCostAlertsView(snapshots) }));
+  });
+
+  // Saving a requirement limit is scoped to the one requirement named in the
+  // form. Validation failures and stale forms come back as values, and a stale
+  // form is a conflict rather than a silent overwrite.
+  app.post("/costs/requirement-limit", async (request, reply) => {
+    const store = options.costLimitStore;
+    if (!store) return reply.code(404).send({ error: "requirement cost limits are not writable" });
+    const body = (request.body ?? {}) as Record<string, string | undefined>;
+    const requirementId = body.requirementId ?? "";
+    const rawVersion = body.expectedVersion;
+    const expectedVersion = rawVersion === undefined || rawVersion === "" ? null : Number(rawVersion);
+    const response = await saveRequirementCostLimit({
+      requirementId,
+      rawLimitUsd: body.limitUsd ?? "",
+      expectedVersion,
+      actor: body.actor ?? "operator",
+      nowMs: Date.now(),
+    }, store);
+    const outcome = response.kind === "saved" ? "limitSaved=1" : `limitError=${response.kind}`;
+    return reply.redirect(`/costs?requirement=${encodeURIComponent(requirementId)}&${outcome}`, 303);
+  });
 
   // A requirement's cumulative cost is the central ledger's answer, so it is
   // served by the same process that holds the store, whether or not a browser
