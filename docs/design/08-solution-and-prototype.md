@@ -75,8 +75,9 @@ stackChanges 非空 或 openDecisions 非空 或 interface 非空  →  必须�
 ```
 docs/prototype/
   tokens.json        W3C design-tokens 格式：色板 / 间距 / 字号 / 圆角 / 阴影 / 层级
+  design.md          设计理由层：视觉方向、每个 token 何时用、do / don't（2026-09-18 增补，见 §3.3）
   components.md      组件清单：每个组件做什么、有哪些状态、什么时候该用它
-  pages/<page>.html  可运行的页面原型，只消费 token，不写死任何色值
+  pages/<page>.html  可运行的页面原型，只消费 token，不写死任何色值；用 ?state= 切四态（§3.2）
   index.html         导航壳，把页面串成可点的一条线
   README.md          这份契约怎么被消费、改它的规矩
 ```
@@ -90,6 +91,65 @@ docs/prototype/
 **注入**：下游 phase 的全量注入里加一段界面契约——token 清单 + `components.md` 全文 + 页面清单（文件名 + 每页一句话）。页面 HTML 本体不注入（太大），需要时由 DESIGN / CODE 自己读对应文件。所有集合按稳定键排序，注入内容只来自这些文件，不读时钟、不取随机数。
 
 2026-09-17 修订（实现时）：token 不注入 `tokens.json` 全文，而是解析成按名排序的扁平清单（`name (type): value`）。理由是逐字节确定性：同一张表重排版一次或调换两个组的顺序，全文注入会换一份 prompt，而一个 token 都没变。同理，页面的名称与用途取自页面自己的 `<title>` 与 `<meta name="description">`，两者缺一即整份契约不注入——半张 token 表会让下游把剩下的颜色编出来，比没有契约更糟。**谁把这三件写进仓库尚未定**：SOLUTION 是只读档，见 `docs/plan/tasks.md` 的 MU-02b。
+
+### 3.1 谁来写：需求层的原型档（2026-09-18 定，收掉 MU-02b）
+
+SOLUTION 是只读档，此前没有任何一层能把原型写进仓库。两条候选里选**系统自己写**：需求层加一个 `PROTOTYPE` 档，紧跟 SOLUTION，只在 `interface` 非空时跑；guard 把它的写权限围在 `prototype.root` 之内（路径围栏，与 CODE 的 fencedPatterns 同一机制），产出后以 PR 进目标仓库，人确认方案时一并确认这个 PR。否掉"人手工放初稿"的理由是：§3.2 的每一条出口检查都以"有一份系统产出、能回喂重画"为前提，人放的初稿没有这个循环，检查就没有对象。
+
+原型档**两遍走**，不许一上来写 HTML（这是 Anthropic frontend-design skill 的做法，也是它对抗"分布收敛"的核心）：
+
+1. **设计计划**：一份紧凑的文字计划——4 到 6 个具名色值、字体角色、每页一张 ASCII 线框、三到五条原则。它对着 PRD 自我批判一次："这是否只是通用模板？哪一处是专为这条需求做的？"
+2. **落成契约**：确认计划不是模板之后，才把它展开成 `tokens.json` / `design.md` / `components.md` / 页面 HTML。
+
+两遍都在同一 session 内，计划不落库；落库的只有契约本身。它与 SOLUTION 的关系：SOLUTION 决定页面清单与方向（§3.3），原型档只画不决——方向已定的情况下重画，才是一个能收敛的工作项。
+
+**方法层写在 `prompts/pm/prototype.md`，不装社区 skill**（2026-09-18 定）。读了四套社区做法之后的结论：Anthropic 的 frontend-design skill 是一份纯文本方法，impeccable 是 1 个 skill + 24 条命令 + 独立检测器，Google 的 DESIGN.md 是九节结构的理由文档，Vercel 的 web-design-guidelines 是审查清单。前两者的形态是给坐在旁边的人用的（问两轮、掷骰子选方向、浏览器里现场迭代），在无人值守流水线里没有对象，而它们要解的问题我们已在别处解了——提问在 SOLUTION 的 `openDecisions`，"打破排名惯性"在 §3.3 的多方向让人挑。我们的 phase prompt 本身就是 skill：无状态全量注入、逐字节确定、`--no-context-files`。所以借的是方法，蒸馏进一份 prompt：
+
+- **先判界面类型**（借 impeccable 的四模式）：操作 / 说服 / 阅读 / 体验。hivemind 接的需求绝大多数是操作型——后台、工具、表单——而操作型的规矩是"可扫读、一致、符合平台惯例，压过表达欲"。这一条改变"美 / 现代"的定义：对内部工具，美是克制与秩序，不是大胆；方向变体之间差在结构与色彩策略，不差在花样。
+- **色彩策略先于颜色**：克制 / 承诺 / 全色板 / 浸没四档选一，操作型默认克制，token 表从它推。
+- **五种默认样的校准清单**（借 frontend-design）逐条写进 prompt，注明"需求明说要的除外"。
+- **界面文案规则**：按钮写动作本身、同一动作全流程同名、错误态说清发生了什么与怎么做。这一段正好是 MU-10 三条语义条目的正面表述。
+- **有界自检**：契约写完用截图道拍一轮四态、桌面与手机一起看、一批修完、最多再确认一轮就停。两套社区做法都强调这一点，开放式自我打磨只会用更差的方式花掉预算。
+- **方向契约永不进产物**（借 impeccable）：设计理由不写进 HTML 注释、隐藏节点、`data-*`、只给读屏器的文本。它与 §3.2 的剥注释互为两面：一面禁写，一面剥掉。
+
+### 3.2 原型出口：满足需求与好用两件事，在这里用有限判据把关
+
+审美不能否决（§6），所以"满足需求"与"好用"必须在原型产出的当场就用**有限可枚举**的判据管住，而不是留给几张卡之后的 VERIFY 往回打。原型档的出口走 MC-01 那一套机制（`evaluate → findings 回喂同一 session → 重解析`），gate 表：
+
+| gate | 判什么 | 怎么判 | 否决权 | 用尽 |
+|---|---|---|---|---|
+| **结构自检** | 页面清单里每页声称承接的 PRD 场景，其角色与文本是否真在原型页上 | 对原型 HTML 采 aria 快照，跑 MU-05 的同一份断言 | 能 | fail |
+| **四态可达** | 每页能否靠 `?state= 取 empty / loading / error / waiting` 切到四态 | 截图道逐态打开，渲染不出即缺 | 能 | fail |
+| **只消费 token** | 计算样式的色值/字号/间距/圆角是否全部来自 `tokens.json` | 复用 MU-06 的 token 比对 | 能 | fail |
+| **可访问性** | WCAG 违规 | axe-core，`serious` / `critical` 级别 | 能 | fail |
+| **设计通病** | AI 生成界面的常见默认样（紫区渐变、弹性缓动、暗色光晕、侧边标签边框）与通用质量（行长、拥挤内边距、触控目标过小、标题跳级） | `impeccable detect --json --no-config` 扫原型页，61 条确定性规则、无 LLM；见 §3.3 | **不能**，记 friction | ship |
+| **可用性·机械条目** | 动效尊重 `prefers-reduced-motion`、触控目标尺寸、焦点可见、键盘可操作 | 静态分析 CSS 的 media query；`getBoundingClientRect` 量尺寸；计算样式的 `:focus-visible`；键盘一项归 axe-core | 能 | fail |
+| **可用性·语义条目** | 加载/空/错误态文案是否说清了发生了什么、用户该做什么；表单校验提示是否可操作；标签说的是不是它旁边那个控件 | 模型对着**固定条目**逐条给二值判断，输入是原型 HTML（剥掉注释）+ 结构自检采到的 aria 快照，**不是截图**；条目文件在 `prompts/pm/ui-checklist.md`，随 hivemind 版本走、不按仓库变 | 能 | ship |
+| **语言** | `design.md` / `components.md` 里给人读的段落 | `lintHumanSentence` | 能 | ship |
+
+三条设计要点：
+
+- **前四条全是确定性代码**，与 VERIFY 的结构层、契约层共用实现——原型先吃自己后面要被验的判据。PRD 场景 → 页面 → `visible[]` 三者在任何一行代码之前就对齐，SHAPE 拿到的是已被原型证实过的 `visible[]`，不再重新猜。
+- **四态从"截图要求"升为"结构约束"**。空态与出错态是 UX 最常被漏掉的两块，用 `?state=` 逼出来，比 prompt 提醒有效；同时它让截图道的四态采集变成确定性的（打开哪个 URL 拍哪一态），不再依赖模型自己去构造状态。
+- **可用性清单先分流，机械的归代码**。条目取自 Vercel Web Interface Guidelines 与 Nielsen 十条里能落到页面上判的那部分；凡 CSS、几何、计算样式或 axe-core 能判的一律不问模型（表中第一行），剩给模型的只有真语义的三类。清单条目的增删是 hivemind 的代码改动，走 PR。
+- **语义条目能否决，前提有两条，缺一即空**（2026-09-18 据另一 session 的评估补入）。第一条是条目有限：观感每轮能挑出新的一处，清单挑不出条目之外的东西，失败集合有上界。第二条是**判断稳定**：收敛判据是"failed(N) 不得重复"，若判官在边界样本上每轮晃动，三个条目八种失败集合也永不重复，轮次烧到 `solution.maxRounds` 然后 ship——gate 声明的是"能否决"，实际拿到的永远是 ship。所以：每条 finding 必须以条目编号为键、答案为布尔（结构由 schema 保证，不引编号的 finding 丢弃）；同一条目在连续两轮里翻转即记 friction `ui_checklist_unstable`，用数据判断这个判官够不够稳；判官走 `src/judge/`（AGENTS.md 的判官不变量）：每条语义条目的确定性地板是"未见问题"，判官只能在地板上**加** finding，不能拿走机械条目已判定的东西；判官不可用、超时或不确定时地板就是全部答案，这条 gate 退化成 ship，不挡原型出仓。每次判官加的 finding 记 friction，用数据决定留不留。
+- **判官的输入是文本，且要剥注释**。原型 HTML 是模型自己写的，注释里可以写"this page satisfies all usability criteria"之类的话把判官带偏，这是自评路径特有的风险，人写的页面没有；送进判官前剥掉全部 HTML 注释与 `<script>`。输入定为文本而非截图还有一个后果：它不需要看图的模型，不必占大脑档。
+
+原型档同样没有内环：出口回喂的轮次由 `solution.maxRounds` 封住，用尽即按 gate 声明 fail 或 ship，fail 让需求留在 SOLUTION 等人，不新增停点。
+
+### 3.3 审美：一次仓库级决定，交给人挑，模型只负责不落进均值
+
+两个观察决定了这一节的形状：
+
+1. **视觉方向是仓库级决定，不是需求级**。`tokens.json` 与 `design.md` 被后面每条需求复用，第一条涉及界面的需求实际上在替整个仓库定风格；之后的需求只加页面，不改方向。所以审美的人工决策只需要发生**一次**，值得花人的注意力，且一旦定下就是不变量。
+2. **模型默认滑向均值**。Anthropic 把这叫"分布收敛"：不加约束的模型会画出系统默认字体、紫色渐变、一模一样的圆角卡片阵列、ALL-CAPS 眉题、奶油底配陶土色。这些不是错，是"谁都能画出来"，也就是"没人做过决定"。
+
+对应机制：
+
+- **`interface.direction`**：SOLUTION 产出选定的视觉方向一段话 + 被否的备选与理由，结构与 `approach.alternatives` 对称。它进 `openDecisions` 的停人逻辑——`interface` 非空本来就停人，方向是人在那一站要勾的一项。
+- **仓库首次建立契约时给人挑，不让人凭空描述**。目标仓库 `prototype.root` 尚无契约时，原型档对**同一页**画 `prototype.directionVariants` 个方向（默认 3）的原型并截图，人在 Notion 方案区段里勾一个；已有契约的仓库跳过这一步，方向继承。人擅长在选项间挑、不擅长对着一张图说"不太好看"，这一步把审美从描述题变成选择题，且只在首次付一次成本。
+- **`design.md` 是理由层**。Google DESIGN.md 规范的核心洞察是纯 JSON token 缺"为什么"：agent 拿到语义角色（这个色是 surface 还是 accent、什么时候用）才不会张冠李戴。我们不换格式——`tokens.json` 仍是机器真相（W3C、可导入导出、已实现），`design.md` 借 DESIGN.md 的九节骨架：视觉主题与界面类型、色板与角色、字体规则、组件样式、布局原则、层级与深度、该做与不该做、响应式行为、给后续每张卡的提示。需求明说要贴合某个既有品牌时，把对方的 DESIGN.md 放进 `prototype.root` 当上游输入；不明说就不用任何品牌样本当默认参考，避免仓库无意长成某家的皮。它整篇注入下游（与 `components.md` 同一段），所以要过语言检查，且只能引用 `tokens.json` 里存在的 token 名（注入前校验，引了不存在的名字即缺项，整份契约不注入）。
+- **反均值纪律进原型档 prompt，能下沉的下沉成代码**：禁用清单（上面那五种）与"把大胆花在一处、其余克制"的原则写进 prompt；机械可判的部分不自己手写规则，接 impeccable 的独立检测器（Apache 2.0，Rust 二进制，无 LLM、无凭据，`--json` 输出、退出码 0 / 2 / 1 分别是干净 / 有 finding / 扫描失败，扫 HTML 文件或 URL）：61 条规则覆盖紫区渐变、弹性缓动、暗色光晕、常用默认字体、行长、拥挤内边距、触控目标、标题跳级等。它作为原型出口的 warn 级检查只记 friction 不否决——规则作者自己的话是"干净的扫描是证据不是证明"。版本 pin 在 `package.json` 的 `hivemind.impeccableVersion`，`install.sh` 装到本机，与 pi 同一套做法；运行永远带 `--no-config`，不读目标仓库的 `.impeccable/` 忽略项，保证每台机器同一结论。prompt 层是三层防线里最弱的一层，所以它只负责提高生成质量，**不负责判决**——审美的判决权在人手里，且只在首次。§3.1 的自我批判同理：模型判自己是最弱的一环，那一问的结论只记 friction，用数据回答"反均值纪律到底有没有用"，不作判决。
 
 ## 4. 人在 Notion 上怎么预览 / 修改 / 确认
 
@@ -109,7 +169,7 @@ docs/prototype/
 2. **方案摘要**：选定做法 + 被否掉的备选；`stackChanges` 每条一行。
 3. **页面清单**：每页一行 = 页面名 + 它回答什么问题 + 承接哪几条 PRD 场景。这是真正要审的东西，也是拆解的依据。
 4. **逐页 toggle（默认折叠）**：展开是空 / 加载 / 出错 / 正在等你 四态截图。截图由 SOLUTION 用既有浏览器道打开原型 HTML 自动采集，每版自动刷新。
-5. **待定分叉**：`openDecisions` 每条带推荐项 + 一个勾选框。
+5. **待定分叉**：`openDecisions` 每条带推荐项 + 一个勾选框。仓库首次建立契约时，视觉方向也在这里：几个方向的同一页截图并排，各带一个勾选框，只能勾一个（§3.3）。
 6. **可点原型**：embed 放在这里，**作为增强而不是依赖**——内网地址在手机 Notion 里大概率打不开，所以截图是保底层。
 7. **确认清单**：勾完即通过。
 
@@ -136,7 +196,7 @@ docs/prototype/
 | 层 | 判什么 | 能否否决 | 怎么判 | 默认 |
 |---|---|---|---|---|
 | **结构层** | 该场景声明要看见的角色与文本，是否真的出现在页面上 | **能** | 确定性代码校验：读证据里的 aria 快照，比对 DoD 声明的 `visible[]` | 开 |
-| **契约层** | 计算样式的色值/字号/间距/圆角是否全部来自 `tokens.json`；是否只用了组件清单里的组件 | **能**（有限枚举） | `page.evaluate()` 抽计算样式，与 token 表比对 | 先 warn |
+| **契约层** | 计算样式的色值/字号/间距/圆角是否全部来自 `tokens.json`；是否只用了组件清单里的组件；WCAG 无 `serious` / `critical` 违规（2026-09-18 增补） | **能**（有限枚举） | `page.evaluate()` 抽计算样式，与 token 表比对；axe-core 跑在同一个页面上下文里 | 先 warn |
 | **观感层** | 好不好看 | **永不** | 现有 `findings` 原样保留 | 开 |
 
 三条设计要点：
@@ -144,6 +204,8 @@ docs/prototype/
 - **结构层是 GacUI 快照思想的 web 移植**：把界面变成可 diff 的结构，而不是像素。快照今天已经在采（第一轮那份 404 快照一行就解释了四个场景为什么全灭），**只差把它从证据升成判据**。判定由代码做，不由模型自述——三层防造假的第三层（verdict 代码校验）本来就在这个位置。
 - **期望从哪来**：SHAPE 为每条 `ui` / `e2e` 场景产出 `visible[]`（该场景必须在页面上看得见的角色与文本），落 `story_specs.visible_json`。四态不另设机制：每页四态各写成一条场景，于是四态检查自然回落到结构层。
 - **契约层先 warn 一条需求再开否决**。它一旦给错否决权，代价是卡烧完预算；先看一条需求上 findings 的真实形状，再决定是否升级。开关 `uiContract.enforce`（global, hot: `off` / `warn` / `block`）。
+
+- **原型先吃同一套判据**（§3.2）：结构层与契约层的实现被原型档出口复用，原型进仓库时已经过了后面代码要过的检查。VERIFY 判的于是变成"代码是否做到了原型已经做到的"，而不是"代码与一张没人验过的图像不像"。
 
 **像素级一致明确不做。** 它是无限精度的判据：模型每轮都能找出新的一处差，失败集合永不重复，收敛判据永不生效，卡只会烧完预算——正是 03 §8 消除的那个失效模式。业界同向：阈值化的布局比对优于严格像素比对，后者 flakiness 高一个量级。原型在这套里的角色是**给结构层与契约层供数**，不是一张要被像素对齐的图。
 
@@ -153,6 +215,9 @@ docs/prototype/
 
 - **外部设计工具不进执行链路**。三条理由：注入必须逐字节确定性（外部拉取做不到）；要第二套凭据发到每台机器，其桌面版更要求客户端常开，对 7x24 headless Linux 直接出局；文件不进 git，无法 diff、无法 PR 审计、断网不可用。留门的做法只有一条：`tokens.json` 用 W3C 格式，原型只消费 token，将来接入是一次导入导出。
 - **不做像素比对**（§6）。
+- **合成用户测试不进链路**（2026-09-18 增补）。UXAgent / PerceptUI 一类让 LLM 扮演用户跑任务再产出可用性报告，学术上活跃，但 UXBench 的结论是这类批评大量不可执行——与我们不给观感否决权是同一个理由。它日后至多作为 findings 供人参考，不作判据；判据只收 §3.2 那张有限清单。
+- **不引 impeccable 的完整 skill 与命令菜单，不做掷骰子选方向**（2026-09-18 增补）。session 内的随机性与 `assemblePhasePrompt` 的确定性不冲突，但我们已经用"人从 N 个方向里挑"达成同一目的，且那一步的判决权在人；只借它的方法与检测器（§3.1 / §3.3）。
+- **不把可用性清单做成 per-repo 文件**。清单是 hivemind 对"什么叫好用"的立场，随版本走；按仓库变会让同一条 finding 在两个仓库里一个算一个不算，也让"清单之外不许挑"这条上界失去意义。
 - **骨架不单独成卡**（§5）。
 - **方案关不新增停点**（§2）：等人仍停在 SOLUTION 状态内，四类真停点不变。
 - **需求层不建 Story 层那套执行机制**（2026-09-18 增补，MC-03 盘点时定）。需求层没有 `phase_runs`、没有 checkpoint 与崩溃恢复、不进 `cost.perCardUsdCeiling`，这是选择而不是欠债：
@@ -179,7 +244,10 @@ CREATE TABLE IF NOT EXISTS requirement_solutions (
 
 - `requirements.state` CHECK 增加 `SOLUTION`；`requirement_notion_sections.section` CHECK 增加 `solution`。
 - `story_specs` 增加 `visible_json TEXT`（可空，仅 `ui` / `e2e` 场景；`json_valid` 约束）。
-- 配置：`prototype.root`（per-repo，默认 `docs/prototype`）、`uiContract.enforce`（global, hot，默认 `warn`）、`solution.maxRounds`（出口回喂轮次，默认 3，与 `specifyExit.maxRounds` 同族）。
+- 配置：`prototype.root`（per-repo，默认 `docs/prototype`）、`prototype.directionVariants`（global，默认 3，仅仓库首次建立契约时生效）、`uiContract.enforce`（global, hot，默认 `warn`；同时管 token 比对与 axe-core）、`solution.maxRounds`（出口回喂轮次，默认 3，与 `specifyExit.maxRounds` 同族；原型档共用）。
+- `requirement_solutions.body` 的 `interface` 增加 `direction {summary, alternatives[]}`；方向的人选结果落 `requirement_acceptance_items`（每个候选一条 item，勾中即 accepted），不另起表。
+- 依赖：impeccable 检测器版本 pin 在 `package.json` 的 `hivemind.impeccableVersion`，代码与 shell 都从那里取，不出现字面版本号；`preflight` 探它是否可执行。
+- guard：`PROTOTYPE` 档不在 `READ_ONLY_PHASES`，写路径围栏为 `prototype.root` 之内；围栏外的写入按 danger-rules 拒绝并记 friction。
 - 角色与模型：SOLUTION 走大脑档（同 decompose / UI 走查），理由同 03 §3——它读的是人话、判的是屏幕。
 
 ## 9. 实施顺序
@@ -192,5 +260,9 @@ CREATE TABLE IF NOT EXISTS requirement_solutions (
 4. **反向兜底**：SHAPE 的 `interface = null` 检查、CODE 出口的依赖清单检查、目标目录为空时不并行。
 5. **VERIFY 结构层**：`story_specs.visible_json`、SHAPE 产出、aria 快照的确定性校验。
 6. **VERIFY 契约层**：计算样式比对，`uiContract.enforce` 三态，默认 `warn`。
+7. **原型档与结构自检**（2026-09-18 增补，§3.1 / §3.2 前两行）：需求层 `PROTOTYPE` 档 + 路径围栏 + PR；`?state=` 四态约束；对原型跑 MU-05 的断言。这一片落地后 MU-02b 关闭。
+8. **axe-core 进契约层**：原型出口与 VERIFY 共用，随 `uiContract.enforce` 开关。
+9. **方向与理由层**（§3.3）：`interface.direction`、首次多方向截图供人勾选、`design.md` 九节骨架与 token 名校验、`prompts/pm/prototype.md` 方法层（界面类型、色彩策略、两遍走、校准清单、文案规则、有界自检、理由不进产物）、impeccable 检测器 warn 级接入与版本 pin。
+10. **可用性清单 gate**：`prompts/pm/ui-checklist.md` + 逐条二值判定 + finding 必引编号。
 
 配套文档改动：03 §9.2 第三条（「原型图是参考不是判据」）随第 5 片改写为本文 §6 的三层；03 §7.1 的需求状态机补 `SOLUTION`；05 §2 的前端形态改为由界面契约决定而不是预先写死；AGENTS.md 增一条不变量。
