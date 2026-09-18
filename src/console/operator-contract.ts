@@ -509,17 +509,23 @@ function renderValidation(message: string | null): string {
 
 function renderTodoFields(
   todo: OperatorTodo,
-  input: { submittedValue: string; submission: TodoSubmissionResult | undefined; submitting: boolean },
+  input: {
+    submittedValue: string;
+    submission: TodoSubmissionResult | undefined;
+    submitting: boolean;
+    retry: boolean;
+  },
 ): string {
   const submitted = escapeHtml(input.submittedValue);
   const disabled = input.submitting ? " disabled" : "";
+  const submitLabel = (label: string): string => input.retry ? copy.todo.retrySubmit : label;
   if (todo.kind === "reply") {
     const message = validationMessage(input.submission, "text");
     return `<div><label for="todo-reply">${escapeHtml(todo.answerLabel)}</label>`
       + `<textarea id="todo-reply" name="text"${message ? ' aria-invalid="true"' : ""}>${submitted}</textarea>`
       + renderValidation(message)
       + `<p class="field-help">${copy.todo.replyHelp}</p></div>`
-      + `<div class="actions"><button class="primary-action" type="submit"${disabled}>${copy.todo.submitReply}</button></div>`;
+      + `<div class="actions"><button class="primary-action" type="submit"${disabled}>${submitLabel(copy.todo.submitReply)}</button></div>`;
   }
   if (todo.kind === "approval") {
     const first = todo.options[0];
@@ -533,14 +539,14 @@ function renderTodoFields(
       + `<textarea id="todo-note" name="note"${noteMessage ? ' aria-invalid="true"' : ""}>${submitted}</textarea>`
       + renderValidation(noteMessage)
       + `<p class="field-help">${copy.todo.noteHelp}</p></div>`
-      + `<div class="actions"><button class="primary-action" type="submit"${disabled}>${copy.todo.submitApproval}</button></div>`;
+      + `<div class="actions"><button class="primary-action" type="submit"${disabled}>${submitLabel(copy.todo.submitApproval)}</button></div>`;
   }
   const message = validationMessage(input.submission, "option");
   return `<fieldset><legend>${copy.todo.choiceLegend}</legend>`
     + todo.options.map((option) => renderOptionField(option, { name: "option" })).join("")
     + renderValidation(message)
     + "</fieldset>"
-    + `<div class="actions"><button class="primary-action" type="submit"${disabled}>${copy.todo.submitChoice}</button></div>`;
+    + `<div class="actions"><button class="primary-action" type="submit"${disabled}>${submitLabel(copy.todo.submitChoice)}</button></div>`;
 }
 
 function renderTodoHead(todo: OperatorTodo): string {
@@ -578,14 +584,19 @@ function renderTodoBody(
   const submission = options.submission;
   if (submission?.kind === "saved") return renderSavedTodo(todo);
   const submitting = submission?.kind === "submitting";
+  const retry = submission?.kind === "not_saved";
   return `<div class="split"><div>${renderTodoHead(todo)}`
     + (submitting ? `<div class="notice section"><p>${copy.todo.submitting}</p></div>` : "")
+    + (retry
+      ? `<div class="notice danger section"><p role="alert">${copy.todo.notSavedHeading}</p><p>${copy.todo.notSavedBody}</p></div>`
+      : "")
     + `<form class="panel section" method="post" action="/operator/todos/${encodeURIComponent(todo.id)}">`
     + `<input type="hidden" name="revision" value="${escapeHtml(todo.revision)}">`
     + renderTodoFields(todo, {
       submittedValue: options.submittedValue ?? "",
       submission,
       submitting,
+      retry,
     })
     + "</form></div>"
     + renderTodoSummary(todo)
