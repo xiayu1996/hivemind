@@ -543,6 +543,8 @@ MU-09 拆开的那一项（2026-09-18，MU-03 做完后复核）：“仓库首�
 | W-09 ✅ | 失败那一轮的 tokens 记成 0、费用 0，而它真跑了 837 秒 | 记账写在出口检查之后，出口一拒绝就抛错走人；会话内回喂的那几轮 prompt 也从来不在这一轮的账上 | 记账移到抛错也走得到的地方，只记一次；回喂的 usage 逐轮累加进来。费用上限是唯一的敞口护栏，漏账就是护栏上的洞 |
 | W-10 ✅ | 模型在卡的树里找不到依赖，跑去宝宝机主 checkout 翻源码，最后把宓主的 `node_modules` 软链进来 | 新切的 worktree 只是一份 checkout，没有装依赖；SPECIFY 要证明测试是红的，而测试根本跑不起来 | `worktree.setupCommand`（per-repo，默认空）：仓库自己声明一棵新树怎么准备好。hivemind 自己配 `npm ci`。软链宓主依赖会让树对着宓主恰好装了什么构建，不可复现 |
 | W-06 ⬜ | 人只能从 worktree 的 `file://` 路径看原型，背离「只在 Notion 上完成」 | 截图能力（`prototype-screenshots.ts`，四态）与 Notion 上传能力（`sdk-adapters.ts` 的 multipart + `file_upload`，Story 侧已在生产用）都在仓库里，**两者之间没有接线**；MU-09 记的「gateway 没有 multipart 通道」是错的 | 待定：Ryan 倾向接 Cloudflare 一类免费服务给可点原型；截图进 Notion 是另一半，两件事不互斥 |
+| W-11 ✅ | host 十二分钟一张卡没派，日志里每个周期只有一行 `cycle failed: Codex error: The usage limit has been reached` | 周期顺序是 checkouts → intake → projection → **拆解** → **Epic 维护** → 回归 → 派发，而 `step()` 只吞 TRANSPORT；一个拆不动的 Epic 让派发永远走不到。回归道早就因为同样的教训改成了「报告而不上抛」，这两步没跟上 | 拆解与 Epic 维护改成报告而不上抛。一个 Epic 拆不动，与已经拆出来的那些 Story 无关 |
+| W-12 ✅ | `openai-codex` 配额耗尽后，每个周期还在敲同一个账号，`retry_at` 停在 00:48 再没动过 | 拆解这条路只读断路器（`usableProviders(...)[0]`）从不回写；Story 那条路一直是对的（`run-story.ts:622-633`），只有这条漏了。于是 `model.tierFailoverChains` 的降级从来没有机会发生 | 拆解失败按同一判据回写断路器：`classifyError !== UNKNOWN` 才记，我们自己的缺陷不许开别人的闸。实测窗口从 00:48 改写成 02:09，下一周期即取链上下一个 |
 
 ---
 
