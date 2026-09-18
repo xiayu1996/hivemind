@@ -141,12 +141,15 @@ function escapeHtml(value: string): string {
  * inside the same row, so a narrow viewport keeps them paired.
  */
 export function renderDailyCostPanel(snapshot: DailyCostViewSnapshot): string {
-  const rows = dailyCostRows(snapshot).map((row) =>
-    `<div class="bar-row" data-date="${escapeHtml(row.date)}">`
-    + `<span class="number">${escapeHtml(row.date.slice(5))}</span>`
-    + `<div class="bar-track"></div>`
-    + `<strong class="money">${escapeHtml(row.amount)}</strong></div>`,
-  ).join("");
+  const peak = snapshot.days.reduce((max, day) => (day.costUsd > max ? day.costUsd : max), 0);
+  const rows = dailyCostRows(snapshot).map((row, index) => {
+    const day = snapshot.days[index];
+    const size = peak > 0 && day ? Math.round((day.costUsd / peak) * 100) : 0;
+    return `<div class="bar-row" data-date="${escapeHtml(row.date)}">`
+      + `<span class="number">${escapeHtml(row.date.slice(5))}</span>`
+      + `<div class="bar-track"><div class="bar-fill" style="--bar-size:${size}%"></div></div>`
+      + `<strong class="money">${escapeHtml(row.amount)}</strong></div>`;
+  }).join("");
   // The scope sits beside the heading as a text node rather than inside a
   // paragraph: the scenario declares it as plain text on the page, and a <p>
   // would publish it under a different role than the one a person reads.
@@ -164,7 +167,6 @@ export function renderMobileNavigation(): string {
   ).join("");
   return `<nav class="mobile-nav" aria-label="手机导航">${links}</nav>`;
 }
-
 /**
  * Moves the page between its states. A selection starts a new request; a
  * response is only applied when it belongs to the newest request. A failed
