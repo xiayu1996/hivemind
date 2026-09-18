@@ -234,10 +234,10 @@ const NAV_SHORT: Record<NavKey, string> = {
  * screens against it. Properties the table does not name (height, min-height,
  * top/bottom, grid tracks) are free: the table has no tokens for them. */
 const STYLES = [
-  ":root{--color-page:#f4f7fa;--color-surface:#ffffff;--color-text:#172b3a;--color-text-muted:#526477;--color-border:#cbd5df;--color-action:#173f63;--color-attention:#a75b00;--color-danger:#b42318;--color-success:#18794e;--color-focus:#0b6bcb;--color-surface-attention:#fff4df;--color-surface-danger:#fff0ef;--color-surface-success:#eaf7f0;--color-surface-selected:#e9f1f8",
-  "--space-inline-tight:4px;--space-control-gap:8px;--space-content-gap:12px;--space-section-gap:20px;--space-page-gutter:28px;--space-page-gutter-mobile:16px",
-  "--font-interface:\"IBM Plex Sans\",\"Segoe UI\",sans-serif;--font-numeric:\"IBM Plex Mono\",\"SFMono-Regular\",monospace",
-  "--font-caption:12px;--font-body:14px;--font-body-large:16px;--font-heading-small:18px;--font-heading-page:26px;--font-metric:30px",
+  ":root{--color-page:#f4f7fa;--color-surface:#ffffff;--color-text:#172b3a;--color-text-muted:#526477;--color-border:#cbd5df;--color-action:#173f63;--color-attention:#a75b00;--color-danger:#b42318;--color-success:#18794e;--color-focus:#0b6bcb;--color-surface-attention:#fff4df;--color-surface-danger:#fff0ef;--color-surface-success:#eaf7f0;--color-surface-selected:#e9f1f8;",
+  "--space-inline-tight:4px;--space-control-gap:8px;--space-content-gap:12px;--space-section-gap:20px;--space-page-gutter:28px;--space-page-gutter-mobile:16px;",
+  "--font-interface:\"IBM Plex Sans\",\"Segoe UI\",sans-serif;--font-numeric:\"IBM Plex Mono\",\"SFMono-Regular\",monospace;",
+  "--font-caption:12px;--font-body:14px;--font-body-large:16px;--font-heading-small:18px;--font-heading-page:26px;--font-metric:30px;",
   "--weight-regular:400;--weight-medium:550;--weight-strong:700;--radius-control:6px;--radius-panel:10px;--radius-pill:999px;--shadow-raised:0 2px 8px #172b3a14;--layer-sticky:10;--layer-navigation:20}",
   "*,*::before,*::after{box-sizing:border-box}",
   "*{margin:0;padding:0}",
@@ -493,31 +493,56 @@ function renderTodoSummary(todo: OperatorTodo): string {
     + "</section></aside>";
 }
 
-function renderTodoFields(todo: OperatorTodo, submittedValue: string): string {
-  const submitted = escapeHtml(submittedValue);
+function validationMessage(
+  submission: TodoSubmissionResult | undefined,
+  field: "text" | "option" | "note",
+): string | null {
+  if (submission?.kind !== "validation_failed" || submission.field !== field) return null;
+  if (field === "text") return copy.todo.validationText;
+  if (field === "note") return copy.todo.validationNote;
+  return copy.todo.validationOption;
+}
+
+function renderValidation(message: string | null): string {
+  return message === null ? "" : `<p class="validation" role="alert">${message}</p>`;
+}
+
+function renderTodoFields(
+  todo: OperatorTodo,
+  input: { submittedValue: string; submission: TodoSubmissionResult | undefined },
+): string {
+  const submitted = escapeHtml(input.submittedValue);
   if (todo.kind === "reply") {
+    const message = validationMessage(input.submission, "text");
     return `<div><label for="todo-reply">${escapeHtml(todo.answerLabel)}</label>`
-      + `<textarea id="todo-reply" name="text">${submitted}</textarea>`
+      + `<textarea id="todo-reply" name="text"${message ? ' aria-invalid="true"' : ""}>${submitted}</textarea>`
+      + renderValidation(message)
       + `<p class="field-help">${copy.todo.replyHelp}</p></div>`
       + `<div class="actions"><button class="primary-action" type="submit">${copy.todo.submitReply}</button></div>`;
   }
   if (todo.kind === "approval") {
     const first = todo.options[0];
+    const optionMessage = validationMessage(input.submission, "option");
+    const noteMessage = validationMessage(input.submission, "note");
     return `<fieldset><legend>${copy.todo.approveLegend}</legend>`
       + todo.options.map((option) => renderOptionField(option, { name: "decision", checkedId: first.id })).join("")
+      + renderValidation(optionMessage)
       + "</fieldset>"
       + `<div><label for="todo-note">${escapeHtml(todo.noteLabel)}</label>`
-      + `<textarea id="todo-note" name="note">${submitted}</textarea>`
+      + `<textarea id="todo-note" name="note"${noteMessage ? ' aria-invalid="true"' : ""}>${submitted}</textarea>`
+      + renderValidation(noteMessage)
       + `<p class="field-help">${copy.todo.noteHelp}</p></div>`
       + `<div class="actions"><button class="primary-action" type="submit">${copy.todo.submitApproval}</button></div>`;
   }
+  const message = validationMessage(input.submission, "option");
   return `<fieldset><legend>${copy.todo.choiceLegend}</legend>`
     + todo.options.map((option) => renderOptionField(option, { name: "option" })).join("")
+    + renderValidation(message)
     + "</fieldset>"
     + `<div class="actions"><button class="primary-action" type="submit">${copy.todo.submitChoice}</button></div>`;
 }
 
-function renderTodoBody(todo: OperatorTodo, options: { submittedValue?: string }): string {
+function renderTodoBody(todo: OperatorTodo, options: { submittedValue?: string; submission?: TodoSubmissionResult }): string {
   const subject = `${escapeHtml(todo.subject.title)} · ${subjectKindWord(todo.subject.kind)} · ${escapeHtml(todo.sourceLabel)}`;
   return backLink()
     + `<header class="page-head"><div><h1>${copy.todo.heading}</h1><p>${subject}</p></div>`
@@ -527,7 +552,7 @@ function renderTodoBody(todo: OperatorTodo, options: { submittedValue?: string }
     + `<section class="panel section"><h2>${copy.todo.contextHeading}</h2><p>${escapeHtml(todo.context)}</p></section>`
     + `<form class="panel section" method="post" action="/operator/todos/${encodeURIComponent(todo.id)}">`
     + `<input type="hidden" name="revision" value="${escapeHtml(todo.revision)}">`
-    + renderTodoFields(todo, options.submittedValue ?? "")
+    + renderTodoFields(todo, { submittedValue: options.submittedValue ?? "", submission: options.submission })
     + "</form></div>"
     + renderTodoSummary(todo)
     + "</div>";
