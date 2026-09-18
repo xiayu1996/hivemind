@@ -33,7 +33,7 @@ import { breakerPolicy, usableProviders } from "../src/runner/circuit-breaker.js
 import { classifyError } from "../src/runner/classify.js";
 import { LibsqlProviderHealthStore } from "../src/runner/provider-health-store.js";
 import { loadSecretsFile } from "../src/config/secrets-file.js";
-import { describeJudgeSetup, environmentJudgeSetup } from "../src/judge/settings.js";
+import { describeJudgeSetup, environmentJudgeSetup, judgeConfigFrom } from "../src/judge/settings.js";
 import { renderMovedReasons } from "../src/judge/environment-reasons.js";
 import { needsApiKeyEnv, providerKeyEnv } from "../src/runner/provider-env.js";
 import { cacheRetentionEnv } from "../src/runner/cache-retention.js";
@@ -364,14 +364,8 @@ async function main(): Promise<void> {
     // only ever to move one off the code side. Absent or unreachable, the table
     // is the whole answer, which is what every deployment without the
     // credential gets.
-    const judgeSetup = environmentJudgeSetup(
-      {
-        enabled: config.get("judge.enabled"),
-        endpoint: config.get("judge.endpoint"),
-        model: config.get("judge.model"),
-        timeoutMs: config.get("judge.timeoutMs"),
-        environmentThreshold: config.get("judge.environmentThreshold"),
-      },
+    const judged = environmentJudgeSetup(
+      judgeConfigFrom(config),
       secrets,
       async (judgement) => {
         if (judgement.moved.length === 0) return;
@@ -383,9 +377,9 @@ async function main(): Promise<void> {
         });
       },
     );
-    const judgeNote = describeJudgeSetup(judgeSetup);
+    const judgeNote = describeJudgeSetup(judged.setup);
     if (judgeNote) console.warn(judgeNote);
-    const environmentJudge = judgeSetup.kind === "ready" ? judgeSetup.settings : undefined;
+    const environmentJudge = judged.settings;
     const blindExecutor = new BlindVerifyExecutor(
       {
         // The spec is the one granted for this verification, so the verifier

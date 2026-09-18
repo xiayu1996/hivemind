@@ -1,0 +1,147 @@
+{
+  "capturedAt": "2026-09-18",
+  "endpoint": "https://api.typesafe.ai/v1/systemone",
+  "note": "Real exchanges for the Notion approval question, one comment per request as the comment lane sends them. The five are the classes the threshold has to tell apart: two approvals the four-string whitelist cannot match, agreement that still asks for a change, bare praise, and a plan approval. Recorded so the parser and the threshold are tested against what the service returns rather than against the documented shape.",
+  "exchanges": [
+    {
+      "want": "approval",
+      "subject": "PRD",
+      "request": {
+        "model": "jev-latest",
+        "state": {
+          "comment": "批准。"
+        },
+        "questions": {
+          "is_approval": {
+            "type": "noul",
+            "instructions": "The text at `comment` is a comment a person left on a page showing a proposed PRD that is waiting for their approval. Does it approve the PRD exactly as it currently stands?",
+            "criteria": {
+              "true": "The comment accepts the PRD as it currently stands and asks for nothing to be changed. Agreement in any wording counts, including a short one.",
+              "false": "The comment asks for any change, however small; or raises a question, an objection or a condition; or says nothing about whether the PRD is accepted. A comment that agrees and also asks for something is not an approval."
+            }
+          }
+        }
+      },
+      "response": {
+        "answers": {
+          "is_approval": {
+            "type": "noul",
+            "noul": 0.94
+          }
+        }
+      }
+    },
+    {
+      "want": "approval",
+      "subject": "PRD",
+      "request": {
+        "model": "jev-latest",
+        "state": {
+          "comment": "确认，可以往下走"
+        },
+        "questions": {
+          "is_approval": {
+            "type": "noul",
+            "instructions": "The text at `comment` is a comment a person left on a page showing a proposed PRD that is waiting for their approval. Does it approve the PRD exactly as it currently stands?",
+            "criteria": {
+              "true": "The comment accepts the PRD as it currently stands and asks for nothing to be changed. Agreement in any wording counts, including a short one.",
+              "false": "The comment asks for any change, however small; or raises a question, an objection or a condition; or says nothing about whether the PRD is accepted. A comment that agrees and also asks for something is not an approval."
+            }
+          }
+        }
+      },
+      "response": {
+        "answers": {
+          "is_approval": {
+            "type": "noul",
+            "noul": 0.87
+          }
+        }
+      }
+    },
+    {
+      "want": "not_approval",
+      "subject": "PRD",
+      "request": {
+        "model": "jev-latest",
+        "state": {
+          "comment": "整体可以，但第二条场景再写细一点"
+        },
+        "questions": {
+          "is_approval": {
+            "type": "noul",
+            "instructions": "The text at `comment` is a comment a person left on a page showing a proposed PRD that is waiting for their approval. Does it approve the PRD exactly as it currently stands?",
+            "criteria": {
+              "true": "The comment accepts the PRD as it currently stands and asks for nothing to be changed. Agreement in any wording counts, including a short one.",
+              "false": "The comment asks for any change, however small; or raises a question, an objection or a condition; or says nothing about whether the PRD is accepted. A comment that agrees and also asks for something is not an approval."
+            }
+          }
+        }
+      },
+      "response": {
+        "answers": {
+          "is_approval": {
+            "type": "noul",
+            "noul": 0.03
+          }
+        }
+      }
+    },
+    {
+      "want": "not_approval",
+      "subject": "PRD",
+      "request": {
+        "model": "jev-latest",
+        "state": {
+          "comment": "这个写得不错"
+        },
+        "questions": {
+          "is_approval": {
+            "type": "noul",
+            "instructions": "The text at `comment` is a comment a person left on a page showing a proposed PRD that is waiting for their approval. Does it approve the PRD exactly as it currently stands?",
+            "criteria": {
+              "true": "The comment accepts the PRD as it currently stands and asks for nothing to be changed. Agreement in any wording counts, including a short one.",
+              "false": "The comment asks for any change, however small; or raises a question, an objection or a condition; or says nothing about whether the PRD is accepted. A comment that agrees and also asks for something is not an approval."
+            }
+          }
+        }
+      },
+      "response": {
+        "answers": {
+          "is_approval": {
+            "type": "noul",
+            "noul": 0.55
+          }
+        }
+      }
+    },
+    {
+      "want": "approval",
+      "subject": "decomposition plan",
+      "request": {
+        "model": "jev-latest",
+        "state": {
+          "comment": "行，就这么干"
+        },
+        "questions": {
+          "is_approval": {
+            "type": "noul",
+            "instructions": "The text at `comment` is a comment a person left on a page showing a proposed decomposition plan that is waiting for their approval. Does it approve the decomposition plan exactly as it currently stands?",
+            "criteria": {
+              "true": "The comment accepts the decomposition plan as it currently stands and asks for nothing to be changed. Agreement in any wording counts, including a short one.",
+              "false": "The comment asks for any change, however small; or raises a question, an objection or a condition; or says nothing about whether the decomposition plan is accepted. A comment that agrees and also asks for something is not an approval."
+            }
+          }
+        }
+      },
+      "response": {
+        "answers": {
+          "is_approval": {
+            "type": "noul",
+            "noul": 0.93
+          }
+        }
+      }
+    }
+  ]
+}

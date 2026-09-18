@@ -1,6 +1,7 @@
 // oxlint-disable unicorn/no-thenable -- Given/When/Then is the external decomposition contract.
 import { createClient, type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { SystemOne, SystemOneRequest } from "../judge/system-one.js";
 import { PlanApprovalStore } from "../orchestrator/plan-approval.js";
 import { migrate } from "../persistence/migrate.js";
 import { CommentIngestor, type NotionCommentSource } from "./comment-ingest.js";
@@ -88,6 +89,65 @@ describe("@scenario S-M2-02-revise Notion sync approval", () => {
     await expect(sync.pollComments("epic-page")).resolves.toMatchObject({ revised: 1 });
     expect(await approvals.getEpic("M2")).toMatchObject({ state: "DECOMPOSE" });
     expect((await client.execute("SELECT story_id FROM execution_dispatches")).rows).toEqual([]);
+  });
+});
+
+describe("plan approval the four strings do not match", () => {
+  async function pollWith(body: string, noul: number): Promise<{
+    approved: number;
+    asked: SystemOneRequest[];
+    friction: { cardId: string; kind: string; detail: string }[];
+  }> {
+    const approvals = new PlanApprovalStore(client, () => 1_000, { planApproval: true });
+    await approvals.present({ epicId: "M2", notionPageId: "epic-page", title: "Plan", plan });
+    const comments = new CommentIngestor(client, {
+      listComments: async () => [{
+        id: "comment-1", pageId: "epic-page", blockId: null, discussionId: "discussion-1",
+        authorId: "human-1", body, createdTime: 1_000,
+      }],
+    }, { now: () => 1_000 });
+    await comments.registerPage("epic-page", []);
+    const asked: SystemOneRequest[] = [];
+    const judge: SystemOne = {
+      async ask(request) {
+        asked.push(request);
+        return { answers: { is_approval: { type: "noul", noul } } };
+      },
+    };
+    const friction: { cardId: string; kind: string; detail: string }[] = [];
+    const sync = new NotionEpicInputSync(
+      client, gateway("拆解待确认"), comments, approvals, () => 1_000, undefined,
+      { judge, model: "jev-latest", threshold: 0.8 },
+      async (input) => { friction.push(input); },
+    );
+    const result = await sync.pollComments("epic-page");
+    return { approved: result.approved, asked, friction };
+  }
+
+  it("approves the plan on a wording the judge vouched for", async () => {
+    // Without the judge this comment falls through to `feedback`, which is
+    // silence: the Epic goes on waiting and nobody is told why.
+    const { approved, asked, friction } = await pollWith("行，就这么干", 0.9);
+
+    expect(approved).toBe(1);
+    expect(asked[0]!.state).toEqual({ comment: "行，就这么干" });
+    expect(friction).toMatchObject([{ cardId: "M2", kind: "notion_approval_judged" }]);
+    expect(await new PlanApprovalStore(client, () => 1_000).getEpic("M2")).toMatchObject({ state: "EXECUTING" });
+  });
+
+  it("goes on waiting when the judge is not sure", async () => {
+    const { approved, friction } = await pollWith("这个拆解写得挺好的", 0.7);
+
+    expect(approved).toBe(0);
+    expect(friction).toEqual([]);
+    expect(await new PlanApprovalStore(client, () => 1_000).getEpic("M2")).toMatchObject({ state: "PLAN_APPROVAL" });
+  });
+
+  it("never asks about the wording the whitelist already approves", async () => {
+    const { approved, asked } = await pollWith("批准", 0.01);
+
+    expect(approved).toBe(1);
+    expect(asked).toEqual([]);
   });
 });
 

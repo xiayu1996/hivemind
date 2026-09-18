@@ -13,6 +13,7 @@ import {
   REQUIREMENT_OUTBOX_OPERATIONS,
 } from "../src/notion/requirement-page-delivery.js";
 import { RequirementPageProjector } from "../src/notion/requirement-projection.js";
+import { approvalJudgeSetup, describeJudgeSetup, judgeConfigFrom } from "../src/judge/settings.js";
 import { NotionRequirementInputSync } from "../src/notion/requirement-input-sync.js";
 import { ingestRequirements } from "../src/notion/requirement-intake.js";
 import { NotionGatewayCommentSource, createNotionHttpTransport } from "../src/notion/sdk-adapters.js";
@@ -158,7 +159,19 @@ async function main(): Promise<void> {
   const solution = new SolutionRunner(store, pm, projector, draftAttempts);
   const decomposer = new RequirementDecomposer(handle.client, store, pm, projector);
   const acceptance = new AcceptanceChecklist(handle.client, store, projector);
-  const humanInput = new NotionRequirementInputSync(handle.client, gateway, comments, store, acceptance);
+  const judged = approvalJudgeSetup(judgeConfigFrom(config), stored);
+  const judgeNote = describeJudgeSetup(judged.setup);
+  if (judgeNote) console.warn(judgeNote);
+  const humanInput = new NotionRequirementInputSync(
+    handle.client,
+    gateway,
+    comments,
+    store,
+    acceptance,
+    Date.now,
+    judged.settings,
+    (input) => store.recordFriction(input),
+  );
 
   // What a person did on the page since the last pass: a verdict on the PRD,
   // ticks and notes on the acceptance list, parking. Read before the

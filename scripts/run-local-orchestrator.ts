@@ -36,6 +36,7 @@ import { defaultModelCatalog } from "../src/runner/catalog.js";
 import { LibsqlProviderHealthStore } from "../src/runner/provider-health-store.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
 import { CommentIngestor } from "../src/notion/comment-ingest.js";
+import { approvalJudgeSetup, judgeConfigFrom } from "../src/judge/settings.js";
 import { NotionEpicInputSync } from "../src/notion/epic-input-sync.js";
 import { NotionGateway, NotionGatewayError } from "../src/notion/gateway.js";
 import { NotionMediaReconciler } from "../src/notion/media-reconciler.js";
@@ -296,6 +297,7 @@ async function main(): Promise<void> {
     },
   );
   const inputSync = new NotionStoryInputSync(handle.client, gateway, storyApi, comments, store);
+  const approvalJudge = approvalJudgeSetup(judgeConfigFrom(config), stored);
   const epicInputSync = new NotionEpicInputSync(
     handle.client,
     gateway,
@@ -305,6 +307,10 @@ async function main(): Promise<void> {
       planApproval: config.get("decompose.planApproval"),
       onApproved: publishEpicBranchFor,
     }),
+    Date.now,
+    undefined,
+    approvalJudge.settings,
+    (input) => store.recordFriction(input),
   );
   const media = new NotionMediaReconciler(
     handle.client,

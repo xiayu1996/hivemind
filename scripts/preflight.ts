@@ -19,8 +19,9 @@ import { probeProviderReadiness } from "../src/runner/auth-probe.js";
 import { needsApiKeyEnv, providerKeyEnv } from "../src/runner/provider-env.js";
 import { reapStalePiAuthLock } from "../src/runner/auth-lock.js";
 import { probeCredentialRoundTrip } from "../src/runner/credential-roundtrip.js";
+import { judgeApprovals, type ApprovalSubject } from "../src/judge/approval-intent.js";
 import { judgeEnvironmentReasons } from "../src/judge/environment-reasons.js";
-import { environmentJudgeSetup } from "../src/judge/settings.js";
+import { approvalJudgeSetup, environmentJudgeSetup, judgeConfigFrom } from "../src/judge/settings.js";
 import { assertErrorFixtureCoverage } from "../src/runner/error-fixtures.js";
 import { assertProviderRetriesDisabled } from "../src/runner/failover.js";
 import { assertModelPolicy, ModelPolicy } from "../src/runner/model-policy.js";
@@ -71,6 +72,17 @@ function knownEnvironmentRefusal(): string {
   const environment = recorded.exchanges.find((exchange) => exchange.want === "environment");
   if (!environment) throw new Error("the recorded judge exchanges carry no environment case");
   return environment.request.state.reason;
+}
+
+/** One real approval, from the recorded exchange, so the probe asks the judge
+ * something a person actually wrote rather than a sentence written for it. */
+function knownApproval(): { comment: string; subject: ApprovalSubject } {
+  const recorded = JSON.parse(
+    readFileSync(new URL("../fixtures/judge/approval-comments.json", import.meta.url), "utf8"),
+  ) as { exchanges: { want: string; subject: ApprovalSubject; request: { state: { comment: string } } }[] };
+  const approval = recorded.exchanges.find((exchange) => exchange.want === "approval");
+  if (!approval) throw new Error("the recorded judge exchanges carry no approval case");
+  return { comment: approval.request.state.comment, subject: approval.subject };
 }
 
 let judgeProbe: number | undefined;
@@ -245,20 +257,14 @@ async function main(): Promise<void> {
     // answer alone -- so only a switch that is on with nothing behind it is a
     // failure: that reads exactly like a judge that is answering.
     await attempt("structured judge", async () => {
-      const setup = environmentJudgeSetup({
-        enabled: judgeConfig.get("judge.enabled"),
-        endpoint: judgeConfig.get("judge.endpoint"),
-        model: judgeConfig.get("judge.model"),
-        timeoutMs: judgeConfig.get("judge.timeoutMs"),
-        environmentThreshold: judgeConfig.get("judge.environmentThreshold"),
-      }, stored);
+      const { setup, settings } = environmentJudgeSetup(judgeConfigFrom(judgeConfig), stored);
       if (setup.kind === "off") return "off; the pattern tables answer alone";
       if (setup.kind === "no_credential") {
         throw new Error(`enabled but ${setup.key} is missing from ${secretsPath}`);
       }
       const started = Date.now();
-      const judgement = await judgeEnvironmentReasons(setup.settings.judge, [knownEnvironmentRefusal()], {
-        model: setup.settings.model,
+      const judgement = await judgeEnvironmentReasons(settings!.judge, [knownEnvironmentRefusal()], {
+        model: settings!.model,
         // Asked at zero so the round trip is proved here and the calibration is
         // judged on its own line: a judge that answers is a different fact from
         // a judge that still answers this one the way it used to.
@@ -278,6 +284,23 @@ async function main(): Promise<void> {
         return `${judgeProbe!.toFixed(2)} against a ${threshold} threshold`;
       }, "WARN");
     }
+    // The second question the judge answers. It shares the client and the
+    // switch, so an unreachable service is already reported above; what is
+    // checked here is that this question still lands where it was calibrated.
+    await attempt("judge still reads a known approval as one", async () => {
+      const { settings } = approvalJudgeSetup(judgeConfigFrom(judgeConfig), stored);
+      if (!settings) return "off; the comment whitelist answers alone";
+      const approval = knownApproval();
+      const judgement = await judgeApprovals(settings.judge, [approval.comment], approval.subject, {
+        model: settings.model,
+        threshold: settings.threshold,
+      });
+      if (judgement.error) throw new Error(judgement.error);
+      if (judgement.moved.length === 0) {
+        throw new Error(`the recorded approval did not reach the ${settings.threshold} threshold; the whitelist still answers, but the judge is adding nothing`);
+      }
+      return `${judgement.moved[0]!.probability.toFixed(2)} against a ${settings.threshold} threshold`;
+    }, "WARN");
     for (const purpose of ["product_manager", "decompose", "code", "verify"] as const) {
       await attempt(`a provider serves the ${purpose} tier`, async () => {
         const providers = await policy.providersFor(purpose);

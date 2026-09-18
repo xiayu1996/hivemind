@@ -72,11 +72,16 @@ export function interpretEpicPropertyChange(
   return { type: "unsupported_property_change", observedEpicStatus, humanWinsUntil };
 }
 
-export function interpretEpicComment(state: EpicState, body: string): EpicCommentIntent {
-  const text = body.trim().toLocaleLowerCase();
+export function interpretEpicComment(
+  state: EpicState,
+  body: string,
+  approving: ReadonlySet<string> = new Set(),
+): EpicCommentIntent {
+  const text = body.trim();
+  const lowered = text.toLocaleLowerCase();
   if (state !== "PLAN_APPROVAL") return { type: "feedback" };
-  if (["批准", "approve", "approved"].includes(text)) return { type: "approve_plan" };
-  if (["修改", "请修改拆解方案", "revise", "request changes"].includes(text)) {
+  if (["批准", "approve", "approved"].includes(lowered) || approving.has(text)) return { type: "approve_plan" };
+  if (["修改", "请修改拆解方案", "revise", "request changes"].includes(lowered)) {
     return { type: "request_revision" };
   }
   return { type: "feedback" };
@@ -139,18 +144,29 @@ export function interpretRequirementPropertyChange(
  * While a PRD waits for approval, anything a person writes that is not the
  * approval itself is revision feedback: they are reading the PRD, and a
  * comment left there is about the PRD, not idle conversation.
+ *
+ * `approving` holds comment bodies a judge read as approvals, for the wordings
+ * the four-string whitelist below cannot match ("批准。" with a full stop,
+ * "确认，可以往下走"). It only ever widens: a comment the whitelist already
+ * recognises is never asked about, and a caller with no judge passes nothing
+ * and gets exactly today's reading.
  */
-export function interpretRequirementComment(state: RequirementState, body: string): RequirementCommentIntent {
+export function interpretRequirementComment(
+  state: RequirementState,
+  body: string,
+  approving: ReadonlySet<string> = new Set(),
+): RequirementCommentIntent {
   const text = body.trim();
   if (text === "") throw new Error("a Notion comment cannot be interpreted without text");
   if (state === "CLARIFY") return { type: "answer", body: text };
+  const yes = approved(text) || approving.has(text);
   if (state === "PRD_CONFIRM") {
-    return approved(text) ? { type: "approve_prd" } : { type: "request_revision", body: text };
+    return yes ? { type: "approve_prd" } : { type: "request_revision", body: text };
   }
   // The same reading as a PRD awaiting approval: while a solution is on the
   // page, what a person writes there is about that solution.
   if (state === "SOLUTION") {
-    return approved(text) ? { type: "approve_solution" } : { type: "request_solution_revision", body: text };
+    return yes ? { type: "approve_solution" } : { type: "request_solution_revision", body: text };
   }
   return { type: "feedback", body: text };
 }

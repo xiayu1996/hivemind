@@ -627,6 +627,13 @@ export const CONFIG_KEYS = {
     reload: "hot",
     description: "How long a judgement may take before the caller falls back to the deterministic answer. Short on purpose: it runs at the end of a round that has already done its work.",
   }),
+  "judge.approvalThreshold": def({
+    schema: z.number().min(0.5).max(1),
+    default: 0.8,
+    scope: "global",
+    reload: "hot",
+    description: "How sure the judge has to be that a comment approves what is on the page before that comment counts as the approval. High because the two mistakes are not comparable: a missed approval costs one redraft and the person says it again, while an invented one lets unapproved content go on to be built and loses what the person actually asked for. Measured 2026-09-18 over thirty real phrasings: approvals scored 0.83 to 0.96, agreement carrying any request 0.02 to 0.17, and bare praise -- which is the class this bar exists to exclude -- 0.55 to 0.76.",
+  }),
   "judge.environmentThreshold": def({
     schema: z.number().min(0.5).max(1),
     default: 0.7,

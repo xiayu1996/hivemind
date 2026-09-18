@@ -1,5 +1,7 @@
+import type { ConfigStore } from "../config/store.js";
+import type { ApprovalJudgeSettings } from "./approval-intent.js";
 import type { EnvironmentJudgement, EnvironmentJudgeSettings } from "./environment-reasons.js";
-import { HttpSystemOne } from "./system-one.js";
+import { HttpSystemOne, type SystemOne } from "./system-one.js";
 
 /** Read from `~/.hivemind/secrets.env` like every other credential; it is never
  * passed to a pi subprocess, which has no business with it. */
@@ -10,7 +12,23 @@ export interface JudgeConfig {
   endpoint: string;
   model: string;
   timeoutMs: number;
+  /** How sure the judge has to be that a rejection reason describes the box. */
   environmentThreshold: number;
+  /** How sure it has to be that a comment approves what is on the page. */
+  approvalThreshold: number;
+}
+
+/** The keys read in one place, so a caller cannot pick up one question's
+ * threshold for another's. */
+export function judgeConfigFrom(config: ConfigStore): JudgeConfig {
+  return {
+    enabled: config.get("judge.enabled"),
+    endpoint: config.get("judge.endpoint"),
+    model: config.get("judge.model"),
+    timeoutMs: config.get("judge.timeoutMs"),
+    environmentThreshold: config.get("judge.environmentThreshold"),
+    approvalThreshold: config.get("judge.approvalThreshold"),
+  };
 }
 
 /**
@@ -22,28 +40,53 @@ export interface JudgeConfig {
 export type JudgeSetup =
   | { kind: "off" }
   | { kind: "no_credential"; key: string }
-  | { kind: "ready"; settings: EnvironmentJudgeSettings };
+  | { kind: "ready"; judge: SystemOne; model: string };
 
-export function environmentJudgeSetup(
-  config: JudgeConfig,
-  secrets: ReadonlyMap<string, string>,
-  onJudged?: (judgement: EnvironmentJudgement) => Promise<void> | void,
-): JudgeSetup {
+export function judgeSetup(config: JudgeConfig, secrets: ReadonlyMap<string, string>): JudgeSetup {
   if (!config.enabled) return { kind: "off" };
   const apiKey = secrets.get(JUDGE_API_KEY);
   if (!apiKey) return { kind: "no_credential", key: JUDGE_API_KEY };
   return {
     kind: "ready",
+    judge: new HttpSystemOne({ endpoint: config.endpoint, apiKey, timeoutMs: config.timeoutMs }),
+    model: config.model,
+  };
+}
+
+/**
+ * Each question carries its own threshold because the conservative direction is
+ * not the same one twice. On the environment question the judge moves a
+ * rejection off the code side, and being wrong costs a card that never
+ * converges; on the approval question it turns a comment into an approval, and
+ * being wrong lets unapproved content go on to be built.
+ */
+export function environmentJudgeSetup(
+  config: JudgeConfig,
+  secrets: ReadonlyMap<string, string>,
+  onJudged?: (judgement: EnvironmentJudgement) => Promise<void> | void,
+): { setup: JudgeSetup; settings?: EnvironmentJudgeSettings } {
+  const setup = judgeSetup(config, secrets);
+  if (setup.kind !== "ready") return { setup };
+  return {
+    setup,
     settings: {
-      judge: new HttpSystemOne({
-        endpoint: config.endpoint,
-        apiKey,
-        timeoutMs: config.timeoutMs,
-      }),
-      model: config.model,
+      judge: setup.judge,
+      model: setup.model,
       threshold: config.environmentThreshold,
       ...(onJudged ? { onJudged } : {}),
     },
+  };
+}
+
+export function approvalJudgeSetup(
+  config: JudgeConfig,
+  secrets: ReadonlyMap<string, string>,
+): { setup: JudgeSetup; settings?: ApprovalJudgeSettings } {
+  const setup = judgeSetup(config, secrets);
+  if (setup.kind !== "ready") return { setup };
+  return {
+    setup,
+    settings: { judge: setup.judge, model: setup.model, threshold: config.approvalThreshold },
   };
 }
 
