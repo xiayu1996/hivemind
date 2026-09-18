@@ -719,13 +719,13 @@ describe("SingleStoryWorker SHAPE re-entry after a crash", () => {
   it("lets the SPECIFY session correct a contract the exit refuses, without spending a phase run", async () => {
     const phases = vi.fn(async (input: ManagedPhaseInput) => {
       if (input.phase === "SPECIFY") {
-        const gate = input.exitGate!;
+        const gate = input.exitGates!.find((candidate) => candidate.name === "specify-exit")!;
         const refused = await gate.evaluate([{ kind: "test-contract", body: NARROW_CONTRACT }], 1);
         expect(refused).toMatchObject({ passed: false, findings: expect.stringContaining("must be full") });
         return {
           sessionId: "session-specify",
           artifacts: [{ kind: "test-contract", body: TEST_CONTRACT }],
-          exitGateRounds: 2,
+          exitGateRounds: { "specify-exit": 2 },
         };
       }
       const front = frontPhase(input);

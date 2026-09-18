@@ -42,8 +42,9 @@ export interface ManagedPhaseInput {
   attempt?: number;
   /** A restart continuing the same attempt, which legitimately finds messages. */
   resuming?: boolean;
-  /** A deterministic exit the port enforces inside the live session. */
-  exitGate?: PhaseExitGate;
+  /** Deterministic exits the port enforces inside the live session, in order.
+   * The port adds its own for the phases that have one. */
+  exitGates?: readonly PhaseExitGate[];
 }
 
 /**
@@ -56,13 +57,25 @@ export interface ManagedPhaseInput {
  * refusals that a single sentence back into the same session would have fixed.
  */
 export interface PhaseExitGate {
+  /** Names the gate in errors, telemetry and friction records. */
+  name: string;
   /** Judges what the phase produced. Findings are what the session is told. */
   evaluate(
     artifacts: readonly { kind: string; body: string }[],
     attempt: number,
   ): Promise<{ passed: true } | { passed: false; findings: string }>;
-  /** Attempts inside one session, after which the phase has failed. */
+  /** How many times this gate may judge inside one session. */
   maxRounds: number;
+  /**
+   * What happens when the rounds run out. `fail` refuses the phase; `ship`
+   * lets the output through as written, which is right where the gate has no
+   * veto -- a delivery report that still reads technically is worth a rewrite,
+   * never a stalled card (03 section 8.2).
+   */
+  exhausted: "fail" | "ship";
+  /** The error a `fail` gate raises, when a bare refusal loses information the
+   * next attempt needs. Defaults to `PhaseExitNotMetError`. */
+  failure?(findings: string): Error;
 }
 
 export interface ManagedPhaseResult {
@@ -70,8 +83,10 @@ export interface ManagedPhaseResult {
   artifacts: Array<{ kind: string; body: string }>;
   /** What the phase actually ran on, when the port resolved one. */
   spec?: ResolvedAgentSpec;
-  /** How many times the exit gate judged this phase, when one was given. */
-  exitGateRounds?: number;
+  /** How many times each exit gate judged this phase, by gate name. A gate
+   * that judged more than once had to send the phase back at least that often,
+   * which is what tells whether a rule is earning its place. */
+  exitGateRounds?: Record<string, number>;
 }
 
 export interface StoryPhasePort {
@@ -780,29 +795,22 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
   }> {
     for (let attempt = 0; attempt < 2; attempt++) {
       const runId = this.createRunId(cardId, "SHAPE", 1);
-      const shaped = await this.runPhase(cardId, "SHAPE", 1, runId);
+      const gate = this.dodGate(cardId, runId);
+      const shaped = await this.runPhase(cardId, "SHAPE", 1, runId, [gate]);
       const questions = JSON.parse(artifact(shaped, "open-questions")) as Array<{
         id: string; question: string; suggestion: string; blocking: boolean;
       }>;
       await this.store.recordOpenQuestions(cardId, questions);
       try {
-        const definitionOfDone = parseDoD(artifact(shaped, "dod"));
-        // The contract a person judges the card by is written for them. A DoD
-        // in English or in implementation words is sent back to the same
-        // session, which costs a retry rather than a person's attention.
-        const language = lintDoDLanguage(definitionOfDone);
-        if (language.length > 0) {
-          // Counted so the rule is judged on evidence: a gate that never fires
-          // says the prompt is already enough, and one that fires every card
-          // says the prompt is not the layer to fix it in.
-          await this.friction?.record({
-            cardId,
-            runId,
-            kind: "dod_language_rejected",
-            detail: language.map((finding) => `${finding.where} ${finding.what}`).join("; "),
-          });
-          throw new DoDValidationError(renderDoDLanguageFindings(language));
+        // A port that does not enforce the gate (a caller driving phases
+        // directly) still has to be judged, once: what a person reads must not
+        // depend on which port ran the phase. The refusal lands in the catch
+        // below, which is the older and more expensive path -- a new session.
+        if (shaped.exitGateRounds?.[gate.name] === undefined) {
+          const verdict = await gate.evaluate(shaped.artifacts, 1);
+          if (!verdict.passed) throw new DoDValidationError(verdict.findings);
         }
+        const definitionOfDone = parseDoD(artifact(shaped, "dod"));
         const frozen = await this.store.findFrozenDefinitionOfDone(cardId);
         if (frozen) {
           await this.store.refreezeDefinitionOfDone(cardId, definitionOfDone);
@@ -839,6 +847,44 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
   }
 
   /**
+   * The contract a person judges the card by: it has to parse, and it has to
+   * be written in their language.
+   *
+   * Both go back to the session that wrote it. A DoD in English, or one whose
+   * YAML does not hold together, is a work item that session can fix in one
+   * turn; refusing it into a new run pays for a whole phase to change a
+   * sentence, and the abandoned run reads downstream as a crash.
+   */
+  private dodGate(cardId: string, runId: string): PhaseExitGate {
+    return {
+      name: "dod",
+      maxRounds: 3,
+      exhausted: "fail",
+      evaluate: async (artifacts) => {
+        const body = artifacts.find((item) => item.kind === "dod")?.body ?? "";
+        let definitionOfDone: DefinitionOfDone;
+        try {
+          definitionOfDone = parseDoD(body);
+        } catch (cause) {
+          return { passed: false, findings: (cause as Error).message };
+        }
+        const language = lintDoDLanguage(definitionOfDone);
+        if (language.length === 0) return { passed: true };
+        // Counted so the rule is judged on evidence: a gate that never fires
+        // says the prompt is already enough, and one that fires every card
+        // says the prompt is not the layer to fix it in.
+        await this.friction?.record({
+          cardId,
+          runId,
+          kind: "dod_language_rejected",
+          detail: language.map((finding) => `${finding.where} ${finding.what}`).join("; "),
+        });
+        return { passed: false, findings: renderDoDLanguageFindings(language) };
+      },
+    };
+  }
+
+  /**
    * Writes the tests, proves they fail on the tree being frozen, and commits.
    *
    * The exit findings go back to the same live session, like the CODE exit's:
@@ -864,6 +910,8 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
     // item the session that wrote it can fix in one turn; refusing it into a
     // new run cost S-AGENTRULES-01 two phase runs and then the card.
     const exitGate: PhaseExitGate = {
+      name: "specify-exit",
+      exhausted: "fail",
       maxRounds: this.specifyExitRounds,
       evaluate: async (artifacts) => {
         const contractYaml = artifactOf(artifacts, "test-contract");
@@ -902,7 +950,7 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
       },
     };
 
-    const result = await this.runPhase(cardId, "SPECIFY", attempt, runId, exitGate);
+    const result = await this.runPhase(cardId, "SPECIFY", attempt, runId, [exitGate]);
     if (settled === undefined) {
       // A port that does not enforce the gate (a caller driving phases
       // directly) still has to be judged, once, on what it produced.
@@ -959,7 +1007,7 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
     phase: Exclude<StoryPhase, "VERIFY">,
     round: number,
     runId: string,
-    exitGate?: PhaseExitGate,
+    exitGates?: readonly PhaseExitGate[],
   ): Promise<ManagedPhaseResult> {
     const persisted = await this.store.getCompletedPhase(cardId, phase, round);
     if (persisted) return persisted;
@@ -971,7 +1019,8 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
     const { attempt } = await this.store.beginPhase({ runId, cardId, phase, round, prompt });
     try {
       const result = await this.phases.run({
-        runId, phase, round, prompt, context, attempt, ...(exitGate ? { exitGate } : {}),
+        runId, phase, round, prompt, context, attempt,
+        ...(exitGates && exitGates.length > 0 ? { exitGates } : {}),
       });
       await this.store.completePhase({
         runId,
