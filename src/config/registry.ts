@@ -629,10 +629,10 @@ export const CONFIG_KEYS = {
   }),
   "judge.environmentThreshold": def({
     schema: z.number().min(0.5).max(1),
-    default: 0.85,
+    default: 0.7,
     scope: "global",
     reload: "hot",
-    description: "How sure the judge has to be that a rejection reason describes the box before that reason stops counting against convergence. High because the two mistakes do not cost the same: reading a real defect as the environment means the round is not counted and the card never converges, while reading an environment failure as the code costs one round -- which is what happens today whenever the pattern table misses.",
+    description: "How sure the judge has to be that a rejection reason describes the box before that reason stops counting against convergence. Above the midpoint because the two mistakes do not cost the same: reading a real defect as the environment means the round is not counted and the card never converges, while reading an environment failure as the code costs one round -- which is what happens today whenever the pattern table misses. Measured 2026-09-18 over fifteen real refusals asked one per request: code-level reasons scored 0.03 to 0.05, environment-level 0.80 to 0.95. 0.7 sits in that gap with room below the weakest yes, which matters because the same refusal written in Chinese scores about 0.1 lower than its English twin and production reasons are written in Chinese.",
   }),
   "guard.contextFilePolicy": def({
     schema: z.enum(["explicit", "inherit"]),

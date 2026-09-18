@@ -27,12 +27,13 @@ const CRITERIA = {
 } as const;
 
 /** Long enough for the sentence and its tail, short enough that a stack trace
- * pasted into a reason cannot crowd out the other reasons in the same call. */
+ * pasted into a reason cannot dominate the question it belongs to. */
 const MAX_REASON_CHARS = 1200;
 
-/** One call, one round trip. A round with more distinct unmatched reasons than
- * this keeps the floor's answer for the rest, which is the safe direction. */
-const MAX_REASONS_PER_CALL = 16;
+/** A ceiling on how many requests one round may open at once. A round with more
+ * distinct unmatched reasons than this keeps the floor's answer for the rest,
+ * which is the safe direction. */
+const MAX_REASONS_PER_ROUND = 16;
 
 export interface EnvironmentJudgementOptions {
   model: string;
@@ -45,9 +46,10 @@ export interface EnvironmentJudgement {
   environmental: ReadonlySet<string>;
   /** What moved and how sure the judge was, for the friction record. */
   moved: readonly { reason: string; probability: number }[];
-  /** Reasons that went unasked because the call was already full. */
+  /** Reasons that went unasked because the round was already at its ceiling. */
   skipped: number;
-  /** Why the judge said nothing, when it said nothing. Never thrown. */
+  /** Why the judge said nothing about the reasons it said nothing about. Never
+   * thrown: one failed question leaves the others standing. */
   error?: string;
 }
 
@@ -67,34 +69,43 @@ export interface EnvironmentJudgeSettings {
 
 const NOTHING: EnvironmentJudgement = { environmental: new Set(), moved: [], skipped: 0 };
 
-function questionId(index: number): string {
-  return `reason_${index}`;
-}
+/** The single question id every request uses; there is one question per request. */
+export const QUESTION_ID = "is_environment";
 
-/** Deduplicated and sorted so the same round produces the same request: the
- * provider's cache is keyed on the bytes, and so is anyone reading two runs
- * side by side. */
+/** Deduplicated and sorted so the same round asks the same questions: a reason
+ * repeated across five scenarios is one question, and two runs of one round
+ * produce the same requests in the same order. */
 export function unmatchedReasons(reasons: readonly string[]): string[] {
   return [...new Set(reasons.filter((reason) => !isEnvironmentFailure(reason)))].toSorted();
 }
 
-export function environmentQuestions(reasons: readonly string[]): Record<string, NoulQuestion> {
-  const questions: Record<string, NoulQuestion> = {};
-  for (const [index] of reasons.entries()) {
-    questions[questionId(index)] = {
-      type: "noul",
-      instructions:
-        `The text at \`reasons[${index}]\` is the reason one verification scenario was rejected. Does it describe the machine the check ran on, rather than a defect in the code being checked?`,
-      criteria: CRITERIA,
-    };
-  }
-  return questions;
+export function environmentQuestion(): NoulQuestion {
+  return {
+    type: "noul",
+    instructions:
+      "The text at `reason` is why one verification scenario was rejected. Does it describe the machine the check ran on, rather than a defect in the code being checked?",
+    criteria: CRITERIA,
+  };
 }
 
 /**
- * Never throws and never returns the floor's own answers. A judge that is
- * missing, slow, broken or unsure costs the caller its opinion and nothing
- * else, which is why `judge` is allowed to be undefined at every call site.
+ * One reason per request, on purpose, even though the API would take them all
+ * at once.
+ *
+ * Measured 2026-09-18: asked together, one reason's answer moves with what else
+ * is in the batch. The same refusal about a stand-in service scored 0.59 beside
+ * two code failures, 0.81 beside five, and 0.88 when four other environment
+ * failures were in the same call -- a 0.29 spread, against a run-to-run spread
+ * of 0.02 on a fixed batch. The judge's own documentation says as much: answers
+ * to separate questions carry no structural invariant between them, and
+ * unrelated context reads as a distractor.
+ *
+ * Batching would therefore make one reason's verdict depend on which other
+ * scenarios happened to fail in the same round, which is both unjustifiable and
+ * invisible. One question per request makes the answer a function of the reason
+ * alone. It costs one request per distinct reason; they go out together, fifteen
+ * took 2.2 seconds, and the tokens are a rounding error against the round that
+ * produced them.
  */
 export async function judgeEnvironmentReasons(
   judge: SystemOne | undefined,
@@ -104,30 +115,43 @@ export async function judgeEnvironmentReasons(
   if (!judge) return NOTHING;
   const candidates = unmatchedReasons(reasons);
   if (candidates.length === 0) return NOTHING;
-  const asked = candidates.slice(0, MAX_REASONS_PER_CALL);
+  const asked = candidates.slice(0, MAX_REASONS_PER_ROUND);
   const skipped = candidates.length - asked.length;
 
-  let answers;
-  try {
-    ({ answers } = await judge.ask({
-      model: options.model,
-      state: { reasons: asked.map((reason) => reason.slice(0, MAX_REASON_CHARS)) },
-      questions: environmentQuestions(asked),
-    }));
-  } catch (error) {
-    const message = error instanceof JudgeError ? `${error.kind}: ${error.message}` : (error as Error).message;
-    return { ...NOTHING, skipped: candidates.length, error: message };
-  }
+  const answers = await Promise.all(asked.map(async (reason) => {
+    try {
+      const response = await judge.ask({
+        model: options.model,
+        state: { reason: reason.slice(0, MAX_REASON_CHARS) },
+        questions: { [QUESTION_ID]: environmentQuestion() },
+      });
+      return { reason, probability: response.answers[QUESTION_ID]?.noul };
+    } catch (error) {
+      const message = error instanceof JudgeError ? `${error.kind}: ${error.message}` : (error as Error).message;
+      return { reason, failure: message };
+    }
+  }));
 
   const environmental = new Set<string>();
   const moved: { reason: string; probability: number }[] = [];
-  for (const [index, reason] of asked.entries()) {
-    const probability = answers[questionId(index)]?.noul;
+  const failures: string[] = [];
+  for (const answer of answers) {
+    if ("failure" in answer && answer.failure !== undefined) {
+      failures.push(answer.failure);
+      continue;
+    }
+    const probability = "probability" in answer ? answer.probability : undefined;
     if (probability === undefined || probability < options.threshold) continue;
-    environmental.add(reason);
-    moved.push({ reason, probability });
+    environmental.add(answer.reason);
+    moved.push({ reason: answer.reason, probability });
   }
-  return { environmental, moved, skipped };
+  const unanswered = failures.length;
+  return {
+    environmental,
+    moved,
+    skipped: skipped + unanswered,
+    ...(unanswered > 0 ? { error: `${unanswered} of ${asked.length} unanswered: ${[...new Set(failures)].join("; ")}` } : {}),
+  };
 }
 
 /** One line for the friction record: what moved, and how sure the judge was.
