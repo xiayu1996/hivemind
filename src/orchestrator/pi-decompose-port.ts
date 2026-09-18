@@ -153,6 +153,7 @@ function promptFor(input: DecomposeRequest): string {
     "这是本 Epic 自己的编号空间：需求里出现的场景 id 属于 PRD，不能拿来当 scenario id，",
     "要承接哪条 PRD 场景就在 given/when/then 的业务语言里说清楚。",
     `本 Epic 最多 ${input.maxStories} 张 Story，超出即整份打回。`,
+    "predictedFootprint: 每条只写路径本身，小写，例如 src/orchestrator；不写文件名、不写扩展名、路径后面不跟任何说明文字。",
   ].join("\n"));
   parts.push([
     "只输出一个 JSON 对象，不要附加解释。字段:",
