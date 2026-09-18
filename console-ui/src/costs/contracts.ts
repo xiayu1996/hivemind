@@ -147,9 +147,12 @@ export function renderDailyCostPanel(snapshot: DailyCostViewSnapshot): string {
     + `<div class="bar-track"></div>`
     + `<strong class="money">${escapeHtml(row.amount)}</strong></div>`,
   ).join("");
+  // The scope sits beside the heading as a text node rather than inside a
+  // paragraph: the scenario declares it as plain text on the page, and a <p>
+  // would publish it under a different role than the one a person reads.
   return `<section class="panel" aria-labelledby="daily-title">`
     + `<div class="section-head"><div><h2 id="daily-title">每日费用</h2>`
-    + `<p>${escapeHtml(snapshot.scope)}</p></div></div>`
+    + `${escapeHtml(snapshot.scope)}</div></div>`
     + `<div class="bar-list">${rows}</div></section>`;
 }
 

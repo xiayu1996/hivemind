@@ -1,7 +1,10 @@
 import fastifyStatic from "@fastify/static";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { costsPageZones, renderCostsRoute } from "./costs-page.js";
 import type {
   DailyCostReadResult,
   DailyCostSelection,
@@ -40,6 +43,37 @@ export interface ConsoleServerOptions {
   configWriter?: ConsoleConfigWritePort;
 }
 
+const moduleDir = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Where a built browser bundle is served from, when one exists.
+ *
+ * A bundle wins, but its absence is not an error: the console is mounted by
+ * whatever process holds the central store, and the server-rendered costs page
+ * below does not depend on a build. Returning null means the other routes were
+ * never built, which is the state this repository is in while its interface is
+ * being rebuilt page by page.
+ */
+export function findConsoleUiRoot(requested: string): string | null {
+  const candidates = [...new Set([
+    resolve(requested),
+    resolve("console-ui/dist"),
+    resolve("console-ui"),
+    resolve(join(moduleDir, "..", "..", "console-ui")),
+  ])];
+  return candidates.find((candidate) => existsSync(join(candidate, "index.html"))) ?? null;
+}
+
+async function readOptional(path: string): Promise<string | null> {
+  try {
+    return await readFile(path, "utf8");
+  } catch {
+    // Absent or unreadable are the same answer here: there is no built page to
+    // serve at this path, and the caller keeps the server-rendered routes.
+    return null;
+  }
+}
+
 /** Builds the read-only intranet console. */
 export async function createConsoleServer(
   data: ConsoleDataSource,
@@ -61,6 +95,23 @@ export async function createConsoleServer(
   app.get("/api/nodes", async () => data.nodes());
   app.get("/api/tasks", async () => data.tasks());
   app.get("/api/costs", async () => data.costs());
+
+  // The costs page is a read of the central ledger, so it is served by the
+  // process that holds it rather than behind `serveUi`: a host with the store
+  // and no bundle still owes a person the screen. A source that cannot read
+  // days renders the failure state instead of a 404.
+  const renderCosts = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
+    const query = (request.query ?? {}) as Record<string, string | undefined>;
+    const zones = await costsPageZones(data);
+    const read = (selection: DailyCostSelection): Promise<DailyCostReadResult> =>
+      data.dailyCosts
+        ? data.dailyCosts(selection)
+        : Promise.resolve({ kind: "failed", message: "daily costs are not available" });
+    const html = await renderCostsRoute(query, zones, read);
+    return reply.type("text/html").send(html);
+  };
+  app.get("/", renderCosts);
+  app.get("/costs", renderCosts);
   app.get("/api/costs/time-zones", async (_request, reply) => {
     if (!data.dailyCostTimeZones) return reply.code(404).send({ error: "daily cost time zones are not available" });
     return data.dailyCostTimeZones();
@@ -116,15 +167,18 @@ export async function createConsoleServer(
   }
 
   if (options.serveUi !== false) {
-    const uiRoot = resolve(options.uiRoot ?? "console-ui/dist");
-    await app.register(fastifyStatic, {
-      root: join(uiRoot, "assets"),
-      prefix: "/assets/",
-    });
-    const index = await readFile(join(uiRoot, "index.html"), "utf8");
-    app.get("/", async (_request, reply) => reply.type("text/html").send(index));
-    for (const route of ["/nodes", "/tasks", "/costs", "/config", "/stats", "/providers", "/queue"]) {
-      app.get(route, async (_request, reply) => reply.type("text/html").send(index));
+    const uiRoot = findConsoleUiRoot(options.uiRoot ?? "console-ui/dist");
+    const index = uiRoot === null ? null : await readOptional(join(uiRoot, "index.html"));
+    if (uiRoot !== null && index !== null) {
+      const assets = join(uiRoot, "assets");
+      if (existsSync(assets)) {
+        await app.register(fastifyStatic, { root: assets, prefix: "/assets/" });
+      }
+      // A built shell owns the remaining pages; `/` and `/costs` stay with the
+      // server-rendered costs page, which exists whether or not a build ran.
+      for (const route of ["/nodes", "/tasks", "/config", "/stats", "/providers", "/queue"]) {
+        app.get(route, async (_request, reply) => reply.type("text/html").send(index));
+      }
     }
   }
   return app;
