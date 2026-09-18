@@ -526,6 +526,22 @@ MU-09 拆开的那一项（2026-09-18，MU-03 做完后复核）：“仓库首�
 
 ---
 
+## MW 首次真实需求全程观察（2026-09-18 夜 — 09-19）
+
+需求「Hivemind 的 web 管理后台」是第一个从 Notion 接单、走完澄清 → PRD → 方案 → 原型 → 拆解 → 执行的真实需求。
+逐条记录观察到的流程缺陷、根因与处置；**修复必须落在机制上**，手工推一把只算止血不算修。
+
+| # | 现象 | 根因 | 处置 |
+|---|---|---|---|
+| W-01 ✅ | 画原型的会话声称画了六页，磁盘上一个文件没有 | 它借拆解的调用点取大脑档，连带继承了拆解的**只读**工具面（实测请求体 `tools: ['find','grep','ls','read']`）；守卫的只读工具名单写的是 Claude Code 的拼法（`list`/`glob`）而非 pi 的；围栏把契约根排除在自身之外 | 画原型成为自己的 `ModelPurpose`；两张工具名单合并为一个导出常量；围栏放行根目录。各带回归测试 |
+| W-02 ✅ | 方案已批准，界面契约却留在未合的 PR 上 | `prototype-delivery.ts` 的注释写明「人批准方案时一起批」，但**没有任何代码在批准后合它**；而每张卡从自己的 worktree 读契约，worktree 从主干切 | `MergeRequestLandPort` + `SolutionRunner.landContract`：确认方案即落地契约，落不下去就停在 SOLUTION 让人看 PR，而不是拆完让每张带界面的卡各停一次 |
+| W-03 ✅ | 七个 Epic 里三个在十分钟内 BLOCKED | 拒绝理由只说「invalid Story id」不说正确形状；prompt 说「数量有上限」不说上限是几；一个错 Story id 放大成十六条 reason 淹掉真正的打回理由；固定两次尝试在每轮都有进展时掐断 | 拒绝自带可照抄的形状；形状与上限随请求下发（上限来自配置）；级联抑制；固定两次改为上限四次 + 内环同款「理由集合不得重复」 |
+| W-04 ✅ | BLOCKED 的 Epic 只能靠人评论恢复，而「id 形状不对」没有人答得上来 | 出路只有 `answerBlocker` 一条，它是为 blocking question 设计的 | `reopenRejectedDecompositions`：判据拒绝类的 BLOCKED 在安装版本变化后自动重开一次；blocking question 原样留着 |
+| W-05 ⬜ | 两版原型的 design lint finding 一字不差 | finding 只记 friction，从不进下一轮 prompt。不否决是对的（审美不能否决），不告诉是错的 | 待做：把上一轮 finding 作为**不否决的提示**注入重画 |
+| W-06 ⬜ | 人只能从 worktree 的 `file://` 路径看原型，背离「只在 Notion 上完成」 | 截图能力（`prototype-screenshots.ts`，四态）与 Notion 上传能力（`sdk-adapters.ts` 的 multipart + `file_upload`，Story 侧已在生产用）都在仓库里，**两者之间没有接线**；MU-09 记的「gateway 没有 multipart 通道」是错的 | 待定：Ryan 倾向接 Cloudflare 一类免费服务给可点原型；截图进 Notion 是另一半，两件事不互斥 |
+
+---
+
 ## 贯穿性事项（不属于单一里程碑）
 
 | 事项 | 约束 |

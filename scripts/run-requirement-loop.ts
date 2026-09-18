@@ -254,6 +254,15 @@ async function main(): Promise<void> {
       contractRoot: async (repository) =>
         (await ConfigStore.load(handle.client, { repository })).get("prototype.root"),
     },
+    landContract: async (requirementId) => {
+      const approved = await store.getSolution(requirementId);
+      if (!approved) return;
+      const prototype = await store.getSolutionPrototype(requirementId, approved.revision);
+      // No drawing means no contract to land: a requirement that touches no
+      // screen leaves the target branch as it is.
+      if (!prototype?.mrUrl) return;
+      await (await discoverMRPort()).land(prototype.mrUrl);
+    },
   });
   const decomposer = new RequirementDecomposer(handle.client, store, pm, projector);
   const acceptance = new AcceptanceChecklist(handle.client, store, projector);

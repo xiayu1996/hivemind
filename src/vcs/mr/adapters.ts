@@ -1,6 +1,7 @@
 import { processCliExecutor } from "./cli.js";
 import type {
-  CliExecutor, MergeRequestInput, MergeRequestResult, MergeRequestState, MergeRequestStatePort, MRPort, OpenMergeRequestQuery,
+  CliExecutor, MergeRequestInput, MergeRequestLandPort, MergeRequestResult, MergeRequestState, MergeRequestStatePort, MRPort,
+  OpenMergeRequestQuery,
 } from "./types.js";
 
 function extractUrl(output: string): string {
@@ -52,7 +53,7 @@ function normaliseState(raw: string, cli: string): MergeRequestState {
   }
 }
 
-export class GhMRAdapter implements MRPort, MergeRequestStatePort {
+export class GhMRAdapter implements MRPort, MergeRequestStatePort, MergeRequestLandPort {
   constructor(private readonly cli: CliExecutor = processCliExecutor) {}
 
   async state(url: string): Promise<MergeRequestState> {
@@ -81,9 +82,18 @@ export class GhMRAdapter implements MRPort, MergeRequestStatePort {
     const result = await this.cli.run("gh", args);
     return { url: extractUrl(result.stdout), provider: "github" };
   }
+
+  // Squashed, because the contract is one decision however many rounds of
+  // drawing it took. The state is read back afterwards so a refusal the CLI
+  // reported without failing cannot pass for a landing.
+  async land(url: string): Promise<void> {
+    await this.cli.run("gh", ["pr", "merge", url, "--squash"]);
+    const state = await this.state(url);
+    if (state !== "merged") throw new Error(`the review request is ${state} after the merge was asked for`);
+  }
 }
 
-export class GlabMRAdapter implements MRPort, MergeRequestStatePort {
+export class GlabMRAdapter implements MRPort, MergeRequestStatePort, MergeRequestLandPort {
   constructor(private readonly cli: CliExecutor = processCliExecutor) {}
 
   async state(url: string): Promise<MergeRequestState> {
@@ -113,10 +123,18 @@ export class GlabMRAdapter implements MRPort, MergeRequestStatePort {
     const result = await this.cli.run("glab", args);
     return { url: extractUrl(result.stdout), provider: "gitlab" };
   }
+
+  async land(url: string): Promise<void> {
+    await this.cli.run("glab", ["mr", "merge", url, "--squash", "--yes"]);
+    const state = await this.state(url);
+    if (state !== "merged") throw new Error(`the review request is ${state} after the merge was asked for`);
+  }
 }
 
 /** Selects gh first, then glab, so deployment images may carry either provider CLI. */
-export async function discoverMRPort(cli: CliExecutor = processCliExecutor): Promise<MRPort & MergeRequestStatePort> {
+export async function discoverMRPort(
+  cli: CliExecutor = processCliExecutor,
+): Promise<MRPort & MergeRequestStatePort & MergeRequestLandPort> {
   if (await cli.available("gh")) return new GhMRAdapter(cli);
   if (await cli.available("glab")) return new GlabMRAdapter(cli);
   throw new Error("neither gh nor glab is installed");
