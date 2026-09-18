@@ -549,6 +549,7 @@ MU-09 拆开的那一项（2026-09-18，MU-03 做完后复核）：“仓库首�
 | W-14 ✅ | 两张在跑的卡租约 01:09:38 取得、01:24:38 到期，`renewed_at` 与 `acquired_at` 完全相同；01:27 两轮都还在跑（CODE 会话已 762KB），租约已过期九分钟 | `LeaseStore.renew` 写好了、测过了、**生产代码零调用**。`run-story.ts` 只 `acquire` 一次，TTL 15 分钟，而 CODE 轮常规超过 15 分钟。单机靠 orchestrator 的 `inFlight` map 恰好挡住；多机没有这一层，而 AGENTS.md 说租约「是多机粘性不出双执行的根」——这个根只在前 15 分钟成立 | `startLeaseHeartbeat`：每 TTL/3 续一次，允许连丢两次；续租被拒只报一次，执行仍由 fence 强制；store 故障不当作丢租约 |
 | W-15 ⬜ 观察 | DESIGN 轮静默 15 分钟：模型为了找一个还不存在的 `console-ui/` 目录跑了 `find / -maxdepth 6`，把宿主整盘翻了一遍 | 预测 footprint 指向尚未创建的目录，模型出树去找。工具面对 `bash` 不设边界 | **已有兜底生效**：`retry.promptTimeoutMs`(15 分钟) 到点放弃该轮、杀掉 `find`、以 continue 续跑，实测 01:30 恢复。代价是一个 15 分钟窗口 + 宿主整盘被读过一遍。不打算按命令拼写去围堵（换个写法就绕开）；真正的问题是「骨架由第一张切片带出来」这件事模型不确信，属于 prompt 而非守卫 |
 | W-16 ✅ | 一个 Epic 的拆解跑满 15 分钟 prompt 超时，整轮作废交给下一周期再花一个 15 分钟（`timed out waiting for agent_settled`） | `grep -rn "runner\.prompt(" src scripts` 除测试与探针外只有两处生产调用：拆解端口与产品经理端口。其余每一条驱动模型的道都走 `promptWithContinueRetry`（phase / prototype / verify / UI 走查）——RPC 下 pi 进程与会话都还在，流断了发一句 `continue` 就接上。而 `retry.promptTimeoutMs` 的描述本身写的就是「resumed, not failed」，这两条道是例外，且恰好是全系统最长的两种 turn | 两处改走 `promptWithContinueRetry`；非可重试的失败（QUOTA/AUTH）行为不变，照旧返回给调用方由断路器读 |
+| W-17 ✅ | `inspect-round` 把 CODE r2 的 34.9KB prompt 报成 44 段，其中 `### SPECIFY / test-contract` 0.0KB——而它是整份里第二大的一段 | `sectionMap` 把任何以 `#` 开头的行当分界，而组装器只写一个 `# `（任务标题），其余一律 `## ` / `### `。于是 `components.md` 自己的十四个标题、测试合同 YAML 开头的注释行都成了「段落」，内容的体重记到了内容自己的标题上 | 分界只认组装器写得出的三种。44 段 → 20 段，测试合同 0.0KB → 7.7KB。一张 prompt 地图说最大的那段是空的，会把读的人送去找一个并不缺的注入——W-08 同一个方向的假话花了一整夜 |
 
 ---
 
