@@ -108,6 +108,11 @@ import { unrecoveredHeadFailures } from "../src/orchestrator/epic-head-failure.j
 const execFileAsync = promisify(execFile);
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
+/** How often the outbox is emptied while the process is draining. The cycle is
+ * no longer running, and a Story that changes state during a drain must still
+ * reach the board. */
+const DRAIN_OUTBOX_INTERVAL_MS = 15_000;
+
 /**
  * The revision of the installation this process is running, which is what says
  * whether a decision was made by the criteria in force today. Read from this
@@ -412,6 +417,21 @@ async function main(): Promise<void> {
       coordinator.registerActivePage(pageId);
     }
   };
+  /** Sends what is queued for the Story side. The requirement loop shares this
+   * outbox; each side replays only its own rows. */
+  const sendQueuedNotionWrites = async (): Promise<void> => {
+    const replayed = await outbox.replay(delivery, { operations: STORY_OUTBOX_OPERATIONS });
+    for (const failure of replayed.failures) {
+      console.warn(`Notion outbox: ${failure.operation} for ${failure.cardId ?? "no card"} failed (attempt ${failure.attempts}): ${failure.error}`);
+    }
+    for (const letter of replayed.dead) {
+      await reportP0(
+        `Notion outbox gave up on ${letter.operation} for ${letter.cardId ?? "no card"}`,
+        new Error(`${letter.attempts} attempts; last error: ${letter.lastError ?? "unknown"}`),
+      );
+    }
+  };
+
   const syncIntake = async (): Promise<void> => {
     await ingestReadyStories(storyApi, dataSourceId, store);
     await registerActiveStories();
@@ -430,17 +450,7 @@ async function main(): Promise<void> {
     await enqueueEpicPages(handle.client, boardTargetBranch);
     const stories = (await handle.client.execute("SELECT id FROM stories ORDER BY id")).rows;
     for (const story of stories) await projection.enqueue(String(story.id));
-    // The requirement loop shares this outbox; each side replays only its own rows.
-    const replayed = await outbox.replay(delivery, { operations: STORY_OUTBOX_OPERATIONS });
-    for (const failure of replayed.failures) {
-      console.warn(`Notion outbox: ${failure.operation} for ${failure.cardId ?? "no card"} failed (attempt ${failure.attempts}): ${failure.error}`);
-    }
-    for (const letter of replayed.dead) {
-      await reportP0(
-        `Notion outbox gave up on ${letter.operation} for ${letter.cardId ?? "no card"}`,
-        new Error(`${letter.attempts} attempts; last error: ${letter.lastError ?? "unknown"}`),
-      );
-    }
+    await sendQueuedNotionWrites();
     await media.reconcile();
     await registerActiveStories();
   };
@@ -1322,7 +1332,21 @@ async function main(): Promise<void> {
     // orchestrator would dispatch the same card again beside it: drain first.
     if (inFlight.size > 0) {
       console.log(`Waiting for ${inFlight.size} in-flight Story run(s) before exit`);
-      await Promise.allSettled(inFlight.values());
+      // The cycle timer is what normally empties the outbox, and it has just
+      // been cleared -- while a Story runs on for another hour the board would
+      // show nothing it does. Keep the postman walking: the health probe reads
+      // an unsent write as the system being stuck, and during a drain it would
+      // be right.
+      const postman = setInterval(() => {
+        void sendQueuedNotionWrites().catch(() => undefined);
+      }, DRAIN_OUTBOX_INTERVAL_MS);
+      postman.unref?.();
+      try {
+        await Promise.allSettled(inFlight.values());
+      } finally {
+        clearInterval(postman);
+      }
+      await sendQueuedNotionWrites().catch(() => undefined);
     }
     coordinator.stop();
     await coordinator.waitForIdle();
