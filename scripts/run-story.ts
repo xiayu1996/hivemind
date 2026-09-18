@@ -33,6 +33,8 @@ import { breakerPolicy, usableProviders } from "../src/runner/circuit-breaker.js
 import { classifyError } from "../src/runner/classify.js";
 import { LibsqlProviderHealthStore } from "../src/runner/provider-health-store.js";
 import { loadSecretsFile } from "../src/config/secrets-file.js";
+import { describeJudgeSetup, environmentJudgeSetup } from "../src/judge/settings.js";
+import { renderMovedReasons } from "../src/judge/environment-reasons.js";
 import { needsApiKeyEnv, providerKeyEnv } from "../src/runner/provider-env.js";
 import { cacheRetentionEnv } from "../src/runner/cache-retention.js";
 import type { ProviderProfile } from "../src/runner/model-policy.js";
@@ -358,6 +360,32 @@ async function main(): Promise<void> {
     // changed during VERIFY is moved to the quarantine root beside it, so the
     // round is rejected with evidence instead of the worker dying.
     const layout = worktreeLayout(resolve(worktreePath, "..", "..", ".."));
+    // Asked only about the refusals the pattern table did not recognise, and
+    // only ever to move one off the code side. Absent or unreachable, the table
+    // is the whole answer, which is what every deployment without the
+    // credential gets.
+    const judgeSetup = environmentJudgeSetup(
+      {
+        enabled: config.get("judge.enabled"),
+        endpoint: config.get("judge.endpoint"),
+        model: config.get("judge.model"),
+        timeoutMs: config.get("judge.timeoutMs"),
+        environmentThreshold: config.get("judge.environmentThreshold"),
+      },
+      secrets,
+      async (judgement) => {
+        if (judgement.moved.length === 0) return;
+        await store.recordFriction({
+          cardId,
+          runId: `verify:${cardId}`,
+          kind: "verify_environment_judged",
+          detail: renderMovedReasons(judgement.moved),
+        });
+      },
+    );
+    const judgeNote = describeJudgeSetup(judgeSetup);
+    if (judgeNote) console.warn(judgeNote);
+    const environmentJudge = judgeSetup.kind === "ready" ? judgeSetup.settings : undefined;
     const blindExecutor = new BlindVerifyExecutor(
       {
         // The spec is the one granted for this verification, so the verifier
@@ -392,6 +420,8 @@ async function main(): Promise<void> {
           await quarantineWorktree(path, reason, layout);
         },
       },
+      Date.now,
+      environmentJudge,
     );
     const verifier = new BlindVerifyStoryPort({
       executor: blindExecutor,
@@ -469,6 +499,9 @@ async function main(): Promise<void> {
           return { title: snapshot.title, businessGoal: snapshot.requirement };
         },
         recordFriction: (friction) => store.recordFriction(friction),
+        // The lane the table misses most: the reviewer stands its own harness
+        // up, so what it refuses on is prose about a box it built itself.
+        ...(environmentJudge ? { environmentJudge } : {}),
       })
       : verifier;
     const delivery = new GitMrStoryDelivery(await discoverMRPort(), {

@@ -1,4 +1,9 @@
 import { refusableStatements, screenScenarios, seedOf, type DefinitionOfDone, type DoDScenario } from "../pipeline/dod.js";
+import {
+  type EnvironmentJudgeSettings,
+  judgeEnvironmentReasons,
+  renderMovedReasons,
+} from "../judge/environment-reasons.js";
 import { splitScenarioFailures } from "../pipeline/failure-classification.js";
 import { AppUnderReview } from "../verify/app-under-review.js";
 import type { UiReviewExecutor, UiReviewReference, UiReviewResult, UiReviewScenario } from "../verify/ui-review.js";
@@ -52,6 +57,11 @@ export interface UiReviewedVerifyPortOptions {
   publishFindings?: (input: { cardId: string; runId: string; text: string; result: UiReviewResult }) => Promise<void>;
   /** A review that could not run says nothing about the Story; it is our problem. */
   recordFriction?: (input: { cardId: string; runId: string; kind: string; detail: string }) => Promise<void>;
+  /** Asked only about the refusals the pattern table did not recognise. This
+   * lane needs it most: the reviewer stands its own harness up, so its
+   * refusals are prose about a box it built itself rather than a runner's
+   * formatted output. Absent means the table is the whole answer. */
+  environmentJudge?: EnvironmentJudgeSettings;
 }
 
 function hostOf(url: string): string | null {
@@ -239,12 +249,29 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
     // What the reviewer could not see because the box misbehaved is not a
     // failure of the code, and the reviewer stands its own harness up: a 500 it
     // meets may well be its own. The same split the functional lane applies.
-    const split = splitScenarioFailures(
-      result.failedScenarios,
-      result.acceptance
-        .filter((entry) => entry.status !== "passed" && entry.reason)
-        .map((entry) => ({ scenarioId: entry.id, reason: entry.reason! })),
+    const reviewReasons = result.acceptance
+      .filter((entry) => entry.status !== "passed" && entry.reason)
+      .map((entry) => ({ scenarioId: entry.id, reason: entry.reason! }));
+    const judged = await judgeEnvironmentReasons(
+      this.options.environmentJudge?.judge,
+      reviewReasons.map((entry) => entry.reason),
+      {
+        model: this.options.environmentJudge?.model ?? "",
+        threshold: this.options.environmentJudge?.threshold ?? 1,
+      },
     );
+    if (judged.moved.length > 0 && this.options.recordFriction) {
+      // Recorded whether or not it changed the verdict: this is the only place
+      // the pattern table's misses become countable, and the count is what
+      // decides whether asking is worth keeping.
+      await this.options.recordFriction({
+        cardId: input.context.cardId,
+        runId: input.runId,
+        kind: "ui_review_environment_judged",
+        detail: renderMovedReasons(judged.moved),
+      });
+    }
+    const split = splitScenarioFailures(result.failedScenarios, reviewReasons, judged.environmental);
     if (result.verdict === "rejected" && split.code.length > 0) {
       return {
         ...functional,

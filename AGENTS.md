@@ -30,6 +30,7 @@ src/
   guard/          danger-rules + 运行时红线（CODE 冻结测试的 fencedPatterns / VERIFY 的导航白名单）；工具面全阶段统一，pi 侧钩子在 extensions/
   queue/ worker/  DB 可派发集 + 租约 CAS 领单 + worker daemon(心跳/能力声明/粘性恢复)
   regression/     RegressionScheduler + 场景注册表 + 归因二分 + 失败签名
+  judge/          结构化判官：pi 之外的第二条模型路径，只回类型化判断不生成文本；每个问题都有确定性地板，判官没意见即用地板
   vcs/ verify/ report/ memory/ observability/ alert/ console/ util/
 prompts/          基线层 + per-phase prompt，各自独立文件
 extensions/       pi extension：hive-guard / model-policy 兜底（浏览器不走 MCP，见 02 §4.3）
@@ -103,6 +104,8 @@ pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src
 - **技术栈与界面是需求级决策，不是卡级决策**（08）：PRD 与拆解禁写技术方案、DESIGN 禁止提问且只看得见一张卡，所以此前**没有任何一层的作用域够大**——需要新栈的需求只能被某张卡顺手决定，涉及界面的需求全链路没有一处描述"长什么样"。需求层为此加一道 `SOLUTION` 关（PRD 确认之后、拆解之前）：产出选定方案与被否的备选、`stackChanges`、`openDecisions`（这是"主动提技术疑问"的出口）、`qualityGates`，涉及界面时再产出进仓库的界面契约（`docs/prototype/` 的 token 表 + 组件清单 + 可运行页面原型）。**停不停人由确定性条件决定**：`stackChanges` 或界面契约非空即必须人批，不接受模型自称不用审。卡越界改依赖由 CODE 出口拒掉并升级回这一关——仓库级不可逆的决定不由一张卡替所有卡做。等人仍停在 SOLUTION 状态内，四类真停点不变。
 - **界面判据分三层，只有前两层能否决**（08 §6，修订 03 §9.2）：结构层（该场景声明要看见的角色与文本是否出现在 aria 快照里）与契约层（色值/字号/间距是否全部来自 token 表）可否决，因为两者有限可枚举、可收敛；观感永不否决。**像素级一致不做**——它是无限精度的判据，模型每轮都能挑出新的一处差，失败集合永不重复、判据永不生效，卡只会烧完预算。原型的作用是给前两层供数，不是一张要被像素对齐的图。
 - **出口检查只有一套机制**：`evaluate → findings 回喂同一 session → 重解析`，每个 phase 的出口由一张表声明（`pi-phase-port.ts` 的 `builtInGates`），调用方需要现场状态时自己传 gate。会话内回喂是关键：拒绝是一个工作项，不是对 Story 的判决，所以不耗轮次、不算重入，也不用重新加载这个 session 已经读过的东西——S-AGENTRULES-01 就是被两次"换个 session 重做"的 SPECIFY 拒绝停掉的。每个 gate 声明用尽轮次后是 `fail` 还是 `ship`：没有否决权的那些（交付报告、设计摘要）照发，因为卡在文字上比文字不好读更糟。
+
+- **判官只许把答案从确定性地板上移开，且只往安全的那一边**：`src/judge/` 是 pi 之外的第二条模型路径，只回类型化判断（Noul / Choice / Score），不生成文本、不进 failover chain、不计费用上限。每一个问到它的问题都必须先有一个确定性答案，判官不可用、超时或不确定时那个答案就是全部答案——所以它**永远只能加**，不能把地板已经判定的东西拿走。方向由代价决定而不是由准确率决定：环境/代码这一处，把真缺陷读成环境会让卡永不收敛，把环境失败读成代码只损失一轮，所以只许往环境侧移且要高置信度。判断在一轮结束时做一次、随该轮用掉，不在 prompt 组装路径上，`assemblePhasePrompt` 的逐字节确定性不受影响。默认关，开了而缺凭据要说出来；每次移动都记 friction，用数据决定留不留。
 
 - **状态只经守卫语句写**：Epic 与 Story 的 state 一律由 `epicTransitionStatement` / `storyTransitionStatement` 生成——声明的边与 `WHERE state = ?` 守卫出自同一对状态，不可能分叉，并发下输的那个拿到 `rowsAffected === 0` 而不是覆盖赢家。它们返回语句而不直接写库：迁移必须和它的事件与看板投影同一 batch 落地，拆开就会有状态变了而没有记录的那一刻。全仓不应再出现手写的 `UPDATE epics/stories SET state`。
 

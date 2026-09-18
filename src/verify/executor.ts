@@ -2,6 +2,10 @@ import { z } from "zod";
 import type { ResolvedAgentSpec } from "../runner/agent-spec.js";
 import { EVIDENCE_DIR_ENV, assembleGuardPolicy, type GuardPolicy } from "../guard/policy.js";
 import { captureTreePin, evaluateTreePin, type TreePin } from "../guard/tree-pin.js";
+import {
+  type EnvironmentJudgeSettings,
+  judgeEnvironmentReasons,
+} from "../judge/environment-reasons.js";
 import { splitScenarioFailures } from "../pipeline/failure-classification.js";
 import { validateVerdict, type TrajectoryEvidence, type VerdictDocument } from "../pipeline/verdict.js";
 import type { PiRunner, RpcEvent, TokenUsage } from "../runner/types.js";
@@ -88,6 +92,11 @@ export interface BlindVerifyResult {
   screenshots: Array<{ scenarioId: string; path: string }>;
   /** Why each non-passing scenario did not pass, in the verifier's words. */
   reasons: Array<{ scenarioId: string; reason: string }>;
+  /** Reasons the judge said were about the box although the pattern table did
+   * not match them. Carried out so a caller re-splitting the same round reuses
+   * this judgement instead of paying for a second, possibly different one.
+   * Absent when no judge was configured, which is the same as empty. */
+  environmentalReasons?: ReadonlySet<string>;
   validationErrors: string[];
   treeChanged: boolean;
   /** The verifier's own failure, if it never reached a verdict. Telemetry must
@@ -315,6 +324,9 @@ export class BlindVerifyExecutor {
     private readonly records: VerifyRecordStore,
     private readonly pins: TreePinPort = defaultTreePin,
     private readonly now: () => number = Date.now,
+    /** Absent means the pattern table is the whole answer, which is what a
+     * deployment without the judge credential gets. */
+    private readonly environmentJudge: EnvironmentJudgeSettings | undefined = undefined,
   ) {}
 
   async run(input: BlindVerifyInput): Promise<BlindVerifyResult> {
@@ -458,7 +470,16 @@ export class BlindVerifyExecutor {
     ];
     // A round the box lost says nothing about the code, and the convergence
     // criterion only means something on code-level failures (03 section 8.6).
-    const split = splitScenarioFailures(failedScenarios, environmentReasons);
+    // The pattern table decides first and the judge is asked only about what it
+    // did not recognise, so this can add environment failures and never remove
+    // one.
+    const judged = await judgeEnvironmentReasons(
+      this.environmentJudge?.judge,
+      environmentReasons.map((entry) => entry.reason),
+      { model: this.environmentJudge?.model ?? "", threshold: this.environmentJudge?.threshold ?? 1 },
+    );
+    await this.environmentJudge?.onJudged?.(judged);
+    const split = splitScenarioFailures(failedScenarios, environmentReasons, judged.environmental);
     const verdict: VerifyRecord["verdict"] = verdictOf({
       hasDocument: Boolean(document && validation),
       valid: validation?.valid ?? false,
@@ -479,6 +500,6 @@ export class BlindVerifyExecutor {
     await this.records.insert(record);
     const screenshots = document?.scenarios.flatMap((scenario) =>
       (scenario.screenshots ?? []).map((path) => ({ scenarioId: scenario.id, path }))) ?? [];
-    return { record, screenshots, reasons: scenarioReasons, validationErrors, treeChanged: !pin.matches, runnerFailure: runnerError, events, usage, messages };
+    return { record, screenshots, reasons: scenarioReasons, environmentalReasons: judged.environmental, validationErrors, treeChanged: !pin.matches, runnerFailure: runnerError, events, usage, messages };
   }
 }

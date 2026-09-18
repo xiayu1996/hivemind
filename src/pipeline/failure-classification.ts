@@ -81,17 +81,25 @@ export interface ScenarioReason {
  * Splits a round's failures. A scenario with any code-level reason counts as
  * code-level: the environment being unhappy does not excuse a real failure
  * reported beside it.
+ *
+ * `alsoEnvironmental` carries reason strings a caller decided are about the box
+ * although the table above did not match them. It only ever adds: the table
+ * stays the floor, so a deployment with nothing extra to say gets exactly the
+ * split it got before. The caller owns that set because deciding it is not a
+ * pure question -- see `src/judge/environment-reasons.ts`.
  */
 export function splitScenarioFailures(
   failedScenarios: readonly string[],
   reasons: readonly ScenarioReason[],
+  alsoEnvironmental: ReadonlySet<string> = new Set(),
 ): { code: string[]; environment: string[] } {
   const code: string[] = [];
   const environment: string[] = [];
   for (const scenarioId of failedScenarios) {
     const own = reasons.filter((entry) => entry.scenarioId === scenarioId);
     // No reason at all is not evidence of a healthy environment.
-    const environmental = own.length > 0 && own.every((entry) => isEnvironmentFailure(entry.reason));
+    const environmental = own.length > 0
+      && own.every((entry) => isEnvironmentFailure(entry.reason) || alsoEnvironmental.has(entry.reason));
     (environmental ? environment : code).push(scenarioId);
   }
   return { code, environment };
