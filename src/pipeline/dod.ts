@@ -54,6 +54,23 @@ const scenario = z.object({
    * review ends inconclusive for lack of anything to look at.
    */
   seed: z.string().trim().min(1).optional(),
+  /**
+   * What a person must be able to see once this scenario passes, as roles and
+   * text the accessibility tree will carry. Required of scenarios a browser
+   * settles and meaningless on the others, which is why the schema leaves it
+   * optional and the SHAPE exit gate asks for it per layer (design 08 6).
+   *
+   * This is the structural layer's basis: without it a round that rendered
+   * nothing but a 404 body still produced four screenshots and four confident
+   * verdicts, because no code had anything to compare the page against.
+   */
+  visible: z.array(z.object({
+    /** The ARIA role, as the snapshot names it: heading, link, button, list. */
+    role: z.string().trim().min(1),
+    /** Text a person reads. Matched as part of a longer label, so a back link
+     * reading "<- return to the list" satisfies "return to the list". */
+    text: z.string().trim().min(1),
+  }).strict()).min(1).optional(),
 }).strict();
 
 const baseline = z.discriminatedUnion("type", [
@@ -211,6 +228,31 @@ export function renderDoDLanguageFindings(findings: readonly DoDLanguageFinding[
   return [
     "The DoD is read by the person who ordered this card, so every sentence in it must be Chinese business language: what a user does and what they then see, with no implementation words, file paths or English prose. Rewrite these and return the whole DoD again:",
     ...findings.map((finding) => `- ${finding.where} ${finding.what}${finding.excerpt ? `: ${finding.excerpt}` : ""}`),
+  ].join("\n");
+}
+
+/**
+ * Screen scenarios that said nothing about what a person would see.
+ *
+ * The structural layer is the only interface criterion that can refuse and
+ * still converge (08 section 6), and it has nothing to work from unless SHAPE
+ * writes `visible[]` here. Asked at the DoD exit rather than at VERIFY because
+ * by then the scenario is already being judged, and the basis of a judgement
+ * cannot be written by the round it judges.
+ */
+export function scenariosMissingVisible(definition: DefinitionOfDone): string[] {
+  return definition.scenarios
+    .filter((entry) => hasScreen(entry) && entry.visible === undefined)
+    .map((entry) => entry.id);
+}
+
+/** What the session is asked to add, in the words it wrote the DoD in. */
+export function renderMissingVisible(ids: readonly string[]): string {
+  return [
+    "这些 scenario 要靠打开页面才能判定，所以每条都要写 `visible`：一个人验收通过时，在那一页上必须看见哪些东西。",
+    "每项是一个角色加一段文字（例如 `- role: heading` / `text: 运行控制台`），文字取页面上真会出现的那句话，",
+    "不要写实现细节或元素选择器。系统之后会按这份清单逐条核对页面，所以写不出来的就不要写。",
+    ...ids.map((id) => `- ${id}`),
   ].join("\n");
 }
 

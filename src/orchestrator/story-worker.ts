@@ -15,6 +15,8 @@ import {
   lintDoDLanguage,
   parseDoD,
   renderDoDLanguageFindings,
+  renderMissingVisible,
+  scenariosMissingVisible,
   type DefinitionOfDone,
 } from "../pipeline/dod.js";
 import { assemblePhasePrompt, type PhaseInput } from "../pipeline/phase-input.js";
@@ -867,6 +869,12 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
           definitionOfDone = parseDoD(body);
         } catch (cause) {
           return { passed: false, findings: (cause as Error).message };
+        }
+        // The structural layer's basis, asked for here because a judgement's
+        // basis cannot be written by the round it judges (08 section 6).
+        const missingVisible = scenariosMissingVisible(definitionOfDone);
+        if (missingVisible.length > 0) {
+          return { passed: false, findings: renderMissingVisible(missingVisible) };
         }
         const language = lintDoDLanguage(definitionOfDone);
         if (language.length === 0) return { passed: true };

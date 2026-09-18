@@ -272,6 +272,7 @@ export const storySpecs = sqliteTable("story_specs", {
   // oxlint-disable-next-line unicorn/no-thenable -- Given/When/Then is the external DoD contract.
   then: text("then_"),
   layers: text("layers"),
+  visibleJson: text("visible_json"),
   notionDetailHash: text("notion_detail_hash"),
   status: text("status").notNull(),
   notionBlockId: text("notion_block_id").unique(),

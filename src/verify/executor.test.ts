@@ -1,4 +1,5 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -69,6 +70,22 @@ function pins(changed = false): TreePinPort {
   return {
     capture: () => ({ head: "abc", digest: changed && count++ > 0 ? "after" : "before" }),
     quarantine: vi.fn(async () => undefined),
+  };
+}
+
+/**
+ * A round wide enough to contain a file the run itself wrote. The window is
+ * real evidence handling -- a snapshot from before the round is refused -- so a
+ * test about something else must not depend on how the two clocks interleave.
+ */
+function roundAround(): () => number {
+  let first = true;
+  return () => {
+    if (first) {
+      first = false;
+      return Date.now() - 60_000;
+    }
+    return Date.now() + 60_000;
   };
 }
 
@@ -191,6 +208,65 @@ describe("BlindVerifyExecutor", () => {
       "S-EPIC-01-unit: URL is invalid",
       "S-EPIC-01-unit: screenshot does not exist (missing.png)",
     ]));
+  });
+
+  it("fails a scenario the verifier called passed when the page never showed what it declared", async () => {
+    // The shape of the real round that started all of this: four confident
+    // verdicts against a page whose whole body was a 404.
+    await mkdir(input().evidencePath, { recursive: true });
+    await writeFile(
+      join(input().evidencePath, "page-1.yml"),
+      '- generic [ref=e1]: "{\\"message\\":\\"Route GET:/x not found\\"}"',
+    );
+    const events = [
+      { type: "test_result", scenarioId: "S-EPIC-01-unit", status: "passed" },
+      assistant(JSON.stringify({ scenarios: [
+        { id: "S-EPIC-01-unit", status: "passed", snapshots: ["page-1.yml"] },
+      ] })),
+    ];
+    const result = await new BlindVerifyExecutor(
+      { create: () => runner({ events }) },
+      { insert: async () => undefined },
+      pins(),
+    ).run({
+      ...input(),
+      visibleRequirements: new Map([["S-EPIC-01-unit", [{ role: "heading", text: "运行控制台" }]]]),
+    });
+
+    expect(result.record.verdict).toBe("rejected");
+    expect(result.record.failedScenarios).toEqual(["S-EPIC-01-unit"]);
+    expect(result.reasons).toContainEqual({
+      scenarioId: "S-EPIC-01-unit",
+      reason: "页面上没有出现这个场景声明要看见的内容：heading “运行控制台”",
+    });
+  });
+
+  it("leaves a scenario passing when its snapshot carries what it declared", async () => {
+    await mkdir(input().evidencePath, { recursive: true });
+    const events = [
+      { type: "test_result", scenarioId: "S-EPIC-01-unit", status: "passed" },
+      assistant(JSON.stringify({ scenarios: [
+        { id: "S-EPIC-01-unit", status: "passed", snapshots: ["page-ok.yml"] },
+      ] })),
+    ];
+    const result = await new BlindVerifyExecutor(
+      // Written as the round runs: evidence from before it started is refused,
+      // which is what stops a passing snapshot being reused next round.
+      { create: () => {
+        writeFileSync(join(input().evidencePath, "page-ok.yml"), '- heading "运行控制台" [level=1] [ref=e1]');
+        return runner({ events });
+      } },
+      { insert: async () => undefined },
+      pins(),
+      roundAround(),
+    ).run({
+      ...input(),
+      visibleRequirements: new Map([["S-EPIC-01-unit", [{ role: "heading", text: "运行控制台" }]]]),
+    });
+
+    expect(result.validationErrors).toEqual([]);
+    expect(result.record.verdict).toBe("accepted");
+    expect(result.record.failedScenarios).toEqual([]);
   });
 
   it("raises a provider failure instead of recording it as a rejected round", async () => {

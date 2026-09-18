@@ -387,6 +387,11 @@ CREATE TABLE IF NOT EXISTS story_specs (
   when_             TEXT,
   then_             TEXT,
   layers            TEXT,
+  -- Roles and text a person must see once this scenario passes, for the
+  -- scenarios a browser settles. Null on the others and on a DoD frozen before
+  -- the structural layer existed; the check then has nothing to assert, which
+  -- is the behaviour those Stories already had.
+  visible_json      TEXT CHECK (visible_json IS NULL OR json_valid(visible_json)),
   notion_detail_hash TEXT,
   status            TEXT NOT NULL CHECK (status IN ('pending','passed','failed','withdrawn')),
   notion_block_id   TEXT UNIQUE,
