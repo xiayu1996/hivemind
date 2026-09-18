@@ -252,6 +252,27 @@ describe("EpicDecomposer", () => {
     expect(await state()).toBe("BLOCKED");
   });
 
+  it("keeps going while each attempt is refused for something new", async () => {
+    // Three Epics of one requirement were blocked on 2026-09-18 with two fixed
+    // attempts: the first was spent on id shapes nothing had stated, and the
+    // second, which had fixed them, was refused for the business language the
+    // ids had been hiding. Both were progress; neither got a third go.
+    const story = plan.stories[0]!;
+    const broken = [
+      { ...plan, businessGoal: "\u65b0\u589e scheduler.ts \u6a21\u5757\u3002" },
+      { ...plan, stories: [{ ...story, id: "M2-S01" }] },
+      { ...plan, stories: [{ ...story, userEntryPoint: "  " }] },
+      { ...plan, stories: [{ ...story, verificationPath: "  " }] },
+    ];
+    let call = 0;
+    const port = { run: vi.fn(async () => broken[call++] ?? plan) };
+    const decomposer = new EpicDecomposer(client, approvals, port, () => 1_000);
+
+    await expect(decomposer.decompose(epic())).resolves.toMatchObject({ kind: "rejected" });
+    expect(port.run).toHaveBeenCalledTimes(4);
+    expect(await state()).toBe("BLOCKED");
+  });
+
   it("accepts a second attempt that fixed what the first got wrong", async () => {
     const port = { run: vi.fn(async (input: { previousRejections: readonly string[] }) =>
       (input.previousRejections.length === 0 ? { ...plan, businessGoal: "新增 scheduler.ts 模块。" } : plan)) };

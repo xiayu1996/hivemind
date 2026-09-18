@@ -68,7 +68,7 @@ describe("PiDecomposePort", () => {
       guard: { extension: "/ext/hive-guard.ts", auditPath: "/audit/decompose.jsonl" },
       createRunner: (config) => { configs.push(config); return instance; },
     });
-    await guarded.run({ epicId: "M2", title: "t", requirement: "r", previousRejections: [] });
+    await guarded.run({ epicId: "M2", title: "t", requirement: "r", previousRejections: [], maxStories: 4 });
 
     const config = configs[0]!;
     expect(config.extensions).toEqual(["/ext/hive-guard.ts"]);
@@ -86,6 +86,7 @@ describe("PiDecomposePort", () => {
       title: "并行与回归",
       requirement: "多个 Story 并行推进并合成一次评审。",
       previousRejections: [],
+      maxStories: 4,
     })).resolves.toMatchObject({ epicId: "M2", stories: [{ id: "S-M2-01" }] });
 
     const prompt = (instance as unknown as { prompts: string[] }).prompts[0]!;
@@ -101,6 +102,7 @@ describe("PiDecomposePort", () => {
       title: "并行与回归",
       requirement: "需求",
       previousRejections: ["businessGoal 含实现词汇", "S-M2-02 缺少场景"],
+      maxStories: 4,
     });
 
     const prompt = (instance as unknown as { prompts: string[] }).prompts[0]!;
@@ -108,21 +110,41 @@ describe("PiDecomposePort", () => {
     expect(prompt).toContain("S-M2-02 缺少场景");
   });
 
+  it("states the id shapes and the Story ceiling it will be judged against", async () => {
+    // The phase prompt said only that a ceiling exists and said nothing about
+    // ids, so the first three Epics through this path guessed, and guessed
+    // wrong: five Stories against a limit of four, and `<EPIC>-S01` ids.
+    const instance = runner(JSON.stringify(CANDIDATE));
+
+    await port(instance).run({
+      epicId: "M2",
+      title: "\u5e76\u884c\u4e0e\u56de\u5f52",
+      requirement: "\u9700\u6c42",
+      previousRejections: [],
+      maxStories: 4,
+    });
+
+    const prompt = (instance as unknown as { prompts: string[] }).prompts[0]!;
+    expect(prompt).toContain("S-M2-01");
+    expect(prompt).toContain("S-M2-01-a");
+    expect(prompt).toContain("4");
+  });
+
   it("finds the candidate inside prose or a code fence", async () => {
     const instance = runner(`思考完毕。\n\`\`\`json\n${JSON.stringify(CANDIDATE)}\n\`\`\``);
-    await expect(port(instance).run({ epicId: "M2", title: "t", requirement: "r", previousRejections: [] }))
+    await expect(port(instance).run({ epicId: "M2", title: "t", requirement: "r", previousRejections: [], maxStories: 4 }))
       .resolves.toMatchObject({ epicId: "M2" });
   });
 
   it("fails closed when the reply carries no usable candidate", async () => {
     const instance = runner("我需要更多信息才能回答。");
-    await expect(port(instance).run({ epicId: "M2", title: "t", requirement: "r", previousRejections: [] }))
+    await expect(port(instance).run({ epicId: "M2", title: "t", requirement: "r", previousRejections: [], maxStories: 4 }))
       .rejects.toThrow(/DECOMPOSE/);
   });
 
   it("stops the session even when the reply was unusable", async () => {
     const instance = runner("not json");
-    await port(instance).run({ epicId: "M2", title: "t", requirement: "r", previousRejections: [] }).catch(() => undefined);
+    await port(instance).run({ epicId: "M2", title: "t", requirement: "r", previousRejections: [], maxStories: 4 }).catch(() => undefined);
     expect(instance.stop).toHaveBeenCalled();
   });
 });
