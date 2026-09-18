@@ -6,6 +6,7 @@ import { EpicDecomposer, type DecomposeRequest } from "./decompose-runner.js";
 import { answerBlocker } from "./epic-blocker.js";
 import { PlanApprovalStore } from "./plan-approval.js";
 import type { DecompositionCandidate } from "./decompose.js";
+import type { SystemOne, SystemOneRequest } from "../judge/system-one.js";
 
 const plan: DecompositionCandidate = {
   epicId: "M2",
@@ -24,6 +25,21 @@ const plan: DecompositionCandidate = {
 
 function epic() {
   return { id: "M2", notionPageId: "epic-page", title: "并行与回归", requirement: "多个 Story 并行推进并合成一次评审。" };
+}
+
+function judgeStub(answer: (sentence: string) => number): SystemOne & { asked: SystemOneRequest[] } {
+  const asked: SystemOneRequest[] = [];
+  return {
+    asked,
+    async ask(request) {
+      asked.push(request);
+      return {
+        answers: {
+          is_implementation: { type: "noul", noul: answer((request.state as { sentence: string }).sentence) },
+        },
+      };
+    },
+  };
 }
 
 describe("EpicDecomposer", () => {
@@ -55,6 +71,71 @@ describe("EpicDecomposer", () => {
     // The plan goes to the page and the card moves to the waiting-for-approval column together.
     const outbox = (await client.execute("SELECT operation FROM notion_outbox ORDER BY id")).rows;
     expect(outbox).toMatchObject([{ operation: "present_epic_plan" }, { operation: "sync_epic_status" }]);
+  });
+
+  describe("construction language the word table cannot see", () => {
+    /** Construction with none of the seventeen words the table keys on. */
+    const missed = "引入缓存层以降低响应延迟";
+    const planWithMiss: DecompositionCandidate = {
+      ...plan,
+      stories: [{ ...plan.stories[0]!, requirement: missed }],
+    };
+
+    it("refuses the plan and tells the next attempt why", async () => {
+      const judge = judgeStub((sentence) => (sentence === missed ? 0.96 : 0.03));
+      const requests: DecomposeRequest[] = [];
+      const port = {
+        run: async (input: DecomposeRequest) => {
+          requests.push(input);
+          return planWithMiss;
+        },
+      };
+      const friction: { cardId: string; kind: string; detail: string }[] = [];
+      const decomposer = new EpicDecomposer(
+        client, approvals, port, () => 1_000, {},
+        { judge, model: "jev-latest", threshold: 0.75 },
+        async (input) => { friction.push(input); },
+      );
+
+      const outcome = await decomposer.decompose(epic());
+
+      // Both attempts produced the same plan, so it ends where an unfixable
+      // plan ends; what matters is that the second attempt was told why.
+      expect(outcome).toMatchObject({ kind: "rejected" });
+      expect(requests[1]!.previousRejections.join(" ")).toContain("describes how the system is built");
+      expect(await state()).toBe("BLOCKED");
+      // Once per attempt: the table missed the same line twice, and that is
+      // two misses, not one.
+      expect(friction).toMatchObject([
+        { cardId: "M2", kind: "decompose_language_judged" },
+        { cardId: "M2", kind: "decompose_language_judged" },
+      ]);
+      expect(friction[0]!.detail).toContain("0.96");
+    });
+
+    it("presents the plan the judge had no objection to", async () => {
+      const judge = judgeStub(() => 0.03);
+      const port = { run: vi.fn(async () => plan) };
+      const decomposer = new EpicDecomposer(
+        client, approvals, port, () => 1_000, {},
+        { judge, model: "jev-latest", threshold: 0.75 },
+      );
+
+      await expect(decomposer.decompose(epic())).resolves.toMatchObject({ kind: "presented" });
+      // Every line a person will read was put to it, and none of them twice.
+      const sentences = judge.asked.map((request) => (request.state as { sentence: string }).sentence);
+      expect(new Set(sentences).size).toBe(sentences.length);
+      expect(sentences).toContain(plan.businessGoal);
+      expect(sentences).toContain(plan.stories[0]!.scenarios[0]!.then);
+    });
+
+    it("presents the same plan as today when there is no judge", async () => {
+      // The whole point of the floor: an unreachable judge subtracts nothing.
+      const port = { run: vi.fn(async () => planWithMiss) };
+      const decomposer = new EpicDecomposer(client, approvals, port, () => 1_000);
+
+      await expect(decomposer.decompose(epic())).resolves.toMatchObject({ kind: "presented" });
+    });
   });
 
   it("starts the work itself when nobody reviews how it was split", async () => {

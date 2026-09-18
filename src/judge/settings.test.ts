@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { approvalJudgeSetup, describeJudgeSetup, environmentJudgeSetup, JUDGE_API_KEY } from "./settings.js";
+import {
+  approvalJudgeSetup,
+  businessLanguageJudgeSetup,
+  describeJudgeSetup,
+  environmentJudgeSetup,
+  JUDGE_API_KEY,
+} from "./settings.js";
 
 const CONFIG = {
   enabled: true,
@@ -8,6 +14,7 @@ const CONFIG = {
   timeoutMs: 8000,
   environmentThreshold: 0.7,
   approvalThreshold: 0.8,
+  businessLanguageThreshold: 0.75,
 };
 
 const WITH_KEY = new Map([[JUDGE_API_KEY, "key-under-test"]]);
@@ -47,14 +54,18 @@ describe("environmentJudgeSetup", () => {
   });
 });
 
-describe("approvalJudgeSetup", () => {
-  it("takes its own threshold, because the safe direction is not the same one", () => {
+describe("each question's own threshold", () => {
+  it("never lends one question's number to another", () => {
     // Sharing a number would tie how sure the judge must be that a comment
-    // approves a draft to how sure it must be that a refusal is about the box.
-    const { settings } = approvalJudgeSetup(CONFIG, WITH_KEY);
+    // approves a draft to how sure it must be that a refusal is about the box,
+    // and the safe direction is not the same one twice.
+    const thresholds = [
+      environmentJudgeSetup(CONFIG, WITH_KEY).settings?.threshold,
+      approvalJudgeSetup(CONFIG, WITH_KEY).settings?.threshold,
+      businessLanguageJudgeSetup(CONFIG, WITH_KEY).settings?.threshold,
+    ];
 
-    expect(settings?.threshold).toBe(0.8);
-    expect(settings?.threshold).not.toBe(CONFIG.environmentThreshold);
+    expect(thresholds).toEqual([0.7, 0.8, 0.75]);
   });
 
   it("leaves the whitelist alone when the deployment did not ask for a judge", () => {
