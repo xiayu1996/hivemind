@@ -7,18 +7,21 @@
  * scenario came back inconclusive -- or worse, came back passed from a session
  * that had stood up something of its own and judged that instead.
  *
- * Read-only by construction: no config writer is passed, so the console's one
- * write surface is not registered and every non-GET is refused by the server's
- * own hook. It reads the central database directly rather than a copy, because
- * the screens under judgement are screens of real rounds, real costs and real
- * blockers -- a freshly migrated database renders every page as its empty
- * state, which is exactly one of the things the scenarios need to tell apart.
+ * It serves a private snapshot of the central database, taken when it starts
+ * and deleted when it stops. Real data, because the screens under judgement are
+ * screens of real rounds, real costs and real blockers -- a freshly migrated
+ * database renders every page as its empty state, which is exactly one of the
+ * things the scenarios need to tell apart. A snapshot rather than the database
+ * itself, because a round that submits a decision on a screen must not submit a
+ * real one: the writing surfaces are what the scenarios are there to exercise,
+ * and the only safe place for that write is a copy nobody reads afterwards.
+ * It also means two rounds judging the same screen start from the same picture.
  */
 import { execFile } from "node:child_process";
-import { hostname } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { createConsoleServer, listenConsole } from "../src/console/server.js";
 import { LibsqlConsoleDataSource } from "../src/console/libsql-data-source.js";
 import { openDb } from "../src/persistence/client.js";
@@ -66,7 +69,45 @@ if (existsSync(join(ROOT, "vite.config.ts"))) {
   }
 }
 
-const handle = openDb(url);
+// The snapshot is taken through the database rather than off the filesystem:
+// a file copy would miss whatever is still in the write-ahead log, and what is
+// newest is exactly what a round is judging.
+// A console killed outright never reaches its own cleanup, and a snapshot is
+// the size of the central database, so the leak is measured in gigabytes. One
+// round lasts minutes; anything of ours still here after an hour was orphaned.
+const SNAPSHOT_PREFIX = "hivemind-console-";
+const ORPHAN_AGE_MS = 60 * 60 * 1000;
+
+function removeOrphanedSnapshots(): void {
+  const now = Date.now();
+  for (const entry of readdirSync(tmpdir())) {
+    if (!entry.startsWith(SNAPSHOT_PREFIX)) continue;
+    const path = join(tmpdir(), entry);
+    try {
+      if (now - statSync(path).mtimeMs < ORPHAN_AGE_MS) continue;
+      rmSync(path, { recursive: true, force: true });
+    } catch {
+      // Another console owns it, or it went away between the two calls. Either
+      // way it is not ours to clean up and the next start will look again.
+    }
+  }
+}
+
+removeOrphanedSnapshots();
+const snapshotDir = url.startsWith("file:") ? mkdtempSync(join(tmpdir(), SNAPSHOT_PREFIX)) : null;
+
+async function snapshotOf(source: string, directory: string): Promise<string> {
+  const target = join(directory, "console.db");
+  const origin = openDb(source);
+  try {
+    await origin.client.execute({ sql: "VACUUM INTO ?", args: [target] });
+  } finally {
+    origin.close();
+  }
+  return `file:${target}`;
+}
+
+const handle = openDb(snapshotDir === null ? url : await snapshotOf(url, snapshotDir));
 const app = await createConsoleServer(
   new LibsqlConsoleDataSource(handle.client, async () => [{
     hostId: hostname(),
@@ -83,6 +124,7 @@ console.log(`console ready at ${address}`);
 const close = async (): Promise<void> => {
   await app.close().catch(() => undefined);
   handle.close();
+  if (snapshotDir !== null) rmSync(snapshotDir, { recursive: true, force: true });
 };
 process.once("SIGINT", () => void close().then(() => process.exit(0)));
 process.once("SIGTERM", () => void close().then(() => process.exit(0)));
