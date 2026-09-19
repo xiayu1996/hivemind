@@ -555,7 +555,24 @@ async function main(): Promise<void> {
               { run: (check, cwd) => runProjectCheck(cwd, check) },
               config.get("codeExit.projectChecks"),
             ),
-            { storyWorktree: worktreePath, integrationWorktree, mainBranch: targetBranch },
+            {
+              storyWorktree: worktreePath,
+              integrationWorktree,
+              mainBranch: targetBranch,
+              // Counted, not refused. Until there are numbers, "a card may not
+              // work outside what it declared" is a rule nobody can size.
+              onFootprintOverreach: async (overreach) => {
+                await store.recordFriction({
+                  cardId: overreach.storyId,
+                  runId: `merge-${overreach.storyId}`,
+                  kind: "footprint_overreach",
+                  detail: JSON.stringify({
+                    unpredicted: overreach.unpredicted,
+                    predicted: overreach.predicted,
+                  }),
+                });
+              },
+            },
           ),
         )
       : undefined;
