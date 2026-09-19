@@ -111,6 +111,15 @@ describe("wordings pi's provider layer already knows", () => {
       expect(classifyError(wording).retryable).toBe(true);
     });
 
+  // Not a provider wording: this is what a Notion request that hit its own
+  // deadline says, and the orchestrator asks this classifier whether a failed
+  // cycle step may be skipped until the next pass. Read as anything but
+  // transient it cost a whole cycle -- dispatch, Epic upkeep, the regression
+  // sweep -- and raised a P0 about a request the next pass would have made.
+  it("reads a request that hit its own deadline as transient", () => {
+    expect(classifyError("The operation was aborted due to timeout").retryable).toBe(true);
+  });
+
   // Published error tables, for wordings that cannot be provoked without paying
   // a provider to refuse us.
   const PUBLISHED: Array<[string, string, string]> = [
