@@ -489,6 +489,6 @@ describe("the drain", () => {
     expect(posted).toHaveLength(1);
     const decision = (await client.execute("SELECT recorded_at FROM todo_decisions")).rows[0];
     expect(decision?.recorded_at).toBe(12_000);
-    await expect(listPendingTodos(client)).resolves.toEqual([]);
+    expect(await listPendingTodos(client)).resolves.toEqual([]);
   });
 });
