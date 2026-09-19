@@ -266,6 +266,11 @@ onBeforeUnmount(() => {
               <li v-for="issue in view.issues" :key="issue">{{ validationMessage(issue) }}</li>
             </ul>
 
+            <div v-if="view.status === 'submission_rejected'" class="submission-rejected" role="alert">
+              <p class="submission-rejected-title">{{ TODO_COPY.answerNotSubmitted }}</p>
+              <p class="field-help">{{ TODO_COPY.submissionRejectedBody }}</p>
+            </div>
+
             <div class="actions">
               <button type="submit" class="button primary" :disabled="!canSubmit">
                 {{ submitting ? TODO_COPY.submitting : TODO_COPY.submitLabels[todo.kind] }}
@@ -441,6 +446,21 @@ a:focus {
   padding: var(--space-control-gap);
   list-style: none;
   margin: 0 0 var(--space-content-gap);
+}
+.submission-rejected {
+  color: var(--color-danger);
+  background: var(--color-surface-danger);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-control);
+  padding: var(--space-control-gap) var(--space-content-gap);
+  margin: 0 0 var(--space-content-gap);
+}
+.submission-rejected-title {
+  font-weight: var(--weight-medium);
+  margin: 0 0 var(--space-inline-tight);
+}
+.submission-rejected .field-help {
+  margin: 0;
 }
 .row {
   display: flex;

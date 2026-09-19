@@ -63,6 +63,11 @@ export function fixtureFor(scenarioId: string | null): VerifyFixture {
       return "choose";
     case "savefail":
       return "savefail";
+    case "rejected":
+      // A scenario about a submission the ledger refuses: the same waiting
+      // question, but the entry point makes the delivery fail so the screen
+      // has to say the answer was not submitted and keep the todo.
+      return "rejected";
     case "error":
       // A read that did not work is its own state, not the empty ledger: the
       // page says it could not read the todo and offers to try again, and the
@@ -219,7 +224,9 @@ export async function applyVerifyFixture(client: Client, fixture: VerifyFixture,
   // served by the entry point, not stored in a row.
   if (fixture === "empty" || fixture === "error") return;
   if (fixture === "full" || fixture === "approve") await seedApproval(client, now);
-  if (fixture === "full" || fixture === "answer") await seedAnswer(client, now);
+  // `rejected` is the answer todo with no decision and no outbox row: the
+  // refusal happens at delivery time, never as a stored successful decision.
+  if (fixture === "full" || fixture === "answer" || fixture === "rejected") await seedAnswer(client, now);
   if (fixture === "full" || fixture === "choose") await seedChoice(client, now);
   if (fixture === "full" || fixture === "savefail") await seedSubmitted(client, now);
 }

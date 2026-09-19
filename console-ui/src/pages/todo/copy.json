@@ -62,6 +62,8 @@
     "choose": "提交选择"
   },
   "submitting": "正在提交，请稍候。",
+  "answerNotSubmitted": "答复未提交，请重试",
+  "submissionRejectedBody": "答复没有提交成功，页面保留了你填写的内容。请检查后重试。",
   "validation": {
     "empty_answer": "请填写答复后再提交",
     "empty_choice": "请为每个问题选择一项后再提交",

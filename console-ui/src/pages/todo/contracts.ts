@@ -232,6 +232,11 @@ export function todoSaveCheckApiPath(todoId: string): string {
  *              so it cannot be triggered twice
  *  - `awaiting_notion` the result is submitted but the Notion entry has not
  *              confirmed it: still 未处理, with 检查保存结果 offered
+ *  - `submission_rejected` a submission that did not land (transport failure,
+ *              an unexpected response, or a todo reported gone during the
+ *              request). The todo, the draft and 未处理 all stay on screen
+ *              with 答复未提交，请重试: a failed answer must never read as an
+ *              empty ledger
  *  - `processed` the result is confirmed kept: 已处理, and the work continues
  *              from it
  */
@@ -243,6 +248,7 @@ export type TodoViewStatus =
   | "error"
   | "submitting"
   | "awaiting_notion"
+  | "submission_rejected"
   | "processed";
 
 export interface TodoViewState {
@@ -307,10 +313,10 @@ export function reduceTodoView(state: TodoViewState, action: TodoViewAction): To
       if (action.result.kind === "invalid") {
         return { ...state, requestId: action.requestId, status: "ready", issues: action.result.issues };
       }
-      if (action.result.kind === "gone") {
-        return { ...state, requestId: action.requestId, status: "none", todo: null, decision: null, issues: [] };
-      }
-      return { ...state, requestId: action.requestId, status: "error", issues: [] };
+      // A submission that did not land keeps the todo and the draft: gone and
+      // failed are both "not submitted", never an empty ledger or a failed
+      // read. The person retries the answer they already typed.
+      return { ...state, requestId: action.requestId, status: "submission_rejected", issues: [] };
     }
     case "check":
       return { ...state, status: "submitting", requestId: action.requestId, issues: [] };
@@ -410,6 +416,8 @@ export const TODO_COPY: {
   readonly noteLabel: string;
   readonly noteHelp: string;
   readonly submitting: string;
+  readonly answerNotSubmitted: string;
+  readonly submissionRejectedBody: string;
   readonly awaitingHeading: string;
   readonly checkSave: string;
   readonly savedPrefixes: { readonly answer: string; readonly approve: string; readonly choose: string };
