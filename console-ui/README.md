@@ -21,11 +21,12 @@ than keeping a reply.
 npx tsx scripts/serve-console.ts --port 4319
 ```
 
-With no database argument the entry opens a temporary demonstration store and
-fills it with a dataset where every section has content, so the screen can be
-opened on its own. Point it at the real store with `--db <url>` (or
-`HIVEMIND_DB_URL`) to read the central database instead; nothing is seeded then.
-The orchestrator mounts the same server in-process and serves the same screen.
+The entry opens a temporary store and fills it with the declared dataset where
+every section has content, so a round always judges the sample its scenarios are
+written about -- not whatever work the environment happens to hold. Point it at
+a database on purpose with `--db <url>` to read that store instead; nothing is
+seeded then. The orchestrator mounts the same server in-process against the
+central store, and that in-process mount is the console a person reads.
 
 ## Looking at the four content states
 

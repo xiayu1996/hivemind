@@ -1,5 +1,5 @@
 import { createClient } from "@libsql/client";
-import { existsSync, mkdtempSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -11,14 +11,22 @@ import { createConsoleServer, listenConsole } from "../src/console/server.js";
 import { migrate } from "../src/persistence/migrate.js";
 
 /**
- * The console as a standalone process.
+ * The console as a standalone process, on its own data.
  *
- * The orchestrator mounts the same server in-process; this entry exists so the
- * screen can be started on its own -- for a review, or on a host that should
- * only serve the read surface. Pointed at no database it opens a temporary
- * demonstration store and fills it with a dataset where every section has
- * something to show; pointed at `HIVEMIND_DB_URL` (or `--db`) it reads the
- * central store and writes nothing into it.
+ * The orchestrator mounts the same server in-process and that is the console a
+ * person reads: it serves the central store. This entry exists so a round can
+ * open the screen and judge it -- and a round must judge the sample data its
+ * scenarios declare, not whatever the worktree happened to inherit. The
+ * orchestrator exports `HIVEMIND_DB_URL` to every child it starts, so a review
+ * that honored it would serve a real deployment's running work and every
+ * scenario written about its own sample would be refused for the work it could
+ * not see. The review therefore always opens a temporary store and fills it
+ * with the declared dataset; only an explicit `--db` reads a database somebody
+ * named on purpose.
+ *
+ * The store is a temporary file rather than `:memory:` because a read runs in
+ * its own transaction, and an in-memory database does not survive the
+ * connection that transaction closes.
  */
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -31,28 +39,14 @@ function option(name: string): string | undefined {
 const port = Number(option("--port") ?? process.env.HIVEMIND_CONSOLE_PORT ?? "3210");
 const host = option("--host") ?? process.env.HIVEMIND_CONSOLE_HOST ?? "127.0.0.1";
 
-/** A `file:` URL names a database that may not exist on this host; anything
- * else (an explicit `--db`, or a remote URL) is taken at its word. */
-function databaseExists(url: string): boolean {
-  return !url.startsWith("file:") || existsSync(url.slice("file:".length));
-}
-
-const explicitDb = option("--db");
-const configuredDb = process.env.HIVEMIND_DB_URL;
-// The orchestrator exports HIVEMIND_DB_URL to every child it starts, so a test
-// worktree inherits a path that is not there. Falling back to the demonstration
-// store keeps the standalone entry startable without ever writing into the
-// central store. The store is a temporary file rather than `:memory:` because a
-// read runs in its own transaction, and an in-memory database does not survive
-// the connection that transaction closes.
 let demoDirectory: string | undefined;
 function demoDatabaseUrl(): string {
   demoDirectory = mkdtempSync(join(tmpdir(), "hivemind-console-demo-"));
   return `file:${join(demoDirectory, "console.db")}`;
 }
 
-const dbUrl = explicitDb
-  ?? (configuredDb !== undefined && databaseExists(configuredDb) ? configuredDb : demoDatabaseUrl());
+const explicitDb = option("--db");
+const dbUrl = explicitDb ?? demoDatabaseUrl();
 
 const client = createClient({ url: dbUrl });
 await migrate(client);
