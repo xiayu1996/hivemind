@@ -213,6 +213,28 @@ describe("BlindVerifyExecutor", () => {
     expect(result.record.verdict).toBe("rejected");
   });
 
+  it("finds a capture the verifier spelled from one level up", async () => {
+    // S-R237511OV-02 round 5 named all fourteen of its captures that way and
+    // lost every scenario to "does not exist" with the files on disk.
+    const evidence = join(scratch, "evidence", "story-1");
+    await mkdir(evidence, { recursive: true });
+    await writeFile(join(evidence, "page-1.png"), "png");
+    const events = [
+      { type: "test_result", scenarioId: "S-EPIC-01-unit", status: "passed" },
+      assistant(JSON.stringify({ scenarios: [
+        { id: "S-EPIC-01-unit", status: "passed", url: "http://localhost/x", screenshots: ["story-1/page-1.png"] },
+      ] })),
+    ];
+    const result = await new BlindVerifyExecutor(
+      { create: () => runner({ events }) },
+      { insert: async () => undefined },
+      pins(),
+      roundAround(),
+    ).run(input());
+    expect(result.validationErrors).toEqual([]);
+    expect(result.record.verdict).toBe("accepted");
+  });
+
   it("reads a snapshot the verifier declared and did not leave as the round's own failure", async () => {
     // The pattern table said `screenshot`, so the same sentence about a
     // snapshot fell through to the judge and got a different answer per

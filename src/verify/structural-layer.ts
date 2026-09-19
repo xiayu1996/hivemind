@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { isWithinRoot } from "../guard/danger-rules.js";
+import { evidenceCandidates } from "../pipeline/evidence-path.js";
 import { describeMissing, missingFromSnapshot, type VisibleRequirement } from "./aria-snapshot.js";
 
 /**
@@ -72,18 +73,16 @@ export async function checkStructuralLayer(input: StructuralInput): Promise<Stru
     let best: VisibleRequirement[] | null = null;
     const unreadable: string[] = [];
     for (const name of subject.snapshots) {
-      const path = resolve(root, name);
       // Validation already refuses an escaping path for the round as a whole;
       // repeated here because this function is also called on a prototype,
       // where nothing else has looked at these names yet.
-      if (!isWithinRoot(path, root)) {
-        unreadable.push(name);
-        continue;
+      const candidates = evidenceCandidates(root, name).filter((path) => isWithinRoot(path, root));
+      let snapshot: string | null = null;
+      for (const path of candidates) {
+        snapshot = await readFile(path, "utf8").catch(() => null);
+        if (snapshot !== null) break;
       }
-      let snapshot: string;
-      try {
-        snapshot = await readFile(path, "utf8");
-      } catch {
+      if (snapshot === null) {
         unreadable.push(name);
         continue;
       }
