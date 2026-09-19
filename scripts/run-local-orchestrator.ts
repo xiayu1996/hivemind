@@ -834,6 +834,12 @@ async function main(): Promise<void> {
           case "cancelled":
             console.warn(`Story ${cardId} run was cancelled by this shutdown; it keeps its reentry budget`);
             return;
+          case "host_fault":
+            // Loud, and free for the card. Nothing it did produced this and
+            // the next attempt would meet the same broken host, so the budget
+            // is left alone and a person is told once per attempt instead.
+            await reportP0(`this host cannot run a Story (${cardId} never started)`, error);
+            return;
           case "provider_fault":
             // The breaker's own "intake halted" line is the alert for this; a
             // P0 per attempt would repeat it for every card on every retry.
