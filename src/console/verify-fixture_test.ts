@@ -83,12 +83,10 @@ describe("the sample data a verification round opens the console on", () => {
     expect(await listPendingTodos(client)).toEqual([]);
   });
 
-  it("an unnamed request keeps the full sample set so a plain page still has something to judge", async () => {
+  it("an unnamed request does not invent work, so the plain page reads as nothing waiting", async () => {
     await applyVerifyFixture(client, fixtureFor(null), 9000);
 
-    const kinds = (await listPendingTodos(client)).map((todo) => todo.kind);
-    expect(new Set(kinds)).toEqual(new Set(["answer", "approve", "choose"]));
-    expect((await listPendingTodos(client)).some((todo) => todo.decision !== null)).toBe(true);
+    expect(await listPendingTodos(client)).toEqual([]);
   });
 
   it("reads the scenario out of the page request the round opens", () => {

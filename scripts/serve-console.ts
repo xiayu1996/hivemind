@@ -181,19 +181,17 @@ const app = await createVerificationConsole({
   serveUi: existsSync(join(uiRoot, "index.html")),
 });
 
-// The waiting work the todo scenarios are written about, put into the copy
-// this process serves. The ledger a worktree has holds none of it at the
-// moment a round runs, and `verify.seedCommand` is not configured for this
-// repository, so a page every scenario is refused on is what a round would
-// otherwise judge. See `verify-fixture.ts`.
-await applyVerifyFixture(handle.client, "full");
-// A scenario named on a page request is judged on that scenario's state, and
-// the empty-state scenarios need the sample rows gone again. Reset on the way
-// in so the picture does not drift as a round opens one page after another.
+// The sample data the todo scenarios are written about. A page request that
+// names a scenario is judged on that scenario's state; a page request that
+// names none is the state the "nothing is waiting" scenarios are written
+// about, so it clears the sample rows rather than seeding them. Asset and API
+// requests are left alone: the page's own reads must see the state its page
+// request set, and the built shell fetches its scripts and data after the
+// document.
 app.addHook("onRequest", async (request) => {
-  const scenario = scenarioOfUrl(request.url);
-  if (scenario === null) return;
-  await applyVerifyFixture(handle.client, fixtureFor(scenario));
+  const path = request.url.split("?")[0] ?? request.url;
+  if (path.startsWith("/api/") || path.startsWith("/assets/") || path === "/health") return;
+  await applyVerifyFixture(handle.client, fixtureFor(scenarioOfUrl(request.url)));
 });
 
 const address = await listenConsole(app, { host: "127.0.0.1", port });

@@ -25,9 +25,10 @@ import { TODO_DECISION_OPERATION } from "../orchestrator/todo-decision.js";
  * scenario id is the state it is about (`...-answer` asks for a waiting
  * question), and the empty-state suffixes are the scenarios whose whole point
  * is that nothing waits: seeding those would take away the state they exist to
- * judge. A request that names no scenario keeps the full sample set, so a
- * round that opens the console plainly still has something to look at instead
- * of an empty page every scenario would be refused on.
+ * judge. A request that names no scenario is one of those empty states -- the
+ * sample rows are cleared instead of seeded -- because a person who opens the
+ * todo page when nothing waits must read that, not a waiting todo a scenario
+ * about something else left behind.
  */
 
 /** The ledger rows this module owns. Fixed so a reset can find them again. */
@@ -47,11 +48,11 @@ function stateOf(scenarioId: string): string {
   return suffix;
 }
 
-/** Which fixture a scenario asks for. A scenario naming no state gets the full
- * set: seeding is what makes a waiting page exist at all, and an unseeded
- * console is a page every scenario is refused on. */
+/** Which fixture a scenario asks for. A request that names no scenario gets the
+ * empty state: the plain page is the one the "nothing is waiting" scenarios
+ * are written about, and seeding it would take that state away. */
 export function fixtureFor(scenarioId: string | null): VerifyFixture {
-  if (scenarioId === null || scenarioId === "") return "full";
+  if (scenarioId === null || scenarioId === "") return "empty";
   switch (stateOf(scenarioId)) {
     case "answer":
       return "answer";
