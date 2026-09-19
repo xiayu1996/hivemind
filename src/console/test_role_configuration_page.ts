@@ -284,3 +284,29 @@ describe("role configuration waiting state", () => {
     expect(state).toMatchObject({ pendingSaveId: "save-1" });
   });
 });
+
+describe("role configuration responsive layout", () => {
+  it("@scenario S-R237511RC-01-responsive 宽屏并排对齐、窄屏按当前版再上一版完整排列", () => {
+    const state: RoleConfigurationViewState = {
+      status: "ready",
+      roles,
+      selectedRoleId: "prototype",
+      pair: pairWith(previous),
+    };
+    const html = renderRoleConfigurationPage(state);
+
+    expect(html).toContain("编辑当前配置");
+    expect(html).toContain("上一版配置");
+    expect(html).toContain("当前版 v12");
+    expect(html).toContain("上一版 v11");
+    expect(html).toContain("Claude Sonnet 4");
+    expect(html).toContain("GPT-5 Codex");
+    expect(html).toContain(current.prompt);
+    expect(html).toContain(previous.prompt);
+    expect(html).toContain(".role-split{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:stretch}");
+    expect(html).toContain("@media (max-width:760px)");
+    expect(html).toContain(".role-split{grid-template-columns:1fr;align-items:start}");
+    expect(html).toContain("aria-label=\"手机导航\"");
+    expect(html).not.toContain("仅显示当前版 v12");
+  });
+});
