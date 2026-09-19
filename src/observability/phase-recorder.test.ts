@@ -1,10 +1,10 @@
 import { createClient } from "@libsql/client";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { migrate } from "../persistence/migrate.js";
-import { parseCanonicalLog, rebuildProviderPayload, validateCoordinates } from "./canonical-log.js";
+import { readCanonicalLog, rebuildProviderPayload, validateCoordinates } from "./canonical-log.js";
 import { LibsqlPhaseRecorder, type PhaseEvidenceInput } from "./phase-recorder.js";
 import { testAgentSpec } from "../runner/agent-spec.testing.js";
 
@@ -48,7 +48,7 @@ describe("LibsqlPhaseRecorder", () => {
     const cost = await recorder.recordCost(telemetry);
     await recorder.writeEvidence({ ...telemetry, cost: cost.data });
 
-    const canonical = parseCanonicalLog(await readFile(join(directory, "run-1", "run-events.jsonl"), "utf8"));
+    const canonical = await readCanonicalLog(join(directory, "run-1", "run-events.jsonl"));
     expect(rebuildProviderPayload(canonical)).toEqual(payloads[1]);
     expect(() => validateCoordinates(canonical)).not.toThrow();
     const costs = await client.execute("SELECT provider, model_id, cost_usd FROM cost_entries");
@@ -99,7 +99,7 @@ describe("LibsqlPhaseRecorder", () => {
     // A provider request carries the whole conversation so far, so keeping the
     // capture beside the log stored every round twice.
     await expect(stat(capture)).rejects.toMatchObject({ code: "ENOENT" });
-    const canonical = parseCanonicalLog(await readFile(join(directory, "run-2", "run-events.jsonl"), "utf8"));
+    const canonical = await readCanonicalLog(join(directory, "run-2", "run-events.jsonl"));
     expect(rebuildProviderPayload(canonical)).toEqual(payloads[0]);
     client.close();
     await rm(directory, { recursive: true, force: true });
