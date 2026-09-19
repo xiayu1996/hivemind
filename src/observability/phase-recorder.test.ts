@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { readPackedText } from "./packed-file.js";
 import { migrate } from "../persistence/migrate.js";
 import { readCanonicalLog, rebuildProviderPayload, validateCoordinates } from "./canonical-log.js";
 import { LibsqlPhaseRecorder, type PhaseEvidenceInput } from "./phase-recorder.js";
@@ -101,6 +102,36 @@ describe("LibsqlPhaseRecorder", () => {
     await expect(stat(capture)).rejects.toMatchObject({ code: "ENOENT" });
     const canonical = await readCanonicalLog(join(directory, "run-2", "run-events.jsonl"));
     expect(rebuildProviderPayload(canonical)).toEqual(payloads[0]);
+    client.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  it("packs a capture the canonical log never folded in rather than leaving it flat", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "hivemind-phase-leftover-"));
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const payloads = [{ model: "mock-1", messages: [{ role: "user", content: "only" }], tools: [] }];
+    const recorder = new LibsqlPhaseRecorder(client, { evidenceRoot: directory }, () => 100);
+    await mkdir(join(directory, "run-3"), { recursive: true });
+    await writeFile(join(directory, "run-3", "provider-requests.jsonl"), `${JSON.stringify(payloads[0])}\n`, "utf8");
+    // What the UI review lane leaves: its own pi, its own requests, no log of
+    // its own to fold them into.
+    const review = join(directory, "run-3", "ui-review-requests.jsonl");
+    const written = `${JSON.stringify({ messages: ["y".repeat(2_048)] })}\n`;
+    await writeFile(review, written, "utf8");
+
+    await recorder.writeEvidence({
+      runId: "run-3",
+      cardId: "card-3",
+      phase: "VERIFY",
+      messages: [{ role: "assistant", content: "done", usage: { input: 10, cacheRead: 0, cacheWrite: 0, output: 1 } }],
+      providerPayloads: payloads,
+      spec: await testAgentSpec(),
+      result: { settled: true, failure: null, usage: { input: 3, output: 2, cacheRead: 0, cacheWrite: 0, reasoning: 0, costUsd: 0.01 }, events: [] },
+    });
+
+    await expect(stat(review)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readPackedText(review)).toEqual(written);
     client.close();
     await rm(directory, { recursive: true, force: true });
   });

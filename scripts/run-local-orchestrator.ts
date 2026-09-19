@@ -84,6 +84,7 @@ import { PlanApprovalStore } from "../src/orchestrator/plan-approval.js";
 import { DispatchQueue } from "../src/queue/dispatch.js";
 import { CostLedger } from "../src/observability/cost-ledger.js";
 import { CANONICAL_CAPTURE_ENV } from "../src/observability/capture-contract.js";
+import { finishLaneCapture, laneCapturePath } from "../src/observability/lane-capture.js";
 import { createConsoleServer, listenConsole } from "../src/console/server.js";
 import { LibsqlConsoleDataSource } from "../src/console/libsql-data-source.js";
 import { ProjectionService } from "../src/observability/projections/service.js";
@@ -575,6 +576,7 @@ async function main(): Promise<void> {
     const epicConfig = await configFor(epicSlug);
     const repositoryPath = checkoutOf(epicSlug);
     const repositoryId = repositoryIdFor(epicSlug);
+    const capturePath = laneCapturePath(join(workRoot, "evidence", repositoryId), "decompose", Date.now());
     // The tree the split is read from has to be the tree it will be built in.
     await ensureCheckout({
       url: (await repositories.get(epicSlug))!.remoteUrl,
@@ -614,7 +616,7 @@ async function main(): Promise<void> {
           // The exact request this lane sent, captured the same way the Story
           // phases capture theirs: a requirement that produced a bad split is
           // unanswerable without the prompt that produced it.
-          [CANONICAL_CAPTURE_ENV]: join(workRoot, "evidence", repositoryId, "decompose-requests.jsonl"),
+          [CANONICAL_CAPTURE_ENV]: capturePath,
         },
         extensions: [join(ROOT, "extensions", "canonical-capture.ts")],
         promptRoot: join(ROOT, "prompts"),
@@ -639,21 +641,25 @@ async function main(): Promise<void> {
     // anything about the provider: a defect of ours is UNKNOWN and must not
     // open a breaker. With this written down, the next cycle skips the open
     // provider and takes the next one in the chain.
-    const outcome = await decomposer.decompose(epic).catch(async (cause: unknown) => {
-      const message = cause instanceof Error ? cause.message : String(cause);
-      if (classifyError(message).class !== "UNKNOWN") {
-        await providerHealth.recordFailure(provider, message, await breakerPolicy(epicConfig))
-          .catch(() => undefined);
+    try {
+      const outcome = await decomposer.decompose(epic).catch(async (cause: unknown) => {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        if (classifyError(message).class !== "UNKNOWN") {
+          await providerHealth.recordFailure(provider, message, await breakerPolicy(epicConfig))
+            .catch(() => undefined);
+        }
+        throw cause;
+      });
+      console.log(`Epic ${epic.id} decomposition: ${outcome.kind}`);
+      if (outcome.kind !== "presented") {
+        await alerts.send({
+          kind: "needs_input",
+          title: `Epic ${epic.id} cannot be decomposed`,
+          body: outcome.kind === "blocking_question" ? outcome.question.question : outcome.reasons.join("; "),
+        }).catch((cause: unknown) => console.error("alert failed:", (cause as Error).message));
       }
-      throw cause;
-    });
-    console.log(`Epic ${epic.id} decomposition: ${outcome.kind}`);
-    if (outcome.kind !== "presented") {
-      await alerts.send({
-        kind: "needs_input",
-        title: `Epic ${epic.id} cannot be decomposed`,
-        body: outcome.kind === "blocking_question" ? outcome.question.question : outcome.reasons.join("; "),
-      }).catch((cause: unknown) => console.error("alert failed:", (cause as Error).message));
+    } finally {
+      await finishLaneCapture(capturePath);
     }
   };
 

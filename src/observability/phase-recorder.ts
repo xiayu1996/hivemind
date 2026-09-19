@@ -1,4 +1,4 @@
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { Client } from "@libsql/client";
 import type { PhaseTelemetryInput } from "../orchestrator/pi-phase-port.js";
@@ -10,10 +10,10 @@ import {
 import { CostLedger, type CostRecordedEvent } from "./cost-ledger.js";
 import {
   CanonicalLogWriter,
-  packCanonicalLog,
   readCanonicalLog,
   rebuildProviderPayload,
 } from "./canonical-log.js";
+import { packFile } from "./packed-file.js";
 
 /** A phase's telemetry plus the cost row the delivery path already wrote, so
  * the canonical log can carry it without writing it a second time. */
@@ -29,6 +29,15 @@ export interface PhaseRecorderOptions {
 
 /** What the pi extension appends provider requests to during a run. */
 const CAPTURE_FILE = "provider-requests.jsonl";
+
+/** Packs every capture a run left behind except the one already folded in. */
+async function packLeftoverCaptures(runDirectory: string): Promise<void> {
+  const entries = await readdir(runDirectory).catch(() => [] as string[]);
+  for (const name of entries) {
+    if (!name.endsWith("-requests.jsonl") || name === CAPTURE_FILE) continue;
+    await packFile(join(runDirectory, name)).catch(() => undefined);
+  }
+}
 
 function sameJson(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
@@ -130,7 +139,12 @@ export class LibsqlPhaseRecorder {
     // reach the previous copy takes a 139MB log to under a megabyte. Every
     // byte is kept -- the evidence a person reads is the same evidence, and
     // `readCanonicalLog` opens either form from the same path.
-    await packCanonicalLog(logPath);
+    await packFile(logPath);
+    // Captures this run's log does not fold in: the UI review lane spawns its
+    // own pi beside the verifier and builds no canonical log, so its requests
+    // have nowhere else to go. They are finished when the run is, and flat
+    // they were 56MB of the same conversation repeated.
+    await packLeftoverCaptures(runDirectory);
 
     const time = this.now();
     const lossByTurn = new Map(cache.losses.map((loss) => [loss.turn, loss.lostTokens]));
