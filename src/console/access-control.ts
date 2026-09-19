@@ -186,9 +186,22 @@ function matches(bytes: AddressBytes, network: ParsedNetwork): boolean {
 }
 
 /** Parses and validates configured ranges without widening private networks. */
-export function createConsoleAccessPolicy(_config: ConsoleAccessConfig): ConsoleAccessPolicy {
+export function createConsoleAccessPolicy(config: ConsoleAccessConfig): ConsoleAccessPolicy {
+  const networks = config.allowedNetworks.map((cidr) => {
+    const parsed = parseNetwork(cidr);
+    if (parsed === null) throw new Error(`invalid allowed console network: ${cidr}`);
+    return parsed;
+  });
   return {
-    authorize: () => ({ allowed: false, reason: "source_outside_allowed_networks" }),
+    authorize(source: ConsoleConnectionSource): ConsoleAccessDecision {
+      if (networks.length === 0) return { allowed: false, reason: "allowed_networks_unconfigured" };
+      const bytes = source.remoteAddress === null ? null : parseAddress(source.remoteAddress);
+      if (bytes === null) return { allowed: false, reason: "source_outside_allowed_networks" };
+      for (const network of networks) {
+        if (matches(bytes, network)) return { allowed: true, matchedNetwork: network.cidr };
+      }
+      return { allowed: false, reason: "source_outside_allowed_networks" };
+    },
   };
 }
 
