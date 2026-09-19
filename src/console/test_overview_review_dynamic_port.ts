@@ -164,4 +164,12 @@ describe("the overview started by a verification round with its dynamic port", (
       expect(failures).not.toContain("旧失败");
     });
   });
+  it("@scenario S-R237511OV-01-recent7d leaves old completions and running work out of the completed section", async () => {
+    await inspectOverview((html) => {
+      const completed = section(html, 'id="completed-title"', '<aside class="stack"');
+      expect(completed).not.toContain("旧任务");
+      expect(completed).not.toContain("旧需求归档");
+      expect(completed).not.toContain("重试退避");
+    });
+  });
 });
