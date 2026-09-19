@@ -368,14 +368,22 @@ export class StoryExecutionStore {
         // the human one: they bound how often the sweep may send one Story
         // back, and that bound would mean nothing if the Story moving forward
         // inside a reopen cleared it.
+        // Going back to where it stopped keeps the lane it stopped in; a
+        // person sending it somewhere else is choosing an ordinary round.
+        // `resume_state` is NULL on every transition that is not a release,
+        // so this reads as today's behaviour everywhere else.
         sql: `UPDATE stories
-              SET state = ?, phase = ?, stop_reason = NULL, resume_state = NULL,
+              SET state = ?,
+                  phase = CASE WHEN phase = 'REGRESSION_FIX' AND ? = resume_state
+                               THEN 'REGRESSION_FIX' ELSE ? END,
+                  stop_reason = NULL, resume_state = NULL,
                   phase_reentries = CASE WHEN ? THEN 0 ELSE phase_reentries END,
                   regression_reopens = CASE WHEN ? THEN 0 ELSE regression_reopens END,
                   last_human_action_at = CASE WHEN ? THEN ? ELSE last_human_action_at END,
                   updated_at = ?
               WHERE id = ? AND state = ?`,
         args: [
+          to,
           to,
           phaseForState(to),
           (actor === "human" && expectedFrom === "NEEDS_INPUT")
@@ -437,13 +445,19 @@ export class StoryExecutionStore {
     const [update] = await this.client.batch([
       {
         sql: `UPDATE stories
-              SET state = ?, phase = ?, stop_reason = NULL, resume_state = ?,
+              SET state = ?,
+                  phase = CASE WHEN ? = 'HUMAN_PARKED' THEN phase
+                               WHEN phase = 'REGRESSION_FIX' AND ? = resume_state
+                               THEN 'REGRESSION_FIX' ELSE ? END,
+                  stop_reason = NULL, resume_state = ?,
                   notion_ai_status_shadow = ?, human_wins_until = ?,
                   phase_reentries = CASE WHEN ? THEN 0 ELSE phase_reentries END,
                   regression_reopens = CASE WHEN ? THEN 0 ELSE regression_reopens END,
                   last_human_action_at = ?, updated_at = ?
               WHERE id = ? AND state = ?`,
         args: [
+          input.to,
+          input.to,
           input.to,
           phaseForState(input.to),
           resumeState,
@@ -851,8 +865,15 @@ export class StoryExecutionStore {
     const time = this.now();
     const [update] = await this.client.batch([
       {
+        // `phase` is kept. It is the only field that says which lane a card is
+        // in -- everywhere else it just mirrors `state` -- so erasing it here
+        // and recomputing it at the release turned a narrow regression fix
+        // into an ordinary round: S-R237511OV-01 was stopped mid-lane on
+        // 09-19, released by a person, and ran the full definition of done
+        // without ever touching the two scenarios it had been reopened for.
+        // A stop is a pause, not a decision about what the card was doing.
         sql: `UPDATE stories
-              SET state = 'NEEDS_INPUT', phase = NULL, stop_reason = ?, resume_state = ?,
+              SET state = 'NEEDS_INPUT', stop_reason = ?, resume_state = ?,
                   stop_summary = ?, updated_at = ?
               WHERE id = ? AND state = ?`,
         args: [reason, expectedFrom, JSON.stringify(summary), time, cardId, expectedFrom],
