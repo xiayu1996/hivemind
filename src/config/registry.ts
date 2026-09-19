@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isConsoleAllowedNetwork } from "../console/access-control.js";
 import { READ_ONLY_TOOL_NAMES } from "../guard/tool-decision.js";
 import { snapshotModelIds } from "../runner/catalog-snapshot.js";
 import { THINKING_LEVELS } from "../runner/model-resolver.js";
@@ -852,6 +853,17 @@ export const CONFIG_KEYS = {
     scope: "global",
     reload: "next-spawn",
     description: "Address the console binds. A public wildcard is refused outright; an intranet address has to be named explicitly.",
+  }),
+  "console.allowedNetworks": def({
+    schema: z.array(
+      z.string().trim().min(1).refine(isConsoleAllowedNetwork, {
+        message: "must be an IPv4 or IPv6 CIDR range",
+      }),
+    ),
+    default: [],
+    scope: "global",
+    reload: "drain-restart",
+    description: "The home and office networks the console answers to, as explicit IPv4 or IPv6 CIDR ranges. Empty denies every request: the console stays closed until a person names a network, and a range that merely looks private is not trusted because of it. A malformed range is rejected on write rather than dropped, so a typo cannot quietly widen or empty the allowed set. The policy is built once at startup and judged from the transport peer, so a change here takes effect on restart.",
   }),
   "console.port": def({
     schema: z.number().int().min(1).max(65_535),

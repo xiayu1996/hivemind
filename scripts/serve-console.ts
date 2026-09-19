@@ -5,9 +5,11 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { LibsqlConsoleDataSource } from "../src/console/libsql-data-source.js";
+import { createConsoleAccessPage, createConsoleAccessPolicy } from "../src/console/access-control.js";
 import { createOverviewPage } from "../src/console/overview-page.js";
 import { seedOverviewDemo } from "../src/console/overview-demo.js";
 import { createConsoleServer, listenConsole } from "../src/console/server.js";
+import { ConfigStore } from "../src/config/store.js";
 import { migrate } from "../src/persistence/migrate.js";
 
 /**
@@ -52,9 +54,17 @@ const client = createClient({ url: dbUrl });
 await migrate(client);
 if (demoDirectory !== undefined) await seedOverviewDemo(client, Date.now());
 
+// The access range is configuration, not a flag: a range passed on the command
+// line would be a second place to widen the console. An unconfigured store
+// denies everything, which is the standalone entry telling the reviewer it has
+// not been told which home or office network may enter.
+const config = await ConfigStore.load(client);
+
 const app = await createConsoleServer(
   new LibsqlConsoleDataSource(client, async () => []),
   {
+    accessPolicy: createConsoleAccessPolicy({ allowedNetworks: config.get("console.allowedNetworks") }),
+    accessPage: createConsoleAccessPage(),
     uiRoot: join(ROOT, "console-ui"),
     overviewPage: createOverviewPage(),
   },

@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { mkdtemp } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { createConsoleServer, listenConsole } from "../src/console/server.js";
+import { createConsoleAccessPage, createConsoleAccessPolicy } from "../src/console/access-control.js";
 import { ConsoleConfigWriter } from "../src/console/config-writer.js";
 import { ConfigStore } from "../src/config/store.js";
 import { LibsqlConsoleDataSource } from "../src/console/libsql-data-source.js";
@@ -149,12 +150,15 @@ async function main(): Promise<void> {
       pi: pinnedPiVersion(),
     }]);
     const uiRoot = join(REPO, "console-ui", "dist");
+    const config = await ConfigStore.load(client);
     app = await createConsoleServer(source, {
+      accessPolicy: createConsoleAccessPolicy({ allowedNetworks: config.get("console.allowedNetworks") }),
+      accessPage: createConsoleAccessPage(),
       uiRoot,
       // The web interface is being rebuilt from the board; until it is there,
       // the console is its read API and nothing else.
       serveUi: existsSync(join(uiRoot, "index.html")),
-      configWriter: new ConsoleConfigWriter(await ConfigStore.load(client), client),
+      configWriter: new ConsoleConfigWriter(config, client),
     });
     const address = await listenConsole(app, { host: "127.0.0.1", port: CONSOLE_PORT });
     console.log(`PASS: canonical request rebuild is byte-equivalent after JSON normalisation (${canonical.length} events)`);

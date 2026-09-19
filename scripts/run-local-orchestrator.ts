@@ -84,6 +84,7 @@ import { DispatchQueue } from "../src/queue/dispatch.js";
 import { CostLedger } from "../src/observability/cost-ledger.js";
 import { CANONICAL_CAPTURE_ENV } from "../src/observability/capture-contract.js";
 import { createConsoleServer, listenConsole } from "../src/console/server.js";
+import { createConsoleAccessPage, createConsoleAccessPolicy } from "../src/console/access-control.js";
 import { LibsqlConsoleDataSource } from "../src/console/libsql-data-source.js";
 import { createOverviewPage } from "../src/console/overview-page.js";
 import { ProjectionService } from "../src/observability/projections/service.js";
@@ -1213,6 +1214,8 @@ async function main(): Promise<void> {
         rejections: projections.rejections(),
       })),
       {
+        accessPolicy: createConsoleAccessPolicy({ allowedNetworks: config.get("console.allowedNetworks") }),
+        accessPage: createConsoleAccessPage(),
         uiRoot,
         overviewPage: createOverviewPage(),
         configWriter: new ConsoleConfigWriter(config, handle.client),

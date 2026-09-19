@@ -196,7 +196,7 @@ export function createConsoleAccessPolicy(config: ConsoleAccessConfig): ConsoleA
     authorize(source: ConsoleConnectionSource): ConsoleAccessDecision {
       if (networks.length === 0) return { allowed: false, reason: "allowed_networks_unconfigured" };
       const bytes = source.remoteAddress === null ? null : parseAddress(source.remoteAddress);
-      if (bytes === null) return { allowed: false, reason: "source_outside_allowed_networks" };
+      if (bytes === null) return { allowed: false, reason: "source_unavailable" };
       for (const network of networks) {
         if (matches(bytes, network)) return { allowed: true, matchedNetwork: network.cidr };
       }
