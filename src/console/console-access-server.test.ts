@@ -165,6 +165,37 @@ describe("console access boundary", () => {
     expect(accessPolicy.authorize).toHaveBeenCalledTimes(2);
   });
 
+  it("@scenario S-R237511OV-02-deniedpage replaces known pages with the access-check document", async () => {
+    const source = dataSource();
+    const app = await server({ accessPolicy: deniedPolicy(), source });
+
+    for (const url of ["/", "/overview", "/costs", "/roles", "/records", "/todo?requirement=R-SECRET"]) {
+      const response = await app.inject({ method: "GET", url, remoteAddress: "203.0.113.90" });
+      expect(response.statusCode).toBe(403);
+      expect(response.headers["content-type"]).toContain("text/html");
+      for (const text of [ACCESS_VERIFICATION, UNAVAILABLE, DEVICE_DENIED, RETRY_NETWORK]) {
+        expect(response.body).toContain(text);
+      }
+      for (const text of [OVERVIEW, TODO, SECRET_RUN, SECRET_CONFIG, "73.21"]) {
+        expect(response.body).not.toContain(text);
+      }
+    }
+    expect(callsOf(source)).toEqual([]);
+  });
+
+  it("@scenario S-R237511OV-02-deniedpage protects bookmarked, asset and unknown page addresses", async () => {
+    const source = dataSource();
+    const app = await server({ accessPolicy: deniedPolicy(), source });
+
+    for (const url of ["/detail/bookmarked-story", "/assets/console.css", "/old-console-address"]) {
+      const response = await app.inject({ method: "GET", url, remoteAddress: "203.0.113.90" });
+      expect(response.statusCode).toBe(403);
+      expect(response.body).toContain(ACCESS_VERIFICATION);
+      expect(response.body).not.toContain(SECRET_RUN);
+    }
+    expect(callsOf(source)).toEqual([]);
+  });
+
   it("@scenario S-R237511OV-02-deniedrequest refuses health, reads and writes before touching a port", async () => {
     const source = dataSource();
     const configWriter = writer();

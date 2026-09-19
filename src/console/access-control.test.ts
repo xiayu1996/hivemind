@@ -124,3 +124,32 @@ describe("console network policy", () => {
   });
 });
 
+describe("data-independent access page", () => {
+  it("@scenario S-R237511OV-02-deniedpage renders only denial guidance and a retry action", async () => {
+    const createPage = await pageContract();
+    const html = createPage().renderDocument({ state: "denied" });
+
+    for (const text of [ACCESS_VERIFICATION, UNAVAILABLE, DEVICE_DENIED, NETWORK_GUIDANCE, RETRY_NETWORK]) {
+      expect(html).toContain(text);
+    }
+    for (const text of [OVERVIEW, TODO, COST, CONFIG, RECORDS, "RUN-SECRET-91", "USD 73.21"]) {
+      expect(html).not.toContain(text);
+    }
+    expect(html).not.toMatch(/<(?:nav|aside)\b/i);
+  });
+
+  it("@scenario S-R237511OV-02-deniedpage does not accept operational values for interpolation", async () => {
+    const createPage = await pageContract();
+    const page = createPage();
+    const normal = page.renderDocument({ state: "denied" });
+    const attemptedInjection = page.renderDocument({
+      state: "denied",
+      snapshot: "RUN-SECRET-91",
+      config: "CONFIG-SECRET-72",
+    } as unknown as { state: ConsoleAccessPageState });
+
+    expect(attemptedInjection).toBe(normal);
+    expect(attemptedInjection).not.toContain("RUN-SECRET-91");
+    expect(attemptedInjection).not.toContain("CONFIG-SECRET-72");
+  });
+});
