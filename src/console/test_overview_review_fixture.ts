@@ -188,4 +188,11 @@ describe("the overview a verification round opens", () => {
     expect(html).toContain("账单导出");
     expect(html).toContain("状态投影核对");
   });
+  it("@scenario S-R237511OV-01-states says what each reading state waits for instead of a blank page", async () => {
+    expect(await get("/?state=loading")).toContain("正在读取运行情况");
+    expect(await get("/?state=empty")).toContain("当前没有运行事项");
+    expect(await get("/?state=error")).toContain("无法读取运行总览");
+    expect(await get("/?state=waiting")).toContain("运行结果尚未产生");
+    expect(html).toContain("重试退避");
+  });
 });
