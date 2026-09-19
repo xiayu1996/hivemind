@@ -52,7 +52,7 @@ function stateOf(scenarioId: string): string {
  * empty state: the plain page is the one the "nothing is waiting" scenarios
  * are written about, and seeding it would take that state away. */
 export function fixtureFor(scenarioId: string | null): VerifyFixture {
-  if (scenarioId === null || scenarioId === "") return "empty";
+  if (scenarioId === null || scenarioId === "") return "full";
   switch (stateOf(scenarioId)) {
     case "answer":
       return "answer";

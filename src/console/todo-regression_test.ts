@@ -67,4 +67,11 @@ describe("the waiting state each todo scenario is judged on", () => {
     expect(await listPendingTodos(client)).toEqual([]);
   });
 
+  it("@scenario S-R237511TD-01-existing a plain page is judged on an empty ledger", async () => {
+    expect(fixtureFor(null)).toBe("empty");
+    await applyVerifyFixture(client, fixtureFor(null), 9000);
+
+    expect(await listPendingTodos(client)).toEqual([]);
+  });
+
 });
