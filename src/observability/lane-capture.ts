@@ -1,3 +1,4 @@
+import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { packFile } from "./packed-file.js";
 
@@ -28,4 +29,24 @@ export async function finishLaneCapture(path: string): Promise<void> {
   } catch (cause) {
     if ((cause as { code?: string }).code !== "ENOENT") throw cause;
   }
+}
+
+/**
+ * Packs every capture left flat under a tree whose runs have all ended.
+ *
+ * A run that died never reaches `writeEvidence`, so its capture is never
+ * folded into a canonical log and stays as the only record of what it sent --
+ * flat, and a capture is one conversation repeated at growing lengths. Called
+ * once a card has no live run, which is the moment every file under it is
+ * finished.
+ */
+export async function packFinishedCaptures(root: string): Promise<number> {
+  const entries = await readdir(root, { withFileTypes: true, recursive: true }).catch(() => []);
+  let packed = 0;
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith("-requests.jsonl")) continue;
+    // Absent by the time we get here means another pass took it; not an error.
+    await packFile(join(entry.parentPath, entry.name)).then(() => { packed++; }).catch(() => undefined);
+  }
+  return packed;
 }

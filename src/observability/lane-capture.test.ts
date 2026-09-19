@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { finishLaneCapture, laneCapturePath } from "./lane-capture.js";
+import { finishLaneCapture, laneCapturePath, packFinishedCaptures } from "./lane-capture.js";
 import { PACKED_SUFFIX, readPackedText } from "./packed-file.js";
 
 describe("a lane capture", () => {
@@ -32,5 +32,22 @@ describe("a lane capture", () => {
   it("accepts a lane that sent nothing and so wrote no file", async () => {
     const root = await mkdtemp(join(tmpdir(), "hm-lane-silent-"));
     await expect(finishLaneCapture(laneCapturePath(root, "sweep", 0))).resolves.toBeUndefined();
+  });
+
+  it("packs what a died run left flat, wherever under the card it landed", async () => {
+    const root = await mkdtemp(join(tmpdir(), "hm-dead-"));
+    const run = join(root, "card-1-code-1-abc");
+    await mkdir(run, { recursive: true });
+    const written = `${JSON.stringify({ messages: ["z".repeat(2_048)] })}\n`;
+    await writeFile(join(run, "provider-requests.jsonl"), written, "utf8");
+    await writeFile(join(run, "ui-review-requests.jsonl"), written, "utf8");
+    // Not a capture: a run's other evidence stays exactly as it is.
+    await writeFile(join(run, "run-events.jsonl"), "kept\n", "utf8");
+
+    expect(await packFinishedCaptures(root)).toBe(2);
+
+    expect(await readPackedText(join(run, "provider-requests.jsonl"))).toEqual(written);
+    expect(await readPackedText(join(run, "ui-review-requests.jsonl"))).toEqual(written);
+    expect(await readFile(join(run, "run-events.jsonl"), "utf8")).toEqual("kept\n");
   });
 });
