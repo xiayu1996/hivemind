@@ -56,6 +56,11 @@ export async function attributeCard(
   probe: RevisionProbe,
   now: () => number = Date.now,
 ): Promise<Attribution> {
+  // Nothing has landed on this Epic head, so there is no revision to probe and
+  // no Story the failure can belong to. Probing anyway handed git the empty
+  // string that stands for "no base" and killed the sweep for the whole Epic:
+  // `git checkout --detach ''` is a fatal pathspec error, not a checkout.
+  if (sequence.base === "") return { kind: "pre_existing", probes: 0 };
   const attribution = await attributeRegression(
     sequence.steps.map((step) => step.storyId),
     async (index) => probe(
