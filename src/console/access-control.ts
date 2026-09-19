@@ -210,15 +210,42 @@ export function createConsoleAccessPolicy(config: ConsoleAccessConfig): ConsoleA
   };
 }
 
-const ACCESS_STATE_COPY: Partial<Record<ConsoleAccessPageState, { heading: string; detail: string; retry: boolean }>> = {
+/**
+ * Copy for each access state. Every state renders the same shell and a heading
+ * with no operational value: the page cannot say more than the state it was
+ * handed, because it was handed nothing else.
+ */
+const ACCESS_STATE_COPY: Record<ConsoleAccessPageState, {
+  readonly heading: string;
+  readonly detail: string;
+  readonly retry: boolean;
+}> = {
   denied: {
     heading: "\u5f53\u524d\u8bbe\u5907\u65e0\u6cd5\u8fdb\u5165\u540e\u53f0",
     detail: "\u65e0\u6cd5\u8bbf\u95ee\u3002\u8bf7\u5148\u8fde\u63a5\u5bb6\u5ead\u6216\u529e\u516c\u7f51\u7edc\uff0c\u7136\u540e\u9009\u62e9\u201c\u91cd\u65b0\u68c0\u67e5\u7f51\u7edc\u201d\u3002",
     retry: true,
   },
+  not_found: {
+    heading: "\u5c1a\u672a\u53d1\u73b0\u53ef\u8bbf\u95ee\u7684\u540e\u53f0",
+    detail: "\u65e0\u6cd5\u8bbf\u95ee\u3002\u8bf7\u5148\u8fde\u63a5\u5bb6\u5ead\u6216\u529e\u516c\u7f51\u7edc\uff0c\u518d\u91cd\u65b0\u68c0\u67e5\u53ef\u7528\u7684\u540e\u53f0\u3002",
+    retry: true,
+  },
+  checking: {
+    heading: "\u6b63\u5728\u68c0\u67e5\u8bbf\u95ee\u6761\u4ef6",
+    detail: "\u6b63\u5728\u786e\u8ba4\u5f53\u524d\u8bbe\u5907\u662f\u5426\u8fde\u63a5\u5bb6\u5ead\u6216\u529e\u516c\u7f51\u7edc\uff0c\u8bf7\u7a0d\u5019\u3002",
+    retry: false,
+  },
+  error: {
+    heading: "\u65e0\u6cd5\u5b8c\u6210\u8bbf\u95ee\u68c0\u67e5",
+    detail: "\u76ee\u524d\u65e0\u6cd5\u786e\u8ba4\u5f53\u524d\u8bbe\u5907\u6240\u5728\u7684\u7f51\u7edc\u3002\u8bf7\u68c0\u67e5\u7f51\u7edc\u8fde\u63a5\u540e\u91cd\u65b0\u68c0\u67e5\uff1b\u786e\u8ba4\u901a\u8fc7\u524d\u4e0d\u4f1a\u5c55\u793a\u540e\u53f0\u5185\u5bb9\u3002",
+    retry: true,
+  },
+  waiting: {
+    heading: "\u6b63\u5728\u7b49\u5f85\u540e\u53f0\u54cd\u5e94",
+    detail: "\u5f53\u524d\u8bbe\u5907\u5df2\u7ecf\u8fde\u63a5\u5bb6\u5ead\u6216\u529e\u516c\u7f51\u7edc\uff0c\u4f46\u540e\u53f0\u5c1a\u672a\u54cd\u5e94\uff1b\u9875\u9762\u4f1a\u7ee7\u7eed\u68c0\u67e5\uff0c\u4e5f\u53ef\u4ee5\u7a0d\u540e\u91cd\u8bd5\u3002",
+    retry: true,
+  },
 };
-
-const ACCESS_PAGE_FALLBACK = { heading: "\u4e0d\u53ef\u7528", detail: "", retry: false };
 
 const ACCESS_PAGE_STYLE = `:root{color-scheme:light}`
   + `body{margin:0;background:#f4f7fa;color:#172b3a;font-family:"IBM Plex Sans","Segoe UI",sans-serif;font-size:14px}`
@@ -235,7 +262,7 @@ const ACCESS_PAGE_STYLE = `:root{color-scheme:light}`
 export function createConsoleAccessPage(): ConsoleAccessPage {
   return {
     renderDocument({ state }: { state: ConsoleAccessPageState }): string {
-      const copy = ACCESS_STATE_COPY[state] ?? ACCESS_PAGE_FALLBACK;
+      const copy = ACCESS_STATE_COPY[state];
       const action = copy.retry
         ? `<button type="button" onclick="location.reload()">\u91cd\u65b0\u68c0\u67e5\u7f51\u7edc</button>`
         : "";
@@ -245,7 +272,7 @@ export function createConsoleAccessPage(): ConsoleAccessPage {
         + `<title>\u8bbf\u95ee\u9a8c\u8bc1\uff5cHivemind</title>`
         + `<style>${ACCESS_PAGE_STYLE}</style></head><body><main>`
         + `<h1>\u8bbf\u95ee\u9a8c\u8bc1</h1>`
-        + `<section class="access-state">` + `<span class="access-badge">\u65e0\u6cd5\u8bbf\u95ee</span>` + ``
+        + `<section class="access-state"><span class="access-badge">\u65e0\u6cd5\u8bbf\u95ee</span>`
         + `<h2>${copy.heading}</h2><p>${copy.detail}</p>${action}</section>`
         + `</main></body></html>`;
     },
