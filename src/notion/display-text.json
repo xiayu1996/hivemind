@@ -226,7 +226,8 @@
     "refusal": "有一轮的产出被出口检查挡下：{reason}",
     "dispatchFailed": "有 {count} 次运行还没产出就断了。",
     "spend": "这张卡到目前花了 {amount} 美元。",
-    "budget": "这段已经用掉 {spent}/{budget} 轮。"
+    "budget": "这段已经用掉 {spent}/{budget} 轮。",
+    "inconclusive": "连续 {attempts} 轮都没能把环境起起来，所以根本没判成：{scenarios}。"
   },
   "solution": {
     "approachTitle": "怎么做",

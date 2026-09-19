@@ -465,7 +465,14 @@ export class SingleStoryWorker {
               kind: "verification_inconclusive",
               detail: `${inconclusiveStreak} consecutive attempts failed for environmental reasons: ${verification.failedScenarios.join(", ")}`,
             });
-            await this.store.stopForInput(cardId, "VERIFY", "retry_limit_exceeded", verifyRunId);
+            // Named, because this stop is not about the work: nothing was
+            // judged at all. Without the detail the card offered a person the
+            // words "retry limit exceeded" over an environment that never came
+            // up, and a fabricated budget of zero underneath them.
+            await this.store.stopForInput(cardId, "VERIFY", "retry_limit_exceeded", verifyRunId, {
+              inconclusive: inconclusiveStreak,
+              inconclusiveScenarios: verification.failedScenarios,
+            });
             await this.projection.enqueue(cardId);
             return { state: "NEEDS_INPUT", rounds: round, mrUrl: null, stopReason: "retry_limit_exceeded" };
           }
