@@ -1342,6 +1342,31 @@ export class StoryExecutionStore {
       + numberValue(bounces!.rows[0]!.spent, "merge bounces");
   }
 
+  /**
+   * The branch this Epic integrates on, recorded when the branch is published
+   * rather than when the first Story lands on it.
+   *
+   * `markIntegrated` used to be the only writer, so the column stayed NULL for
+   * the whole window between an Epic starting work and its first delivery.
+   * `EpicBranchFreshness` skips a NULL, so nothing merged main into the branch
+   * during exactly the window in which its Stories are being written:
+   * R237511TR sat there for thirty hours and 157 commits, and its first card
+   * could not be verified because what it needed had landed on main meanwhile.
+   * A card that needs main to finish, on a branch that waits for a card to
+   * finish before it takes main, is a deadlock with no way out of itself.
+   *
+   * Only fills an empty column, so a branch somebody recorded by hand or a
+   * later publish of the same name never rewrites what the Epic already lives
+   * on.
+   */
+  async recordIntegrationBranch(epicId: string, integrationBranch: string): Promise<void> {
+    await this.client.execute({
+      sql: `UPDATE epics SET integration_branch = ?, updated_at = ?
+            WHERE id = ? AND integration_branch IS NULL`,
+      args: [integrationBranch, this.now(), epicId],
+    });
+  }
+
   /** The Story is on the Epic head. Recorded so a later Story's subset
    * re-verification knows what it has to hold beside, and so the branch the
    * Epic lives on is durable rather than inferred from a naming rule. */
