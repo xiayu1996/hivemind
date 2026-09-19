@@ -77,4 +77,32 @@ describe("verification fixture request ownership", () => {
     expect(navigation).toMatchObject({ kind: "select", plan: { fixture: "empty" } });
     expect(await listPendingTodos(client)).toEqual([]);
   });
+
+  it("@scenario S-R237511TD-02-rejected 被拒绝场景保留一条可提交的待答复事项并拒绝交付", async () => {
+    expect(fixtureContract.verifyFixturePlanFor).toBeTypeOf("function");
+    const plan = fixtureContract.verifyFixturePlanFor("S-R237511TD-02-rejected");
+
+    expect(plan).toEqual({ fixture: "rejected", todoRead: "available", decisionDelivery: "reject" });
+    await applyVerifyFixture(client, plan.fixture, 9_000);
+    expect(await listPendingTodos(client)).toEqual([
+      expect.objectContaining({
+        todoId: "answer:S-R237-ANSWER:q1",
+        title: "提醒应在什么时候发送？",
+        decision: null,
+      }),
+    ]);
+  });
+
+  it("@scenario S-R237511TD-02-rejected 被拒绝场景不会沿用已处理结果或其他种类待办", async () => {
+    await applyVerifyFixture(client, "full", 9_000);
+    expect(fixtureContract.verifyFixturePlanFor).toBeTypeOf("function");
+    const plan = fixtureContract.verifyFixturePlanFor("S-R237511TD-02-rejected");
+    await applyVerifyFixture(client, plan.fixture, 9_000);
+
+    const waiting = await listPendingTodos(client);
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0]).toMatchObject({ kind: "answer", decision: null });
+    expect((await client.execute("SELECT COUNT(*) AS count FROM todo_decisions")).rows[0]?.count).toBe(0);
+    expect((await client.execute("SELECT COUNT(*) AS count FROM notion_outbox")).rows[0]?.count).toBe(0);
+  });
 });

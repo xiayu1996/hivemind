@@ -40,7 +40,7 @@ const FIXTURE_STORY_IDS = [ANSWER_STORY, SAVE_STORY];
 const FIXTURE_REQUIREMENT_IDS = [APPROVE_REQUIREMENT, CHOICE_REQUIREMENT];
 const FIXTURE_PAGE_IDS = [...FIXTURE_STORY_IDS, ...FIXTURE_REQUIREMENT_IDS].map((id) => `page-${id}`);
 
-export type VerifyFixture = "full" | "answer" | "approve" | "choose" | "savefail" | "empty" | "error";
+export type VerifyFixture = "full" | "answer" | "approve" | "choose" | "savefail" | "rejected" | "empty" | "error";
 
 /** The word a scenario id ends in, which is the state that scenario is about. */
 function stateOf(scenarioId: string): string {

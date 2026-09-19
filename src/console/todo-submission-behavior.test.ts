@@ -205,3 +205,33 @@ describe("the page projection after an answer", () => {
   });
 });
 
+describe("a rejected todo answer", () => {
+  it("@scenario S-R237511TD-02-rejected 提交被拒绝时保留待办和原答复并明确提示重试", () => {
+    const state = reduceTodoView(submitting(), {
+      type: "submitted",
+      requestId: 2,
+      result: { kind: "failed" },
+    });
+
+    expect(state.status).toBe("submission_rejected");
+    expect(state.todo).toEqual(answerTodo);
+    expect(state.submission).toEqual(submission);
+    expect(state.decision).toBeNull();
+    expect((TODO_COPY as unknown as Record<string, unknown>).answerNotSubmitted).toBe("答复未提交，请重试");
+    expect(state.status).not.toBe("processed");
+    expect(state.status).not.toBe("none");
+  });
+
+  it("@scenario S-R237511TD-02-rejected 提交期间待办消失也不得显示成已处理或所有事项已处理", () => {
+    expect(submissionContract.projectTodoSubmission).toBeTypeOf("function");
+    const projection = submissionContract.projectTodoSubmission(answerTodo, submission, { kind: "gone" });
+
+    expect(projection).toEqual({
+      kind: "submission_rejected",
+      todo: answerTodo,
+      submission,
+      messageKey: "answer_not_submitted",
+    });
+    expect(projection.kind).not.toBe("confirmed");
+  });
+});
