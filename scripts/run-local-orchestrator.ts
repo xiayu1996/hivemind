@@ -72,7 +72,7 @@ import { EpicCompletion } from "../src/orchestrator/epic-completion.js";
 import { EpicMrDelivery } from "../src/vcs/epic-delivery.js";
 import { escalateParkedStories } from "../src/orchestrator/epic-escalation.js";
 import { enqueueEpicPages } from "../src/orchestrator/epic-page-projection.js";
-import { epicRegressionClean, epicsAwaitingDelivery, unprovenScenarios } from "../src/regression/epic-gate.js";
+import { epicRegressionClean, epicsAwaitingDelivery, scenariosAwaitingDelivery } from "../src/regression/epic-gate.js";
 import { discoverMRPort } from "../src/vcs/mr/adapters.js";
 import { NotionStoryProjection } from "../src/notion/story-projection.js";
 import { NotionSyncCoordinator, type NotionSyncPoller } from "../src/notion/sync.js";
@@ -986,7 +986,7 @@ async function main(): Promise<void> {
         .then((sha) => sha.trim())
         .catch(() => "");
       if (head === "") continue;
-      awaitedByDelivery.push(...await unprovenScenarios(handle.client, epicId, head));
+      awaitedByDelivery.push(...await scenariosAwaitingDelivery(handle.client, epicId, head));
     }
 
     const plan = planRegressionSweep({
