@@ -58,6 +58,32 @@ describe("@scenario S-M2-06-freshness", () => {
     expect(git.run).not.toHaveBeenCalled();
   });
 
+  it("leaves a branch whose merge conflicts alone until main moves", async () => {
+    await client.execute("INSERT INTO epic_branch_refresh_events (epic_id, outcome, source_revision, ts, failure_reason) VALUES ('M2', 'failed', 'main-revision', 99000000, 'conflicts in a.ts')");
+    const git = { run: vi.fn(async (_cwd: string, args: string[]) =>
+      args[0] === "branch" ? "epic/M2\n" : "main-revision\n") };
+    const refresh = new EpicBranchFreshness(client, { worktreePath: "integration", git, intervalMs: 86_400_000, now: () => 100_000_000 });
+
+    await expect(refresh.tick()).resolves.toEqual([{ epicId: "M2", outcome: "skipped" }]);
+    expect(git.run).not.toHaveBeenCalledWith("integration", ["merge", "--no-ff", "origin/main"]);
+    const rows = await client.execute("SELECT COUNT(*) n FROM epic_branch_refresh_events");
+    expect(rows.rows[0]?.n).toBe(1);
+  });
+
+  it("tries a conflicted branch again as soon as main has moved", async () => {
+    await client.execute("INSERT INTO epic_branch_refresh_events (epic_id, outcome, source_revision, ts, failure_reason) VALUES ('M2', 'failed', 'old-main', 99000000, 'conflicts in a.ts')");
+    const git = { run: vi.fn(async (_cwd: string, args: string[]) => {
+      if (args[0] === "branch") return "epic/M2\n";
+      if (args[0] === "status") return "";
+      if (args[0] === "rev-parse") return "new-main\n";
+      return "";
+    }) };
+    const refresh = new EpicBranchFreshness(client, { worktreePath: "integration", git, intervalMs: 86_400_000, now: () => 100_000_000 });
+
+    await expect(refresh.tick()).resolves.toEqual([{ epicId: "M2", outcome: "succeeded" }]);
+    expect(git.run).toHaveBeenCalledWith("integration", ["merge", "--no-ff", "origin/main"]);
+  });
+
   it("records skipped before the daily interval elapses from the durable successful event", async () => {
     await client.execute("INSERT INTO epic_branch_refresh_events (epic_id, outcome, source_revision, ts) VALUES ('M2', 'succeeded', 'old-main', 50000000)");
     const git = { run: vi.fn(async (_cwd: string, args: string[]) => args[0] === "branch" ? "epic/M2\n" : "new-main\n") };
