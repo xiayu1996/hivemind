@@ -192,3 +192,20 @@ describe("role configuration differences", () => {
     expect(html).not.toContain("无变化");
   });
 });
+
+describe("role configuration empty state", () => {
+  it("@scenario S-R237511RC-01-empty 没有配置时说明现状并给出创建入口", async () => {
+    const html = renderRoleConfigurationPage({ status: "empty" });
+
+    expect(html).toContain("还没有角色配置");
+    expect(html).toContain("创建首个配置");
+    expect(html).not.toContain("当前版 v1");
+    expect(html).not.toContain("上一版 v");
+
+    const state = await readRoleConfigurationView(
+      resolveRoleConfigurationPageRequest({}),
+      { readCatalog: async () => ({ status: "empty" }), readVersionPair: async () => { throw new Error("not read"); } },
+    );
+    expect(state.status).toBe("empty");
+  });
+});
