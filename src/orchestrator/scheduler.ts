@@ -62,7 +62,33 @@ function findDependencyCycle(stories: readonly SchedulableStory[]): readonly str
   return undefined;
 }
 
-function pathsIntersect(left: string, right: string): boolean {
+/**
+ * The directory a footprint entry names, whichever way it was spelled.
+ *
+ * A trailing slash and a trailing glob both name the subtree they are attached
+ * to, and neither may change the answer. Untrimmed, `src/console/` and
+ * `src/console/**` each failed to contain `src/console/tabs` while
+ * `src/console` contained it, so two Stories in one subtree could be planned
+ * side by side. All three spellings come from real cards: the DoD rewrites the
+ * footprint the decomposition validated and asks only for non-empty strings.
+ *
+ * Only a whole segment is dropped, so `src/consoles` and a file named `*`
+ * keep their own names.
+ */
+function directoryOf(path: string): string {
+  let end = path.length;
+  for (;;) {
+    while (end > 1 && path[end - 1] === "/") end -= 1;
+    const segment = path.lastIndexOf("/", end - 1) + 1;
+    const last = path.slice(segment, end);
+    if (segment === 0 || (last !== "*" && last !== "**")) return path.slice(0, end);
+    end = segment;
+  }
+}
+
+function pathsIntersect(rawLeft: string, rawRight: string): boolean {
+  const left = directoryOf(rawLeft);
+  const right = directoryOf(rawRight);
   return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
 }
 
@@ -85,9 +111,10 @@ function storiesConflict(left: SchedulableStory, right: SchedulableStory, hotspo
 export async function planRepositoryStoryExecution(
   config: ConfigStore,
   stories: readonly SchedulableStory[],
+  options: StoryExecutionOptions = {},
 ): Promise<StoryExecutionPlan> {
   await config.reload();
-  return planStoryExecution(stories, config.get("schedule.hotspotPaths"));
+  return planStoryExecution(stories, config.get("schedule.hotspotPaths"), options);
 }
 
 /** States a Story can still be dispatched from. A parked or failed Story is
@@ -135,18 +162,58 @@ export function dispatchableStories(stories: readonly RepositoryStory[]): Schedu
     }));
 }
 
-export function planStoryExecution(stories: readonly SchedulableStory[], hotspots: readonly string[]): StoryExecutionPlan {
+export interface StoryExecutionOptions {
+  /**
+   * The most Stories one batch may hold.
+   *
+   * Used for the one case where independent Stories are not independent: a
+   * repository whose interface contract is not on the branch yet. The first
+   * card to run is the one that puts it there, and every card dispatched
+   * beside it would invent its own -- which is what 14 cards pointing at a
+   * front-end directory that did not exist looked like from inside.
+   */
+  maxPerBatch?: number;
+  /**
+   * Stories already executing on this installation, by id.
+   *
+   * They hold their footprint for as long as they run, so they seed the first
+   * batch and nothing that conflicts with them joins it. Without this the plan
+   * describes a machine on which nothing has started yet, and the caller then
+   * dispatches into a directory a live worktree is already writing.
+   */
+  running?: readonly string[];
+}
+
+export function planStoryExecution(
+  stories: readonly SchedulableStory[],
+  hotspots: readonly string[],
+  options: StoryExecutionOptions = {},
+): StoryExecutionPlan {
   const cycle = findDependencyCycle(stories);
   if (cycle) return { kind: "dependency_cycle", cycle, batches: [] };
 
   const remaining = [...stories];
   const completed = new Set<string>();
+  const running = new Set(options.running ?? []);
   const batches: string[][] = [];
   while (remaining.length > 0) {
     const batch: SchedulableStory[] = [];
+    // A Story that is already executing holds its footprint until it finishes,
+    // so the first batch is whatever is running plus whatever may run beside
+    // it. Planning from scratch every cycle put a card into batch one while a
+    // card sharing its directories sat in batch six and was already in a
+    // worktree: S-R237511CO-03 and S-R237511MB-01 both took src/console on
+    // 2026-09-19, which is the conflict at merge that footprints exist to
+    // prevent. A running Story's dependencies are satisfied by the fact that it
+    // is running, so it is seeded before the dependency check rather than
+    // through it.
+    const seeding = batches.length === 0 && running.size > 0;
+    if (seeding) for (const story of remaining) if (running.has(story.id)) batch.push(story);
     for (const story of remaining) {
+      if (seeding && running.has(story.id)) continue;
       if (!story.dependsOn.every((dependency) => completed.has(dependency))) continue;
       if (batch.some((candidate) => storiesConflict(story, candidate, hotspots))) continue;
+      if (options.maxPerBatch !== undefined && batch.length >= options.maxPerBatch) break;
       batch.push(story);
     }
     if (batch.length === 0) {

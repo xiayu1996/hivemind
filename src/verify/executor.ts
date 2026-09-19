@@ -10,8 +10,11 @@ import { splitScenarioFailures } from "../pipeline/failure-classification.js";
 import { validateVerdict, type TrajectoryEvidence, type VerdictDocument } from "../pipeline/verdict.js";
 import type { PiRunner, RpcEvent, TokenUsage } from "../runner/types.js";
 import { promptWithContinueRetry } from "../runner/continue-retry.js";
+import { addUsage } from "../runner/failure.js";
 import { jsonPayloadCandidates } from "../util/json-payload.js";
 import { browserLaneEnv } from "./browser-config.js";
+import type { VisibleRequirement } from "./aria-snapshot.js";
+import { checkStructuralLayer } from "./structural-layer.js";
 
 export { EVIDENCE_DIR_ENV } from "../guard/policy.js";
 
@@ -22,6 +25,7 @@ const scenarioSchema = z.object({
   detail: z.string().optional(),
   url: z.string().optional(),
   screenshots: z.array(z.string()).optional(),
+  snapshots: z.array(z.string()).optional(),
 }).strict();
 
 const verifierReplySchema = z.object({
@@ -41,7 +45,19 @@ export interface BlindVerifyInput {
   declaredScenarioIds: string[];
   /** Scenarios that must be reached in the browser, each with its own screenshot. */
   screenScenarioIds?: string[];
+  /**
+   * Per scenario, the roles and text SHAPE said a person would see, from the
+   * frozen DoD. Scenarios absent from the map are not judged structurally,
+   * which is every scenario of a Story frozen before SHAPE produced them.
+   */
+  visibleRequirements?: ReadonlyMap<string, readonly VisibleRequirement[]>;
   allowedHosts: string[];
+  /**
+   * Where the repository's application runs this round, or why it has none.
+   * Undefined leaves the verifier to start whatever a page needs itself, which
+   * is only right for a repository that has no application to start.
+   */
+  app?: AppAddress;
   /** From verify.chromiumSandbox; undefined keeps the sandbox. */
   chromiumSandbox?: boolean;
   commitMessages: string[];
@@ -90,6 +106,10 @@ export interface TreePinPort {
 export interface BlindVerifyResult {
   record: VerifyRecord;
   screenshots: Array<{ scenarioId: string; path: string }>;
+  /** The page each scenario reported reaching. The contract layer opens these
+   * again while the application is still up, so it judges the screen a person
+   * would see rather than a route somebody guessed. */
+  pages: Array<{ scenarioId: string; url: string }>;
   /** Why each non-passing scenario did not pass, in the verifier's words. */
   reasons: Array<{ scenarioId: string; reason: string }>;
   /** Reasons the judge said were about the box although the pattern table did
@@ -114,6 +134,11 @@ export interface BlindVerifyResult {
  * it did before.
  */
 const VERDICT_HANDBACKS = 2;
+
+/** How many times a verdict is asked to name the page structure records it
+ * judged by. Two, like the malformed-verdict handback: a verifier that still
+ * has not taken one is answering a question it did not look at. */
+const SNAPSHOT_HANDBACKS = 2;
 
 const VERDICT_HANDBACK_PROMPT =
   "Your last message carried no verdict this system can read. Send the verdict again as one JSON object "
@@ -250,15 +275,31 @@ function readVerdict(events: readonly RpcEvent[]): z.infer<typeof verifierReplyS
     .at(-1);
 }
 
-function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
-  return {
-    input: a.input + b.input,
-    output: a.output + b.output,
-    cacheRead: a.cacheRead + b.cacheRead,
-    cacheWrite: a.cacheWrite + b.cacheWrite,
-    reasoning: a.reasoning + b.reasoning,
-    costUsd: a.costUsd + b.costUsd,
-  };
+/**
+ * Scenarios claimed passed whose `visible` list has nothing to be checked
+ * against. The structural layer (08 section 6) reads those records; with none
+ * declared there is nothing to read, and the claim can only be refused.
+ */
+function undeclaredSnapshots(
+  document: VerdictDocument,
+  requirements: ReadonlyMap<string, readonly VisibleRequirement[]> | undefined,
+): readonly string[] {
+  if (!requirements) return [];
+  return document.scenarios
+    .filter((scenario) => scenario.status === "passed"
+      && (requirements.get(scenario.id) ?? []).length > 0
+      && (scenario.snapshots ?? []).length === 0)
+    .map((scenario) => scenario.id)
+    .toSorted();
+}
+
+function snapshotHandbackPrompt(scenarioIds: readonly string[]): string {
+  return [
+    `These scenarios are marked passed and declare \`visible\`, but name no page structure record: ${scenarioIds.join(", ")}.`,
+    "A claim with nothing behind it is refused, so judge them again: open each scenario's page in the browser, call",
+    "`snapshot` there, and put the file name in that scenario's `snapshots`. If the page does not show what `visible`",
+    "asks for, say so and mark the scenario failed. Then send the whole verdict again as one JSON object and nothing else.",
+  ].join(" ");
 }
 
 function toVerdictDocument(value: z.infer<typeof verifierReplySchema>): VerdictDocument {
@@ -270,17 +311,22 @@ function toVerdictDocument(value: z.infer<typeof verifierReplySchema>): VerdictD
       ...(scenario.detail === undefined ? {} : { detail: scenario.detail }),
       ...(scenario.url === undefined ? {} : { url: scenario.url }),
       ...(scenario.screenshots === undefined ? {} : { screenshots: scenario.screenshots }),
+      ...(scenario.snapshots === undefined ? {} : { snapshots: scenario.snapshots }),
     })),
   };
 }
 
 /**
- * What the verifier is told about the browser it may drive. Only the host list
- * and the card id enter the text, so the same round produces the same prompt
- * on any machine; the paths the browser writes to are already fixed in the
- * worktree's Playwright configuration.
+ * What the verifier is told about the browser it may drive. Only the host list,
+ * the card id and the application's configured address enter the text, so the
+ * same round produces the same prompt on any machine; the paths the browser
+ * writes to are already fixed in the worktree's Playwright configuration.
  */
-export function browserLaneInstructions(session: string, allowedHosts: readonly string[]): string {
+export function browserLaneInstructions(
+  session: string,
+  allowedHosts: readonly string[],
+  app?: AppAddress,
+): string {
   const hosts = [...allowedHosts].toSorted().join(", ");
   return [
     "Browser lane: a headless Chromium is available through the `playwright-cli` command; always pass the session flag",
@@ -295,12 +341,46 @@ export function browserLaneInstructions(session: string, allowedHosts: readonly 
     `Typical use: \`playwright-cli -s=${session} open <url>\`, then \`snapshot\`, \`click <ref>\`, \`fill <ref> <text>\`, \`screenshot\`, and \`close\`.`,
     "A scenario whose layer is ui or e2e must be exercised in the browser: report the page you judged in `url` and the",
     "screenshot file names in `screenshots`. Close the browser before returning the verdict.",
-    "Other verifiers may be running on this machine: pick a port nobody is listening on (check with `lsof -i :<port>`),",
-    "never assume a page on a well-known port is yours, and stop every process you started before returning the verdict.",
-    "If a page needs a running service, start it yourself in the background and confirm it answers before opening pages:",
-    `\`nohup <command> > "$${EVIDENCE_DIR_ENV}/service.log" 2>&1 &\` — that directory is the only place you may write,`,
-    "and a process that is not detached does not outlive the command that started it.",
+    ...applicationInstructions(app),
   ].join(" ");
+}
+
+/** Where this round's application is, or why it has none. */
+export type AppAddress = { url: string } | { unavailable: string };
+
+/**
+ * How the lane reaches the application under verification.
+ *
+ * Without an address the verifier is told to stand one up itself, which is how
+ * the same scenario on the same tree came back passed from one session and
+ * inconclusive from the next: each invented its own service and judged what it
+ * had invented. When the box knows the address it says so and forbids the
+ * substitute; when the box has none it says that instead, and the scenarios
+ * that need a screen are inconclusive for a reason that does not change
+ * between rounds.
+ */
+function applicationInstructions(app: AppAddress | undefined): string[] {
+  if (app === undefined) {
+    return [
+      "Other verifiers may be running on this machine: pick a port nobody is listening on (check with `lsof -i :<port>`),",
+      "never assume a page on a well-known port is yours, and stop every process you started before returning the verdict.",
+      "If a page needs a running service, start it yourself in the background and confirm it answers before opening pages:",
+      `\`nohup <command> > "$${EVIDENCE_DIR_ENV}/service.log" 2>&1 &\` — that directory is the only place you may write,`,
+      "and a process that is not detached does not outlive the command that started it.",
+    ];
+  }
+  if ("url" in app) {
+    return [
+      `The application under verification is already running at ${app.url}: open its pages there.`,
+      "Do not start a service of your own and do not look for the application on another port -- a page you served",
+      "yourself is not the one under verification, and a verdict read off it is refused.",
+    ];
+  }
+  return [
+    `${app.unavailable}.`,
+    "Do not stand up a substitute and judge that: a scenario that has to be read off a screen is inconclusive this round,",
+    "and its reason says the application could not be opened. Scenarios you can settle without a page are judged as usual.",
+  ];
 }
 
 function promptFor(input: BlindVerifyInput): string {
@@ -310,7 +390,9 @@ function promptFor(input: BlindVerifyInput): string {
     "Choose and run the relevant tests from the repository and the specification.",
     "Run tests in a mode that reports each individual test name, so every scenario's outcome is observable in the transcript.",
     "Evidence protocol (mandatory): after observing the outcome of each scenario, print a line exactly of the form HIVEMIND_TEST_RESULT <scenario_id> <passed|failed|inconclusive>, once per declared scenario id. A verdict whose scenarios have no observable evidence in this session is rejected.",
-    ...(input.allowedHosts.length > 0 ? [browserLaneInstructions(browserSessionFor(input), input.allowedHosts)] : []),
+    ...(input.allowedHosts.length > 0
+      ? [browserLaneInstructions(browserSessionFor(input), input.allowedHosts, input.app)]
+      : []),
     "Return only JSON: {\"scenarios\":[{\"id\":string,\"status\":\"passed\"|\"failed\"|\"inconclusive\",\"reason\"?:string,\"detail\"?:string,\"url\"?:string,\"screenshots\"?:string[]}]}",
     "For every scenario that is not passed, `reason` is mandatory and is written in Chinese, in the words of the person who ordered the card: one sentence saying what does not work from their side. They decide what to do next from that sentence alone, so it carries no test name, no file path and no stack frame; all of that goes in `detail`, which is written for whoever debugs it.",
     "Specification:",
@@ -452,11 +534,31 @@ export class BlindVerifyExecutor {
         }
         parsed = readVerdict(retry.events);
       }
-      messages = await runner.getMessages();
-      if (parsed === undefined) {
-        throw new Error("VERIFY returned no assistant verdict or a malformed verdict: no parseable JSON verdict");
-      }
+      if (parsed === undefined) throw new Error("VERIFY returned a malformed verdict");
       document = toVerdictDocument(parsed);
+      // A scenario passed with no page structure record behind it is not a
+      // judgement the code can check, and the verifier is the only session that
+      // can fix it: it is the one standing in front of the page. The structural
+      // layer refuses such a claim, the refusal travels to CODE, and CODE can
+      // do nothing with it -- S-R237511TD-01 ran four identical rounds that way
+      // and parked. So it is asked here, in the session that can still look.
+      for (let handback = 0; handback < SNAPSHOT_HANDBACKS; handback += 1) {
+        const undeclared = undeclaredSnapshots(document, input.visibleRequirements);
+        if (undeclared.length === 0) break;
+        const retry = await promptWithContinueRetry(runner, snapshotHandbackPrompt(undeclared), {
+          maxContinueRetries: input.maxContinueRetries ?? 8,
+        });
+        events = [...events, ...retry.events];
+        usage = addUsage(usage, retry.usage);
+        if (retry.failure) {
+          providerFailure = retry.failure.errorMessage;
+          throw new Error(retry.failure.errorMessage);
+        }
+        const reparsed = readVerdict(retry.events);
+        if (reparsed === undefined) break;
+        document = toVerdictDocument(reparsed);
+      }
+      messages = await runner.getMessages();
     } catch (cause) {
       runnerError = cause instanceof Error ? cause.message : "VERIFY failed";
     } finally {
@@ -503,15 +605,43 @@ export class BlindVerifyExecutor {
     const refusedClaims = (validation?.errors ?? [])
       .map((error) => error.slice(0, error.indexOf(": ")))
       .filter((id) => declared.has(id));
+    // The structural layer (08 section 6): the page either carried the roles
+    // and text the scenario declared, or it did not. Read from the snapshots
+    // the round left behind, by code, because the round is what is on trial.
+    const structural = input.visibleRequirements
+      ? await checkStructuralLayer({
+          root: input.evidencePath,
+          subjects: (document?.scenarios ?? [])
+            .filter((scenario) => scenario.status === "passed" && input.visibleRequirements!.has(scenario.id))
+            .map((scenario) => ({
+              id: scenario.id,
+              snapshots: scenario.snapshots ?? [],
+              required: input.visibleRequirements!.get(scenario.id) ?? [],
+            })),
+        })
+      : [];
     const failedScenarios = [...new Set([
       ...(document?.scenarios.filter((scenario) => scenario.status !== "passed").map((scenario) => scenario.id)
         ?? [...declared]),
       ...observedFailures,
       ...refusedClaims,
+      ...structural.map((finding) => finding.id),
     ])].toSorted();
-    const scenarioReasons = document?.scenarios
-      .filter((scenario) => scenario.status !== "passed" && scenario.reason)
-      .map((scenario) => ({ scenarioId: scenario.id, reason: scenario.reason! })) ?? [];
+    const scenarioReasons = [
+      ...document?.scenarios
+        .filter((scenario) => scenario.status !== "passed" && scenario.reason)
+        .map((scenario) => ({ scenarioId: scenario.id, reason: scenario.reason! })) ?? [],
+      ...structural.map((finding) => ({ scenarioId: finding.id, reason: finding.reason })),
+      // A scenario the trajectory failed while the verdict called it passed has
+      // no reason of the verifier's own: the verifier did not think it had
+      // failed. The box knows why it is failed anyway and says so, because a
+      // failure carried forward without a reason reaches a person as a blank
+      // and reaches the regression lane as one break indistinguishable from
+      // every other reasonless one.
+      ...observedFailures
+        .filter((id) => !(document?.scenarios ?? []).some((scenario) => scenario.id === id && scenario.status !== "passed"))
+        .map((id) => ({ scenarioId: id, reason: "这条场景在运行记录里判为未通过，但结论里写成通过" })),
+    ];
     const environmentReasons = [
       ...scenarioReasons,
       ...(validation?.errors ?? []).map((error) => ({
@@ -551,6 +681,8 @@ export class BlindVerifyExecutor {
     await this.records.insert(record);
     const screenshots = document?.scenarios.flatMap((scenario) =>
       (scenario.screenshots ?? []).map((path) => ({ scenarioId: scenario.id, path }))) ?? [];
-    return { record, screenshots, reasons: scenarioReasons, environmentalReasons: judged.environmental, validationErrors, treeChanged: !pin.matches, runnerFailure: runnerError, events, usage, messages };
+    const pages = document?.scenarios.flatMap((scenario) =>
+      scenario.url ? [{ scenarioId: scenario.id, url: scenario.url }] : []) ?? [];
+    return { record, screenshots, pages, reasons: scenarioReasons, environmentalReasons: judged.environmental, validationErrors, treeChanged: !pin.matches, runnerFailure: runnerError, events, usage, messages };
   }
 }

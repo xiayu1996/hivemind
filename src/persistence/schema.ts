@@ -59,6 +59,14 @@ export const requirementSolutions = sqliteTable("requirement_solutions", {
   confirmedAt: ms("confirmed_at"),
 }, (t) => [primaryKey({ columns: [t.requirementId, t.revision] })]);
 
+export const requirementPrototypes = sqliteTable("requirement_prototypes", {
+  requirementId: text("requirement_id").notNull(),
+  revision: integer("revision").notNull(),
+  body: text("body").notNull(),
+  mrUrl: text("mr_url"),
+  createdAt: ms("created_at").notNull(),
+}, (t) => [primaryKey({ columns: [t.requirementId, t.revision] })]);
+
 export const requirementAcceptanceItems = sqliteTable("requirement_acceptance_items", {
   requirementId: text("requirement_id").notNull(),
   itemId: text("item_id").notNull(),
@@ -272,6 +280,7 @@ export const storySpecs = sqliteTable("story_specs", {
   // oxlint-disable-next-line unicorn/no-thenable -- Given/When/Then is the external DoD contract.
   then: text("then_"),
   layers: text("layers"),
+  visibleJson: text("visible_json"),
   notionDetailHash: text("notion_detail_hash"),
   status: text("status").notNull(),
   notionBlockId: text("notion_block_id").unique(),
@@ -341,6 +350,7 @@ export const notionOutbox = sqliteTable("notion_outbox", {
   attempts: integer("attempts").notNull().default(0),
   lastError: text("last_error"),
   claimedUntil: ms("claimed_until"),
+  nextAttemptAt: ms("next_attempt_at"),
   createdAt: ms("created_at").notNull(),
   sentAt: ms("sent_at"),
 }, (t) => [
@@ -383,6 +393,38 @@ export const turnUsage = sqliteTable("turn_usage", {
   cacheLossTokens: integer("cache_loss_tokens").notNull().default(0),
   ts: ms("ts").notNull(),
 }, (t) => [primaryKey({ columns: [t.runId, t.turn] }), index("idx_turn_usage_card").on(t.cardId, t.ts)]);
+
+export const requirementCostEntries = sqliteTable("requirement_cost_entries", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  usageEventId: text("usage_event_id").notNull(),
+  requirementId: text("requirement_id").notNull(),
+  workItemId: text("work_item_id").notNull(),
+  roundId: text("round_id").notNull(),
+  occurredAtMs: ms("occurred_at_ms").notNull(),
+  provider: text("provider").notNull(),
+  modelId: text("model_id").notNull(),
+  billingMode: text("billing_mode").notNull(),
+  category: text("category").notNull(),
+  tokenCount: integer("token_count").notNull(),
+  pricingStatus: text("pricing_status").notNull(),
+  priceVersionId: text("price_version_id"),
+  usdPerMillionTokens: text("usd_per_million_tokens"),
+  amountUsd: text("amount_usd"),
+  priceSourceReference: text("price_source_reference"),
+  unpricedReason: text("unpriced_reason"),
+  createdAt: ms("created_at").notNull(),
+}, (t) => [
+  uniqueIndex("requirement_cost_entries_usage_event_category_unique").on(t.usageEventId, t.category),
+  index("idx_requirement_cost_entries_requirement").on(t.requirementId, t.occurredAtMs, t.id),
+]);
+
+export const requirementCostLimits = sqliteTable("requirement_cost_limits", {
+  requirementId: text("requirement_id").primaryKey(),
+  limitUsdCents: integer("limit_usd_cents").notNull(),
+  version: integer("version").notNull(),
+  updatedBy: text("updated_by").notNull(),
+  updatedAt: ms("updated_at").notNull(),
+});
 
 export const configEntries = sqliteTable("config_entries", {
   scopeId: text("scope_id").notNull().default("global"),

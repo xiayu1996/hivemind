@@ -21,6 +21,24 @@ describe("planDispatchAcrossRepositories", () => {
     ]);
   });
 
+  it("dispatches one card into a repository that has no interface contract yet", () => {
+    const plan = planDispatchAcrossRepositories([
+      {
+        slug: "acme/widget",
+        stories: [story("S-A-01"), story("S-A-02")],
+        hotspotPaths: [],
+        hasInterfaceContract: false,
+      },
+      { slug: "acme/gadget", stories: [story("S-B-01"), story("S-B-02")], hotspotPaths: [] },
+    ]);
+
+    expect(plan.batch).toEqual([
+      { slug: "acme/widget", cardId: "S-A-01" },
+      { slug: "acme/gadget", cardId: "S-B-01" },
+      { slug: "acme/gadget", cardId: "S-B-02" },
+    ]);
+  });
+
   it("serialises Stories that share a hotspot only inside their own repository", () => {
     const plan = planDispatchAcrossRepositories([
       {
@@ -76,5 +94,19 @@ describe("planDispatchAcrossRepositories", () => {
       { slug: "acme/widget", stories: [story("S-A-01", { state: "DELIVERED" })], hotspotPaths: [] },
     ]);
     expect(plan).toEqual({ batch: [], cycles: [], stranded: [] });
+  });
+
+  it("does not send a card into a directory a running card is writing", async () => {
+    const plan = planDispatchAcrossRepositories([{
+      slug: "acme/widget",
+      hotspotPaths: [],
+      running: ["S-RUN-01"],
+      stories: [
+        { id: "S-NEW-01", state: "QUEUED", dependsOn: [], predictedFootprint: ["src/console"] },
+        { id: "S-RUN-01", state: "CODE", dependsOn: [], predictedFootprint: ["src/console"] },
+      ],
+    }]);
+
+    expect(plan.batch.map((entry) => entry.cardId)).toEqual(["S-RUN-01"]);
   });
 });

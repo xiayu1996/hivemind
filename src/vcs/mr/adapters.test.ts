@@ -90,4 +90,19 @@ describe("MR CLI adapters", () => {
   it("fails loudly when no supported CLI exists", async () => {
     await expect(discoverMRPort(fake(""))).rejects.toThrow(/neither gh nor glab/);
   });
+
+  it("reads back where the request stands rather than trusting the merge command", async () => {
+    // A branch protection rule, a failing check or a conflict all leave the
+    // request open, and the caller goes on to build against a contract that is
+    // not on the branch it thinks it is.
+    const merged = fake(JSON.stringify({ state: "MERGED" }));
+    await expect(new GhMRAdapter(merged).land("https://github.com/owner/repo/pull/7")).resolves.toBeUndefined();
+    expect(merged.run).toHaveBeenNthCalledWith(1, "gh", [
+      "pr", "merge", "https://github.com/owner/repo/pull/7", "--squash",
+    ]);
+
+    const refused = fake(JSON.stringify({ state: "OPEN" }));
+    await expect(new GhMRAdapter(refused).land("https://github.com/owner/repo/pull/7"))
+      .rejects.toThrow(/is open after the merge was asked for/);
+  });
 });

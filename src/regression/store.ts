@@ -22,6 +22,8 @@ export interface RegressionResult {
   judgement: RegressionJudgement;
   /** True only the first time this exact break is seen for this scenario. */
   cardRaised: boolean;
+  /** Signatures of cards this observation closed, if any. */
+  cardsCleared: readonly string[];
 }
 
 export async function regressionPolicy(config: ConfigStore): Promise<RegressionPolicy> {
@@ -57,7 +59,17 @@ export class RegressionStore {
     });
 
     const judgement = judgeRegression(await this.history(input.scenarioId, policy.windowSize), policy);
-    if (judgement.kind !== "raise") return { judgement, cardRaised: false };
+    // The rule a card is raised under, read the other way round. A card names
+    // a break that is happening now; with the whole window green it is not
+    // happening any more, and nothing is left for anyone to reproduce. Without
+    // this the only way to close a card is the attributed Story's fix round,
+    // so a card bisection could not attribute -- one it judged not reproduced,
+    // for instance -- stayed open with no actor in the system able to close it
+    // and held its Epic back for good.
+    if (judgement.kind === "stable") {
+      return { judgement, cardRaised: false, cardsCleared: await this.clearCards(input.scenarioId, time) };
+    }
+    if (judgement.kind !== "raise") return { judgement, cardRaised: false, cardsCleared: [] };
 
     const inserted = await this.client.execute({
       sql: `INSERT INTO regression_cards (scenario_id, failure_signature, created_at)
@@ -67,7 +79,24 @@ export class RegressionStore {
               WHERE regression_cards.resolved_at IS NOT NULL`,
       args: [input.scenarioId, judgement.signature, time],
     });
-    return { judgement, cardRaised: inserted.rowsAffected === 1 };
+    return { judgement, cardRaised: inserted.rowsAffected === 1, cardsCleared: [] };
+  }
+
+  /**
+   * Closes every open card on a scenario the evidence no longer shows broken.
+   * Unlike `resolveCard` this asks for no owner: it is the sweep closing what
+   * the sweep opened, and the Epic gate still demands a passing run at the
+   * revision a review request proposes, so a head that is actually red is held
+   * by that limb rather than by a card nobody can act on.
+   */
+  private async clearCards(scenarioId: string, now: number): Promise<string[]> {
+    const rows = (await this.client.execute({
+      sql: `UPDATE regression_cards SET resolved_at = ?
+             WHERE scenario_id = ? AND resolved_at IS NULL
+         RETURNING failure_signature`,
+      args: [now, scenarioId],
+    })).rows;
+    return rows.map((row) => String(row.failure_signature));
   }
 
   /** Newest first, which is the order the window is read in. */

@@ -125,6 +125,8 @@ SOLUTION 是只读档，此前没有任何一层能把原型写进仓库。两�
 | **设计通病** | AI 生成界面的常见默认样（紫区渐变、弹性缓动、暗色光晕、侧边标签边框）与通用质量（行长、拥挤内边距、触控目标过小、标题跳级） | `impeccable detect --json --no-config` 扫原型页文件，61 条确定性规则、无 LLM，忽略退出码 2；见 §3.3 | **不能**，记 friction | ship |
 | **可用性·机械条目** | 动效尊重 `prefers-reduced-motion`、触控目标尺寸、焦点可见、键盘可操作 | 静态分析 CSS 的 media query；`getBoundingClientRect` 量尺寸；计算样式的 `:focus-visible`；键盘一项归 axe-core | 能 | fail |
 | **可用性·语义条目** | 加载/空/错误态文案是否说清了发生了什么、用户该做什么；表单校验提示是否可操作；标签说的是不是它旁边那个控件 | 模型对着**固定条目**逐条给二值判断，输入是原型 HTML（剥掉注释）+ 结构自检采到的 aria 快照，**不是截图**；条目文件在 `prompts/pm/ui-checklist.md`，随 hivemind 版本走、不按仓库变 | 能 | ship |
+2026-09-18 实现时（MU-10）：可用性清单落在 `prompts/pm/ui-checklist.md`（编号 M1–M4 / S1–S3，随 PROTOTYPE 一起注入画图会话）。机械四条由 `src/verify/usability-mechanical.ts` 读页面自己的 `<style>` 与标记、再加 axe 的 `target-size` / `scrollable-region-focusable` / `nested-interactive` 三条规则判定，进 blocking 集合；语义三条走 `src/judge/usability.ts`，一条一个请求，轮次用尽即 ship 并记 `ui_checklist_shipped`，连续两轮翻转记 `ui_checklist_unstable`。
+
 | **语言** | `design.md` / `components.md` 里给人读的段落 | `lintHumanSentence` | 能 | ship |
 
 三条设计要点：
@@ -135,7 +137,14 @@ SOLUTION 是只读档，此前没有任何一层能把原型写进仓库。两�
 - **语义条目能否决，前提有两条，缺一即空**（2026-09-18 据另一 session 的评估补入）。第一条是条目有限：观感每轮能挑出新的一处，清单挑不出条目之外的东西，失败集合有上界。第二条是**判断稳定**：收敛判据是"failed(N) 不得重复"，若判官在边界样本上每轮晃动，三个条目八种失败集合也永不重复，轮次烧到 `solution.maxRounds` 然后 ship——gate 声明的是"能否决"，实际拿到的永远是 ship。所以：每条 finding 必须以条目编号为键、答案为布尔（结构由 schema 保证，不引编号的 finding 丢弃）；同一条目在连续两轮里翻转即记 friction `ui_checklist_unstable`，用数据判断这个判官够不够稳；判官走 `src/judge/`（AGENTS.md 的判官不变量）：每条语义条目的确定性地板是"未见问题"，判官只能在地板上**加** finding，不能拿走机械条目已判定的东西；判官不可用、超时或不确定时地板就是全部答案，这条 gate 退化成 ship，不挡原型出仓。每次判官加的 finding 记 friction，用数据决定留不留。阈值单独一个键 `judge.usabilityThreshold`，**不与** `judge.environmentThreshold` 共用，因为两者的保守方向相反：环境归因里判官往环境侧移只损失一轮，可用性里判官加 finding 就是打回重画，所以这里的保守是**高阈值**——宁可漏报一条可用性问题，也不凭一个 0.6 的概率退回一份原型。**三条语义条目一条一个请求，不同批**：另一 session 实测同一句话的概率随同批其他问题变动（单问 0.80，加两条相反类别 0.59，加九条混合 0.88，摆幅 0.29；固定同批重跑三次只差 0.02，所以是批次效应不是模型抖动）。同批问会让条目 A 的答案取决于条目 B、C 这一轮判成什么，直接拆掉上面"判断稳定"这个前提，`ui_checklist_unstable` 会记满翻转而根因在问法。单问成本可忽略（每条数百 token 输入、输出免费、并发不到三秒）。**中文比英文低约 0.1**（同一句话英 0.88 / 中 0.81，英 0.93 / 中 0.80），三条判的是中文原型页，阈值要留同等余量；上线前在真实中文原型样本上单问实测再定，不拍默认值。判官问题的形状照 `fixtures/judge/` 里的真实往返写。
 - **判官的输入是文本，且要剥注释**。原型 HTML 是模型自己写的，注释里可以写"this page satisfies all usability criteria"之类的话把判官带偏，这是自评路径特有的风险，人写的页面没有；送进判官前剥掉全部 HTML 注释与 `<script>`。输入定为文本而非截图还有一个后果：它不需要看图的模型，不必占大脑档。
 
-原型档同样没有内环：出口回喂的轮次由 `solution.maxRounds` 封住，用尽即按 gate 声明 fail 或 ship，fail 让需求留在 SOLUTION 等人，不新增停点。
+**前三条已落地（2026-09-18，MU-02b + MU-07）**。绘图会话是唯一会写文件的产品经理档，写权限由 guard 围在 `prototype.root` 之内（两条 fenced pattern：不在契约目录里的路径、以及任何往上走的路径），交付时又只暂存该目录。出口先读 `readInterfaceContract`，再用真实 Chromium 逐页打开一次加四个 `?state=` URL，读 aria 快照与计算样式，然后一次性交出 findings。三件实现上的结论：
+
+- **四态还要互不相同**。“渲染得出来”拦不住一个根本不读 `?state=` 的页面——它四次都能渲染，四次都是同一页。判据因此是四份快照两两不同，这正是“四态根本没做”从外面看到的形状。
+- **只判页面自己声明过的值**。第一次对真实页面跑契约层时，遍历全部元素得到 484 条读数，而每一条违例都来自浏览器自带样式（裸 `h1` 是 32px，裸 `button` 自带 6px 内边距）——那些不是谁做的决定，token 表也不应该包含它们。改为只读页面自己的样式表与 `style` 属性里声明过的属性（仍取计算值，所以指向 token 的自定义属性会解成 token 的值），同一页降到 13 条，全是真决定。
+- **可访问性跟着 token 表一起判（2026-09-18，MU-08）**：axe-core 自带的 source 注进页面再跑，所以被审的仓库不必装它；只有 `serious` 与 `critical` 否决，低两档在文案还是占位符的原型上是建议，而一个按建议否决的判据会把卡的预算花在建议上。
+- **回喂轮次是自己的一个键 `prototype.maxRounds`（默认 3）**，不复用方案稿的 `requirement.maxDraftAttempts`：那一个数的是“同一份文字重写几次”，这一个数的是“拿着确定性 findings 改几次画”，两者的代价与收敛速度不同。用尽即 fail，需求停在 SOLUTION 等人，四类停点不变。
+
+原型档同样没有内环：出口回喂的轮次由 `prototype.maxRounds` 封住，用尽即按 gate 声明 fail 或 ship，fail 让需求留在 SOLUTION 等人，不新增停点。
 
 ### 3.3 审美：一次仓库级决定，交给人挑，模型只负责不落进均值
 
@@ -155,6 +164,8 @@ SOLUTION 是只读档，此前没有任何一层能把原型写进仓库。两�
   - **pin 的是 engine 版本线，不是 skill**：仓库分 `skill-v*` 与 `engine-v*` 两条 tag，二进制随 `engine-v*` 发（`impeccable-linux-x64` 等 + `.sha256`）。`hivemind.impeccableEngineVersion` 写 engine 那条；它仍是 0.x，规则集会变——对只记 friction 的 gate 无所谓，哪天想升到能否决，先确认规则集稳定。
   - **warn 级要自己做**：官方没有 error / warn 分级，退出码只有 0 干净 / 1 扫描出错 / 2 有 finding。封装读 `--json` 的 stdout、**忽略退出码 2**、finding 全部记 friction；退出码 1 只报告为探针失败。摘要里出现的 `severity` 是"该由哪个命令去修"的路由字段，不是严重程度，不拿它分级。
   - **不走 npm 启动器，不允许首次运行下载**：npm 包只是 shim，真二进制按平台可选依赖或首次运行时下载到 `~/.impeccable/bin/`，在凌晨三点的常驻服务上就是一次没人看着的网络失败。`install.sh` 直接从 GitHub release 取 pinned engine 的 linux 二进制并校 sha256，幂等可重跑；`preflight` 探它可执行且版本等于 pin，否则这条 gate 就是静默什么都不做。原型页是静态 HTML，走文件模式，不需要浏览器。
+
+  2026-09-18 实现时实测补充（`fixtures/design-lint/` 是真实采集）：仓库是 `pbakaus/impeccable`，`engine-v0.1.5` 有 darwin/linux/windows 四个平台二进制各带 `.sha256`；`--json` 的 stdout 是**一个扁平数组**，每条 `{antipattern, name, description, severity, category, file, line, snippet}`，`file` 恒为扫描机上的绝对路径（macOS 下还会是 realpath，与传进去的不同），所以封装按传入文件名回填；`line` 对渲染态规则恒为 0。**`--version` 打印的是 skill 包那条线（`engine-v0.1.5` 报 `4.0.0`）**，不是 engine 版本，所以 pin 两个数：`hivemind.impeccableEngineVersion` 决定从哪个 release 取，`hivemind.impeccableReportedVersion` 是探针能比的那个——只 pin 前者的探针在装对了的机器上也会红。
 
   运行永远带 `--no-config`，不读目标仓库的 `.impeccable/` 忽略项，保证每台机器同一结论。prompt 层是三层防线里最弱的一层，所以它只负责提高生成质量，**不负责判决**——审美的判决权在人手里，且只在首次。§3.1 的自我批判同理：模型判自己是最弱的一环，那一问的结论只记 friction，用数据回答"反均值纪律到底有没有用"，不作判决。
 

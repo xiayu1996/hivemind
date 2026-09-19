@@ -1,10 +1,12 @@
 import { z } from "zod";
+import { READ_ONLY_TOOL_NAMES } from "../guard/tool-decision.js";
 import { snapshotModelIds } from "../runner/catalog-snapshot.js";
 import { THINKING_LEVELS } from "../runner/model-resolver.js";
 import { MODEL_PURPOSES, MODEL_TIERS } from "../pipeline/phase.js";
 
 /** The surface of a call site that only reads. */
-const READ_ONLY_TOOLS = ["find", "grep", "ls", "read"];
+/** The surface of a call site that only reads, named as pi names them. */
+const READ_ONLY_TOOLS = [...READ_ONLY_TOOL_NAMES];
 
 /**
  * How a changed value reaches a running process.
@@ -244,6 +246,7 @@ export const CONFIG_KEYS = {
     default: {
       product_manager: "brain",
       decompose: "brain",
+      prototype: "brain",
       // SHAPE and SPECIFY each hold half of the acceptance bar: one reads a
       // sentence of requirement into scenarios that can be judged true or
       // false, the other turns a business-language `then` into assertions that
@@ -271,6 +274,7 @@ export const CONFIG_KEYS = {
     default: {
       product_manager: "high",
       decompose: "high",
+      prototype: "high",
       shape: "high",
       design: "high",
       specify: "high",
@@ -487,6 +491,20 @@ export const CONFIG_KEYS = {
     description: "Run the browser lane's Chromium with its process sandbox. Turn off only on a host that cannot build one (a container, or Ubuntu's user-namespace restriction that preflight reports) after the kernel fix is ruled out.",
     dangerous: true,
   }),
+  "worktree.setupCommand": def({
+    schema: z.array(z.string().trim().min(1)),
+    default: [],
+    scope: "per-repo",
+    reload: "hot",
+    description: "What this repository needs done to a fresh worktree before a phase can work in it, as argv run in it once at creation: a dependency install, a code generation step. Empty means a checkout is usable as it stands. Without it a phase reaches its first test run and finds nothing to run it with -- the first real requirement had every Story arrive at SPECIFY with no node_modules, and one of them symlinked the host's to get out.",
+  }),
+  "worktree.setupTimeoutMs": def({
+    schema: z.number().int().positive(),
+    default: 600_000,
+    scope: "per-repo",
+    reload: "hot",
+    description: "How long the worktree setup command may take. A cold dependency install is minutes, so this is not the ordinary command timeout.",
+  }),
   "verify.appStartCommand": def({
     schema: z.array(z.string().trim().min(1)),
     default: [],
@@ -521,6 +539,20 @@ export const CONFIG_KEYS = {
     scope: "per-repo",
     reload: "hot",
     description: "Where the repository keeps the interface contract a requirement with screens is built against: the token table, the component inventory and the runnable page prototypes. It is read from the branch a round runs on and injected into the phases that build screens, so a repository that keeps it elsewhere says so here rather than having two copies.",
+  }),
+  "prototype.maxRounds": def({
+    schema: positiveInt.max(6),
+    default: 3,
+    scope: "global",
+    reload: "hot",
+    description: "How many times the drawing session may be handed its own exit findings before the requirement stops for a person. The findings are deterministic and shrink -- a page either shows the role and text it claimed or it does not -- so a small budget is enough for the ones that can be fixed, and a drawing that cannot satisfy them in three rounds is telling us the page list or the direction is wrong, which is a person's call and not the drawing's.",
+  }),
+  "uiContract.enforce": def({
+    schema: z.enum(["off", "warn", "block"]),
+    default: "warn",
+    scope: "global",
+    reload: "hot",
+    description: "How much power the interface contract layer has: whether every colour and size on a screen came from the token table. `warn` records the findings and lets the round through, `block` fails the scenarios that carry them, `off` does not look. It starts at warn deliberately (design 08 section 6): the criterion is finite and can converge, but giving it a veto before one requirement's worth of real findings has been read risks spending a card's whole budget on a rule nobody has checked the shape of yet. It governs the delivered screens only: the prototype's own exit always blocks on the token table, because a prototype exists to be the thing later rounds are measured against and one that quietly contains values from nowhere makes that measurement meaningless.",
   }),
   "guard.e2eHostAllowlist": def({
     schema: z.array(z.string()),
@@ -563,6 +595,20 @@ export const CONFIG_KEYS = {
     scope: "per-repo",
     reload: "hot",
     description: "The repository's own gate commands (format, lint, typecheck, tests) as argv, run at the CODE exit. Declared per repository because hivemind does not get to decide how somebody else's repository is checked; empty means the exit rests on the commit, evidence and marker checks alone. A check may name the file globs that make it relevant (when), the checks that must run before it (requires), and the generated paths it must leave untouched (assertCleanPaths).",
+  }),
+  "codeExit.dependencyManifests": def({
+    schema: z.array(repositoryRelativePath),
+    default: [
+      "Cargo.toml",
+      "go.mod",
+      "package.json",
+      "pom.xml",
+      "pyproject.toml",
+      "requirements.txt",
+    ],
+    scope: "per-repo",
+    reload: "next-spawn",
+    description: "Files that say what the repository is built with. A card that changes one is deciding for every other card, which is what the requirement's solution gate exists to put in front of a person (design 08 section 1); the CODE exit refuses the change and tells the card to say so in its artifact instead. Lock files are deliberately absent: they change as a side effect of an install nobody asked for, and refusing them would send cards into a loop over a file they did not mean to touch.",
   }),
   "codeExit.protectedPaths": def({
     schema: z.array(repositoryRelativePath),
@@ -655,6 +701,13 @@ export const CONFIG_KEYS = {
     reload: "hot",
     description: "How sure the judge has to be that a sentence in a design summary or a delivery report describes how the system was built, before that sentence is sent back to be rewritten. Lower than judge.businessLanguageThreshold although it is the same question, because the costs are not the same: these two gates declare exhausted: \"ship\", so a finding the judge invents costs one rewrite and the artifact goes out anyway, while the same mistake in the decomposer blocks an Epic. Measured 2026-09-18 over twelve report sentences, twice: implementation prose scored 0.84 to 0.97 and sentences that must survive 0.04 to 0.18. The deterministic linter flags none of the twelve, in either direction.",
   }),
+  "judge.usabilityThreshold": def({
+    schema: z.number().min(0.5).max(1),
+    default: 0.75,
+    scope: "global",
+    reload: "hot",
+    description: "How sure the judge has to be that a prototype page fails one of the three semantic usability items before that item is handed back to be redrawn. Its own key rather than a shared one because the safe direction here is the opposite of judge.environmentThreshold's: adding a finding costs a redrawing round and can use up the prototype's whole budget, while missing one costs a screen that is slightly less clear than it could be, which a person still sees before anything is built on it. Chinese prototypes score about 0.1 lower than the same page written in English, so the bar leaves room below it.",
+  }),
   "judge.environmentThreshold": def({
     schema: z.number().min(0.5).max(1),
     default: 0.7,
@@ -702,7 +755,9 @@ export const CONFIG_KEYS = {
     // in one place only; what is declared here is the exception to it. The
     // product manager and the decomposer write nothing: their whole output is
     // text a person approves, and either one editing the tree would be doing
-    // the work it is supposed to be describing.
+    // the work it is supposed to be describing. The drawing phase is the one
+    // exception and is absent here on purpose: it puts the interface contract
+    // into the repository, so it takes the write-capable default.
     default: { product_manager: READ_ONLY_TOOLS, decompose: READ_ONLY_TOOLS },
     scope: "global",
     reload: "next-spawn",

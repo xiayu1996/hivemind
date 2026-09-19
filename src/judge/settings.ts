@@ -4,6 +4,7 @@ import type { BusinessLanguageJudgeSettings } from "./business-language.js";
 import type { HumanSentenceJudgeSettings } from "./human-sentence.js";
 import type { VerticalSliceJudgeSettings } from "./vertical-slice.js";
 import type { EnvironmentJudgement, EnvironmentJudgeSettings } from "./environment-reasons.js";
+import type { UsabilityJudgeSettings } from "./usability.js";
 import { HttpSystemOne, type SystemOne } from "./system-one.js";
 
 /** Read from `~/.hivemind/secrets.env` like every other credential; it is never
@@ -25,6 +26,8 @@ export interface JudgeConfig {
   verticalSliceThreshold: number;
   /** How sure it has to be that a sentence a person reads is about building. */
   readabilityThreshold: number;
+  /** How sure it has to be that a prototype page fails a semantic usability item. */
+  usabilityThreshold: number;
 }
 
 /** The keys read in one place, so a caller cannot pick up one question's
@@ -40,6 +43,7 @@ export function judgeConfigFrom(config: ConfigStore): JudgeConfig {
     businessLanguageThreshold: config.get("judge.businessLanguageThreshold"),
     verticalSliceThreshold: config.get("judge.verticalSliceThreshold"),
     readabilityThreshold: config.get("judge.readabilityThreshold"),
+    usabilityThreshold: config.get("judge.usabilityThreshold"),
   };
 }
 
@@ -99,6 +103,23 @@ export function approvalJudgeSetup(
   return {
     setup,
     settings: { judge: setup.judge, model: setup.model, threshold: config.approvalThreshold },
+  };
+}
+
+/**
+ * The three semantic usability items. Its own threshold, not the environment
+ * one: there, only a confident yes may move a failure off the code; here, a
+ * confident yes costs a redrawing round out of a small budget.
+ */
+export function usabilityJudgeSetup(
+  config: JudgeConfig,
+  secrets: ReadonlyMap<string, string>,
+): { setup: JudgeSetup; settings?: UsabilityJudgeSettings } {
+  const setup = judgeSetup(config, secrets);
+  if (setup.kind !== "ready") return { setup };
+  return {
+    setup,
+    settings: { judge: setup.judge, model: setup.model, threshold: config.usabilityThreshold },
   };
 }
 

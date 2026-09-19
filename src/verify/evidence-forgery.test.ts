@@ -123,7 +123,7 @@ describe("verify telemetry", () => {
     const result = await verdictOf([]);
 
     expect(result.record.verdict).toBe("inconclusive");
-    expect(result.runnerFailure).toMatch(/no assistant verdict/);
+    expect(result.runnerFailure).toMatch(/malformed verdict/);
   });
 
   it("reports no failure for a settled session", async () => {

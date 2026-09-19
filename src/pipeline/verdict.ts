@@ -17,6 +17,13 @@ export interface ScenarioVerdict {
   detail?: string;
   url?: string;
   screenshots?: string[];
+  /**
+   * The accessibility snapshots this scenario reached, as `page-*.yml` names
+   * under the evidence root. Declared beside the screenshots rather than paired
+   * with them by name: the two are separate captures and their timestamps do
+   * not match, so pairing would be a guess. The structural layer reads these.
+   */
+  snapshots?: string[];
 }
 
 export interface VerdictDocument {
@@ -119,20 +126,28 @@ export async function validateVerdict(input: VerdictInput): Promise<VerdictValid
         errors.push(`${scenario.id}: URL is invalid`);
       }
     }
-    for (const screenshot of scenario.screenshots ?? []) {
-      const path = resolve(evidenceRoot, screenshot);
-      if (!isWithinRoot(path, evidenceRoot)) {
-        errors.push(`${scenario.id}: screenshot escapes the evidence root`);
-        continue;
-      }
-      try {
-        const details = await stat(path);
-        if (!details.isFile()) errors.push(`${scenario.id}: screenshot is not a file (${screenshot})`);
-        if (details.mtimeMs < input.roundStartedAt || details.mtimeMs > input.roundEndedAt) {
-          errors.push(`${scenario.id}: screenshot mtime is outside the verification round (${screenshot})`);
+    // Both kinds of evidence answer the same three questions, so they are
+    // checked by one loop: a file outside the root, from another round, or
+    // absent is worth nothing whether it is an image or a tree.
+    for (const [kind, files] of [
+      ["screenshot", scenario.screenshots ?? []],
+      ["snapshot", scenario.snapshots ?? []],
+    ] as const) {
+      for (const file of files) {
+        const path = resolve(evidenceRoot, file);
+        if (!isWithinRoot(path, evidenceRoot)) {
+          errors.push(`${scenario.id}: ${kind} escapes the evidence root`);
+          continue;
         }
-      } catch {
-        errors.push(`${scenario.id}: screenshot does not exist (${screenshot})`);
+        try {
+          const details = await stat(path);
+          if (!details.isFile()) errors.push(`${scenario.id}: ${kind} is not a file (${file})`);
+          if (details.mtimeMs < input.roundStartedAt || details.mtimeMs > input.roundEndedAt) {
+            errors.push(`${scenario.id}: ${kind} mtime is outside the verification round (${file})`);
+          }
+        } catch {
+          errors.push(`${scenario.id}: ${kind} does not exist (${file})`);
+        }
       }
     }
   }

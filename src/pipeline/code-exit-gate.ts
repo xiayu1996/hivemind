@@ -48,6 +48,10 @@ export interface CodeExitFacts {
   changedFrozenTestPaths?: readonly string[];
   /** Generated outputs edited by hand instead of regenerated. */
   changedProtectedPaths?: readonly string[];
+  /** Dependency manifests this card changed. What a repository is built with
+   * is decided once for every card at the requirement's solution gate, so a
+   * card that adds a dependency is one card deciding for all of them. */
+  changedDependencyPaths?: readonly string[];
   /** Tags of the round's tasks (a person's answer, a rejection, a failing scenario), from the prompt. */
   roundTags?: readonly string[];
   /** The implementation artifact, where each tag must be accounted for. */
@@ -133,6 +137,9 @@ export function evaluateCodeExit(facts: CodeExitFacts): CodeExitVerdict {
   if ((facts.changedProtectedPaths?.length ?? 0) > 0) {
     findings.push(`These generated outputs were edited by hand: ${facts.changedProtectedPaths!.join(", ")}. Regenerate them through the repository's own command instead.`);
   }
+  if ((facts.changedDependencyPaths?.length ?? 0) > 0) {
+    findings.push(`This card changed what the repository is built with: ${facts.changedDependencyPaths!.join(", ")}. Restore them and do the work with what is already there. Adding a dependency is decided once for every card at the requirement's solution gate, not by whichever card needed it first; if there is genuinely no way to do this without one, say so in the artifact and leave the manifests alone.`);
+  }
 
   for (const check of facts.projectChecks) {
     if (check.skipped || check.passed) continue;
@@ -167,6 +174,8 @@ export interface CodeExitCollectInput {
   testPathPatterns?: readonly string[] | undefined;
   /** Generated outputs no phase may edit by hand. */
   protectedPaths?: readonly string[] | undefined;
+  /** Dependency manifests, from `codeExit.dependencyManifests`. */
+  dependencyManifests?: readonly string[] | undefined;
   /** The commit SPECIFY froze the tests in. Without it there is nothing to
    * diff against, and the frozen-test check does not run at all -- a card
    * driven without SPECIFY is measured by the checks that still apply. */
@@ -297,6 +306,7 @@ export async function collectCodeExitFacts(input: CodeExitCollectInput): Promise
       .filter((path) => matchesAnyGlob(path, testPatterns))
     : [];
   const changedProtectedPaths = changed.filter((path) => matchesAnyGlob(path, input.protectedPaths ?? []));
+  const changedDependencyPaths = changed.filter((path) => matchesAnyGlob(path, input.dependencyManifests ?? []));
 
   return {
     uncommittedPaths,
@@ -309,6 +319,7 @@ export async function collectCodeExitFacts(input: CodeExitCollectInput): Promise
     projectChecks,
     changedFrozenTestPaths,
     changedProtectedPaths,
+    changedDependencyPaths,
   };
 }
 

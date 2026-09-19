@@ -50,6 +50,7 @@ export function todoSaveCheckPath(todoId: string): string {
 export const CONSOLE_WRITE_ROUTES: readonly { readonly method: string; readonly path: string }[] = [
   { method: "POST", path: "/api/config/value" },
   { method: "POST", path: "/api/config/rollback" },
+  { method: "POST", path: "/costs/requirement-limit" },
   { method: "POST", path: TODO_DECISION_PATH },
   { method: "POST", path: TODO_SAVE_CHECK_PATH },
 ];
@@ -62,9 +63,21 @@ export const CONSOLE_WRITE_ROUTES: readonly { readonly method: string; readonly 
  * `/api/todos/a/b/decision` are not the todo route, and the query string is
  * not part of the path. */
 export function isConsoleWriteRequest(method: string, path: string): boolean {
-  if (method !== "POST") return false;
+  return matchedConsoleWriteRoute(method, path) !== null;
+}
+
+/**
+ * Which declared route this request is, by its declared path rather than the
+ * requested one, or null when it is none of them.
+ *
+ * The caller needs the declaration and not just a yes: each route is answered
+ * by its own port, and a route whose port was not handed over is refused the
+ * same as one that was never declared.
+ */
+export function matchedConsoleWriteRoute(method: string, path: string): string | null {
+  if (method !== "POST") return null;
   const segments = (path.split("?")[0] ?? "").split("/");
-  return CONSOLE_WRITE_ROUTES.some((route) => {
+  return CONSOLE_WRITE_ROUTES.find((route) => {
     if (route.method !== method) return false;
     const expected = route.path.split("/");
     if (expected.length !== segments.length) return false;
@@ -75,7 +88,7 @@ export function isConsoleWriteRequest(method: string, path: string): boolean {
       if (segment.startsWith(":")) return (segments[index] ?? "") !== "";
       return segment === segments[index];
     });
-  });
+  })?.path ?? null;
 }
 
 /** The todo list, oldest waiting first, plus the id the page opens on when no

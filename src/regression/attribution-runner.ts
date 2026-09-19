@@ -39,7 +39,13 @@ export async function attributionSequence(client: Client, epicId: string): Promi
     storyId: String(row.story_id),
     revision: String(row.story_revision),
   }));
-  return { base: rows.length > 0 ? String(rows[0]!.base_revision) : "", steps };
+  // A revision is a sha or there is no sequence. An empty one reaches git as
+  // `checkout --detach ''`, which is a fatal pathspec error that kills the
+  // sweep for the whole Epic, so the absence is expressed once here rather
+  // than guarded at each place a revision is used.
+  const base = rows.length > 0 ? String(rows[0]!.base_revision) : "";
+  if (base === "" || steps.some((step) => step.revision === "")) return { base: "", steps: [] };
+  return { base, steps };
 }
 
 /**
@@ -56,6 +62,11 @@ export async function attributeCard(
   probe: RevisionProbe,
   now: () => number = Date.now,
 ): Promise<Attribution> {
+  // Nothing has landed on this Epic head, so there is no revision to probe and
+  // no Story the failure can belong to. Probing anyway handed git the empty
+  // string that stands for "no base" and killed the sweep for the whole Epic:
+  // `git checkout --detach ''` is a fatal pathspec error, not a checkout.
+  if (sequence.base === "") return { kind: "pre_existing", probes: 0 };
   const attribution = await attributeRegression(
     sequence.steps.map((step) => step.storyId),
     async (index) => probe(

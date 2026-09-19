@@ -120,4 +120,17 @@ describe("@scenario S-M2-06-epicmr Story ids that follow the decomposition gramm
     expect(body).toContain("`test(S-M2-06-freshness): red` -> `feat(S-M2-06-freshness): green`");
     expect(body).not.toContain("S-M2-05-subset");
   });
+
+  it("reuses the request a returned batch left open instead of asking for a second one", async () => {
+    const git = { run: vi.fn(async (_cwd: string, args: string[]) => args[0] === "log" ? `${commits.join("\n")}\n` : "") };
+    const create = vi.fn(async () => ({ url: "https://github.com/owner/repo/pull/99", provider: "github" as const }));
+    const findOpen = vi.fn(async () => "https://github.com/owner/repo/pull/42");
+    const delivery = new EpicMrDelivery(client, { create, findOpen }, { worktreePath: "integration", git, now: () => 3 });
+
+    await expect(delivery.deliver("M2")).resolves.toEqual({ kind: "delivered", mrUrl: "https://github.com/owner/repo/pull/42" });
+    expect(create).not.toHaveBeenCalled();
+    expect(findOpen).toHaveBeenCalledWith({ repository: "owner/repo", sourceBranch: "epic/M2", targetBranch: "main" });
+    expect((await client.execute("SELECT mr_url FROM epics WHERE id = 'M2'")).rows[0]?.mr_url)
+      .toBe("https://github.com/owner/repo/pull/42");
+  });
 });

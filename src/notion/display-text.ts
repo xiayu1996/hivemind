@@ -41,9 +41,24 @@ const epicSectionTitles: Record<EpicPageSection, SectionName> = text.sections.ep
 
 /** The requirement page's sections. The original request is the page's own
  * preface, not a section: the person wrote it there. */
-export type RequirementPageSection = "clarify" | "prd" | "delivery";
+export type RequirementPageSection = "clarify" | "prd" | "solution" | "delivery";
 
 const requirementSectionTitles: Record<RequirementPageSection, SectionName> = text.sections.requirement;
+
+/** The sentences the solution section is written from, and the words the
+ * three kinds of dependency change are named with. */
+export const solutionText: Record<string, string> = text.solution;
+
+export function solutionLine(key: keyof typeof text.solution, values: Record<string, string> = {}): string {
+  let line = solutionText[key];
+  if (line === undefined) throw new Error(`no display text for solution line: ${key}`);
+  for (const [name, value] of Object.entries(values)) line = line.replaceAll(`{${name}}`, value);
+  return line;
+}
+
+export function stackChangeWord(kind: string): string {
+  return (text.solutionKinds as Record<string, string>)[kind] ?? kind;
+}
 
 export function requirementSectionTitle(section: RequirementPageSection): string {
   return requirementSectionTitles[section].title;

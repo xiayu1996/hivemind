@@ -13,6 +13,8 @@ import { phaseEvidenceSink } from "../src/observability/phase-evidence-sink.js";
 import { BlindVerifyStoryPort } from "../src/orchestrator/blind-verify-port.js";
 import { UiReviewedVerifyPort } from "../src/orchestrator/ui-reviewed-verify-port.js";
 import { UiReviewExecutor } from "../src/verify/ui-review.js";
+import { playwrightStyleCollector } from "../src/verify/ui-contract-collector.js";
+import { contractEnforcement } from "../src/verify/ui-contract.js";
 import { loadPmPromptLayers } from "../src/pipeline/prompt-loader.js";
 import { PiStoryPhasePort } from "../src/orchestrator/pi-phase-port.js";
 import { EpicIntegrator } from "../src/orchestrator/epic-integration.js";
@@ -48,7 +50,7 @@ import { defaultModelCatalog } from "../src/runner/catalog.js";
 import { ModelPolicy } from "../src/runner/model-policy.js";
 import { SpawnBroker } from "../src/runner/spawn-broker.js";
 import { ProviderSlotStore } from "../src/queue/provider-slots.js";
-import { LeaseStore, holderKey, type LeaseHolder } from "../src/persistence/lease.js";
+import { LeaseStore, holderKey, startLeaseHeartbeat, type LeaseHolder } from "../src/persistence/lease.js";
 import { resolveAgentSpec } from "../src/runner/agent-spec.js";
 import type { CacheKeyScope } from "../src/runner/session-file.js";
 import type { StoryState } from "../src/orchestrator/state-machine.js";
@@ -65,13 +67,18 @@ import { BlindVerifyExecutor, EVIDENCE_DIR_ENV } from "../src/verify/executor.js
 import { loadPromptLayers } from "../src/pipeline/prompt-loader.js";
 import { discoverMRPort } from "../src/vcs/mr/adapters.js";
 import { GitMrStoryDelivery, processGitCommand } from "../src/vcs/story-delivery.js";
+import { appLaneConfig } from "../src/verify/app-lane.js";
 
 const execFileAsync = promisify(execFile);
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
-/** Long enough to outlive one phase, short enough that a killed worker's card
- * comes back on the next sweep rather than the next day. */
+/** How long the card stays this holder's after the last renewal. Short enough
+ * that a killed worker's card comes back on the next sweep rather than the next
+ * day; a phase that runs longer than this is carried by the heartbeat below,
+ * not by a longer TTL. */
 const LEASE_TTL_MS = 15 * 60_000;
+/** A third of the TTL, so two renewals may be lost before the lease lapses. */
+const LEASE_RENEW_MS = LEASE_TTL_MS / 3;
 /** Provider capacity is heartbeaten by the spawn that holds it; this is how
  * long a slot survives with nobody heartbeating it. */
 const SLOT_LEASE_MS = 10 * 60_000;
@@ -190,6 +197,7 @@ async function main(): Promise<void> {
 
   const handle = openDb(dbUrl);
   let held: { fence: number } | null = null;
+  let stopHeartbeat: (() => void) | null = null;
   const providerHealth = new LibsqlProviderHealthStore(handle.client);
   let events = new EventBuffer();
   let drain: DrainLoop | null = null;
@@ -214,6 +222,13 @@ async function main(): Promise<void> {
     }
     held = { fence: lease.fence };
     const fence = lease.fence;
+    // Without this the card became dispatchable again mid-phase: CODE routinely
+    // runs past one TTL. The fence still refuses a revoked holder's writes, so
+    // losing the lease is reported here and enforced there.
+    stopHeartbeat = startLeaseHeartbeat(leases, cardId, instance, fence, {
+      intervalMs: LEASE_RENEW_MS,
+      onLost: (reason) => console.warn(`lease on ${cardId} is no longer ours: ${reason}`),
+    });
     const store = new StoryExecutionStore(handle.client, Date.now, {
       assert: (id) => leases.assertHolds(id, instance, fence),
     });
@@ -348,6 +363,7 @@ async function main(): Promise<void> {
         maxRounds: config.get("codeExit.maxRounds"),
         testPathPatterns: config.get("codeExit.testPathPatterns"),
         protectedPaths: config.get("codeExit.protectedPaths"),
+        dependencyManifests: config.get("codeExit.dependencyManifests"),
         // Only set once SPECIFY has frozen something; a card driven without it
         // is measured by the checks that still apply rather than by a diff
         // against a commit that does not exist.
@@ -429,6 +445,10 @@ async function main(): Promise<void> {
       evidenceRoot,
       auditPath,
       allowedHosts,
+      // The same application the UI review opens, started for the functional
+      // lane too: telling the verifier to stand one up itself made the answer
+      // depend on what it stood up.
+      app: appLaneConfig(config),
       chromiumSandbox: config.get("verify.chromiumSandbox"),
       resolveSpec: () => grant("verify"),
       commitMessages: () => gitMessages(worktreePath, targetBranch),
@@ -499,6 +519,18 @@ async function main(): Promise<void> {
           return { title: snapshot.title, businessGoal: snapshot.requirement };
         },
         recordFriction: (friction) => store.recordFriction(friction),
+        // The contract layer: the screens the round reached, measured against
+        // the token table on the branch under review. Read per round for the
+        // same reason the phases read it per phase - a card that added a token
+        // in this round must be judged against the table it just wrote.
+        uiContract: {
+          enforce: contractEnforcement(config.get("uiContract.enforce")),
+          tokens: async () => {
+            const read = await readInterfaceContract(join(worktreePath, config.get("prototype.root")));
+            return read.kind === "present" ? read.contract.tokens : null;
+          },
+          collector: playwrightStyleCollector,
+        },
         // The lane the table misses most: the reviewer stands its own harness
         // up, so what it refuses on is prose about a box it built itself.
         ...(environmentJudge ? { environmentJudge } : {}),
@@ -523,7 +555,24 @@ async function main(): Promise<void> {
               { run: (check, cwd) => runProjectCheck(cwd, check) },
               config.get("codeExit.projectChecks"),
             ),
-            { storyWorktree: worktreePath, integrationWorktree, mainBranch: targetBranch },
+            {
+              storyWorktree: worktreePath,
+              integrationWorktree,
+              mainBranch: targetBranch,
+              // Counted, not refused. Until there are numbers, "a card may not
+              // work outside what it declared" is a rule nobody can size.
+              onFootprintOverreach: async (overreach) => {
+                await store.recordFriction({
+                  cardId: overreach.storyId,
+                  runId: `merge-${overreach.storyId}`,
+                  kind: "footprint_overreach",
+                  detail: JSON.stringify({
+                    unpredicted: overreach.unpredicted,
+                    predicted: overreach.predicted,
+                  }),
+                });
+              },
+            },
           ),
         )
       : undefined;
@@ -623,6 +672,7 @@ async function main(): Promise<void> {
     // expires, and a lease nobody released is a card nobody picks up.
     // Last pass before the process goes away, so the tail of the evidence is
     // not lost with it. It writes what is already buffered and nothing more.
+    stopHeartbeat?.();
     await drain?.stop().catch(() => undefined);
     if (events.dropped > 0) console.warn(`observability dropped ${events.dropped} event(s) under back pressure`);
     await slots.releaseHolder(holderKey(instance)).catch(() => undefined);

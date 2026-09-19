@@ -9,18 +9,20 @@ import {
 const TODO_ID = "answer:S-EPIC1-01:q1";
 
 describe("the console's write surface", () => {
-  it("offers exactly the two config writes and the two todo writes, and nothing else", () => {
+  it("offers exactly the config writes, the requirement limit and the two todo writes, and nothing else", () => {
     expect(CONSOLE_WRITE_ROUTES.map((route) => `${route.method} ${route.path}`)).toEqual([
       "POST /api/config/value",
       "POST /api/config/rollback",
+      "POST /costs/requirement-limit",
       "POST /api/todos/:todoId/decision",
       "POST /api/todos/:todoId/save-check",
     ]);
   });
 
-  it("admits those four routes", () => {
+  it("admits those five routes", () => {
     expect(isConsoleWriteRequest("POST", "/api/config/value")).toBe(true);
     expect(isConsoleWriteRequest("POST", "/api/config/rollback")).toBe(true);
+    expect(isConsoleWriteRequest("POST", "/costs/requirement-limit")).toBe(true);
     expect(isConsoleWriteRequest("POST", todoDecisionPath(TODO_ID))).toBe(true);
     expect(isConsoleWriteRequest("POST", todoSaveCheckPath(TODO_ID))).toBe(true);
   });

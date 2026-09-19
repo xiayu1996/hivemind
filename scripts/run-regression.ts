@@ -26,6 +26,7 @@ import { browserLanePath } from "../src/verify/browser-config.js";
 import { loadPromptLayers } from "../src/pipeline/prompt-loader.js";
 import { BlindVerifyExecutor, EVIDENCE_DIR_ENV } from "../src/verify/executor.js";
 import { processGitCommand } from "../src/vcs/story-delivery.js";
+import { appLaneConfig } from "../src/verify/app-lane.js";
 
 const execFileAsync = promisify(execFile);
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -127,6 +128,7 @@ async function main(): Promise<void> {
       auditPath,
       resolveSpec: sweepGrant,
       allowedHosts,
+      app: appLaneConfig(config),
       chromiumSandbox: config.get("verify.chromiumSandbox"),
     });
     const result = await new RegressionSweeper(registry, store, sweepPort).sweep({ pool, branch, scenarioIds }, policy);
@@ -147,8 +149,9 @@ async function main(): Promise<void> {
         evidenceRoot: join(evidenceRoot, "probe"),
         auditPath,
         resolveSpec: sweepGrant,
-      allowedHosts,
-      chromiumSandbox: config.get("verify.chromiumSandbox"),
+        allowedHosts,
+        app: appLaneConfig(config),
+        chromiumSandbox: config.get("verify.chromiumSandbox"),
       });
       try {
         for (const raised of result.raised) {

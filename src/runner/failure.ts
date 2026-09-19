@@ -52,6 +52,20 @@ export function extractFailure(events: RpcEvent[]): RunFailure | null {
  * priced differently from uncached input, so they stay in their own buckets
  * rather than being folded into it.
  */
+/** Adds two measured usages bucket by bucket. Same rules as `sumUsage`:
+ * `reasoning` stays a subset of `output`, and the cache buckets stay their own,
+ * because they are priced differently. */
+export function addUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
+  return {
+    input: a.input + b.input,
+    output: a.output + b.output,
+    cacheRead: a.cacheRead + b.cacheRead,
+    cacheWrite: a.cacheWrite + b.cacheWrite,
+    reasoning: a.reasoning + b.reasoning,
+    costUsd: a.costUsd + b.costUsd,
+  };
+}
+
 export function sumUsage(events: RpcEvent[]): TokenUsage {
   const total: TokenUsage = { ...EMPTY_USAGE };
 

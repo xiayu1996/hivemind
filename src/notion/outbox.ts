@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Client } from "@libsql/client";
+import { isTransientNotionFailure } from "./gateway.js";
 
 export interface EnqueueNotionOperation {
   cardId?: string;
@@ -8,9 +9,10 @@ export interface EnqueueNotionOperation {
   target: string;
   payload: unknown;
   /**
-   * The same payload was delivered before, but the remote has since moved on
-   * and must receive it again. Dedup exists for crash replay; a desired state
-   * that recurs after an intermediate one is new work, not a replay.
+   * The remote moved without us -- a person edited it -- so the payload it
+   * last received is no longer what it holds, and it must receive it again
+   * even though nothing else was sent to the target since. A payload that
+   * recurs after a different one is resent without this flag.
    */
   resend?: boolean;
 }
@@ -39,12 +41,33 @@ export interface NotionOutboxDelivery {
 }
 
 /**
- * How many delivery attempts a row gets before it is declared dead. Notion
- * outages clear within a few cycles; a row still failing after this many is
- * a payload the API will never accept, and retrying it forever only hides
- * the failure while it holds its place in the queue.
+ * How many delivery attempts a row gets before it is declared dead. This
+ * budget answers a payload the API refuses, which it refuses identically every
+ * time; retrying such a row forever only hides the failure while it holds its
+ * place in the queue.
  */
 export const OUTBOX_MAX_ATTEMPTS = 8;
+
+/**
+ * How long a row whose faults are all transient keeps being retried. A timeout
+ * says nothing about the payload, so spending the payload budget on one costs
+ * a page write that would have gone through minutes later: at a ten-second
+ * cycle the eight attempts above are eighty seconds, which is shorter than a
+ * single Notion wobble. After this long a person should look instead.
+ */
+export const OUTBOX_TRANSIENT_WINDOW_MS = 60 * 60 * 1_000;
+
+/** Longest pause between two attempts at a row that keeps hitting transient
+ * faults. Short enough that the board catches up promptly once Notion answers
+ * again. */
+export const OUTBOX_MAX_BACKOFF_MS = 10 * 60 * 1_000;
+
+/** Doubles from one cycle up to the cap, so an outage is not hammered and a
+ * blip costs the board seconds rather than an hour. */
+export function transientBackoffMs(attempts: number): number {
+  const doubled = 10_000 * 2 ** Math.max(0, attempts - 1);
+  return Math.min(doubled, OUTBOX_MAX_BACKOFF_MS);
+}
 
 /**
  * How long a replay holds a row it is sending. Long enough to cover a send
@@ -155,15 +178,25 @@ export class NotionOutbox {
     }
 
     const existing = await this.client.execute({
-      sql: "SELECT id, state FROM notion_outbox WHERE target = ? AND payload_hash = ?",
-      args: [input.target, encoded.hash],
+      sql: `SELECT id, state, (SELECT MAX(id) FROM notion_outbox WHERE target = ?) AS newest
+            FROM notion_outbox WHERE target = ? AND payload_hash = ?`,
+      args: [input.target, input.target, encoded.hash],
     });
     const id = existing.rows[0]?.id;
     if (id === undefined) throw new Error("outbox conflict row disappeared");
-    if (input.resend && existing.rows[0]?.state === "sent") {
+    // Dedup exists for crash replay, so it may only collapse a payload that is
+    // still the newest thing this target was given. Once a different payload
+    // followed it, the remote holds that later one, and the recurrence is new
+    // work: dropping it leaves the remote on the intermediate state for good.
+    // A Story page that stopped and was then resumed by a person returns to
+    // exactly the payload it had before it stopped, and the stop callout sat
+    // on the page for the rest of the run.
+    const superseded = Number(existing.rows[0]?.newest ?? id) !== Number(id);
+    if ((input.resend || superseded) && existing.rows[0]?.state === "sent") {
       await this.client.execute({
         sql: `UPDATE notion_outbox
-              SET state = 'pending', attempts = 0, last_error = NULL, sent_at = NULL, created_at = ?, priority = ?
+              SET state = 'pending', attempts = 0, last_error = NULL, sent_at = NULL,
+                  next_attempt_at = NULL, created_at = ?, priority = ?
               WHERE id = ? AND state = 'sent'`,
         args: [this.now(), input.priority, id],
       });
@@ -181,12 +214,16 @@ export class NotionOutbox {
     const filter = operations.length > 0 ? ` AND operation IN (${operations.map(() => "?").join(", ")})` : "";
     const now = this.now();
     const rows = (await this.client.execute({
-      sql: `SELECT id, card_id, priority, operation, target, payload, payload_hash, attempts
+      // Oldest desired state first, and a row revived by a recurring payload
+      // carries the instant it was revived, so it lands after whatever was
+      // queued for the same target in between.
+      sql: `SELECT id, card_id, priority, operation, target, payload, payload_hash, attempts, created_at
             FROM notion_outbox
-            WHERE state = 'pending' AND (claimed_until IS NULL OR claimed_until <= ?)${filter}
-            ORDER BY priority ASC, id ASC
+            WHERE state = 'pending' AND (claimed_until IS NULL OR claimed_until <= ?)
+                  AND (next_attempt_at IS NULL OR next_attempt_at <= ?)${filter}
+            ORDER BY priority ASC, created_at ASC, id ASC
             LIMIT ?`,
-      args: [now, ...operations, limit],
+      args: [now, now, ...operations, limit],
     })).rows;
     let sent = 0;
     let failed = 0;
@@ -219,16 +256,30 @@ export class NotionOutbox {
       try {
         if (!(await delivery.isApplied(record))) await delivery.send(record);
         await this.client.execute({
-          sql: "UPDATE notion_outbox SET state = 'sent', sent_at = ?, last_error = NULL, claimed_until = NULL WHERE id = ?",
+          sql: `UPDATE notion_outbox
+                SET state = 'sent', sent_at = ?, last_error = NULL,
+                    claimed_until = NULL, next_attempt_at = NULL
+                WHERE id = ?`,
           args: [this.now(), record.id],
         });
         sent++;
       } catch (cause) {
         const lastError = String((cause as Error).message).slice(0, 2_000);
-        const exhausted = record.attempts >= OUTBOX_MAX_ATTEMPTS;
+        // A transient fault is not evidence about the payload, so it may not
+        // spend the payload budget; it buys a pause instead, until the row has
+        // been failing that way for longer than any outage worth waiting out.
+        const transient = isTransientNotionFailure(cause);
+        const waited = this.now() - Number(row.created_at);
+        const exhausted = record.attempts >= OUTBOX_MAX_ATTEMPTS
+          && (!transient || waited >= OUTBOX_TRANSIENT_WINDOW_MS);
+        const nextAttemptAt = transient && !exhausted
+          ? this.now() + transientBackoffMs(record.attempts)
+          : null;
         await this.client.execute({
-          sql: "UPDATE notion_outbox SET last_error = ?, state = ?, claimed_until = NULL WHERE id = ?",
-          args: [lastError, exhausted ? "dead" : "pending", record.id],
+          sql: `UPDATE notion_outbox
+                SET last_error = ?, state = ?, claimed_until = NULL, next_attempt_at = ?
+                WHERE id = ?`,
+          args: [lastError, exhausted ? "dead" : "pending", nextAttemptAt, record.id],
         });
         failed++;
         failures.push({ id: record.id, cardId: record.cardId, operation: record.operation, attempts: record.attempts, error: lastError });

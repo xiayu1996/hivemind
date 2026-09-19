@@ -1,12 +1,5 @@
 import { classifyError } from "./classify.js";
-import {
-  RunnerTimeoutError,
-  type PiRunner,
-  type PromptImage,
-  type PromptResult,
-  type RpcEvent,
-  type TokenUsage,
-} from "./types.js";
+import { RunnerTimeoutError, type PiRunner, type PromptImage, type PromptResult, type RpcEvent, type TokenUsage } from "./types.js";
 
 export class RetryLimitExceededError extends Error {
   readonly stopReason = "retry_limit_exceeded" as const;
@@ -33,19 +26,6 @@ const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 const defaultBackoff = (attempt: number) => Math.min(30_000, 1_000 * 2 ** (attempt - 1));
 
 const NO_USAGE = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, costUsd: 0 } as const;
-
-/** Per-call usage summed bucket by bucket: cache reads and writes are priced
- * differently from uncached input, and reasoning stays a subset of output. */
-function addUsage(left: TokenUsage, right: TokenUsage): TokenUsage {
-  return {
-    input: left.input + right.input,
-    output: left.output + right.output,
-    cacheRead: left.cacheRead + right.cacheRead,
-    cacheWrite: left.cacheWrite + right.cacheWrite,
-    reasoning: left.reasoning + right.reasoning,
-    costUsd: left.costUsd + right.costUsd,
-  };
-}
 
 /**
  * A prompt that never settles is an interruption, not a verdict on the work.
@@ -104,9 +84,10 @@ export async function promptWithContinueRetry(
   // Every attempt reports only the events it produced itself, so keeping the
   // last result alone throws away everything the interrupted attempt had
   // already done: the tests it ran, the pages it opened, the tokens it spent.
-  // A VERIFY round resumed after a broken stream was then judged on the tail
-  // alone and reported that its scenarios had left no evidence at all.
-  let events: RpcEvent[] = [...result.events];
+  // A VERIFY round resumed after a broken stream was judged on the tail alone
+  // and reported that its scenarios had left no evidence at all; the cost
+  // ceiling, which reads the same usage, was undercounting by the same amount.
+  const events: RpcEvent[] = [...result.events];
   let usage: TokenUsage = result.usage;
   let attempts = 0;
 
@@ -127,12 +108,23 @@ export async function promptWithContinueRetry(
     options.onRetry?.(attempts, result.failure.errorMessage);
     await sleep(backoff(attempts));
     const next = await promptOnce(runner, "continue", timeoutMs);
-    // Pushed one by one: a tool-heavy turn emits tens of thousands of events,
-    // which is past the argument limit a spread would hit.
+    // Pushed one at a time: a tool-heavy turn emits tens of thousands of
+    // events, past the argument count a spread would pass at once.
     for (const event of next.events) events.push(event);
     usage = addUsage(usage, next.usage);
     result = next;
   }
 
   return { ...result, events, usage, continueRetries: attempts };
+}
+
+function addUsage(left: TokenUsage, right: TokenUsage): TokenUsage {
+  return {
+    input: left.input + right.input,
+    output: left.output + right.output,
+    cacheRead: left.cacheRead + right.cacheRead,
+    cacheWrite: left.cacheWrite + right.cacheWrite,
+    reasoning: left.reasoning + right.reasoning,
+    costUsd: left.costUsd + right.costUsd,
+  };
 }

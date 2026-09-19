@@ -83,6 +83,10 @@ export function heading2(content: RichTextRun[], toggleable = false): Block {
   return block("heading_2", { rich_text: content, ...(toggleable ? { is_toggleable: true } : {}) });
 }
 
+export function heading3(content: RichTextRun[]): Block {
+  return block("heading_3", { rich_text: content });
+}
+
 export function callout(content: RichTextRun[], icon: string, color: string): Block {
   return block("callout", { rich_text: content, icon: { type: "emoji", emoji: icon }, color });
 }

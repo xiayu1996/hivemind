@@ -41,6 +41,28 @@ describe("RegressionStore", () => {
     await expect(store.openCards()).resolves.toHaveLength(1);
   });
 
+  it("closes an open card once the scenario stops failing, with no owner asked for", async () => {
+    await fail();
+    await fail();
+    await fail();
+    await expect(store.openCards()).resolves.toHaveLength(1);
+
+    // The card was never attributed, so no Story could ever close it.
+    for (let i = 0; i < policy.windowSize; i += 1) {
+      await store.record({ scenarioId: "S-M2-01-a", pool: "main", revision: "def456", outcome: "passed" }, policy);
+    }
+    await expect(store.openCards()).resolves.toEqual([]);
+  });
+
+  it("keeps the card open while the scenario is still failing some of the time", async () => {
+    await fail();
+    await fail();
+    await fail();
+    await store.record({ scenarioId: "S-M2-01-a", pool: "main", revision: "def456", outcome: "passed" }, policy);
+    await store.record({ scenarioId: "S-M2-01-a", pool: "main", revision: "def456", outcome: "passed" }, policy);
+    await expect(store.openCards()).resolves.toHaveLength(1);
+  });
+
   it("does not raise a card for a scenario that fails about a third of the time", async () => {
     for (const outcome of ["failed", "passed", "passed", "failed", "passed", "passed", "passed", "failed", "passed", "passed"] as const) {
       await store.record({

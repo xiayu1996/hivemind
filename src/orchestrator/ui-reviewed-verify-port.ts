@@ -6,6 +6,17 @@ import {
 } from "../judge/environment-reasons.js";
 import { splitScenarioFailures } from "../pipeline/failure-classification.js";
 import { AppUnderReview } from "../verify/app-under-review.js";
+import type { DesignToken } from "../pipeline/interface-contract.js";
+import {
+  allowedValues,
+  contractViolations,
+  describeContractViolations,
+  type ContractEnforcement,
+  type ContractViolation,
+} from "../verify/ui-contract.js";
+import { CONTRACT_PROPERTIES } from "../verify/ui-contract.js";
+import { describeAccessibilityViolations } from "../verify/accessibility-audit.js";
+import { CONTRACT_MAX_ELEMENTS, type StyleCollectorPort } from "../verify/ui-contract-collector.js";
 import type { UiReviewExecutor, UiReviewReference, UiReviewResult, UiReviewScenario } from "../verify/ui-review.js";
 import { renderDodAmendments, renderUiFindings } from "../verify/ui-review.js";
 import type {
@@ -55,6 +66,18 @@ export interface UiReviewedVerifyPortOptions {
    * never travel through the verdict, so a port that drops them loses them.
    */
   publishFindings?: (input: { cardId: string; runId: string; text: string; result: UiReviewResult }) => Promise<void>;
+  /**
+   * The contract layer (design 08 section 6): every colour and size on the
+   * screen has to come from the token table. Absent means the repository has
+   * no interface contract, which is every repository without screens.
+   */
+  uiContract?: {
+    enforce: ContractEnforcement;
+    /** The token table on the branch under review, or null when there is none. */
+    tokens: () => Promise<readonly DesignToken[] | null>;
+    /** Opens the running application. Closed by this port when it is done. */
+    collector: () => Promise<StyleCollectorPort & { close(): Promise<void> }>;
+  };
   /** A review that could not run says nothing about the Story; it is our problem. */
   recordFriction?: (input: { cardId: string; runId: string; kind: string; detail: string }) => Promise<void>;
   /** Asked only about the refusals the pattern table did not recognise. This
@@ -72,6 +95,46 @@ function hostOf(url: string): string | null {
     return null;
   }
 }
+
+const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]", "::1", "0.0.0.0"]);
+
+/**
+ * Moves a page the blind verifier reached onto the instance this lane started.
+ *
+ * The two lanes each run their own copy of the application, and the verifier's
+ * copy is gone by the time the contract layer runs -- it recorded
+ * `http://127.0.0.1:4311/costs?...` and that port answers nothing any more, so
+ * every page came back unreadable and the one layer that is allowed to refuse
+ * on the token table measured nothing at all.
+ *
+ * Only a loopback origin is rewritten. A page on some other host is not this
+ * application and guessing it is would point the browser somewhere nobody
+ * asked for.
+ */
+export function onAppOrigin(url: string, appUrl: string | undefined): string {
+  if (!appUrl) return url;
+  try {
+    const page = new URL(url);
+    if (!LOOPBACK.has(page.hostname)) return url;
+    const app = new URL(appUrl);
+    page.protocol = app.protocol;
+    page.host = app.host;
+    return page.toString();
+  } catch {
+    // Not a URL either side could open; the collector reports it as it is.
+    return url;
+  }
+}
+
+/**
+ * Why the contract layer read nothing, when the reason is that this lane has no
+ * application of its own to read. It names the setting rather than the symptom:
+ * `verify.appStartCommand` empty is the whole of it, and until it is filled in
+ * the token-table layer measures no repository at all.
+ */
+const NO_APPLICATION =
+  "the contract layer had no application to open: verify.appStartCommand is empty for this repository, "
+  + "so this lane starts nothing and the blind lane's instance has already stopped";
 
 function inconclusiveOf(result: UiReviewResult, fallback: readonly string[], reason: string | null): Array<{ id: string; reason: string }> {
   const listed = result.acceptance
@@ -106,8 +169,86 @@ function inconclusiveOf(result: UiReviewResult, fallback: readonly string[], rea
  * the box's failure: the round stays accepted on the functional lane and every
  * reviewable scenario is recorded inconclusive with the reason.
  */
+/** What the contract layer found, kept apart from the review's own findings:
+ * one is a finite check with a veto the deployment may switch on, the other is
+ * taste and never gets one. */
+interface ContractCheck {
+  violations: ContractViolation[];
+  /** What axe-core found, by scenario. Judged with the token table because it
+   * asks the same kind of question: a finite set of rules, each of which the
+   * page either breaks or does not. */
+  inaccessible: Array<{ page: string; text: string }>;
+  /** Pages the layer could not open. Never a violation: a page that would not
+   * render has already failed the structural layer, and reporting it twice
+   * would read as two problems. */
+  failures: string[];
+}
+
 export class UiReviewedVerifyPort implements StoryVerifyPort {
   constructor(private readonly options: UiReviewedVerifyPortOptions) {}
+
+  /**
+   * Opens each page the round reached and checks its computed styles against
+   * the token table. One browser for the whole round, closed here whatever
+   * happens: a leaked Chromium outlives the card.
+   */
+  private async checkContract(
+    pages: ReadonlyArray<{ scenarioId: string; url: string }>,
+    reviewable: ReadonlySet<string>,
+    appUrl: string | undefined,
+  ): Promise<ContractCheck> {
+    const options = this.options.uiContract;
+    if (!options || options.enforce === "off") return { violations: [], inaccessible: [], failures: [] };
+    const tokens = await options.tokens();
+    // No token table means nothing to measure against. It is not a violation:
+    // a repository without an interface contract has made no promise to break.
+    if (!tokens || tokens.length === 0) return { violations: [], inaccessible: [], failures: [] };
+    const wanted = pages.filter((page) => reviewable.has(page.scenarioId));
+    if (wanted.length === 0) return { violations: [], inaccessible: [], failures: [] };
+    // Every URL here belongs to the blind lane's application, which stopped
+    // when that lane finished. Without an instance of our own there is nowhere
+    // to move them to, so the layer cannot read a single page. Said once, in
+    // those words: opening them anyway reported one refused connection per
+    // scenario, which reads like a few flaky pages rather than a layer that
+    // has never run on this repository.
+    if (appUrl === undefined) return { violations: [], inaccessible: [], failures: [NO_APPLICATION] };
+
+    const collector = await options.collector();
+    const violations: ContractViolation[] = [];
+    const inaccessible: Array<{ page: string; text: string }> = [];
+    const failures: string[] = [];
+    try {
+      // Sorted so two runs of one round report the same findings in the same
+      // order, and one page per scenario: the same URL under two scenarios is
+      // one screen, and reading it twice would double every finding on it.
+      const seen = new Set<string>();
+      for (const page of [...wanted].toSorted((left, right) =>
+        left.scenarioId < right.scenarioId ? -1 : left.scenarioId > right.scenarioId ? 1 : 0)
+      ) {
+        if (seen.has(page.url)) continue;
+        seen.add(page.url);
+        try {
+          const styles = await collector.collect(page.url, CONTRACT_PROPERTIES, CONTRACT_MAX_ELEMENTS);
+          violations.push(...contractViolations(
+            page.scenarioId,
+            styles,
+            allowedValues(tokens, styles.rootFontSizePx),
+          ));
+          for (const text of describeAccessibilityViolations(
+            page.scenarioId,
+            await collector.audit?.(page.url) ?? [],
+          )) {
+            inaccessible.push({ page: page.scenarioId, text });
+          }
+        } catch (cause) {
+          failures.push(`${page.scenarioId}: ${cause instanceof Error ? cause.message : "did not render"}`);
+        }
+      }
+    } finally {
+      await collector.close().catch(() => undefined);
+    }
+    return { violations, inaccessible, failures };
+  }
 
   async run(input: ManagedVerifyInput): Promise<ManagedVerifyResult> {
     const functional = await this.options.functional.run(input);
@@ -123,6 +264,7 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
       : null;
 
     let result: UiReviewResult;
+    let contract: ContractCheck = { violations: [], inaccessible: [], failures: [] };
     let appFailure: string | null = null;
     const seedFailures: string[] = [];
     try {
@@ -188,6 +330,19 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
           ...(this.options.chromiumSandbox === undefined ? {} : { chromiumSandbox: this.options.chromiumSandbox }),
         });
       }
+      // While the application is still up: the contract layer opens the pages
+      // the round reported reaching and reads their computed styles. After the
+      // finally block there is nothing left to open. The URLs come from the
+      // blind lane, whose own copy of the application is already gone, so they
+      // are moved onto this lane's instance first.
+      contract = await this.checkContract(
+        (functional.pages ?? []).map((page) => ({
+          scenarioId: page.scenarioId,
+          url: onAppOrigin(page.url, appUrl),
+        })),
+        reviewable,
+        appUrl,
+      );
     } finally {
       if (handle) await handle.stop().catch(() => undefined);
     }
@@ -244,6 +399,19 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
         images: result.images,
         sessionId: result.reviewSessionId,
       },
+      ...(contract.violations.length === 0 && contract.inaccessible.length === 0 && contract.failures.length === 0
+        ? {}
+        : {
+          uiContract: {
+            enforce: this.options.uiContract?.enforce ?? "off",
+            violations: contract.violations,
+            text: [
+              ...describeContractViolations(contract.violations),
+              ...contract.inaccessible.map((entry) => entry.text),
+            ].join("\n"),
+            ...(contract.failures.length === 0 ? {} : { unreadable: contract.failures }),
+          },
+        }),
     });
 
     // What the reviewer could not see because the box misbehaved is not a
@@ -271,15 +439,55 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
         detail: renderMovedReasons(judged.moved),
       });
     }
+    // The contract layer's own outcome, kept separate from the review's until
+    // here: `warn` records what it found and lets the round through, `block`
+    // fails the scenarios that carry it. Which one is a deployment's decision
+    // (`uiContract.enforce`), not this round's.
+    const contractFailures = this.options.uiContract?.enforce === "block"
+      ? [...new Set([
+        ...contract.violations.map((violation) => violation.page),
+        ...contract.inaccessible.map((entry) => entry.page),
+      ])].toSorted()
+      : [];
+    if (contract.failures.includes(NO_APPLICATION) && this.options.recordFriction) {
+      // Counted like every other gap this file records: 08 section 6 gives the
+      // contract layer a veto once it has earned one, and a layer that has
+      // never opened a page cannot have earned anything. This is the number
+      // that says so.
+      await this.options.recordFriction({
+        cardId: input.context.cardId,
+        runId: input.runId,
+        kind: "ui_contract_no_app",
+        detail: NO_APPLICATION,
+      });
+    }
+    if ((contract.violations.length > 0 || contract.inaccessible.length > 0) && this.options.recordFriction) {
+      // Recorded whether or not it refused: the count is what decides whether
+      // this layer is ready to be given a veto (08 section 6).
+      await this.options.recordFriction({
+        cardId: input.context.cardId,
+        runId: input.runId,
+        kind: this.options.uiContract?.enforce === "block" ? "ui_contract_blocked" : "ui_contract_warned",
+        detail: [
+          ...describeContractViolations(contract.violations),
+          ...contract.inaccessible.map((entry) => entry.text),
+        ].join("; "),
+      });
+    }
     const split = splitScenarioFailures(result.failedScenarios, reviewReasons, judged.environmental);
-    if (result.verdict === "rejected" && split.code.length > 0) {
+    const refused = [...new Set([
+      ...(result.verdict === "rejected" ? split.code : []),
+      ...contractFailures,
+    ])].toSorted();
+    if (refused.length > 0) {
       return {
         ...functional,
         verdict: "rejected",
-        failedScenarios: split.code,
-        // A function the reviewer could not find on the screen is a failure in
-        // the code, so it counts against convergence like any other.
-        codeFailedScenarios: split.code,
+        failedScenarios: refused,
+        // A function the reviewer could not find on the screen, or a value
+        // that came from outside the token table, is a failure in the code, so
+        // it counts against convergence like any other.
+        codeFailedScenarios: refused,
         artifact,
       };
     }

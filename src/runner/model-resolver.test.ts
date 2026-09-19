@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   cachingCatalog,
   firstNonEmptyCatalog,
+  keepOwnProvider,
   parseModelTable,
   parseTokenCount,
   resolveModel,
@@ -105,3 +106,16 @@ describe("catalogue composition", () => {
     await expect(firstNonEmptyCatalog(broken, recorded).list("deepseek")).resolves.toHaveLength(1);
   });
 });
+describe("keepOwnProvider", () => {
+  it("drops the row another provider owns, which pi prints because it matches by substring", () => {
+    const models = parseModelTable([
+      "provider      model                      context  max-out  thinking  images",
+      "deepseek      deepseek-v4-flash          128K     4.1K     no        no",
+      "command-code  deepseek/deepseek-v4.1-flash  128K   4.1K     no        no",
+    ].join("\n"));
+
+    expect(keepOwnProvider(models, "deepseek").map((model) => model.id)).toEqual(["deepseek-v4-flash"]);
+    expect(keepOwnProvider(models, "command-code").map((model) => model.id)).toEqual(["deepseek/deepseek-v4.1-flash"]);
+  });
+});
+

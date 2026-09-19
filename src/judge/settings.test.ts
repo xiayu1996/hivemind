@@ -19,6 +19,7 @@ const CONFIG = {
   businessLanguageThreshold: 0.75,
   verticalSliceThreshold: 0.6,
   readabilityThreshold: 0.6,
+  usabilityThreshold: 0.75,
 };
 
 const WITH_KEY = new Map([[JUDGE_API_KEY, "key-under-test"]]);

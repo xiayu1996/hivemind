@@ -134,6 +134,10 @@
         "title": "PRD",
         "aliases": []
       },
+      "solution": {
+        "title": "方案",
+        "aliases": []
+      },
       "delivery": {
         "title": "交付结果",
         "aliases": [
@@ -197,6 +201,11 @@
         "icon": "🙋",
         "color": "orange_background",
         "action": "看下面的 PRD；认可就把卡拖到「拆解执行中」，要改就写条评论说改哪里。"
+      },
+      "SOLUTION": {
+        "icon": "🙋",
+        "color": "red_background",
+        "action": "看完下面的方案与界面方向：认可就把「还没定的事」逐条勾完再勾「确认」那一条，或把卡拖到「拆解执行中」；要改就写条评论说改哪里。改动会重画原型，不会动已确认的 PRD。"
       }
     }
   },
@@ -218,5 +227,35 @@
     "dispatchFailed": "有 {count} 次运行还没产出就断了。",
     "spend": "这张卡到目前花了 {amount} 美元。",
     "budget": "这段已经用掉 {spent}/{budget} 轮。"
+  },
+  "solution": {
+    "approachTitle": "怎么做",
+    "approachAlternatives": "没走的路",
+    "directionTitle": "这一版界面长什么样",
+    "directionAlternatives": "没走的方向",
+    "alternative": "{option}：{reason}",
+    "stackTitle": "要动的依赖",
+    "stackNone": "这一版不新增、不升级、不移除任何依赖，全部用现有技术栈实现。",
+    "stackChange": "{kind} {name}：{reason}；还会碰到{impact}",
+    "gatesTitle": "新栈由什么把关",
+    "gate": "{name}：{covers}",
+    "pagesTitle": "页面清单与原型",
+    "prototypeLink": "原型已经画好并进了仓库，可以点开逐页看",
+    "prototypeMissing": "这一版还没有可以点开的原型链接，页面清单如下。",
+    "page": "{name} · {purpose}",
+    "pageScenarios": "承接场景：{scenarios}",
+    "pageVisible": "这页必须看得见：{visible}",
+    "pageStates": "空、加载中、出错、等人四个样子都画了，在原型里换一下地址栏末尾的 ?state= 就能逐个看。",
+    "concernsTitle": "画原型时发现的问题",
+    "openTitle": "还没定的事",
+    "openDecision": "{question}：我建议{recommendation}",
+    "confirmTitle": "确认",
+    "confirmLine": "上面「还没定的事」逐条勾完之后再勾这里：这一版方案和界面方向可以，按它往下拆",
+    "confirmed": "这一版方案你已经确认过，不会再被改写。"
+  },
+  "solutionKinds": {
+    "added": "新增",
+    "upgraded": "升级",
+    "removed": "移除"
   }
 }

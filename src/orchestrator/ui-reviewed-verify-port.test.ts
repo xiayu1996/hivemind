@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { DefinitionOfDone } from "../pipeline/dod.js";
 import type { UiReviewResult } from "../verify/ui-review.js";
 import type { AppUnderReview } from "../verify/app-under-review.js";
+import type { DesignToken } from "../pipeline/interface-contract.js";
+import type { PageStyles } from "../verify/ui-contract.js";
+import type { StyleCollectorPort } from "../verify/ui-contract-collector.js";
+import type { AccessibilityViolation } from "../verify/accessibility-audit.js";
 import { reviewableScenarios, UiReviewedVerifyPort, type UiReviewAppOptions } from "./ui-reviewed-verify-port.js";
 import type { ManagedVerifyInput, ManagedVerifyResult } from "./story-worker.js";
 
@@ -76,6 +80,11 @@ function port(options: {
   friction?: (input: { cardId: string; runId: string; kind: string; detail: string }) => Promise<void>;
   app?: UiReviewAppOptions;
   appUnderReview?: () => Pick<AppUnderReview, "start" | "stop" | "seed">;
+  uiContract?: {
+    enforce: "off" | "warn" | "block";
+    tokens: () => Promise<readonly DesignToken[] | null>;
+    collector: () => Promise<StyleCollectorPort & { close(): Promise<void> }>;
+  };
 }) {
   const review = vi.fn(async (given: unknown) => {
     options.onReview?.(given);
@@ -93,6 +102,7 @@ function port(options: {
     ...(options.friction ? { recordFriction: options.friction as never } : {}),
     ...(options.app ? { app: options.app } : {}),
     ...(options.appUnderReview ? { appUnderReview: options.appUnderReview } : {}),
+    ...(options.uiContract ? { uiContract: options.uiContract } : {}),
   });
   return { instance, review };
 }
@@ -359,5 +369,242 @@ describe("UiReviewedVerifyPort", () => {
       expect(created).toBe(0);
       expect(review).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+function collector(styles: PageStyles, violations: AccessibilityViolation[] = []) {
+  const opened: string[] = [];
+  let closed = 0;
+  return {
+    opened,
+    closedCount: () => closed,
+    make: async () => ({
+      collect: async (url: string) => {
+        opened.push(url);
+        return styles;
+      },
+      audit: async () => violations,
+      close: async () => { closed += 1; },
+    } satisfies StyleCollectorPort & { close(): Promise<void> }),
+  };
+}
+
+// The layer reads the pages on an instance this lane started; the blind lane's
+// own copy stopped when it finished, so without this there is nothing to open.
+const CONTRACT_APP = {
+  startCommand: ["npm", "run", "dev"],
+  readyUrl: "http://127.0.0.1:4173/",
+  readyTimeoutMs: 1000,
+  seedCommand: [],
+};
+
+describe("UiReviewedVerifyPort and the interface contract", () => {
+  const tokens: DesignToken[] = [{ name: "color.surface", type: "color", value: "#111827" }];
+
+  const offTable: PageStyles = {
+    rootFontSizePx: 16,
+    usages: [{ selector: "main > .card", property: "background-color", value: "rgb(200, 200, 200)" }],
+  };
+  const fromTable: PageStyles = {
+    rootFontSizePx: 16,
+    usages: [{ selector: "main > .card", property: "background-color", value: "rgb(17, 24, 39)" }],
+  };
+  const functional = functionalResult({
+    pages: [{ scenarioId: "S-EPIC-01-s0", url: "http://localhost:4000/checkout" }],
+  });
+
+  it("opens the pages on the instance this lane started, not on the one that is gone", async () => {
+    // The blind lane runs its own copy and takes it down when it is done, so
+    // the URLs it recorded answer nothing by now. Reading them as they stand
+    // left every page unreadable and the one layer allowed to refuse on the
+    // token table measuring nothing.
+    const styles = collector(offTable);
+    const { instance } = port({
+      functional: functionalResult({
+        pages: [{ scenarioId: "S-EPIC-01-s0", url: "http://127.0.0.1:4311/costs?timeZone=UTC" }],
+      }),
+      app: CONTRACT_APP,
+      appUnderReview: () => fakeApp().handle,
+      uiContract: { enforce: "warn", tokens: async () => tokens, collector: styles.make },
+    });
+
+    await instance.run(verifyInput(dod([["ui"]])));
+
+    expect(styles.opened).toEqual(["http://127.0.0.1:4173/costs?timeZone=UTC"]);
+  });
+
+  it("says it had no application rather than reporting one refused page per scenario", async () => {
+    // With no start command this lane opens nothing, and every URL it was given
+    // belongs to the blind lane's instance, which has already stopped. Three
+    // refused connections read like three flaky pages; on S-R237511CO-02 they
+    // hid a layer that has never once measured this repository.
+    const friction: Array<{ kind: string; detail: string }> = [];
+    const styles = collector(offTable);
+    const { instance } = port({
+      functional,
+      friction: async (given) => { friction.push(given); },
+      uiContract: { enforce: "warn", tokens: async () => tokens, collector: styles.make },
+    });
+
+    const result = await instance.run(verifyInput(dod([["ui"]])));
+
+    expect(styles.opened).toEqual([]);
+    const unreadable = JSON.parse(result.artifact).uiContract.unreadable as string[];
+    expect(unreadable).toHaveLength(1);
+    expect(unreadable[0]).toContain("verify.appStartCommand");
+    expect(friction.map((entry) => entry.kind)).toContain("ui_contract_no_app");
+    expect(result.verdict).toBe("accepted");
+  });
+
+  it("delivers the round but records what it found while the layer is only warning", async () => {
+    const friction: Array<{ kind: string; detail: string }> = [];
+    const styles = collector(offTable);
+    const { instance } = port({
+      app: CONTRACT_APP,
+      appUnderReview: () => fakeApp().handle,
+      functional,
+      friction: async (given) => { friction.push(given); },
+      uiContract: { enforce: "warn", tokens: async () => tokens, collector: styles.make },
+    });
+
+    const result = await instance.run(verifyInput(dod([["ui"]])));
+
+    expect(result.verdict).toBe("accepted");
+    expect(friction.map((entry) => entry.kind)).toContain("ui_contract_warned");
+    expect(JSON.parse(result.artifact).uiContract.text)
+      .toContain("用了不在设计规范里的颜色");
+  });
+
+  it("sends the Story back when the deployment has given the layer a veto", async () => {
+    const styles = collector(offTable);
+    const { instance } = port({
+      app: CONTRACT_APP,
+      appUnderReview: () => fakeApp().handle,
+      functional,
+      uiContract: { enforce: "block", tokens: async () => tokens, collector: styles.make },
+    });
+
+    const result = await instance.run(verifyInput(dod([["ui"]])));
+
+    expect(result.verdict).toBe("rejected");
+    expect(result.failedScenarios).toEqual(["S-EPIC-01-s0"]);
+    expect(result.codeFailedScenarios).toEqual(["S-EPIC-01-s0"]);
+  });
+
+  it("sends the Story back for a page a person could not use, on the same switch", async () => {
+    const styles = collector(fromTable, [{
+      id: "label",
+      impact: "critical",
+      help: "表单控件要有标签",
+      nodes: ["#phone"],
+    }]);
+    const { instance } = port({
+      app: CONTRACT_APP,
+      appUnderReview: () => fakeApp().handle,
+      functional,
+      uiContract: { enforce: "block", tokens: async () => tokens, collector: styles.make },
+    });
+
+    const result = await instance.run(verifyInput(dod([["ui"]])));
+
+    expect(result.verdict).toBe("rejected");
+    expect(JSON.parse(result.artifact).uiContract.text).toContain("表单控件要有标签");
+  });
+
+  it("does not refuse for an accessibility note that is only advice", async () => {
+    const styles = collector(fromTable, [{
+      id: "region",
+      impact: "moderate",
+      help: "内容应当放在地标里",
+      nodes: ["main"],
+    }]);
+    const { instance } = port({
+      app: CONTRACT_APP,
+      appUnderReview: () => fakeApp().handle,
+      functional,
+      uiContract: { enforce: "block", tokens: async () => tokens, collector: styles.make },
+    });
+
+    await expect(instance.run(verifyInput(dod([["ui"]])))).resolves.toMatchObject({ verdict: "accepted" });
+  });
+
+  it("says nothing about a page whose every value came from the table", async () => {
+    const styles = collector(fromTable);
+    const { instance } = port({
+      app: CONTRACT_APP,
+      appUnderReview: () => fakeApp().handle,
+      functional,
+      uiContract: { enforce: "block", tokens: async () => tokens, collector: styles.make },
+    });
+
+    const result = await instance.run(verifyInput(dod([["ui"]])));
+
+    expect(result.verdict).toBe("accepted");
+    expect(JSON.parse(result.artifact).uiContract).toBeUndefined();
+  });
+
+  it("does not open a browser for a repository that made no promise to keep", async () => {
+    const styles = collector(offTable);
+    const { instance } = port({
+      app: CONTRACT_APP,
+      appUnderReview: () => fakeApp().handle,
+      functional,
+      uiContract: { enforce: "block", tokens: async () => null, collector: styles.make },
+    });
+
+    const result = await instance.run(verifyInput(dod([["ui"]])));
+
+    expect(styles.opened).toEqual([]);
+    expect(result.verdict).toBe("accepted");
+  });
+
+  it("does not look at all when the deployment switched the layer off", async () => {
+    const styles = collector(offTable);
+    const { instance } = port({
+      app: CONTRACT_APP,
+      appUnderReview: () => fakeApp().handle,
+      functional,
+      uiContract: { enforce: "off", tokens: async () => tokens, collector: styles.make },
+    });
+
+    await instance.run(verifyInput(dod([["ui"]])));
+
+    expect(styles.opened).toEqual([]);
+  });
+
+  it("closes the browser it opened, so a leaked Chromium does not outlive the card", async () => {
+    const styles = collector(offTable);
+    const { instance } = port({
+      app: CONTRACT_APP,
+      appUnderReview: () => fakeApp().handle,
+      functional,
+      uiContract: { enforce: "warn", tokens: async () => tokens, collector: styles.make },
+    });
+
+    await instance.run(verifyInput(dod([["ui"]])));
+
+    expect(styles.closedCount()).toBe(1);
+  });
+
+  it("reads one screen once even when two scenarios reached the same page", async () => {
+    const styles = collector(offTable);
+    const { instance } = port({
+      app: CONTRACT_APP,
+      appUnderReview: () => fakeApp().handle,
+      functional: functionalResult({
+        pages: [
+          { scenarioId: "S-EPIC-01-s0", url: "http://localhost:4000/checkout" },
+          { scenarioId: "S-EPIC-01-s1", url: "http://localhost:4000/checkout" },
+        ],
+      }),
+      review: reviewResult({
+        acceptance: [{ id: "S-EPIC-01-s0", status: "passed" }, { id: "S-EPIC-01-s1", status: "passed" }],
+      }),
+      uiContract: { enforce: "warn", tokens: async () => tokens, collector: styles.make },
+    });
+
+    await instance.run(verifyInput(dod([["ui"], ["ui"]])));
+
+    expect(styles.opened).toEqual(["http://127.0.0.1:4173/checkout"]);
   });
 });

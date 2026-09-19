@@ -8,7 +8,8 @@ import {
   type SolutionCandidate,
 } from "./requirement-solution.js";
 import { draftUntilUsable, requirementRunId as runId, stopOnUnusableDraft } from "./requirement-draft.js";
-import type { RequirementStore } from "./requirement-store.js";
+import type { PrototypeRunner } from "./prototype-runner.js";
+import type { RequirementSnapshot, RequirementStore } from "./requirement-store.js";
 
 export interface SolutionRequest {
   requirementId: string;
@@ -46,13 +47,65 @@ export type SolutionOutcome =
  * nothing and touches no screen carries no decision worth a person's time, and
  * stopping it would spend the one resource this whole layer exists to protect.
  */
+export interface SolutionRunnerOptions {
+  attempts?: number;
+  /** Draws the screens this solution decided on, before anybody reads either.
+   * Absent on an installation that cannot reach a repository to draw into. */
+  prototype?: {
+    runner: PrototypeRunner;
+    /** Where the repository keeps its interface contract. */
+    contractRoot: (repository: string) => Promise<string>;
+  };
+  /**
+   * Puts the approved interface contract on the branch the work will be built
+   * from. Absent on an installation with no review CLI, which leaves the
+   * request open for a person, as it was before this existed.
+   */
+  landContract?: (requirementId: string) => Promise<void>;
+}
+
 export class SolutionRunner {
   constructor(
     private readonly store: RequirementStore,
     private readonly port: SolutionPort,
     private readonly publisher: RequirementPagePublisher,
-    private readonly attempts = 2,
+    private readonly options: SolutionRunnerOptions = {},
   ) {}
+
+  private get attempts(): number {
+    return this.options.attempts ?? 2;
+  }
+
+  /**
+   * Draws the screens a draft says it needs and does not have yet. Returns the
+   * stop when the drawing could not be made, and nothing at all when there was
+   * nothing to draw.
+   */
+  private async drawMissingScreens(
+    requirement: RequirementSnapshot,
+    current: { revision: number; body: string },
+  ): Promise<{ kind: "stopped"; reason: string } | undefined> {
+    const solution = JSON.parse(current.body) as SolutionBody;
+    if (!this.options.prototype || !solution.interface) return undefined;
+    if (await this.store.getSolutionPrototype(requirement.id, current.revision)) return undefined;
+
+    const prd = await this.store.getPrd(requirement.id);
+    if (!prd || prd.status !== "confirmed") return undefined;
+    const body = JSON.parse(prd.body) as { businessGoal: string; scenarios: PrdScenario[] };
+    const drawn = await this.options.prototype.runner.draw({
+      requirementId: requirement.id,
+      title: requirement.title,
+      repository: requirement.repo ?? "",
+      businessGoal: body.businessGoal,
+      scenarios: body.scenarios,
+      solution,
+      revision: current.revision,
+      contractRoot: await this.options.prototype.contractRoot(requirement.repo ?? ""),
+    });
+    if (drawn.kind === "stopped") return { kind: "stopped", reason: drawn.reason };
+    await this.publisher.publish(requirement.id);
+    return undefined;
+  }
 
   async advance(requirementId: string): Promise<SolutionOutcome> {
     const requirement = await this.store.getRequirement(requirementId);
@@ -63,11 +116,21 @@ export class SolutionRunner {
 
     const current = await this.store.getSolution(requirementId);
     if (current?.status === "confirmed") {
+      const landed = await this.landApprovedContract(requirementId);
+      if (landed) return landed;
       await this.store.transition(requirementId, "SOLUTION", "DECOMPOSING", "system", runId(requirementId));
       await this.publisher.publish(requirementId);
       return { kind: "confirmed", revision: current.revision, source: "human" };
     }
-    if (current?.status === "draft") return { kind: "awaiting", revision: current.revision };
+    if (current?.status === "draft") {
+      // A draft whose screens were never drawn was interrupted between the two
+      // halves of one decision. Resuming finishes it rather than putting the
+      // approach up alone: a person asked to approve a sentence with no screens
+      // beside it is being asked to approve nothing.
+      const missing = await this.drawMissingScreens(requirement, current);
+      if (missing) return missing;
+      return { kind: "awaiting", revision: current.revision };
+    }
 
     const prd = await this.store.getPrd(requirementId);
     if (!prd || prd.status !== "confirmed") {
@@ -119,6 +182,24 @@ export class SolutionRunner {
       JSON.stringify(solution),
       runId(requirementId),
     );
+    // The screens are drawn before the approach is read, because they are one
+    // decision: a person who approves "a web back office on the existing
+    // stack" without seeing the screens has approved a sentence. A drawing
+    // that never passed its own checks stops the requirement here rather than
+    // sending the approach on alone (design 08 section 3.1).
+    if (this.options.prototype && solution.interface) {
+      const drawn = await this.options.prototype.runner.draw({
+        requirementId,
+        title: requirement.title,
+        repository: requirement.repo ?? "",
+        businessGoal: body.businessGoal,
+        scenarios: body.scenarios,
+        solution,
+        revision,
+        contractRoot: await this.options.prototype.contractRoot(requirement.repo ?? ""),
+      });
+      if (drawn.kind === "stopped") return { kind: "stopped", reason: drawn.reason };
+    }
     if (solutionNeedsApproval(solution)) {
       await this.publisher.publish(requirementId);
       return { kind: "drafted", revision, awaiting: approvalReasons(solution) };
@@ -133,8 +214,40 @@ export class SolutionRunner {
       "auto",
       runId(requirementId),
     );
+    const landed = await this.landApprovedContract(requirementId);
+    if (landed) return landed;
     await this.store.transition(requirementId, "SOLUTION", "DECOMPOSING", "system", runId(requirementId));
     await this.publisher.publish(requirementId);
     return { kind: "confirmed", revision, source: "auto" };
+  }
+
+  /**
+   * Puts the approved contract on the target branch before the requirement is
+   * split.
+   *
+   * Every later card reads the contract off its own worktree, which is cut
+   * from the target branch, so a contract still sitting on its own branch is
+   * one no card can see: each Story with a screen stops in SHAPE asking for
+   * the token table nobody handed it. Approving the solution is approving the
+   * contract -- they were drawn and read together -- so nothing further is
+   * asked of a person here. What a person is asked for is the failure: a
+   * contract that would not land needs somebody to look at the request, and
+   * splitting the requirement first would only queue up that stop once per
+   * Story.
+   */
+  private async landApprovedContract(
+    requirementId: string,
+  ): Promise<{ kind: "stopped"; reason: string } | undefined> {
+    const land = this.options.landContract;
+    if (!land) return undefined;
+    try {
+      await land(requirementId);
+      return undefined;
+    } catch (cause) {
+      const reason = `界面契约没能进入主干：${(cause as Error).message}`;
+      await this.store.stopForHumanInput(requirementId, "SOLUTION", runId(requirementId), reason);
+      await this.publisher.publish(requirementId);
+      return { kind: "stopped", reason };
+    }
   }
 }

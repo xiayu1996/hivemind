@@ -76,7 +76,7 @@ export class EpicIntegrator {
       return result;
     }
     if (result.kind === "conflict") {
-      await this.store.recordMergeConflict(cardId, runId, result.reason);
+      await this.store.recordMergeConflict(cardId, runId, result.reason, result.files);
       return result;
     }
     if (result.attribution === "baseline_failing") {
