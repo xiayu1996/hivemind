@@ -3,8 +3,9 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { OVERVIEW_ENDPOINT, type OverviewReadPort } from "./overview-contract.js";
+import { OVERVIEW_ENDPOINT, type OverviewReadPort, type OverviewTodoItem } from "./overview-contract.js";
 import type { ConsoleOverviewPage, OverviewPageState } from "./overview-page.js";
+import { createTodoPage, type ConsoleTodoPage, type TodoPageState } from "./todo-page.js";
 
 /** The console's own time zone when the reader's browser sends none. */
 const DEFAULT_TIME_ZONE = "Asia/Shanghai";
@@ -63,6 +64,9 @@ export interface ConsoleServerOptions {
    * returns the block the open page refreshes; without it the console falls
    * back to serving a static bundle from `uiRoot`. */
   overviewPage?: ConsoleOverviewPage;
+  /** The page behind the overview's waiting rail. It shares the overview's
+   * read, so it is only served alongside it. */
+  todoPage?: ConsoleTodoPage;
 }
 
 /** Builds the read-only intranet console. */
@@ -159,6 +163,27 @@ export async function createConsoleServer(
       };
       app.get("/", renderPage);
       app.get("/overview", renderPage);
+      const todoPage = options.todoPage ?? createTodoPage();
+      app.get("/todo", async (request, reply) => {
+        const requirementId = (request.query as { requirement?: string }).requirement ?? null;
+        const nowMs = Date.now();
+        let item: OverviewTodoItem | null = null;
+        let state: TodoPageState = "empty";
+        try {
+          const snapshot = await data.readOverview({ nowMs, timeZone: timeZoneOf(request) });
+          item = requirementId === null
+            ? null
+            : snapshot.sections.todos.find((candidate) => candidate.requirement.id === requirementId) ?? null;
+          state = item === null ? "empty" : "ready";
+        } catch {
+          // The same failed read the overview turns into its own error state:
+          // the item page says so and offers the re-read instead of a blank 500.
+          state = "error";
+        }
+        await reply.type("text/html; charset=utf-8").send(
+          todoPage.renderDocument({ state, item, requirementId, nowMs }),
+        );
+      });
       app.get("/overview/sections", async (request, reply) => {
         const timeZone = timeZoneOf(request);
         const nowMs = Date.now();

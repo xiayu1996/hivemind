@@ -42,6 +42,10 @@ export interface OverviewTodoItem {
   title: string;
   requirement: { id: string; title: string };
   waitingSinceMs: number;
+  /** The question a person has to settle, when the todo carries one. */
+  question: string;
+  /** The choices a `choice` todo offers; empty for a free-form reply. */
+  options: string[];
   action: OverviewAction;
 }
 
@@ -205,13 +209,30 @@ function costsHref(requirementId: string): string {
   return `/costs?requirement=${encodeURIComponent(requirementId)}`;
 }
 
-function questionHasOptions(questions: unknown): boolean {
-  if (!Array.isArray(questions)) return false;
-  return questions.some((question) => {
-    if (typeof question !== "object" || question === null) return false;
-    const options = (question as { options?: unknown }).options;
-    return Array.isArray(options) && options.length > 0;
-  });
+/** The first question a clarify round asked, with the labels it offered. The
+ * questions column is opaque JSON, so anything unreadable reads as no question
+ * rather than as a reason the whole read fails. */
+function questionParts(questions: unknown): { question: string; options: string[] } {
+  if (!Array.isArray(questions)) return { question: "", options: [] };
+  for (const entry of questions) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const candidate = entry as { question?: unknown; options?: unknown };
+    const question = typeof candidate.question === "string" ? candidate.question : "";
+    const options = Array.isArray(candidate.options)
+      ? candidate.options
+        .map((option) => {
+          if (typeof option === "string") return option;
+          if (typeof option === "object" && option !== null) {
+            const label = (option as { label?: unknown }).label;
+            if (typeof label === "string") return label;
+          }
+          return "";
+        })
+        .filter((label) => label.length > 0)
+      : [];
+    if (question !== "" || options.length > 0) return { question, options };
+  }
+  return { question: "", options: [] };
 }
 
 interface OverviewRows {
@@ -278,13 +299,15 @@ async function readRows(tx: Transaction, rangeStart: number, nowMs: number): Pro
     const requirementId = String(row.requirement_id);
     if (row.state === "DONE" || row.state === "FAILED") continue;
     const title = String(row.title);
-    const questions: unknown = JSON.parse(String(row.questions));
+    const parts = questionParts(JSON.parse(String(row.questions)));
     clarifyTodos.push({
       id: `clarify:${requirementId}:${numberValue(row.round)}`,
-      kind: questionHasOptions(questions) ? "choice" : "reply",
+      kind: parts.options.length > 0 ? "choice" : "reply",
       title,
       requirement: { id: requirementId, title },
       waitingSinceMs: numberValue(row.asked_at),
+      question: parts.question,
+      options: parts.options,
       action: { label: text.todoActionLabel, href: todoHref(requirementId) },
     });
   }
@@ -360,6 +383,8 @@ function draftTodos(
       title,
       requirement: { id: requirementId, title },
       waitingSinceMs: draft.createdAt,
+      question: "",
+      options: [],
       action: { label: text.todoActionLabel, href: todoHref(requirementId) },
     };
   });
