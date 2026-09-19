@@ -230,4 +230,8 @@ describe("the overview a verification round opens", () => {
     expect(refreshed.body).not.toContain('aria-label="重试退避 任务 VERIFY 运行中"');
     expect(refreshed.body).toContain('aria-label="异常归类 任务 VERIFY 运行中"');
   });
+  it("@scenario S-R237511OV-01-responsive never leaks the central store into the sections", () => {
+    expect(html).not.toContain("别的运行需求");
+    expect(html).not.toContain("别的运行任务");
+  });
 });
