@@ -176,4 +176,16 @@ describe("the overview a verification round opens", () => {
     expect(refreshed.refreshed).toContain("最近刷新");
     expect(refreshed.revision.length).toBeGreaterThan(0);
   });
+  it("@scenario S-R237511OV-01-responsive keeps the fixed section order and both navigations on one page", () => {
+    expect(html.indexOf('id="todos-title"')).toBeLessThan(html.indexOf('id="active-title"'));
+    expect(html.indexOf('id="active-title"')).toBeLessThan(html.indexOf('id="failures-title"'));
+    expect(html.indexOf('id="failures-title"')).toBeLessThan(html.indexOf('id="completed-title"'));
+    expect(html).toContain('class="sidebar"');
+    expect(html).toContain('class="mobile-nav"');
+    expect(html).toContain('aria-current="page"');
+    expect(html).toContain("重试退避");
+    expect(html).toContain("支付重试规则");
+    expect(html).toContain("账单导出");
+    expect(html).toContain("状态投影核对");
+  });
 });
