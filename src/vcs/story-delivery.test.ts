@@ -1,6 +1,10 @@
+import { randomUUID } from "node:crypto";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { StorySnapshot } from "../orchestrator/story-execution-store.js";
-import { GitMrStoryDelivery } from "./story-delivery.js";
+import { GitMrStoryDelivery, processGitCommand } from "./story-delivery.js";
 
 const story: StorySnapshot = {
   id: "S-EPIC1-01", epicId: "EPIC1", notionPageId: "page-1", title: "Deliver safely",
@@ -110,5 +114,25 @@ describe("GitMrStoryDelivery for a Story that no Epic MR covers", () => {
 
     await expect(delivery.deliver({ story, mergeArtifact: "Already on the Epic head." })).resolves.toEqual({ mrUrl: null });
     expect(create).not.toHaveBeenCalled();
+  });
+});
+
+describe("the process git command", () => {
+  it("names the working directory that is gone rather than blaming git", async () => {
+    // Node reports a missing cwd and a missing binary with the same words,
+    // `spawn git ENOENT`. A Story stopped on that message, and it sends a
+    // reader to check whether git is installed instead of to the directory
+    // that can be put back.
+    const missing = join(tmpdir(), `hm-gone-${randomUUID()}`);
+
+    await expect(processGitCommand.run(missing, ["status"]))
+      .rejects.toThrow(new RegExp(`working directory is gone .*${missing.replaceAll("\\", "\\\\")}`));
+  });
+
+  it("passes a real git failure through as git wrote it", async () => {
+    const repo = await mkdtemp(join(tmpdir(), "hm-git-command-"));
+
+    await expect(processGitCommand.run(repo, ["rev-parse", "--verify", "HEAD"]))
+      .rejects.toThrow(/not a git repository/i);
   });
 });

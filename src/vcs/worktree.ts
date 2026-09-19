@@ -63,6 +63,29 @@ async function exists(path: string): Promise<boolean> {
   return stat(path).then(() => true, () => false);
 }
 
+/**
+ * Clears the registration git keeps for a worktree whose directory is gone.
+ *
+ * A directory can leave without git being told: an operator clearing disk, a
+ * rename that failed halfway, a machine that died mid-checkout. git then
+ * refuses to put a worktree back at that path ("missing but already registered
+ * worktree"), so the card's own branch becomes unreachable and every later
+ * dispatch dies on a cwd that does not exist -- as `spawn git ENOENT`, which
+ * reads like git is not installed. One Story spent its budget that way.
+ *
+ * `remove --force` names the one path, so a worktree somebody else is using
+ * cannot be caught by it, and the branch keeps its commits. Failure is the
+ * ordinary case of no registration at all and says nothing about the add that
+ * follows, which reports its own reason.
+ */
+async function clearStaleRegistration(repositoryPath: string, worktreePath: string): Promise<void> {
+  await execFileAsync(
+    "git",
+    ["worktree", "remove", "--force", worktreePath],
+    { cwd: repositoryPath, windowsHide: true },
+  ).catch(() => undefined);
+}
+
 /** Creates a branch worktree without relying on a process-local ownership lock.
  * Reuses an existing story branch when a previous worktree was removed without
  * merging, so a re-dispatch never stalls on its own stale branch. */
@@ -72,6 +95,7 @@ export async function createWorktree(
 ): Promise<WorktreeLocation> {
   const location = locateWorktree(input.repositoryId, input.cardId, layout);
   if (await exists(location.worktreePath)) throw new Error(`worktree already exists: ${location.worktreePath}`);
+  await clearStaleRegistration(resolve(input.repositoryPath), location.worktreePath);
   await mkdir(resolve(location.worktreePath, ".."), { recursive: true });
   await mkdir(location.evidencePath, { recursive: true });
   const branchExists = await execFileAsync(
