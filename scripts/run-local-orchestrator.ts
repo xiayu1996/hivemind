@@ -970,8 +970,25 @@ async function main(): Promise<void> {
       }
     }
 
+    // A finished Epic's trees are spare. Its scenarios move to the main pool,
+    // which sweeps `regression-main` and needs no probe at all, and its
+    // integration tree has no Story left to take. Both are a full checkout
+    // with the repository's dependencies in them -- 336MB per Epic here -- and
+    // `createWorktree` puts either back from its branch if a delivered card is
+    // ever reopened.
+    const retireEpicTrees = async (epicId: string): Promise<void> => {
+      const slug = slugOfEpic(epicId);
+      const repository = checkoutOf(slug);
+      for (const name of [`epic-${epicId}`, `probe-${epicId}`]) {
+        const path = locateWorktree(repositoryIdFor(slug), name, layout).worktreePath;
+        if (await retireWorktree(repository, path)) console.log(`Retired the worktree ${name}`);
+      }
+    };
     for (const outcome of await new EpicCompletion(handle.client, await mergeRequests()).tick()) {
-      if (outcome.kind === "done") console.log(`Epic ${outcome.epicId} is done: its review request landed`);
+      if (outcome.kind === "done") {
+        console.log(`Epic ${outcome.epicId} is done: its review request landed`);
+        await retireEpicTrees(outcome.epicId);
+      }
       if (outcome.kind === "unreadable") console.warn(`Epic ${outcome.epicId} review state unreadable: ${outcome.reason}`);
     }
 
