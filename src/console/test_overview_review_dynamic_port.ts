@@ -149,4 +149,12 @@ describe("the overview started by a verification round with its dynamic port", (
       expect(todos).not.toContain("R-HANDLED");
     });
   });
+  it("@scenario S-R237511OV-01-active does not mix waiting, failed, or completed work into the running section", async () => {
+    await inspectOverview((html) => {
+      const active = section(html, 'id="active-title"', 'id="failures-title"');
+      expect(active).not.toContain("支付重试规则");
+      expect(active).not.toContain("账单导出");
+      expect(active).not.toContain("状态投影核对");
+    });
+  });
 });
