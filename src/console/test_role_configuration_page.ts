@@ -209,3 +209,15 @@ describe("role configuration empty state", () => {
     expect(state.status).toBe("empty");
   });
 });
+
+describe("role configuration loading state", () => {
+  it("@scenario S-R237511RC-01-loading 读取期间说明进度且不显示任何真实配置", () => {
+    const html = renderRoleConfigurationPage({ status: "loading", selectedRoleId: "prototype" });
+
+    expect(html).toContain("正在读取角色版本");
+    expect(html).toContain("正在加载当前版、上一版及 Prompt 差异，请稍候。");
+    expect(html).not.toContain("无法读取角色配置");
+    expect(html).not.toContain("当前版 v12");
+    expect(html).not.toContain("编辑当前配置");
+  });
+});
