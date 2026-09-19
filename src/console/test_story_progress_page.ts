@@ -223,6 +223,25 @@ describe("requirement detail page", () => {
     // covers an amount, a blocker or a round.
     expect(html).toContain("104px");
   });
+
+  it("@scenario S-R237511DT-01-mobile 底部当前入口把选中的历史轮次带回当前轮", () => {
+    const html = renderStoryProgressPage(storyProgressPageView(progress(threeRounds()), { round: "2" }));
+    const href = /<a class="mobile-link" href="([^"]*)"/.exec(html)?.[1];
+    expect(href).toBeDefined();
+    // The entry is a real target: following it lands on the round the card is
+    // actually in, whichever history round a person had opened first.
+    const query = Object.fromEntries(
+      new URL(href!, "http://localhost/stories/S-R237511DT-01/progress").searchParams.entries(),
+    );
+    const view = storyProgressPageView(progress(threeRounds()), query);
+    expect(view.selectedRoundId).toBe(view.snapshot?.currentRoundId);
+    expect(view.selectedRoundId).toBe(3);
+  });
+
+  it("@scenario S-R237511DT-01-mobile 停在当前轮时底部入口标出当前", () => {
+    const html = renderReady();
+    expect(html).toMatch(/<a class="mobile-link" href="\?round=3"[^>]*aria-current="page"[^>]*>当前<\/a>/);
+  });
 });
 
 describe("requirement detail page route", () => {
