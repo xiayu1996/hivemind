@@ -207,4 +207,34 @@ describe("console access boundary", () => {
     }
     expect(callsOf(source)).toEqual([]);
   });
+
+  it("@scenario S-R237511OV-02-unconfigured denies page and API access before reading content", async () => {
+    const source = dataSource();
+    const app = await server({ accessPolicy: deniedPolicy("allowed_networks_unconfigured"), source });
+
+    const page = await app.inject({ method: "GET", url: "/overview", remoteAddress: "127.0.0.1" });
+    const api = await app.inject({ method: "GET", url: "/api/tasks", remoteAddress: "10.0.0.8" });
+
+    expect(page.statusCode).toBe(403);
+    expect(page.body).toContain(ACCESS_VERIFICATION);
+    expect(page.body).not.toContain(SECRET_RUN);
+    expect(api.statusCode).toBe(403);
+    expect(api.json()).toEqual({
+      error: "console_access_denied",
+      reason: "allowed_networks_unconfigured",
+    });
+    expect(callsOf(source)).toEqual([]);
+  });
+
+  it("@scenario S-R237511OV-02-unconfigured does not implicitly trust loopback or private peers", async () => {
+    const accessPolicy = deniedPolicy("allowed_networks_unconfigured");
+    const app = await server({ accessPolicy });
+
+    for (const remoteAddress of ["127.0.0.1", "10.0.0.8", "192.168.1.8", "::1"]) {
+      const response = await app.inject({ method: "GET", url: "/health", remoteAddress });
+      expect(response.statusCode).toBe(403);
+      expect(response.json().reason).toBe("allowed_networks_unconfigured");
+    }
+    expect(accessPolicy.authorize).toHaveBeenCalledTimes(4);
+  });
 });

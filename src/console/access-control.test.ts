@@ -59,5 +59,44 @@ describe("console network policy", () => {
       reason: "source_outside_allowed_networks",
     });
   });
+
+  it("@scenario S-R237511OV-02-unconfigured denies every source when no ranges are configured", async () => {
+    const createPolicy = await policyContract();
+    const policy = createPolicy({ allowedNetworks: [] });
+
+    for (const remoteAddress of ["127.0.0.1", "10.1.2.3", "192.168.1.8", "2001:db8::8"]) {
+      expect(policy.authorize({ remoteAddress })).toEqual({
+        allowed: false,
+        reason: "allowed_networks_unconfigured",
+      });
+    }
+  });
+
+  it("@scenario S-R237511OV-02-unconfigured fails closed when the peer source is unavailable", async () => {
+    const createPolicy = await policyContract();
+    const policy = createPolicy({ allowedNetworks: ["192.168.50.0/24"] });
+
+    expect(policy.authorize({ remoteAddress: null })).toEqual({
+      allowed: false,
+      reason: "source_unavailable",
+    });
+    expect(policy.authorize({ remoteAddress: "not-an-address" })).toEqual({
+      allowed: false,
+      reason: "source_unavailable",
+    });
+  });
+
+  it("@scenario S-R237511OV-02-unconfigured registers a deny-all default and rejects malformed ranges", () => {
+    const definition = Reflect.get(CONFIG_KEYS, "console.allowedNetworks") as
+      | { default: unknown; scope: string; reload: string; schema: { safeParse(value: unknown): { success: boolean } } }
+      | undefined;
+
+    expect(definition).toBeDefined();
+    expect(definition?.default).toEqual([]);
+    expect(definition).toMatchObject({ scope: "global", reload: "drain-restart" });
+    expect(definition?.schema.safeParse(["192.168.50.0/24"]).success).toBe(true);
+    expect(definition?.schema.safeParse(["192.168.50.0/99"]).success).toBe(false);
+    expect(definition?.schema.safeParse(["anything"]).success).toBe(false);
+  });
 });
 
