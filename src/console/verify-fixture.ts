@@ -57,6 +57,7 @@ export function fixtureFor(scenarioId: string | null): VerifyFixture {
     case "answer":
       return "answer";
     case "open":
+      return "empty";
     case "approve":
       return "approve";
     case "choose":
