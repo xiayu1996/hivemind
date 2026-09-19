@@ -16,6 +16,15 @@ export type FreshnessResult =
 
 /** Refreshes clean Epic worktrees from main, including those awaiting review,
  * and leaves main untouched. */
+/**
+ * The failure a person reads, with the files it stopped on. Without them the
+ * reason is `Command failed: git merge --no-ff origin/main`, which says that
+ * something is wrong and nothing about what to open.
+ */
+function withConflictedFiles(reason: string, files: readonly string[]): string {
+  return files.length === 0 ? reason : `${reason}; conflicts in ${files.join(", ")}`;
+}
+
 export class EpicBranchFreshness {
   private readonly git: GitCommandPort;
   private readonly intervalMs: number;
@@ -71,7 +80,10 @@ export class EpicBranchFreshness {
       args: [epicId],
     })).rows[0];
     if (typeof lastSuccess?.ts === "number" && time - lastSuccess.ts < this.intervalMs) {
-      await this.record(epicId, "skipped", sourceRevision, time);
+      // Not recorded: nothing reads a skip. The interval query reads
+      // 'succeeded' and the progress probe reads 'succeeded' and 'failed', so
+      // a row per cycle per Epic only grows the table -- one Epic had 742 of
+      // them in a day, each saying that nothing happened.
       return { epicId, outcome: "skipped" };
     }
     await this.record(epicId, "attempted", sourceRevision, time);
@@ -90,7 +102,14 @@ export class EpicBranchFreshness {
     try {
       await this.git.run(cwd, ["merge", "--no-ff", source]);
     } catch (cause) {
-      const reason = cause instanceof Error ? cause.message : String(cause);
+      const reason = withConflictedFiles(
+        cause instanceof Error ? cause.message : String(cause),
+        // Read before the abort, which is what removes them. git writes the
+        // conflicted paths to stdout, and the port keeps only stderr, so the
+        // failure reaching the progress probe named no file at all: a person
+        // was told the Epic could not take main and not where to look.
+        await this.conflictedFiles(cwd),
+      );
       try {
         await this.git.run(cwd, ["merge", "--abort"]);
         const clean = await this.git.run(cwd, ["status", "--porcelain"]);
@@ -109,6 +128,18 @@ export class EpicBranchFreshness {
     }
     await this.record(epicId, "succeeded", sourceRevision, time);
     return { epicId, outcome: "succeeded" };
+  }
+
+  /** The paths git stopped on, or none when the failure was not a conflict. */
+  private async conflictedFiles(cwd: string): Promise<readonly string[]> {
+    try {
+      const unresolved = await this.git.run(cwd, ["diff", "--name-only", "--diff-filter=U"]);
+      return unresolved.split("\n").map((line) => line.trim()).filter((line) => line !== "").toSorted();
+    } catch {
+      // The worktree cannot be inspected either; the caller reports the merge
+      // failure on its own, which is still more than nothing.
+      return [];
+    }
   }
 
   private async record(epicId: string, outcome: "attempted" | "succeeded" | "skipped" | "failed", sourceRevision: string, time: number, reason?: string): Promise<void> {
