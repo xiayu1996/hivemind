@@ -1,7 +1,7 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import type { GuardPolicy } from "../guard/policy.js";
 import type { PiRunner, PromptImage, PromptResult, RpcEvent } from "../runner/types.js";
 import {
@@ -16,6 +16,8 @@ import {
 } from "./ui-review.js";
 
 const scratch = mkdtempSync(join(tmpdir(), "hivemind-ui-review-"));
+// Left behind, one per run, until they were counted in the thousands.
+afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 function png(name: string, bytes = 64): string {
   const path = join(scratch, name);

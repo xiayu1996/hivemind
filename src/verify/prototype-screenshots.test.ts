@@ -1,11 +1,18 @@
 import { mkdtemp, readdir } from "node:fs/promises";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { capturePrototypePages, pageSlug } from "./prototype-screenshots.js";
 
+// One root per file, removed when the file is done: these were left behind,
+// one directory per case, and thousands of them had collected in the host's
+// temp directory.
+const scratch = mkdtempSync(join(tmpdir(), "hivemind-shots-"));
+afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+
 async function outputDir(): Promise<string> {
-  return await mkdtemp(join(tmpdir(), "hivemind-shots-"));
+  return await mkdtemp(join(scratch, "case-"));
 }
 
 describe("capturePrototypePages", () => {

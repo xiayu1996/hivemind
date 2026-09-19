@@ -1,7 +1,8 @@
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   describePrototypePage,
   parseDesignTokens,
@@ -26,8 +27,14 @@ const DESIGN = "# 为什么长这样\n\n"
   + "值班的人在往返走动中看这块屏，所以底色用 `color.surface`，"
   + "行间距用 `space.gutter`。\n";
 
+// One root per file, removed when the file is done: these were left behind,
+// one directory per case, and thousands of them had collected in the host's
+// temp directory.
+const scratch = mkdtempSync(join(tmpdir(), "hivemind-prototype-"));
+afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+
 async function contractRoot(files: Record<string, string>): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "hivemind-prototype-"));
+  const root = await mkdtemp(join(scratch, "case-"));
   await mkdir(join(root, "pages"), { recursive: true });
   for (const [name, body] of Object.entries(files)) await writeFile(join(root, name), body);
   return root;
