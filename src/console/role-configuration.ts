@@ -413,6 +413,11 @@ function renderReady(state: Extract<RoleConfigurationViewState, { status: "ready
 function renderState(state: RoleConfigurationViewState): string {
   switch (state.status) {
     case "ready": return renderReady(state);
+    case "empty":
+      return `<section class="state-page"><div class="state-card">`
+        + `<h2>还没有角色配置</h2>`
+        + `<p>创建首个角色配置后，可以在这里查看 Prompt、供应商、模型和版本差异。</p>`
+        + `<button type="button">创建首个配置</button></div></section>`;
     default: return "";
   }
 }
