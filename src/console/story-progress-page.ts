@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import {
   STORY_PROGRESS_COPY,
+  currentRound,
   formatLimitLine,
   formatLimitStateLine,
   formatRoundBlockerLine,
@@ -216,9 +217,21 @@ function renderSidebar(): string {
 }
 
 /** The one fixed entry a narrow viewport shows: back to the current round. */
-function renderMobileNavigation(): string {
+function renderMobileNavigation(view: StoryProgressPageView): string {
+  const snapshot = view.snapshot;
+  const present = snapshot === null ? null : selectedRoundOf(snapshot, view.selectedRoundId);
+  const currentRoundId = snapshot === null ? null : currentRound(snapshot)?.round ?? null;
+  // A bare `#current` fragment left a person who had opened a history round on
+  // that history round: following a fragment moves nothing on a server-
+  // rendered page. The entry names the round the card is actually in, so
+  // choosing 第 2 轮 and tapping it lands back on the current one. With no
+  // snapshot there is no round to name and the entry re-reads this requirement.
+  const href = currentRoundId === null ? "" : `?round=${currentRoundId}`;
+  const current = present !== null && currentRoundId !== null && present.round === currentRoundId
+    ? ' aria-current="page"'
+    : "";
   return `<nav class="mobile-nav" aria-label="手机导航">`
-    + `<a class="mobile-link" href="#current" aria-current="page">${escapeHtml(STORY_PROGRESS_COPY.currentRunEntry)}</a>`
+    + `<a class="mobile-link" href="${escapeHtml(href)}"${current}>${escapeHtml(STORY_PROGRESS_COPY.currentRunEntry)}</a>`
     + `</nav>`;
 }
 
@@ -339,7 +352,7 @@ export function renderStoryProgressPage(view: StoryProgressPageView): string {
     + `<meta name="viewport" content="width=device-width,initial-scale=1">`
     + `<title>需求与任务详情｜Hivemind</title><style>${PAGE_STYLE}</style></head><body>`
     + `<div class="shell">${renderSidebar()}<main>${body}</main></div>`
-    + renderMobileNavigation()
+    + renderMobileNavigation(view)
     + `</body></html>`;
 }
 
