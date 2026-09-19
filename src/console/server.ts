@@ -2,8 +2,9 @@ import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import type { OverviewReadPort } from "./overview-contract.js";
 
-export interface ConsoleDataSource {
+export interface ConsoleDataSource extends OverviewReadPort {
   nodes(): Promise<unknown[]>;
   tasks(): Promise<unknown[]>;
   costs(): Promise<unknown[]>;

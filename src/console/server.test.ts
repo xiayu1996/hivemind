@@ -1,7 +1,25 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createConsoleServer, listenConsole, type ConsoleDataSource } from "./server.js";
 
 const data: ConsoleDataSource = {
+  readOverview: async (query) => ({
+    revision: "1",
+    generatedAtMs: query.nowMs,
+    contentState: { kind: "ready" },
+    sections: { todos: [], active: [], failures: [], completed: [] },
+    summary: {
+      range: {
+        startInclusiveMs: query.nowMs - 7 * 24 * 60 * 60 * 1000,
+        endInclusiveMs: query.nowMs,
+        timeZone: query.timeZone,
+      },
+      completedCount: 0,
+      runningCount: 0,
+      failureCount: 0,
+      costUsd: 0,
+      overruns: [],
+    },
+  }),
   nodes: async () => [{ hostId: "windows-1", status: "healthy" }],
   tasks: async () => [{ id: "story-1", events: [{ type: "turn_end" }], traceHtml: "<div>trace</div>" }],
   costs: async () => [{ runId: "run-1", costUsd: 0.1 }],
@@ -20,6 +38,40 @@ describe("read-only console", () => {
       expect(response.statusCode).toBe(200);
       expect(response.json()).toHaveLength(1);
     }
+    await app.close();
+  });
+
+  it("@scenario S-R237511OV-01-active serves one overview snapshot with a validated time zone and server time", async () => {
+    const readOverview = vi.fn(data.readOverview);
+    const app = await createConsoleServer({ ...data, readOverview }, { serveUi: false });
+    const before = Date.now();
+
+    const response = await app.inject({ method: "GET", url: "/api/overview?timeZone=Asia%2FShanghai" });
+
+    expect(response.statusCode).toBe(200);
+    expect(readOverview).toHaveBeenCalledOnce();
+    expect(readOverview).toHaveBeenCalledWith({
+      nowMs: expect.any(Number),
+      timeZone: "Asia/Shanghai",
+    });
+    const query = readOverview.mock.calls[0]?.[0];
+    expect(query?.nowMs).toBeGreaterThanOrEqual(before);
+    expect(query?.nowMs).toBeLessThanOrEqual(Date.now());
+    expect(response.json()).toMatchObject({
+      generatedAtMs: query?.nowMs,
+      summary: { range: { timeZone: "Asia/Shanghai" } },
+    });
+    await app.close();
+  });
+
+  it("@scenario S-R237511OV-01-active rejects an invalid time zone before reading overview data", async () => {
+    const readOverview = vi.fn(data.readOverview);
+    const app = await createConsoleServer({ ...data, readOverview }, { serveUi: false });
+
+    const response = await app.inject({ method: "GET", url: "/api/overview?timeZone=not-a-zone" });
+
+    expect(response.statusCode).toBe(400);
+    expect(readOverview).not.toHaveBeenCalled();
     await app.close();
   });
 

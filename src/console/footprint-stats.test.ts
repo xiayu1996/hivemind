@@ -29,6 +29,7 @@ describe("S-M2-07-stats footprint deviation on the statistics page", () => {
 
   it("serves the summary under the statistics API and route", async () => {
     const data: ConsoleDataSource = {
+      readOverview: async () => { throw new Error("overview is not used in statistics tests"); },
       nodes: async () => [],
       tasks: async () => [],
       costs: async () => [],

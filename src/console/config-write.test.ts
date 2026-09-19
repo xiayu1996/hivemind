@@ -6,6 +6,7 @@ import { ConsoleConfigWriter } from "./config-writer.js";
 import { createConsoleServer, type ConsoleDataSource } from "./server.js";
 
 const data: ConsoleDataSource = {
+  readOverview: async () => { throw new Error("overview is not used in configuration tests"); },
   nodes: async () => [],
   tasks: async () => [],
   costs: async () => [],

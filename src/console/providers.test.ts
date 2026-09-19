@@ -25,6 +25,7 @@ describe("M2-19 provider health on the console", () => {
 
   it("serves the provider view read-only", async () => {
     const data: ConsoleDataSource = {
+      readOverview: async () => { throw new Error("overview is not used in provider tests"); },
       nodes: async () => [],
       tasks: async () => [],
       costs: async () => [],
