@@ -10,7 +10,7 @@ import {
   type StoryStopReason,
   type TransitionActor,
 } from "./state-machine.js";
-import type { PhaseInput, PhaseRejection, ScenarioFailure } from "../pipeline/phase-input.js";
+import type { PhaseInput, PhaseRejection, RegressionCardRef, ScenarioFailure } from "../pipeline/phase-input.js";
 import { parseDoD, type DefinitionOfDone } from "../pipeline/dod.js";
 import { dodVersion, scenarioVersions } from "../pipeline/dod-version.js";
 import { isProviderFault } from "../pipeline/failure-classification.js";
@@ -1697,14 +1697,20 @@ export class StoryExecutionStore {
       || (phase === "SPECIFY" && story.phase === "REGRESSION_FIX");
     const regressions = readsRegressionCards
       ? (await this.client.execute({
-          sql: `SELECT scenario_id, failure_signature, attributed_story FROM regression_cards
+          sql: `SELECT scenario_id, failure_signature, failure_text, attributed_story FROM regression_cards
                  WHERE attributed_story = ? AND resolved_at IS NULL ORDER BY created_at, scenario_id`,
           args: [cardId],
-        })).rows.map((row) => ({
-          scenarioId: stringValue(row.scenario_id, "regression scenario"),
-          signature: stringValue(row.failure_signature, "regression signature"),
-          attributedStory: stringValue(row.attributed_story, "attributed story"),
-        }))
+        })).rows.map((row) => {
+          const card: RegressionCardRef = {
+            scenarioId: stringValue(row.scenario_id, "regression scenario"),
+            signature: stringValue(row.failure_signature, "regression signature"),
+            attributedStory: stringValue(row.attributed_story, "attributed story"),
+          };
+          if (row.failure_text !== null && row.failure_text !== undefined) {
+            card.failureText = String(row.failure_text);
+          }
+          return card;
+        })
       : null;
     const latestVerify = verifyResult.rows.at(-1);
     const failedScenarios = regressions

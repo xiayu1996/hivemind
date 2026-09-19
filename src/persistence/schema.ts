@@ -192,12 +192,14 @@ export const regressionRuns = sqliteTable("regression_runs", {
   revision: text("revision").notNull(),
   outcome: text("outcome").notNull(),
   failureSignature: text("failure_signature"),
+  failureText: text("failure_text"),
   ts: ms("ts").notNull(),
 }, (t) => [index("idx_regression_runs_scenario").on(t.scenarioId, t.ts)]);
 
 export const regressionCards = sqliteTable("regression_cards", {
   scenarioId: text("scenario_id").notNull(),
   failureSignature: text("failure_signature").notNull(),
+  failureText: text("failure_text"),
   attributedStory: text("attributed_story"),
   createdAt: ms("created_at").notNull(),
   resolvedAt: ms("resolved_at"),
