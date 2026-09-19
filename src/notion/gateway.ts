@@ -26,6 +26,8 @@ export interface NotionGatewayOptions {
   transport: NotionTransport;
   ratePerSecond?: number;
   mergeWindowMs?: number;
+  /** Pause before sending a read again after a transient fault. */
+  readRetryBackoffMs?: number;
 }
 
 export interface PagePropertyUpdate {
@@ -50,6 +52,43 @@ export class NotionGatewayError extends Error {
     super(message);
     this.name = "NotionGatewayError";
   }
+}
+
+/**
+ * How many times a read is sent before its fault is handed to the caller.
+ * Only reads: appending children is not idempotent, so a write that timed out
+ * may already have landed and sending it again would duplicate a block.
+ */
+const READ_ATTEMPTS = 3;
+
+/** Faults that say nothing about the payload: the request never got an answer,
+ * or got one Notion itself calls temporary. Anything else -- a 400 the API will
+ * refuse forever, a parse error, a bug -- is not transient, so an error nobody
+ * recognises is reported rather than retried until a budget runs out. */
+/**
+ * Says which request failed when the transport throws rather than answers.
+ *
+ * A refusal already carries its method and path; a timeout carried nothing but
+ * "The operation was aborted due to timeout", and a page projection is dozens
+ * of requests, so the line in the outbox named an operation and a card and left
+ * the actual call to guesswork. The original message is kept inside the new one
+ * because transience is decided by reading it.
+ */
+function nameTheRequest(cause: unknown, request: NotionRequest): unknown {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  if (message.startsWith(`${request.method} ${request.path} `)) return cause;
+  return new Error(`${request.method} ${request.path} failed: ${message}`, { cause });
+}
+
+export function isTransientNotionFailure(error: unknown): boolean {
+  if (error instanceof NotionGatewayError && error.status !== undefined) {
+    return error.status >= 500 || error.status === 429;
+  }
+  const name = (error as { name?: string } | null)?.name ?? "";
+  if (name === "TimeoutError" || name === "AbortError") return true;
+  const message = String((error as Error | null)?.message ?? "");
+  return /aborted due to timeout|fetch failed|socket hang up|network|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|EPIPE/i
+    .test(message);
 }
 
 /**
@@ -103,6 +142,7 @@ export class NotionGateway {
   readonly #transport: NotionTransport;
   readonly #ratePerSecond: number;
   readonly #mergeWindowMs: number;
+  readonly #readRetryBackoffMs: number;
   readonly #queue: PendingRequest[] = [];
   readonly #propertyBatches = new Map<string, PropertyBatch>();
   readonly #successfulFingerprints = new Map<string, string>();
@@ -115,6 +155,7 @@ export class NotionGateway {
     this.#transport = options.transport;
     this.#ratePerSecond = options.ratePerSecond ?? 2.5;
     this.#mergeWindowMs = options.mergeWindowMs ?? 5_000;
+    this.#readRetryBackoffMs = options.readRetryBackoffMs ?? 1_000;
     if (!Number.isFinite(this.#ratePerSecond) || this.#ratePerSecond <= 0) {
       throw new NotionGatewayError("ratePerSecond must be a positive finite number");
     }
@@ -207,13 +248,30 @@ export class NotionGateway {
     }
   }
 
+  /** One send, with a read given another go at a fault that says nothing about
+   * what was asked. A page projection is dozens of reads around a few writes,
+   * and without this a single timed-out read throws away the whole pass. */
+  async #send(request: NotionRequest): Promise<NotionTransportResponse> {
+    const attempts = request.method === "GET" ? READ_ATTEMPTS : 1;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const response = await this.#transport(request);
+        if (response.status < 500 || attempt >= attempts) return response;
+      } catch (cause) {
+        if (attempt >= attempts || !isTransientNotionFailure(cause)) throw nameTheRequest(cause, request);
+      }
+      await sleep(this.#readRetryBackoffMs * attempt);
+      while (!this.#tryTakeToken()) await sleep(this.#millisecondsUntilToken());
+    }
+  }
+
   async #sendWithRetry(request: NotionRequest): Promise<NotionTransportResponse> {
-    let response = await this.#transport(request);
+    let response = await this.#send(request);
     while (response.status === 429) {
       const retryAfterSeconds = response.retryAfterSeconds ?? 1;
       await sleep(Math.max(0, retryAfterSeconds) * 1_000);
       while (!this.#tryTakeToken()) await sleep(this.#millisecondsUntilToken());
-      response = await this.#transport(request);
+      response = await this.#send(request);
     }
     if (response.status < 200 || response.status >= 300) {
       // Notion says why in the body; without it a 400 in the outbox is a

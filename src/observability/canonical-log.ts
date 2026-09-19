@@ -1,5 +1,6 @@
-import { appendFile, readFile } from "node:fs/promises";
+import { appendFile } from "node:fs/promises";
 import { z } from "zod";
+import { readPackedText } from "./packed-file.js";
 
 export interface CanonicalEvent<T = unknown> {
   type: string;
@@ -87,8 +88,10 @@ export function parseCanonicalLog(raw: string): CanonicalEvent[] {
   return events;
 }
 
+/** Reads a log whether or not it has been packed; the caller names the plain
+ * path either way. */
 export async function readCanonicalLog(path: string): Promise<CanonicalEvent[]> {
-  return parseCanonicalLog(await readFile(path, "utf8"));
+  return parseCanonicalLog(await readPackedText(path));
 }
 
 /** Serialises appends so each JSON envelope occupies one complete line. */

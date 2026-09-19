@@ -6,6 +6,7 @@ import {
 } from "../judge/environment-reasons.js";
 import { splitScenarioFailures } from "../pipeline/failure-classification.js";
 import { AppUnderReview } from "../verify/app-under-review.js";
+import { reserveAppPort } from "../verify/app-lane.js";
 import type { DesignToken } from "../pipeline/interface-contract.js";
 import {
   allowedValues,
@@ -126,6 +127,31 @@ export function onAppOrigin(url: string, appUrl: string | undefined): string {
   }
 }
 
+/**
+ * Why the contract layer read nothing, when the reason is that this lane has no
+ * application of its own to read. It names the setting rather than the symptom:
+ * `verify.appStartCommand` empty is the whole of it, and until it is filled in
+ * the token-table layer measures no repository at all.
+ */
+const NO_APPLICATION = "the contract layer had no application to open";
+
+/**
+ * Why this round has no application, in the layer's own words.
+ *
+ * There are two reasons and they ask for different things: a repository that
+ * declares no way to start has nothing to fix, while one whose application
+ * refused to come up has a box to repair. One sentence for both said
+ * `verify.appStartCommand is empty for this repository` beside a friction
+ * record holding that very command, which is how the round that launched the
+ * console with a literal `{port}` read as a repository that starts nothing.
+ */
+function noApplicationReason(startFailure: string | null): string {
+  return startFailure === null
+    ? `${NO_APPLICATION}: verify.appStartCommand is empty for this repository, `
+      + "so this lane starts nothing and the blind lane's instance has already stopped"
+    : `${NO_APPLICATION}: it was started for this round and did not come up -- ${startFailure}`;
+}
+
 function inconclusiveOf(result: UiReviewResult, fallback: readonly string[], reason: string | null): Array<{ id: string; reason: string }> {
   const listed = result.acceptance
     .filter((entry) => entry.status === "inconclusive")
@@ -185,6 +211,8 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
   private async checkContract(
     pages: ReadonlyArray<{ scenarioId: string; url: string }>,
     reviewable: ReadonlySet<string>,
+    appUrl: string | undefined,
+    startFailure: string | null,
   ): Promise<ContractCheck> {
     const options = this.options.uiContract;
     if (!options || options.enforce === "off") return { violations: [], inaccessible: [], failures: [] };
@@ -194,6 +222,15 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
     if (!tokens || tokens.length === 0) return { violations: [], inaccessible: [], failures: [] };
     const wanted = pages.filter((page) => reviewable.has(page.scenarioId));
     if (wanted.length === 0) return { violations: [], inaccessible: [], failures: [] };
+    // Every URL here belongs to the blind lane's application, which stopped
+    // when that lane finished. Without an instance of our own there is nowhere
+    // to move them to, so the layer cannot read a single page. Said once, in
+    // those words: opening them anyway reported one refused connection per
+    // scenario, which reads like a few flaky pages rather than a layer that
+    // has never run on this repository.
+    if (appUrl === undefined) {
+      return { violations: [], inaccessible: [], failures: [noApplicationReason(startFailure)] };
+    }
 
     const collector = await options.collector();
     const violations: ContractViolation[] = [];
@@ -252,29 +289,42 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
     try {
       let appUrl: string | undefined;
       if (handle && app) {
-        const started = await handle.start({
-          cwd: this.options.worktreePath,
-          command: app.startCommand,
-          readyUrl: app.readyUrl,
-          timeoutMs: app.readyTimeoutMs,
-        });
-        if (started.started) {
-          appUrl = started.url || undefined;
-          if (app.seedCommand.length > 0) {
-            for (const scenario of scenarios) {
-              const seed = seedOf(scenario);
-              if (!seed) continue;
-              const seeded = await handle.seed({
-                cwd: this.options.worktreePath,
-                command: app.seedCommand,
-                scenarioId: scenario.id,
-                seed,
-              });
-              if (!seeded.ok) seedFailures.push(`${scenario.id}: ${seeded.output}`);
+        // The same port reservation the blind lane makes. Without it this lane
+        // starts the application with the literal `{port}` and judges a round
+        // of screens nothing was ever serving.
+        let substitute: ((text: string) => string) | null = null;
+        try {
+          substitute = await reserveAppPort([...app.startCommand, app.readyUrl, ...app.seedCommand]);
+        } catch (cause) {
+          const reason = cause instanceof Error ? cause.message : String(cause);
+          appFailure = `No port could be reserved for the application this round: ${reason}`;
+        }
+        const replace = substitute ?? ((text: string): string => text);
+        if (appFailure === null) {
+          const started = await handle.start({
+            cwd: this.options.worktreePath,
+            command: app.startCommand.map(replace),
+            readyUrl: replace(app.readyUrl),
+            timeoutMs: app.readyTimeoutMs,
+          });
+          if (started.started) {
+            appUrl = started.url || undefined;
+            if (app.seedCommand.length > 0) {
+              for (const scenario of scenarios) {
+                const seed = seedOf(scenario);
+                if (!seed) continue;
+                const seeded = await handle.seed({
+                  cwd: this.options.worktreePath,
+                  command: app.seedCommand.map(replace),
+                  scenarioId: scenario.id,
+                  seed,
+                });
+                if (!seeded.ok) seedFailures.push(`${scenario.id}: ${seeded.output}`);
+              }
             }
+          } else {
+            appFailure = started.reason;
           }
-        } else {
-          appFailure = started.reason;
         }
       }
 
@@ -323,6 +373,8 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
           url: onAppOrigin(page.url, appUrl),
         })),
         reviewable,
+        appUrl,
+        appFailure,
       );
     } finally {
       if (handle) await handle.stop().catch(() => undefined);
@@ -430,6 +482,19 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
         ...contract.inaccessible.map((entry) => entry.page),
       ])].toSorted()
       : [];
+    const missingApplication = contract.failures.find((failure) => failure.startsWith(NO_APPLICATION));
+    if (missingApplication !== undefined && this.options.recordFriction) {
+      // Counted like every other gap this file records: 08 section 6 gives the
+      // contract layer a veto once it has earned one, and a layer that has
+      // never opened a page cannot have earned anything. This is the number
+      // that says so.
+      await this.options.recordFriction({
+        cardId: input.context.cardId,
+        runId: input.runId,
+        kind: "ui_contract_no_app",
+        detail: missingApplication,
+      });
+    }
     if ((contract.violations.length > 0 || contract.inaccessible.length > 0) && this.options.recordFriction) {
       // Recorded whether or not it refused: the count is what decides whether
       // this layer is ready to be given a veto (08 section 6).

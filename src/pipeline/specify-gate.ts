@@ -98,7 +98,14 @@ export function specifyGatePorts(input: SpecifyGatePortsInput): SpecExitPorts {
 
     async commit(message: string): Promise<{ commit: string; treeSha: string }> {
       await git(["add", "--all"]);
-      await git(["commit", "-m", message]);
+      // A phase that committed its own red leaves nothing here to freeze. The
+      // freeze is about the tree being pinned, not about who pinned it, so
+      // HEAD is answered rather than an empty commit attempted: `git commit`
+      // calls that an error and says why on stdout, so it reaches the caller
+      // as a failure carrying no reason at all -- which is how a SPECIFY that
+      // had done everything right came back as an unclassifiable crash.
+      const staged = lines(await git(["diff", "--cached", "--name-only"]));
+      if (staged.length > 0) await git(["commit", "-m", message]);
       return {
         commit: (await git(["rev-parse", "HEAD"])).trim(),
         treeSha: (await git(["rev-parse", "HEAD^{tree}"])).trim(),

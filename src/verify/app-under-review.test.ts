@@ -103,6 +103,38 @@ describe("AppUnderReview", () => {
     expect(result).toEqual({ ok: true, output: "S-EPIC-01-a|one repository with 3 stories" });
   });
 
+  it("hands the application a shell and the address of its data, and nothing else it was started with", async () => {
+    // The daemon that starts it loads `secrets.env` into its own environment
+    // on a deployed host, and the application is code this round wrote and
+    // this round judges, with nobody in between.
+    process.env.NOTION_TOKEN = "must-not-travel";
+    process.env.HIVEMIND_DB_URL = "file:/central.db";
+    try {
+      const result = await new AppUnderReview().seed({
+        cwd: process.cwd(),
+        command: [process.execPath, "-e",
+          "console.log([process.env.NOTION_TOKEN ?? 'absent', process.env.HIVEMIND_DB_URL, process.env.PATH ? 'path' : 'no path'].join('|'))"],
+        scenarioId: "S-EPIC-01-a",
+        seed: "anything",
+      });
+      expect(result).toEqual({ ok: true, output: "absent|file:/central.db|path" });
+    } finally {
+      delete process.env.NOTION_TOKEN;
+      delete process.env.HIVEMIND_DB_URL;
+    }
+  });
+
+  it("lets a repository declare what else its application needs", async () => {
+    const result = await new AppUnderReview().seed({
+      cwd: process.cwd(),
+      command: [process.execPath, "-e", "console.log(process.env.APP_FLAVOUR)"],
+      scenarioId: "S-EPIC-01-a",
+      seed: "anything",
+      env: { APP_FLAVOUR: "review" },
+    });
+    expect(result).toEqual({ ok: true, output: "review" });
+  });
+
   it("reports a failed seed with its output rather than throwing", async () => {
     const result = await new AppUnderReview().seed({
       cwd: process.cwd(),

@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   archiveBlock,
+  isTransientNotionFailure,
   NotionGateway,
+  NotionGatewayError,
   type NotionRequest,
   type NotionTransport,
   type NotionTransportResponse,
@@ -98,6 +100,102 @@ describe("rate and retry", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     await request;
     expect(times).toEqual([0, 2_000]);
+  });
+});
+
+describe("a fault that says nothing about the payload", () => {
+  it("names a timeout, a 5xx and a rate limit, and nothing else", () => {
+    expect(isTransientNotionFailure(new Error("The operation was aborted due to timeout"))).toBe(true);
+    expect(isTransientNotionFailure(new Error("fetch failed"))).toBe(true);
+    expect(isTransientNotionFailure(new NotionGatewayError("boom", 502))).toBe(true);
+    expect(isTransientNotionFailure(new NotionGatewayError("slow down", 429))).toBe(true);
+    expect(isTransientNotionFailure(new NotionGatewayError("body.rich_text is too long", 400))).toBe(false);
+    expect(isTransientNotionFailure(new Error("Notion Story page did not converge"))).toBe(false);
+  });
+
+  it("sends a read again rather than losing the pass it belongs to", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let calls = 0;
+    const gateway = new NotionGateway({
+      transport: async () => {
+        calls++;
+        if (calls === 1) throw new Error("The operation was aborted due to timeout");
+        return ok({ read: calls });
+      },
+      ratePerSecond: 1_000_000,
+      mergeWindowMs: 10,
+      readRetryBackoffMs: 1_000,
+    });
+    const request = gateway.request({ method: "GET", path: "/blocks/x/children", priority: "projection" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(request).resolves.toMatchObject({ data: { read: 2 } });
+    expect(calls).toBe(2);
+  });
+
+  // An append is not idempotent: the one that timed out may already have
+  // landed, so sending it again is how a page grows a duplicate block.
+  it("hands a timed-out append back instead of sending it again", async () => {
+    let calls = 0;
+    const gateway = new NotionGateway({
+      transport: async () => {
+        calls++;
+        throw new Error("The operation was aborted due to timeout");
+      },
+      ratePerSecond: 1_000_000,
+      mergeWindowMs: 10,
+      readRetryBackoffMs: 0,
+    });
+    await expect(gateway.request({
+      method: "PATCH",
+      path: "/blocks/x/children",
+      priority: "projection",
+      body: { children: [] },
+    })).rejects.toThrow(/aborted due to timeout/);
+    expect(calls).toBe(1);
+  });
+
+  // A page projection is dozens of requests, so "The operation was aborted due
+  // to timeout" on its own named an operation and a card and left the call
+  // itself to guesswork -- one Story's page failed that way five times running.
+  it("says which request timed out", async () => {
+    const gateway = new NotionGateway({
+      transport: async () => { throw new Error("The operation was aborted due to timeout"); },
+      ratePerSecond: 1_000_000,
+      mergeWindowMs: 10,
+      readRetryBackoffMs: 0,
+    });
+
+    await expect(gateway.request({
+      method: "PATCH",
+      path: "/v1/blocks/page-1/children",
+      priority: "projection",
+      body: { children: [] },
+    })).rejects.toThrow("PATCH /v1/blocks/page-1/children failed: The operation was aborted due to timeout");
+  });
+
+  // Transience is decided by reading the message, so the wrapper has to keep
+  // the original inside it or a timeout stops being retryable.
+  it("keeps a named timeout retryable", () => {
+    expect(isTransientNotionFailure(
+      new Error("PATCH /v1/blocks/page-1/children failed: The operation was aborted due to timeout"),
+    )).toBe(true);
+  });
+
+  it("gives up on a read that keeps faulting", async () => {
+    let calls = 0;
+    const gateway = new NotionGateway({
+      transport: async () => {
+        calls++;
+        throw new Error("fetch failed");
+      },
+      ratePerSecond: 1_000_000,
+      mergeWindowMs: 10,
+      readRetryBackoffMs: 0,
+    });
+    await expect(gateway.request({ method: "GET", path: "/x", priority: "projection" }))
+      .rejects.toThrow(/fetch failed/);
+    expect(calls).toBe(3);
   });
 });
 

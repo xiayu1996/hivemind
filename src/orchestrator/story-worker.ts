@@ -8,7 +8,7 @@ import {
 } from "../pipeline/convergence.js";
 import type { MergeFailureAttribution } from "../vcs/merge-flow.js";
 import { evaluateSpecExit, applyDowngrades, renderSpecExitFindings, type SpecExitPorts } from "../pipeline/spec-exit-gate.js";
-import { parseTestContract, type TestContract } from "../pipeline/test-contract.js";
+import { parseTestContract, TestContractValidationError, type TestContract } from "../pipeline/test-contract.js";
 import { costCeilingVerdict, renderCostCeilingReport, type CardSpend } from "../pipeline/cost-ceiling.js";
 import {
   DoDValidationError,
@@ -161,6 +161,10 @@ export interface StoryIntegrationPort {
     /** Why the re-verification refused it, which decides what it costs. */
     attribution?: MergeFailureAttribution | undefined;
     failures?: readonly string[] | undefined;
+    /** On a conflict: the branch it was landing on and the paths the rebase
+     * could not reconcile. */
+    integrationBranch?: string | undefined;
+    files?: readonly string[] | undefined;
   }>;
 }
 
@@ -461,7 +465,14 @@ export class SingleStoryWorker {
               kind: "verification_inconclusive",
               detail: `${inconclusiveStreak} consecutive attempts failed for environmental reasons: ${verification.failedScenarios.join(", ")}`,
             });
-            await this.store.stopForInput(cardId, "VERIFY", "retry_limit_exceeded", verifyRunId);
+            // Named, because this stop is not about the work: nothing was
+            // judged at all. Without the detail the card offered a person the
+            // words "retry limit exceeded" over an environment that never came
+            // up, and a fabricated budget of zero underneath them.
+            await this.store.stopForInput(cardId, "VERIFY", "retry_limit_exceeded", verifyRunId, {
+              inconclusive: inconclusiveStreak,
+              inconclusiveScenarios: verification.failedScenarios,
+            });
             await this.projection.enqueue(cardId);
             return { state: "NEEDS_INPUT", rounds: round, mrUrl: null, stopReason: "retry_limit_exceeded" };
           }
@@ -562,6 +573,19 @@ export class SingleStoryWorker {
         // fix a missing binary.
         const attribution: MergeFailureAttribution | undefined =
           integrated.kind === "conflict" ? "story_regression" : integrated.attribution;
+        // Counted, not just recorded against the card. A rebase conflict is
+        // not a defect in the Story and not a judgement on it -- it says two
+        // Stories wanted the same ground -- so how often it happens is the
+        // number that decides whether the split, the schedule or the branch
+        // discipline needs changing.
+        if (integrated.kind === "conflict") {
+          await this.friction?.record({
+            cardId,
+            runId: mergeRunId,
+            kind: "merge_conflict",
+            detail: JSON.stringify({ branch: integrated.integrationBranch, files: integrated.files }),
+          });
+        }
         if (attribution === "environment") {
           throw new Error(`Story ${cardId} could not be re-verified at merge: ${integrated.reason ?? "the check did not run"}`);
         }
@@ -624,7 +648,13 @@ export class SingleStoryWorker {
     }
     if (story.regressionReopens >= this.maxRegressionReopens) {
       const runId = this.createRunId(cardId, "REGRESSION_FIX", story.innerLoopRounds);
-      await this.store.stopForInput(cardId, "REGRESSION_FIX", "retry_limit_exceeded", runId);
+      // Carries its own numbers: the page showed "重试次数用尽" over a budget
+      // that belongs to the inner loop, which this stop is not about.
+      await this.store.stopForInput(cardId, "REGRESSION_FIX", "retry_limit_exceeded", runId, {
+        spent: story.regressionReopens,
+        budget: this.maxRegressionReopens,
+        reopened: cards.map((card) => card.scenarioId),
+      });
       await this.projection.enqueue(cardId);
       return {
         state: "NEEDS_INPUT",
@@ -950,8 +980,32 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
       exhausted: "fail",
       maxRounds: this.specifyExitRounds,
       evaluate: async (artifacts) => {
-        const contractYaml = artifactOf(artifacts, "test-contract");
-        const contract = parseTestContract(contractYaml);
+        const contractYaml = artifacts.find((item) => item.kind === "test-contract")?.body;
+        if (contractYaml === undefined) {
+          return { passed: false, findings: "This phase produced no test contract. Write one." };
+        }
+        let contract: TestContract;
+        try {
+          contract = parseTestContract(contractYaml);
+        } catch (cause) {
+          // A contract that does not parse is a work item, not a verdict on
+          // the Story. Thrown, it escaped the gate entirely: out of the phase,
+          // out of the process, and back to the coordinator as an unknown
+          // crash that also spent a phase re-entry -- for a model that wrote
+          // one key the schema does not have and could have dropped it in one
+          // turn. S-R237511DT-03 and -04 each lost a run that way.
+          if (!(cause instanceof TestContractValidationError)) throw cause;
+          // Counted so the next reading of this rule has numbers: a contract
+          // the schema keeps refusing is either a prompt that does not say
+          // what the shape is or a schema that is stricter than it needs.
+          await this.friction?.record({
+            cardId, runId, kind: "specify_contract_unparsable", detail: cause.message,
+          });
+          return {
+            passed: false,
+            findings: `${cause.message}\nRewrite the contract with only the keys the schema defines.`,
+          };
+        }
         if (contract.mode !== expectedMode) {
           // A narrow rerun that writes a full contract would put every
           // scenario of a delivered card back under proof, and a full one
@@ -1090,25 +1144,30 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
         codeSessionId,
         definitionOfDone,
       });
-      await this.store.completePhase({
+      // Read before anything is committed: this reaches into the worktree, and
+      // a worktree that is gone answers with a failure. Completing the run
+      // first would have made that failure permanent, because a completed run
+      // is reused rather than started again and this round's slot would hold
+      // one that never reached a verdict.
+      const treeSha = this.treeSha ? await this.treeSha() : "";
+      await this.store.completeVerification({
         runId,
         sessionId: result.sessionId,
         artifacts: [{ kind: "verification", body: result.artifact }],
-      });
-      const treeSha = this.treeSha ? await this.treeSha() : "";
-      await this.store.recordVerification(runId, {
-        cardId,
-        round,
-        codeSessionId,
-        verifySessionId: result.sessionId,
-        verdict: result.verdict,
-        failedScenarios: result.failedScenarios,
-        // Only what this round actually looked at. A narrow round that judged
-        // one scenario must not mark the rest of the card passed by default.
-        verifiedScenarios: definitionOfDone.scenarios.map((scenario) => scenario.id),
-        ...(treeSha === "" ? {} : { verifiedTreeSha: treeSha }),
-        ...(result.evidenceDir ? { evidenceDir: result.evidenceDir } : {}),
-        ...(result.screenshots ? { screenshots: result.screenshots } : {}),
+        record: {
+          cardId,
+          round,
+          codeSessionId,
+          verifySessionId: result.sessionId,
+          verdict: result.verdict,
+          failedScenarios: result.failedScenarios,
+          // Only what this round actually looked at. A narrow round that judged
+          // one scenario must not mark the rest of the card passed by default.
+          verifiedScenarios: definitionOfDone.scenarios.map((scenario) => scenario.id),
+          ...(treeSha === "" ? {} : { verifiedTreeSha: treeSha }),
+          ...(result.evidenceDir ? { evidenceDir: result.evidenceDir } : {}),
+          ...(result.screenshots ? { screenshots: result.screenshots } : {}),
+        },
       });
       return result;
     } catch (cause) {
