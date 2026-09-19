@@ -52,6 +52,12 @@ export interface BlindVerifyInput {
    */
   visibleRequirements?: ReadonlyMap<string, readonly VisibleRequirement[]>;
   allowedHosts: string[];
+  /**
+   * Where the repository's application runs this round, or why it has none.
+   * Undefined leaves the verifier to start whatever a page needs itself, which
+   * is only right for a repository that has no application to start.
+   */
+  app?: AppAddress;
   /** From verify.chromiumSandbox; undefined keeps the sandbox. */
   chromiumSandbox?: boolean;
   commitMessages: string[];
@@ -311,12 +317,16 @@ function toVerdictDocument(value: z.infer<typeof verifierReplySchema>): VerdictD
 }
 
 /**
- * What the verifier is told about the browser it may drive. Only the host list
- * and the card id enter the text, so the same round produces the same prompt
- * on any machine; the paths the browser writes to are already fixed in the
- * worktree's Playwright configuration.
+ * What the verifier is told about the browser it may drive. Only the host list,
+ * the card id and the application's configured address enter the text, so the
+ * same round produces the same prompt on any machine; the paths the browser
+ * writes to are already fixed in the worktree's Playwright configuration.
  */
-export function browserLaneInstructions(session: string, allowedHosts: readonly string[]): string {
+export function browserLaneInstructions(
+  session: string,
+  allowedHosts: readonly string[],
+  app?: AppAddress,
+): string {
   const hosts = [...allowedHosts].toSorted().join(", ");
   return [
     "Browser lane: a headless Chromium is available through the `playwright-cli` command; always pass the session flag",
@@ -331,12 +341,46 @@ export function browserLaneInstructions(session: string, allowedHosts: readonly 
     `Typical use: \`playwright-cli -s=${session} open <url>\`, then \`snapshot\`, \`click <ref>\`, \`fill <ref> <text>\`, \`screenshot\`, and \`close\`.`,
     "A scenario whose layer is ui or e2e must be exercised in the browser: report the page you judged in `url` and the",
     "screenshot file names in `screenshots`. Close the browser before returning the verdict.",
-    "Other verifiers may be running on this machine: pick a port nobody is listening on (check with `lsof -i :<port>`),",
-    "never assume a page on a well-known port is yours, and stop every process you started before returning the verdict.",
-    "If a page needs a running service, start it yourself in the background and confirm it answers before opening pages:",
-    `\`nohup <command> > "$${EVIDENCE_DIR_ENV}/service.log" 2>&1 &\` — that directory is the only place you may write,`,
-    "and a process that is not detached does not outlive the command that started it.",
+    ...applicationInstructions(app),
   ].join(" ");
+}
+
+/** Where this round's application is, or why it has none. */
+export type AppAddress = { url: string } | { unavailable: string };
+
+/**
+ * How the lane reaches the application under verification.
+ *
+ * Without an address the verifier is told to stand one up itself, which is how
+ * the same scenario on the same tree came back passed from one session and
+ * inconclusive from the next: each invented its own service and judged what it
+ * had invented. When the box knows the address it says so and forbids the
+ * substitute; when the box has none it says that instead, and the scenarios
+ * that need a screen are inconclusive for a reason that does not change
+ * between rounds.
+ */
+function applicationInstructions(app: AppAddress | undefined): string[] {
+  if (app === undefined) {
+    return [
+      "Other verifiers may be running on this machine: pick a port nobody is listening on (check with `lsof -i :<port>`),",
+      "never assume a page on a well-known port is yours, and stop every process you started before returning the verdict.",
+      "If a page needs a running service, start it yourself in the background and confirm it answers before opening pages:",
+      `\`nohup <command> > "$${EVIDENCE_DIR_ENV}/service.log" 2>&1 &\` — that directory is the only place you may write,`,
+      "and a process that is not detached does not outlive the command that started it.",
+    ];
+  }
+  if ("url" in app) {
+    return [
+      `The application under verification is already running at ${app.url}: open its pages there.`,
+      "Do not start a service of your own and do not look for the application on another port -- a page you served",
+      "yourself is not the one under verification, and a verdict read off it is refused.",
+    ];
+  }
+  return [
+    `${app.unavailable}.`,
+    "Do not stand up a substitute and judge that: a scenario that has to be read off a screen is inconclusive this round,",
+    "and its reason says the application could not be opened. Scenarios you can settle without a page are judged as usual.",
+  ];
 }
 
 function promptFor(input: BlindVerifyInput): string {
@@ -346,7 +390,9 @@ function promptFor(input: BlindVerifyInput): string {
     "Choose and run the relevant tests from the repository and the specification.",
     "Run tests in a mode that reports each individual test name, so every scenario's outcome is observable in the transcript.",
     "Evidence protocol (mandatory): after observing the outcome of each scenario, print a line exactly of the form HIVEMIND_TEST_RESULT <scenario_id> <passed|failed|inconclusive>, once per declared scenario id. A verdict whose scenarios have no observable evidence in this session is rejected.",
-    ...(input.allowedHosts.length > 0 ? [browserLaneInstructions(browserSessionFor(input), input.allowedHosts)] : []),
+    ...(input.allowedHosts.length > 0
+      ? [browserLaneInstructions(browserSessionFor(input), input.allowedHosts, input.app)]
+      : []),
     "Return only JSON: {\"scenarios\":[{\"id\":string,\"status\":\"passed\"|\"failed\"|\"inconclusive\",\"reason\"?:string,\"detail\"?:string,\"url\"?:string,\"screenshots\"?:string[]}]}",
     "For every scenario that is not passed, `reason` is mandatory and is written in Chinese, in the words of the person who ordered the card: one sentence saying what does not work from their side. They decide what to do next from that sentence alone, so it carries no test name, no file path and no stack frame; all of that goes in `detail`, which is written for whoever debugs it.",
     "Specification:",

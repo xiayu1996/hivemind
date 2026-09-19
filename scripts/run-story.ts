@@ -67,6 +67,7 @@ import { BlindVerifyExecutor, EVIDENCE_DIR_ENV } from "../src/verify/executor.js
 import { loadPromptLayers } from "../src/pipeline/prompt-loader.js";
 import { discoverMRPort } from "../src/vcs/mr/adapters.js";
 import { GitMrStoryDelivery, processGitCommand } from "../src/vcs/story-delivery.js";
+import { appLaneConfig } from "../src/verify/app-lane.js";
 
 const execFileAsync = promisify(execFile);
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -444,6 +445,10 @@ async function main(): Promise<void> {
       evidenceRoot,
       auditPath,
       allowedHosts,
+      // The same application the UI review opens, started for the functional
+      // lane too: telling the verifier to stand one up itself made the answer
+      // depend on what it stood up.
+      app: appLaneConfig(config),
       chromiumSandbox: config.get("verify.chromiumSandbox"),
       resolveSpec: () => grant("verify"),
       commitMessages: () => gitMessages(worktreePath, targetBranch),

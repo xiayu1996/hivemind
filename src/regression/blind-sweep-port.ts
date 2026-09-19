@@ -3,6 +3,7 @@ import type { GitCommandPort } from "../vcs/story-delivery.js";
 import type { ScenarioPool } from "./scenario-registry.js";
 import type { SweepOutcome, SweepPort } from "./sweeper.js";
 import type { AgentSpawnGrant } from "../runner/spawn-broker.js";
+import { startAppLane, type AppLaneConfig } from "../verify/app-lane.js";
 
 export interface BlindSweepPortOptions {
   /** A worktree per pool: the Epic pool sweeps the Epic head, the main pool main. */
@@ -18,6 +19,13 @@ export interface BlindSweepPortOptions {
   evidenceRoot: string;
   auditPath: string;
   allowedHosts: readonly string[];
+  /**
+   * How the swept repository starts its application. The sweep judges scenarios
+   * a Story was accepted against, several of which are read off a screen; with
+   * no address it invented its own service and reached a different answer from
+   * the round that accepted them.
+   */
+  app?: Omit<AppLaneConfig, "cwd">;
   chromiumSandbox?: boolean;
 }
 
@@ -47,9 +55,16 @@ export class BlindSweepPort implements SweepPort {
       ...declaredScenarioIds.map((scenarioId) => `${scenarioId}: ${specifications.get(scenarioId)!}`),
     ].join("\n");
     const grant = await this.options.resolveSpec();
+    // Started per sweep and stopped whatever the sweep does; the next sweep
+    // wants the same port and must not be answered by this one's tree.
+    const lane = await startAppLane(
+      this.options.app ? { ...this.options.app, cwd: worktreePath } : undefined,
+      this.options.allowedHosts,
+    );
     try {
-      return await this.sweep(input, worktreePath, revision, declaredScenarioIds, specification, grant);
+      return await this.sweep(input, worktreePath, revision, declaredScenarioIds, specification, grant, lane);
     } finally {
+      await lane.stop().catch(() => undefined);
       await grant.release().catch(() => undefined);
     }
   }
@@ -61,6 +76,7 @@ export class BlindSweepPort implements SweepPort {
     declaredScenarioIds: string[],
     specification: string,
     grant: AgentSpawnGrant,
+    lane: Awaited<ReturnType<typeof startAppLane>>,
   ): Promise<{ revision: string; outcomes: readonly SweepOutcome[]; inconclusive?: readonly string[] }> {
     const result = await this.options.executor.run({
       spec: grant.spec,
@@ -74,7 +90,8 @@ export class BlindSweepPort implements SweepPort {
       auditPath: this.options.auditPath,
       specification,
       declaredScenarioIds,
-      allowedHosts: [...this.options.allowedHosts],
+      allowedHosts: lane.allowedHosts,
+      app: lane.app,
       ...(this.options.chromiumSandbox === undefined ? {} : { chromiumSandbox: this.options.chromiumSandbox }),
       commitMessages: [],
     });
