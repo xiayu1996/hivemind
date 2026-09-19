@@ -1,8 +1,8 @@
 import type { Row } from "@libsql/client";
-import { execFile } from "node:child_process";
+import { execFile, type ChildProcess } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
@@ -61,6 +61,7 @@ import {
   NotionStoryDelivery,
   NotionStoryPropertyDelivery,
   STORY_OUTBOX_OPERATIONS,
+  STORY_WHOLE_STATE_OPERATIONS,
 } from "../src/notion/story-property-delivery.js";
 import { NotionEpicPlanDelivery } from "../src/notion/epic-plan-delivery.js";
 import { ingestEpicsForDecomposition } from "../src/notion/epic-intake.js";
@@ -84,6 +85,7 @@ import { PlanApprovalStore } from "../src/orchestrator/plan-approval.js";
 import { DispatchQueue } from "../src/queue/dispatch.js";
 import { CostLedger } from "../src/observability/cost-ledger.js";
 import { CANONICAL_CAPTURE_ENV } from "../src/observability/capture-contract.js";
+import { finishLaneCapture, laneCapturePath, packFinishedCaptures } from "../src/observability/lane-capture.js";
 import { createConsoleServer, listenConsole } from "../src/console/server.js";
 import { LibsqlConsoleDataSource } from "../src/console/libsql-data-source.js";
 import type { ConsoleTodoReadPort } from "../src/console/todo-contract.js";
@@ -94,10 +96,10 @@ import { ConsoleConfigWriter } from "../src/console/config-writer.js";
 import { resolveAgentSpec } from "../src/runner/agent-spec.js";
 import { cacheRetentionEnv } from "../src/runner/cache-retention.js";
 import { StoryExecutionStore } from "../src/orchestrator/story-execution-store.js";
-import { openDb } from "../src/persistence/client.js";
+import { absoluteDbUrl, openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
 import { assertSchemaCurrent } from "../src/persistence/schema-fingerprint.js";
-import { createWorktree, locateWorktree, worktreeLayout } from "../src/vcs/worktree.js";
+import { createWorktree, locateWorktree, retireWorktree, worktreeLayout } from "../src/vcs/worktree.js";
 import { publishEpicBranch } from "../src/vcs/epic-branch.js";
 import { processGitCommand } from "../src/vcs/story-delivery.js";
 import { checkoutKey, checkoutPath, ensureCheckout, processRemoteGit, remoteDefaultBranch } from "../src/vcs/repository-checkout.js";
@@ -188,13 +190,6 @@ function repositoryIdFor(slug: string): string {
 
 /** A `file:` URL made absolute against this process's cwd; anything else is
  * left as it is, since a remote libsql URL has no cwd to resolve against. */
-function absoluteDbUrl(url: string): string {
-  if (!url.startsWith("file:")) return url;
-  const path = url.slice("file:".length);
-  const [file, query] = path.split(/(?=\?)/);
-  return isAbsolute(file!) ? url : `file:${resolve(file!)}${query ?? ""}`;
-}
-
 async function main(): Promise<void> {
   const stored = await loadSecretsFile();
   const token = process.env.NOTION_TOKEN ?? stored.get("NOTION_TOKEN");
@@ -463,7 +458,13 @@ async function main(): Promise<void> {
   /** Sends what is queued for the Story side. The requirement loop shares this
    * outbox; each side replays only its own rows. */
   const sendQueuedNotionWrites = async (): Promise<void> => {
-    const replayed = await outbox.replay(delivery, { operations: STORY_OUTBOX_OPERATIONS });
+    const replayed = await outbox.replay(delivery, {
+      operations: STORY_OUTBOX_OPERATIONS,
+      wholeStateOperations: STORY_WHOLE_STATE_OPERATIONS,
+    });
+    for (const row of replayed.superseded) {
+      console.log(`Notion outbox: dropped a stale ${row.operation} for ${row.cardId ?? "no card"} after ${row.attempts} attempts; the page already holds a newer one`);
+    }
     for (const failure of replayed.failures) {
       console.warn(`Notion outbox: ${failure.operation} for ${failure.cardId ?? "no card"} failed (attempt ${failure.attempts}): ${failure.error}`);
     }
@@ -602,6 +603,7 @@ async function main(): Promise<void> {
     const epicConfig = await configFor(epicSlug);
     const repositoryPath = checkoutOf(epicSlug);
     const repositoryId = repositoryIdFor(epicSlug);
+    const capturePath = laneCapturePath(join(workRoot, "evidence", repositoryId), "decompose", Date.now());
     // The tree the split is read from has to be the tree it will be built in.
     await ensureCheckout({
       url: (await repositories.get(epicSlug))!.remoteUrl,
@@ -641,7 +643,7 @@ async function main(): Promise<void> {
           // The exact request this lane sent, captured the same way the Story
           // phases capture theirs: a requirement that produced a bad split is
           // unanswerable without the prompt that produced it.
-          [CANONICAL_CAPTURE_ENV]: join(workRoot, "evidence", repositoryId, "decompose-requests.jsonl"),
+          [CANONICAL_CAPTURE_ENV]: capturePath,
         },
         extensions: [join(ROOT, "extensions", "canonical-capture.ts")],
         promptRoot: join(ROOT, "prompts"),
@@ -666,21 +668,25 @@ async function main(): Promise<void> {
     // anything about the provider: a defect of ours is UNKNOWN and must not
     // open a breaker. With this written down, the next cycle skips the open
     // provider and takes the next one in the chain.
-    const outcome = await decomposer.decompose(epic).catch(async (cause: unknown) => {
-      const message = cause instanceof Error ? cause.message : String(cause);
-      if (classifyError(message).class !== "UNKNOWN") {
-        await providerHealth.recordFailure(provider, message, await breakerPolicy(epicConfig))
-          .catch(() => undefined);
+    try {
+      const outcome = await decomposer.decompose(epic).catch(async (cause: unknown) => {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        if (classifyError(message).class !== "UNKNOWN") {
+          await providerHealth.recordFailure(provider, message, await breakerPolicy(epicConfig))
+            .catch(() => undefined);
+        }
+        throw cause;
+      });
+      console.log(`Epic ${epic.id} decomposition: ${outcome.kind}`);
+      if (outcome.kind !== "presented") {
+        await alerts.send({
+          kind: "needs_input",
+          title: `Epic ${epic.id} cannot be decomposed`,
+          body: outcome.kind === "blocking_question" ? outcome.question.question : outcome.reasons.join("; "),
+        }).catch((cause: unknown) => console.error("alert failed:", (cause as Error).message));
       }
-      throw cause;
-    });
-    console.log(`Epic ${epic.id} decomposition: ${outcome.kind}`);
-    if (outcome.kind !== "presented") {
-      await alerts.send({
-        kind: "needs_input",
-        title: `Epic ${epic.id} cannot be decomposed`,
-        body: outcome.kind === "blocking_question" ? outcome.question.question : outcome.reasons.join("; "),
-      }).catch((cause: unknown) => console.error("alert failed:", (cause as Error).message));
+    } finally {
+      await finishLaneCapture(capturePath);
     }
   };
 
@@ -704,7 +710,34 @@ async function main(): Promise<void> {
     }
   };
 
+  /**
+   * Background work whose failure is reported rather than raised, and only
+   * when somebody has to look at it.
+   *
+   * Two questions, not one. `step` already skips a fault that retrying clears,
+   * but an inner catch that reports first never lets it: a Notion request that
+   * hit its deadline during decomposition paged the operator about a request
+   * the next cycle would have made successfully. So the classifier is asked
+   * whether a person is needed -- which it answers yes to for anything it does
+   * not recognise -- and only then is the page sent; everything else is a line
+   * in the log and another try next cycle.
+   */
+  const reportedStep = async (name: string, run: () => Promise<void>): Promise<void> =>
+    step(name, async () => {
+      try {
+        await run();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!classifyError(message).needsHuman) {
+          console.warn(`${name} was skipped this cycle: ${message}`);
+          return;
+        }
+        await reportP0(`${name} failed`, error);
+      }
+    });
+
   const inFlight = new Map<string, Promise<void>>();
+  const storyChildren = new Set<ChildProcess>();
   // Set the moment shutdown starts. The signal reaches the whole process group,
   // so a Story's pi dies of it too, and the error that surfaces here is
   // whatever pi was in the middle of -- no signal of our own to read. Without
@@ -785,7 +818,7 @@ async function main(): Promise<void> {
       const npm = process.platform === "win32" ? "npm.cmd" : "npm";
       let result;
       try {
-        result = await execFileAsync(npm, [
+        const pending = execFileAsync(npm, [
           "run", "story:run", "--",
           "--card-id", cardId,
           "--worktree", location.worktreePath,
@@ -803,6 +836,14 @@ async function main(): Promise<void> {
           maxBuffer: 10 * 1024 * 1024,
           env: { ...process.env, HIVEMIND_DB_URL: dbUrl },
         });
+        // Held so a shutdown can stop waiting for it. Without a handle the
+        // only way out of a drain was to wait for a whole inner loop.
+        storyChildren.add(pending.child);
+        try {
+          result = await pending;
+        } finally {
+          storyChildren.delete(pending.child);
+        }
       } catch (error) {
         // What a dead run costs the card is one decision, taken in
         // `decideDispatchFailure`: a run this process killed and a run a
@@ -810,10 +851,21 @@ async function main(): Promise<void> {
         // and only the last two outcomes charge anything. The reason is
         // written to the card either way, because a card that stops here has
         // nothing else recorded against it.
+        // This card has no live run now, so every capture under it is
+        // finished. A run that died never reached `writeEvidence`, so nothing
+        // else will ever fold these into a log or pack them, and they are the
+        // only record of what that run sent -- 405MB of them had accumulated.
+        await packFinishedCaptures(location.evidencePath).catch(() => 0);
         const decision = await settleDispatchFailure({ store, config, cardId, error, stopping });
         switch (decision.kind) {
           case "cancelled":
             console.warn(`Story ${cardId} run was cancelled by this shutdown; it keeps its reentry budget`);
+            return;
+          case "host_fault":
+            // Loud, and free for the card. Nothing it did produced this and
+            // the next attempt would meet the same broken host, so the budget
+            // is left alone and a person is told once per attempt instead.
+            await reportP0(`this host cannot run a Story (${cardId} never started)`, error);
             return;
           case "provider_fault":
             // The breaker's own "intake halted" line is the alert for this; a
@@ -844,6 +896,12 @@ async function main(): Promise<void> {
       await reconcileProjections();
       const completed = await store.getStory(cardId);
       if (completed.state === "NEEDS_INPUT") await announceStop(cardId);
+      // Delivered means the work is on the Epic branch, so this tree is spare.
+      // It is a full checkout with the repository's dependencies in it, and
+      // keeping every one of them is how the work root reached 3.1GB of trees.
+      if (completed.state === "DELIVERED" && await retireWorktree(repositoryPath, location.worktreePath)) {
+        console.log(`Retired the worktree for ${cardId}; its branch keeps every commit`);
+      }
   };
 
   // Everything that wants to know a card stopped hears the same summary: the
@@ -857,6 +915,16 @@ async function main(): Promise<void> {
   const announceStop = async (cardId: string): Promise<void> => {
     const summary = await store.stopSummary(cardId);
     if (!summary) return;
+    // The board is the fourth listener, and the only one a person actually
+    // looks at. Refreshing it lived on the path a run takes when it succeeds,
+    // so a card parked by a dead run kept its page reading "进行中" and "现在
+    // 没有等你处理的事" until a later cycle got round to projecting -- behind
+    // decomposition, Epic upkeep and a full regression sweep, which is half an
+    // hour on this host. A stop nobody is told about is not a stop for a
+    // person, it is a halt.
+    await reconcileProjections().catch((error: unknown) => {
+      console.error(`Story ${cardId} stopped but its page could not be refreshed: ${(error as Error).message}`);
+    });
     console.warn(renderStopSummary(summary));
     const { failed } = await notifyStoryStopped(stopSinks, summary);
     for (const failure of failed) console.error(`Story ${cardId} stopped but a sink refused it: ${failure}`);
@@ -935,8 +1003,28 @@ async function main(): Promise<void> {
       }
     }
 
+    // A finished Epic's trees are spare. Its scenarios move to the main pool,
+    // which sweeps `regression-main` and needs no probe at all, and its
+    // integration tree has no Story left to take. Both are a full checkout
+    // with the repository's dependencies in them -- 336MB per Epic here -- and
+    // `createWorktree` puts either back from its branch if a delivered card is
+    // ever reopened.
+    const retireEpicTrees = async (epicId: string): Promise<void> => {
+      const slug = slugOfEpic(epicId);
+      const repository = checkoutOf(slug);
+      for (const name of [`epic-${epicId}`, `probe-${epicId}`]) {
+        const path = locateWorktree(repositoryIdFor(slug), name, layout).worktreePath;
+        if (await retireWorktree(repository, path)) console.log(`Retired the worktree ${name}`);
+      }
+    };
     for (const outcome of await new EpicCompletion(handle.client, await mergeRequests()).tick()) {
-      if (outcome.kind === "done") console.log(`Epic ${outcome.epicId} is done: its review request landed`);
+      if (outcome.kind === "done") {
+        console.log(`Epic ${outcome.epicId} is done: its review request landed`);
+        await retireEpicTrees(outcome.epicId);
+      }
+      if (outcome.kind === "gap") {
+        console.log(`Epic ${outcome.epicId} goes back to work: ${outcome.storyIds.join(", ")} carry what acceptance found missing`);
+      }
       if (outcome.kind === "unreadable") console.warn(`Epic ${outcome.epicId} review state unreadable: ${outcome.reason}`);
     }
 
@@ -1095,6 +1183,7 @@ async function main(): Promise<void> {
       "--branch", branch,
       "--worktree", sweepTree.worktreePath,
       "--scenarios", plan.scenarioIds.join(","),
+      "--repository", slug,
       "--evidence-root", join(workRoot, "evidence", repositoryId, sweepCard),
       "--provider", provider,
       "--model", model,
@@ -1150,23 +1239,11 @@ async function main(): Promise<void> {
       // split out of the others. Raising it ended the cycle before dispatch,
       // so a single spent account stopped every Story on the host and kept
       // stopping it, one silent cycle at a time.
-      await step("epic decomposition", async () => {
-        try {
-          await decomposeWaitingEpic();
-        } catch (error) {
-          await reportP0("epic decomposition failed", error);
-        }
-      });
+      await reportedStep("epic decomposition", decomposeWaitingEpic);
       // Same reason again: Epic upkeep is background work about Epics, and a
       // branch or a head recheck it cannot finish says nothing about the
       // Stories waiting to be dispatched below it.
-      await step("epic maintenance", async () => {
-        try {
-          await maintainEpics();
-        } catch (error) {
-          await reportP0("epic maintenance failed", error);
-        }
-      });
+      await reportedStep("epic maintenance", maintainEpics);
       // Before dispatch, not after. Called after, it saw the Stories this very
       // cycle had just put in flight and gave way to them; and the cycle
       // returns early when there is nothing to dispatch, which is exactly when
@@ -1177,22 +1254,7 @@ async function main(): Promise<void> {
       // foreground; letting its failure end the cycle stopped intake,
       // projection and dispatch for every Story on the host because one Epic's
       // worktree was in a state git would not allow.
-      await step("regression sweep", async () => {
-        try {
-          await regressionSweep();
-        } catch (error) {
-          const message = (error as Error).message;
-          // A provider that is busy is not a person's problem: the sweep is a
-          // safety net that runs again on the next idle cycle, and a rate limit
-          // clears on its own. Only a fault the classifier says needs somebody
-          // pages -- which includes anything it does not recognise.
-          if (!classifyError(message).needsHuman) {
-            console.warn(`regression sweep was skipped this cycle: ${message}`);
-            return;
-          }
-          await reportP0("regression sweep failed", error);
-        }
-      });
+      await reportedStep("regression sweep", regressionSweep);
 
       const slugs = servable.map((repository) => repository.slug);
       const rows = (await handle.client.execute({
@@ -1452,8 +1514,25 @@ async function main(): Promise<void> {
     await projections.stop();
     handle.close();
   };
-  process.once("SIGINT", () => void stop().then(() => process.exit(0)));
-  process.once("SIGTERM", () => void stop().then(() => process.exit(0)));
+  // A second signal stops waiting. The drain above is deliberately unbounded
+  // -- a round in flight has already been paid for -- but an operator with a
+  // fix to deploy cannot be made to wait out a whole inner loop, and guessing
+  // a deadline here would be guessing at their trade rather than letting them
+  // make it. The child handles SIGTERM: its run settles as cancelled and keeps
+  // every budget, so what a second signal costs is this round's tokens.
+  let draining = false;
+  const signalled = (): void => {
+    if (!draining) {
+      draining = true;
+      void stop().then(() => process.exit(0));
+      return;
+    }
+    if (storyChildren.size === 0) return;
+    console.log(`Stopping ${storyChildren.size} in-flight Story run(s) now; each keeps its budget`);
+    for (const child of storyChildren) child.kill("SIGTERM");
+  };
+  process.on("SIGINT", signalled);
+  process.on("SIGTERM", signalled);
 }
 
 main().catch((error: unknown) => {

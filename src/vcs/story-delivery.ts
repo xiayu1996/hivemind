@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { stat } from "node:fs/promises";
 import { promisify } from "node:util";
 import type { StoryDeliveryPort } from "../orchestrator/story-worker.js";
 import { normalizeActualFootprint, type ActualFootprintRecorder } from "./actual-footprint.js";
@@ -12,14 +13,39 @@ export interface GitCommandPort {
 
 export const processGitCommand: GitCommandPort = {
   async run(cwd, args) {
-    const result = await execFileAsync("git", args, {
-      cwd,
-      windowsHide: true,
-      maxBuffer: 1024 * 1024,
-    });
-    return result.stdout;
+    try {
+      const result = await execFileAsync("git", args, {
+        cwd,
+        windowsHide: true,
+        maxBuffer: 1024 * 1024,
+      });
+      return result.stdout;
+    } catch (cause) {
+      throw await describeSpawnFailure(cause, cwd, args);
+    }
   },
 };
+
+/**
+ * Says which of the two things ENOENT meant.
+ *
+ * Node reports a missing working directory exactly as it reports a missing
+ * binary: `spawn git ENOENT`, with nothing naming the directory. A Story whose
+ * worktree had been deleted stopped on that message, and it reads as a host
+ * with no git -- an operator checks `which git`, finds it, and has nowhere
+ * left to look. The directory is the thing to name, because it is the thing
+ * that is repairable.
+ */
+async function describeSpawnFailure(cause: unknown, cwd: string, args: string[]): Promise<unknown> {
+  const failure = cause as { code?: unknown };
+  if (failure?.code !== "ENOENT") return cause;
+  const reachable = await stat(cwd).then(() => true, () => false);
+  if (reachable) return cause;
+  return new Error(
+    `git ${args.join(" ")} could not run: its working directory is gone (${cwd})`,
+    { cause },
+  );
+}
 
 function epicBranch(epicId: string): string {
   if (!/^[A-Za-z0-9._-]+$/.test(epicId)) throw new Error("Epic id cannot be used in a branch name");

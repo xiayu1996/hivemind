@@ -25,7 +25,8 @@ export interface RegressionRecord {
 
 export interface RegressionResult {
   judgement: RegressionJudgement;
-  /** True only the first time this exact break is seen for this scenario. */
+  /** True when this observation opened a card; false when the scenario was
+   * already carrying one. */
   cardRaised: boolean;
   /** Signatures of cards this observation closed, if any. */
   cardsCleared: readonly string[];
@@ -82,13 +83,20 @@ export class RegressionStore {
     }
     if (judgement.kind !== "raise") return { judgement, cardRaised: false, cardsCleared: [] };
 
+    // One open card per scenario. A scenario that is simply broken fails in a
+    // new signature every sweep when a person writing about the screen is what
+    // produces the text, so keying the card on the break alone opened another
+    // one every round: the same work item, worded differently, piling up in
+    // the Story's fix round and in the Epic's gate message.
     const inserted = await this.client.execute({
       sql: `INSERT INTO regression_cards (scenario_id, failure_signature, failure_text, created_at)
-            VALUES (?, ?, ?, ?)
+            SELECT ?, ?, ?, ?
+             WHERE NOT EXISTS (SELECT 1 FROM regression_cards
+                                WHERE scenario_id = ? AND resolved_at IS NULL)
             ON CONFLICT(scenario_id, failure_signature) DO UPDATE
               SET resolved_at = NULL, created_at = excluded.created_at
               WHERE regression_cards.resolved_at IS NOT NULL`,
-      args: [input.scenarioId, judgement.signature, text, time],
+      args: [input.scenarioId, judgement.signature, text, time, input.scenarioId],
     });
     return { judgement, cardRaised: inserted.rowsAffected === 1, cardsCleared: [] };
   }
@@ -136,6 +144,54 @@ export class RegressionStore {
                ORDER BY c.created_at, c.scenario_id`,
         args: [epicId],
       })).rows;
+    return rows.map(toOpenCard);
+  }
+
+  /**
+   * Open cards nobody owns yet, among the scenarios named. Every other query
+   * reaches a card through its attributed Story, so a card without one is
+   * invisible to the Epic it blocks and to the only actor that could close it.
+   * Attribution is retried from here each sweep rather than only at the moment
+   * a card is raised, because a card that found no owner once would otherwise
+   * never be offered one again.
+   */
+  async unattributedCards(scenarioIds: readonly string[]): Promise<OpenRegressionCard[]> {
+    if (scenarioIds.length === 0) return [];
+    const rows = (await this.client.execute({
+      sql: `SELECT scenario_id, failure_signature, failure_text, attributed_story FROM regression_cards
+             WHERE resolved_at IS NULL AND attributed_story IS NULL
+               AND scenario_id IN (${scenarioIds.map(() => "?").join(", ")})
+             ORDER BY created_at, scenario_id`,
+      args: [...scenarioIds],
+    })).rows;
+    return rows.map(toOpenCard);
+  }
+
+  /**
+   * Open cards whose owner is idle, among the scenarios named.
+   *
+   * A card is answered by its Story going back through the pipeline, and the
+   * sweep is what closes it. Between those two an owner can reach DELIVERED
+   * with the card still open -- the fix did not make the scenario pass, or the
+   * lane was lost on the way -- and nothing looked at that state: the card was
+   * owned, so the attribution path skipped it, and the Story was delivered, so
+   * no round was running to carry it. S-R237511OV-01 sat there for seven hours
+   * holding its Epic at the review gate while every sweep paid to fail the
+   * same two scenarios again.
+   *
+   * Only DELIVERED counts as idle. A Story anywhere else is either working or
+   * stopped for a person, and both already have somebody to carry the card.
+   */
+  async idleOwnedCards(scenarioIds: readonly string[]): Promise<OpenRegressionCard[]> {
+    if (scenarioIds.length === 0) return [];
+    const rows = (await this.client.execute({
+      sql: `SELECT c.scenario_id, c.failure_signature, c.failure_text, c.attributed_story
+              FROM regression_cards c JOIN stories s ON s.id = c.attributed_story
+             WHERE c.resolved_at IS NULL AND s.state = 'DELIVERED'
+               AND c.scenario_id IN (${scenarioIds.map(() => "?").join(", ")})
+             ORDER BY c.created_at, c.scenario_id`,
+      args: [...scenarioIds],
+    })).rows;
     return rows.map(toOpenCard);
   }
 

@@ -22,10 +22,17 @@
  * because the ledger a worktree serves holds none of it while a round runs; a
  * scenario named on a page request picks its own state. `verify-fixture.ts`
  * says why that lives here rather than in `verify.seedCommand`.
+ *
+ * Starting it builds the screens it serves. The build output is ignored by git
+ * and so survives in a worktree from one round to the next, which would show a
+ * round the interface of an earlier one; a branch that never took that build
+ * served no screens at all and every scenario came back inconclusive.
  */
+import { execFile } from "node:child_process";
 import { hostname, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
+import { promisify } from "node:util";
+import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync, statfsSync, statSync } from "node:fs";
 import { listenConsole } from "../src/console/server.js";
 import { createVerificationConsole } from "../src/console/app-entry.js";
 import { openDb } from "../src/persistence/client.js";
@@ -37,6 +44,8 @@ import {
 } from "../src/persistence/schema-fingerprint.js";
 import type { NotionOutboxDelivery } from "../src/notion/outbox.js";
 import { applyVerifyFixture, fixtureFor, scenarioOfUrl } from "../src/console/verify-fixture.js";
+
+const execFileAsync = promisify(execFile);
 
 const ROOT = new URL("..", import.meta.url).pathname;
 
@@ -85,6 +94,21 @@ if (file === "" || !existsSync(file)) {
   throw new Error(`no database at ${named}: set HIVEMIND_DB_URL or pass --db`);
 }
 
+// The console's screens are a built shell, and the build output is ignored by
+// git, so it survives in a worktree from one round to the next. Serving what
+// happens to be there would show a verification round the interface of an
+// earlier round rather than of the tree it is judging, so starting the console
+// means building it. It takes well under a second, and a repository with no
+// shell to build keeps its server-rendered pages.
+if (existsSync(join(ROOT, "vite.config.ts"))) {
+  try {
+    await execFileAsync(join(ROOT, "node_modules", ".bin", "vite"), ["build"], { cwd: ROOT });
+  } catch (cause) {
+    const output = cause instanceof Error && "stderr" in cause ? String(cause.stderr) : String(cause);
+    throw new Error(`the console's screens could not be built, so there is nothing to serve: ${output.trim()}`, { cause });
+  }
+}
+
 /**
  * A private copy of the database, taken through the filesystem.
  *
@@ -115,9 +139,29 @@ function removeOrphanedSnapshots(): void {
   }
 }
 
+/**
+ * A snapshot is the size of the central database. Running out of disk halfway
+ * through one leaves a truncated copy that reads like a database with less in
+ * it, and the round would judge screens against it. Refusing outright makes the
+ * round report that it had no application, which is a fact somebody can act on.
+ */
+function assertRoomFor(databaseFile: string, directory: string): void {
+  const wal = `${databaseFile}-wal`;
+  const needed = statSync(databaseFile).size + (existsSync(wal) ? statSync(wal).size : 0);
+  const stats = statfsSync(directory);
+  const free = stats.bavail * stats.bsize;
+  if (free > needed * 1.2) return;
+  throw new Error(
+    `not enough disk for a private copy of the database: it is ${Math.round(needed / 1e6)}MB `
+    + `and ${Math.round(free / 1e6)}MB is free. The console serves a copy so a round cannot write `
+    + `to the central database, so it does not start without room for one.`,
+  );
+}
+
 function snapshotOf(source: string): { url: string; discard: () => void } {
   removeOrphanedSnapshots();
   const directory = mkdtempSync(join(tmpdir(), SNAPSHOT_PREFIX));
+  assertRoomFor(source, directory);
   const target = join(directory, "console.db");
   cpSync(source, target);
   for (const suffix of ["-wal", "-shm"]) {

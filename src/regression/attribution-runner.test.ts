@@ -1,7 +1,7 @@
 import { createClient } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { migrate } from "../persistence/migrate.js";
-import { attributeCard, attributionSequence } from "./attribution-runner.js";
+import { attributeCard, attributionSequence, reopenOwner } from "./attribution-runner.js";
 import { RegressionStore } from "./store.js";
 
 describe("attribution over a real integration sequence", () => {
@@ -43,6 +43,14 @@ describe("attribution over a real integration sequence", () => {
       sql: "INSERT INTO regression_cards (scenario_id, failure_signature, created_at) VALUES ('S-M2-01-a', 'sig', 1)",
     });
   });
+
+  async function register(scenarioId: string, storyId: string): Promise<void> {
+    await client.execute({
+      sql: `INSERT INTO scenario_registry (scenario_id, story_id, epic_id, pool, created_at, updated_at)
+            VALUES (?, ?, 'M2', 'epic', 1, 1)`,
+      args: [scenarioId, storyId],
+    });
+  }
 
   afterEach(() => client.close());
 
@@ -87,7 +95,53 @@ describe("attribution over a real integration sequence", () => {
       .toMatchObject([{ type: "regression.attributed" }]);
   });
 
-  it("blames nobody when the failure predates the sequence", async () => {
+  it("reopens the Story that registered the scenario when nobody introduced the break", async () => {
+    // Nobody in the sequence broke it, so the bisect names nobody -- and the
+    // card used to stay open with no actor able to close it, holding the Epic
+    // at its review gate while every sweep paid to fail again.
+    await register("S-M2-01-a", "S-M2-01");
+
+    const attribution = await attributeCard(
+      client,
+      store,
+      { scenarioId: "S-M2-01-a", failureSignature: "sig" },
+      await attributionSequence(client, "M2"),
+      async () => true,
+      () => 500,
+    );
+
+    expect(attribution).toMatchObject({ kind: "pre_existing" });
+    await expect(store.openCards()).resolves.toMatchObject([{ attributedStory: "S-M2-01" }]);
+    expect((await client.execute("SELECT state, phase FROM stories WHERE id = 'S-M2-01'")).rows[0])
+      .toMatchObject({ state: "SPECIFY", phase: "REGRESSION_FIX" });
+    // The log says which of the two ways the owner was found, because only one
+    // of them survived a bisect.
+    const event = (await client.execute("SELECT data FROM event_log WHERE card_id = 'S-M2-01'")).rows[0];
+    expect(JSON.parse(String(event?.data)) as { origin: string }).toMatchObject({ origin: "pre_existing" });
+  });
+
+  it("hands a scenario to its owner when a revision could not be judged at all", async () => {
+    // The application does not start at a revision predating the code that
+    // starts it, so the probe there answers nothing. Read as a pass, the base
+    // looked green and a break that has never once worked came back as "does
+    // not reproduce" -- five of them did, on a live Epic.
+    await register("S-M2-01-a", "S-M2-01");
+
+    const attribution = await attributeCard(
+      client,
+      store,
+      { scenarioId: "S-M2-01-a", failureSignature: "sig" },
+      await attributionSequence(client, "M2"),
+      async (): Promise<"unknown"> => "unknown",
+      () => 500,
+    );
+
+    expect(attribution).toMatchObject({ kind: "unattributable", probes: 1 });
+    await expect(store.openCards()).resolves.toMatchObject([{ attributedStory: "S-M2-01" }]);
+    expect((await client.execute("SELECT state FROM stories WHERE id = 'S-M2-01'")).rows[0]?.state).toBe("SPECIFY");
+  });
+
+  it("blames nobody for a scenario no Story registered", async () => {
     const attribution = await attributeCard(
       client,
       store,
@@ -106,7 +160,9 @@ describe("attribution over a real integration sequence", () => {
   it("probes nothing on an Epic head nothing has landed on", async () => {
     // The empty base is what "no Story has integrated yet" looks like. Handed
     // to the probe it became `git checkout --detach ''`, a fatal pathspec
-    // error that took the whole Epic's sweep down with it.
+    // error that took the whole Epic's sweep down with it. The owner is still
+    // known without probing, because registration named it.
+    await register("S-M2-01-a", "S-M2-01");
     let probes = 0;
     const attribution = await attributeCard(
       client,
@@ -119,10 +175,16 @@ describe("attribution over a real integration sequence", () => {
 
     expect(attribution).toMatchObject({ kind: "pre_existing" });
     expect(probes).toBe(0);
-    await expect(store.openCards()).resolves.toMatchObject([{ attributedStory: null }]);
+    await expect(store.openCards()).resolves.toMatchObject([{ attributedStory: "S-M2-01" }]);
   });
 
-  it("does not reopen anything for a failure it cannot reproduce", async () => {
+  it("blames nobody in the sequence when the probe cannot reproduce what the sweep just saw", async () => {
+    // The card exists because the sweep failed this scenario at this very
+    // revision. A probe that passes there contradicts that, so the bisect
+    // standing on it names nobody -- and the scenario goes to its owner rather
+    // than staying open with no one able to close it.
+    await register("S-M2-01-a", "S-M2-01");
+
     const attribution = await attributeCard(
       client,
       store,
@@ -133,7 +195,9 @@ describe("attribution over a real integration sequence", () => {
     );
 
     expect(attribution).toMatchObject({ kind: "not_reproduced" });
-    await expect(store.openCards()).resolves.toMatchObject([{ attributedStory: null }]);
+    await expect(store.openCards()).resolves.toMatchObject([{ attributedStory: "S-M2-01" }]);
+    expect((await client.execute("SELECT state FROM stories WHERE id = 'S-M2-03'")).rows[0]?.state)
+      .toBe("DELIVERED");
   });
 
   it("leaves a Story that is already back in the pipeline where it is", async () => {
@@ -152,5 +216,38 @@ describe("attribution over a real integration sequence", () => {
     expect(attribution).toMatchObject({ kind: "introduced", item: "S-M2-02" });
     expect((await client.execute("SELECT state FROM stories WHERE id = 'S-M2-02'")).rows[0]?.state).toBe("CODE");
     await expect(store.openCards()).resolves.toMatchObject([{ attributedStory: "S-M2-02" }]);
+  });
+
+  it("sends a delivered owner back for a card it did not close, with no bisect to run", async () => {
+    await expect(reopenOwner(
+      client,
+      { scenarioId: "S-M2-01-a", failureSignature: "sig" },
+      "S-M2-02",
+      "still_failing",
+      0,
+      () => 700,
+    )).resolves.toBe(true);
+
+    const story = (await client.execute("SELECT state, phase, priority FROM stories WHERE id = 'S-M2-02'")).rows[0];
+    expect(story).toMatchObject({ state: "SPECIFY", phase: "REGRESSION_FIX", priority: 0 });
+    const event = (await client.execute(
+      "SELECT card_id, data FROM event_log WHERE type = 'regression.attributed'",
+    )).rows[0];
+    expect(event?.card_id).toBe("S-M2-02");
+    expect(JSON.parse(String(event?.data))).toMatchObject({ origin: "still_failing" });
+  });
+
+  it("does not disturb an owner that is already working on it", async () => {
+    await client.execute("UPDATE stories SET state = 'VERIFY' WHERE id = 'S-M2-02'");
+
+    await expect(reopenOwner(
+      client,
+      { scenarioId: "S-M2-01-a", failureSignature: "sig" },
+      "S-M2-02",
+      "still_failing",
+      0,
+      () => 700,
+    )).resolves.toBe(false);
+    expect((await client.execute("SELECT state FROM stories WHERE id = 'S-M2-02'")).rows[0]?.state).toBe("VERIFY");
   });
 });

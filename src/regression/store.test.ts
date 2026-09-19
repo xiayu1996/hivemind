@@ -76,11 +76,26 @@ describe("RegressionStore", () => {
     await expect(store.openCards()).resolves.toEqual([]);
   });
 
-  it("separates two different breaks in the same scenario into their own cards", async () => {
+  it("keeps one open card per scenario however differently it fails", async () => {
+    // A screen's failure is a sentence somebody wrote about it, so a scenario
+    // that is simply broken produces a new signature every sweep. A card per
+    // signature meant another copy of the same work item every round, in the
+    // Story's fix round and in the Epic's gate message.
     for (let attempt = 0; attempt < 3; attempt++) await fail("AssertionError: expected 3 to be 4");
     for (let attempt = 0; attempt < 8; attempt++) await fail("TypeError: cart is not iterable");
 
-    await expect(store.openCards()).resolves.toHaveLength(2);
+    await expect(store.openCards()).resolves.toMatchObject([{ failureText: "assertionerror: expected <n> to be <n>" }]);
+  });
+
+  it("raises again for the next break once the card for the last one is closed", async () => {
+    for (let attempt = 0; attempt < 3; attempt++) await fail("AssertionError: expected 3 to be 4");
+    const [first] = await store.openCards();
+    await store.attribute(first!.scenarioId, first!.failureSignature, "S-M2-03");
+    await store.resolveCard(first!.scenarioId, first!.failureSignature, "S-M2-03");
+
+    for (let attempt = 0; attempt < 3; attempt++) await fail("TypeError: cart is not iterable");
+
+    await expect(store.openCards()).resolves.toMatchObject([{ failureText: "typeerror: cart is not iterable" }]);
   });
 
   it("records the Story a card was attributed to", async () => {
@@ -90,6 +105,47 @@ describe("RegressionStore", () => {
     await store.attribute(card!.scenarioId, card!.failureSignature, "S-M2-03");
 
     await expect(store.openCards()).resolves.toMatchObject([{ attributedStory: "S-M2-03" }]);
+  });
+
+  it("offers an ownerless card up again, and stops once it has an owner", async () => {
+    // A card nobody owns is reached by no other query, so a sweep that stopped
+    // looking after the round that raised it left the card open forever.
+    for (let attempt = 0; attempt < 3; attempt++) await fail();
+    const [card] = await store.openCards();
+
+    await expect(store.unattributedCards([card!.scenarioId])).resolves.toHaveLength(1);
+    await expect(store.unattributedCards(["S-M2-03-elsewhere"])).resolves.toEqual([]);
+    await expect(store.unattributedCards([])).resolves.toEqual([]);
+
+    await store.attribute(card!.scenarioId, card!.failureSignature, "S-M2-03");
+    await expect(store.unattributedCards([card!.scenarioId])).resolves.toEqual([]);
+  });
+
+  it("offers an owned card up again once its Story has delivered without closing it", async () => {
+    // The state nothing used to look at: the card names its owner, so the
+    // attribution path skips it, and the owner is delivered, so no round is
+    // running to carry it. S-R237511OV-01 held its Epic at the review gate for
+    // seven hours in exactly this shape.
+    await client.execute({
+      sql: `INSERT INTO stories (id, notion_page_id, title, requirement, state, created_at, updated_at)
+            VALUES ('S-M2-03', 'p-s1', 'Story', 'req', 'CODE', 1, 1)`,
+    });
+    for (let attempt = 0; attempt < 3; attempt++) await fail();
+    const [card] = await store.openCards();
+    await store.attribute(card!.scenarioId, card!.failureSignature, "S-M2-03");
+
+    // While the owner is working there is already somebody to carry it.
+    await expect(store.idleOwnedCards([card!.scenarioId])).resolves.toEqual([]);
+
+    await client.execute("UPDATE stories SET state = 'DELIVERED' WHERE id = 'S-M2-03'");
+    await expect(store.idleOwnedCards([card!.scenarioId]))
+      .resolves.toMatchObject([{ scenarioId: card!.scenarioId, attributedStory: "S-M2-03" }]);
+    await expect(store.idleOwnedCards(["S-M2-03-elsewhere"])).resolves.toEqual([]);
+    await expect(store.idleOwnedCards([])).resolves.toEqual([]);
+
+    // And a card the sweep closed is nobody's work any more.
+    await store.resolveCard(card!.scenarioId, card!.failureSignature, "S-M2-03", 5_000);
+    await expect(store.idleOwnedCards([card!.scenarioId])).resolves.toEqual([]);
   });
 
   it("closes a card only for the Story it was attributed to, then lets the same break raise again", async () => {
@@ -121,7 +177,12 @@ describe("RegressionStore", () => {
       args: [],
     });
     for (let attempt = 0; attempt < 3; attempt++) await fail("AssertionError: expected 3 to be 4");
-    for (let attempt = 0; attempt < 8; attempt++) await fail("TypeError: cart is not iterable");
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await store.record({
+        scenarioId: "S-M2-01-b", pool: "main", revision: "abc123", outcome: "failed",
+        output: "TypeError: cart is not iterable",
+      }, policy);
+    }
     const [attributed] = await store.openCards();
     await store.attribute(attributed!.scenarioId, attributed!.failureSignature, "S-M2-03");
 

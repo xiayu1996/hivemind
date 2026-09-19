@@ -259,7 +259,13 @@ export class NotionStoryProjection implements StoryProjectionPort {
     if (summary.dispatchFailures.length > 0) {
       lines.push(stopSummaryLine("dispatchFailed", { count: String(summary.dispatchFailures.length) }));
     }
-    if (summary.budget > 0) {
+    if (summary.inconclusive) {
+      lines.push(stopSummaryLine("inconclusive", {
+        attempts: String(summary.inconclusive.attempts),
+        scenarios: summary.inconclusive.scenarios.join("\u3001"),
+      }));
+    }
+    if (summary.budget !== undefined && summary.budget > 0) {
       lines.push(stopSummaryLine("budget", { spent: String(summary.spent), budget: String(summary.budget) }));
     }
     if (summary.costUsd > 0) lines.push(stopSummaryLine("spend", { amount: summary.costUsd.toFixed(2) }));

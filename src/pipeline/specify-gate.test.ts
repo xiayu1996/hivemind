@@ -128,6 +128,21 @@ describe("the repository side of the SPECIFY exit", () => {
     await expect(ports.isClean()).resolves.toBe(true);
   });
 
+  it("answers with the tree the phase already froze itself", async () => {
+    const cwd = repository();
+    writeFileSync(join(cwd, "test", "price.test.ts"), "// @scenario S-EPIC1-01-a\n", "utf8");
+    const ports = gate(cwd);
+    execFileSync("git", ["add", "--all"], { cwd });
+    execFileSync("git", ["commit", "-m", "test(S-EPIC1-01): red"], { cwd });
+
+    const proof = await ports.currentTreeSha();
+    const frozen = await ports.commit("test(S-EPIC1-01): red");
+
+    expect(frozen.treeSha).toBe(proof);
+    expect(frozen.commit).toBe(head(cwd));
+    await expect(ports.isClean()).resolves.toBe(true);
+  });
+
   it("sees the tree move when a file changes after the red was proved", async () => {
     const cwd = repository();
     const ports = gate(cwd);

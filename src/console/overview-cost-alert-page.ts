@@ -5,8 +5,14 @@ import type { OverviewCostAlertRow, OverviewCostAlertsView } from "./overview-co
  * The run overview's cost alert summary. It is the first screen a person opens,
  * so the alert is stated in words as well as colour, and it says work goes on:
  * a requirement over its own limit is an alert line, not a stop.
+ *
+ * The module is named for the one thing it draws rather than for the route it
+ * happens to answer. `overview-page.ts` is the whole run overview, which is
+ * being built elsewhere, and two Epics both putting a file there is a merge
+ * nobody can resolve mechanically -- it held one Epic out of main for thirty
+ * refresh cycles.
  */
-export interface OverviewPageView {
+export interface OverviewCostAlertPageView {
   alert: OverviewCostAlertsView;
 }
 
@@ -36,7 +42,7 @@ function renderAlertRow(row: OverviewCostAlertRow): string {
     + `<a href="/costs?requirement=${encodeURIComponent(row.requirementId)}">查看费用明细</a></div></li>`;
 }
 
-function renderAlertSummary(view: OverviewPageView): string {
+function renderAlertSummary(view: OverviewCostAlertPageView): string {
   const rows = view.alert.rows.map(renderAlertRow).join("");
   if (view.alert.count === 0) {
     return `<section class="panel" aria-label="费用超限">`
@@ -56,7 +62,7 @@ function renderAlertSummary(view: OverviewPageView): string {
 }
 
 /** The complete run-overview document. */
-export function renderOverviewPage(view: OverviewPageView): string {
+export function renderOverviewCostAlertPage(view: OverviewCostAlertPageView): string {
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">`
     + `<meta name="viewport" content="width=device-width,initial-scale=1">`
     + `<title>运行总览｜Hivemind</title><style>${COSTS_PAGE_STYLE}</style></head><body>`

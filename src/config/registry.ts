@@ -170,7 +170,7 @@ export const CONFIG_KEYS = {
     default: 86_400_000,
     scope: "global",
     reload: "hot",
-    description: "Minimum interval between successful merges of main into an active Epic integration branch.",
+    description: "Floor under how often an Epic integration branch is refreshed from main. What makes a branch due is main having moved; this only rate-limits a main that moves constantly.",
   }),
   "schedule.workerGraceMs": def({
     schema: positiveInt.min(60_000),
@@ -510,14 +510,14 @@ export const CONFIG_KEYS = {
     default: [],
     scope: "per-repo",
     reload: "hot",
-    description: "How to start the repository's application for the UI acceptance review, as argv run in the Story worktree. The reviewer needs a running page with data on it, not only the functional lane's screenshots; empty means there is no application to start and the review judges from screenshots alone.",
+    description: "How to start the repository's application for the UI acceptance review, as argv run in the Story worktree. The reviewer needs a running page with data on it, not only the functional lane's screenshots; empty means there is no application to start and the review judges from screenshots alone. Write {port} where the port goes, here and in verify.appReadyUrl, and each round gets one this host has just found free: a fixed port is taken by whichever lane started first, and the others are answered by its application and judge that instead of their own.",
   }),
   "verify.appReadyUrl": def({
     schema: z.string().trim(),
     default: "",
     scope: "per-repo",
     reload: "hot",
-    description: "URL polled until it answers 2xx or 3xx before the UI acceptance review starts, and handed to the reviewer as where the application is. Empty means do not wait.",
+    description: "URL polled until it answers 2xx or 3xx before the UI acceptance review starts, and handed to the reviewer as where the application is. Empty means do not wait. {port} is replaced by the port reserved for this round, the same one substituted into verify.appStartCommand.",
   }),
   "verify.appReadyTimeoutMs": def({
     schema: positiveInt,

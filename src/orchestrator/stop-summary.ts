@@ -42,7 +42,15 @@ export interface StopSummary {
   /** Which situation ended the loop, when a loop ended it. */
   convergence?: ConvergenceClassification;
   spent: number;
-  budget: number;
+  /**
+   * Absent when the stop did not come from a round budget. It used to default
+   * to 0, which reads as a budget of zero -- a number the code guarantees
+   * cannot exist, since `maxInnerLoopRounds` is validated above zero.
+   */
+  budget?: number;
+  /** Rounds that could not be judged at all because the environment would not
+   * stand up, when that is what ended the card. */
+  inconclusive?: { attempts: number; scenarios: readonly string[] };
   rounds: readonly StopSummaryRound[];
   mergeBounces: readonly StopSummaryMergeBounce[];
   baselineFailures: readonly StopSummaryBaselineFailure[];
@@ -82,7 +90,16 @@ export function renderStopSummary(summary: StopSummary): string {
   } else {
     lines.push(`${summary.cardId} stopped: ${summary.reason}`);
   }
-  lines.push("", `Rounds spent: ${summary.spent} of ${summary.budget}`);
+  if (summary.inconclusive) {
+    lines.push(
+      "",
+      `The environment would not stand up ${summary.inconclusive.attempts} rounds running, `
+      + `so nothing could be judged: ${summary.inconclusive.scenarios.join(", ")}`,
+    );
+  }
+  lines.push("", summary.budget === undefined
+    ? `Rounds spent: ${summary.spent}`
+    : `Rounds spent: ${summary.spent} of ${summary.budget}`);
   for (const bounce of summary.mergeBounces) {
     lines.push(`Merge sent it back (${bounce.attribution}): ${bounce.failures.join(", ") || bounce.check || "no name recorded"}`);
   }
