@@ -31,7 +31,7 @@
     "story": "任务"
   },
   "todoKinds": {
-    "reply": "待答复",
+    "reply": "回答问题",
     "approval": "待批准",
     "choice": "待选择"
   },
