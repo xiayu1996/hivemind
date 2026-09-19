@@ -8,6 +8,12 @@ import type { ConsoleOverviewPage, OverviewPageState } from "./overview-page.js"
 
 /** The console's own time zone when the reader's browser sends none. */
 const DEFAULT_TIME_ZONE = "Asia/Shanghai";
+/**
+ * For a review of the four content states, `?state=` forces one of them. It
+ * drives the same render path a real empty store, a failed read or a pending
+ * result takes, so a reviewer can see each without breaking the service; a
+ * normal open reads the store and picks the state from what it found.
+ */
 const FORCED_PAGE_STATES = new Set<OverviewPageState>(["loading", "empty", "error", "waiting"]);
 
 function forcedPageState(value: string | undefined): OverviewPageState | null {
