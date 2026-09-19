@@ -215,4 +215,9 @@ describe("the overview a verification round opens", () => {
     expect(active).not.toContain("别的运行任务");
     expect(active).not.toContain("已经恢复的旧失败");
   });
+  it("@scenario S-R237511OV-01-failures omits a recovered historical failure from the current failure section", () => {
+    const failures = section(html, 'id="failures-title"', 'id="completed-title"');
+    expect(failures).not.toContain("已经恢复的旧失败");
+    expect(failures).not.toContain("旧失败原因");
+  });
 });
