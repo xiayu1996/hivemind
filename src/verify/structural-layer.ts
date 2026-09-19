@@ -32,6 +32,13 @@ export interface StructuralFinding {
   reason: string;
   /** For whoever debugs it: which snapshots were read. */
   detail: string;
+  /**
+   * The snapshot was missing or unreadable, so this finding says nothing about
+   * the page: the round has nothing to look at, which is a fact about the run
+   * and not about the code. A finding without it names something the page was
+   * required to show and did not.
+   */
+  evidenceMissing?: true;
 }
 
 export interface StructuralInput {
@@ -58,6 +65,7 @@ export async function checkStructuralLayer(input: StructuralInput): Promise<Stru
         id: subject.id,
         reason: "这个场景要看见的内容无从查证：没有留下任何页面结构记录",
         detail: "no accessibility snapshot was declared",
+        evidenceMissing: true,
       });
       continue;
     }
@@ -92,6 +100,7 @@ export async function checkStructuralLayer(input: StructuralInput): Promise<Stru
         id: subject.id,
         reason: "这个场景要看见的内容无从查证：留下的页面结构记录读不出来",
         detail: `unreadable snapshots: ${[...unreadable].toSorted().join(", ")}`,
+        evidenceMissing: true,
       });
       continue;
     }
