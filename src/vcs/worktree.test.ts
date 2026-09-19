@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -48,6 +48,67 @@ describe("worktree lifecycle", () => {
     expect((await stat(location.evidencePath)).isDirectory()).toBe(true);
     expect(execFileSync("git", ["branch", "--show-current"], { cwd: location.worktreePath, encoding: "utf8" }).trim())
       .toBe("story/sample-1");
+  });
+
+  it("puts a worktree back after its directory left without git being told", async () => {
+    const repo = await repository();
+    const root = await mkdtemp(join(tmpdir(), "hm-worktree-restore-"));
+    const layout = worktreeLayout(root);
+    const input = {
+      repositoryPath: repo,
+      repositoryId: "sample",
+      cardId: "story-3",
+      branch: "story/sample-3",
+      startPoint: "main",
+    };
+    const first = await createWorktree(input, layout);
+    await writeFile(join(first.worktreePath, "work.txt"), "committed work\n", "utf8");
+    execFileSync("git", ["add", "work.txt"], { cwd: first.worktreePath });
+    execFileSync("git", ["commit", "-m", "story work"], { cwd: first.worktreePath });
+    // Whoever removed it -- an operator clearing disk, a half-finished rename,
+    // a machine that died -- git still holds the registration, and without
+    // clearing it the card's own branch has nowhere left to be checked out.
+    await rm(first.worktreePath, { recursive: true, force: true });
+
+    const again = await createWorktree(input, layout);
+
+    expect(again.worktreePath).toBe(first.worktreePath);
+    expect(await readFile(join(again.worktreePath, "work.txt"), "utf8")).toBe("committed work\n");
+    expect(execFileSync("git", ["branch", "--show-current"], { cwd: again.worktreePath, encoding: "utf8" }).trim())
+      .toBe("story/sample-3");
+  });
+
+  it("leaves another card's worktree alone while restoring its own", async () => {
+    const repo = await repository();
+    const root = await mkdtemp(join(tmpdir(), "hm-worktree-neighbour-"));
+    const layout = worktreeLayout(root);
+    const neighbour = await createWorktree({
+      repositoryPath: repo,
+      repositoryId: "sample",
+      cardId: "story-4",
+      branch: "story/sample-4",
+      startPoint: "main",
+    }, layout);
+    const lost = await createWorktree({
+      repositoryPath: repo,
+      repositoryId: "sample",
+      cardId: "story-5",
+      branch: "story/sample-5",
+      startPoint: "main",
+    }, layout);
+    await rm(lost.worktreePath, { recursive: true, force: true });
+
+    await createWorktree({
+      repositoryPath: repo,
+      repositoryId: "sample",
+      cardId: "story-5",
+      branch: "story/sample-5",
+      startPoint: "main",
+    }, layout);
+
+    expect((await stat(neighbour.worktreePath)).isDirectory()).toBe(true);
+    expect(execFileSync("git", ["worktree", "list"], { cwd: repo, encoding: "utf8" }))
+      .toContain(neighbour.worktreePath);
   });
 
   it("moves suspect data to recoverable quarantine and rejects unmanaged paths", async () => {
