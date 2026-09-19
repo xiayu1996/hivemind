@@ -47,8 +47,10 @@ export interface EvidenceRef {
 
 export interface RegressionCardRef {
   scenarioId: string;
-  /** The normalised failure text the card is keyed by. */
+  /** The stable key of the break, used for ordering and for closing the card. */
   signature: string;
+  /** The break in words. Absent only for a card raised before it was kept. */
+  failureText?: string;
   /** The Story the bisection blamed; absent when the card is still unattributed. */
   attributedStory?: string;
 }
@@ -214,7 +216,10 @@ export function roundTasks(input: PhaseInput): RoundTask[] {
   for (const card of sortBy(input.regressions ?? [], (c) => `${c.scenarioId} ${c.signature}`)) {
     tasks.push({
       tag: `[regression:${card.scenarioId}]`,
-      text: `the scenario fails on the Epic branch since ${card.attributedStory ?? "an unattributed Story"}: ${card.signature.trim()}`,
+      // The text, never the key. A Story asked to reproduce a break was being
+      // handed the thirty-two hex characters the card is filed under.
+      text: `the scenario fails on the Epic branch since ${card.attributedStory ?? "an unattributed Story"}: ${
+        (card.failureText ?? "").trim() || `no failure text was recorded (break ${card.signature.trim()})`}`,
     });
   }
   return tasks;

@@ -4,10 +4,15 @@ import type { ScenarioPool } from "./scenario-registry.js";
 import {
   failureSignature,
   judgeRegression,
+  normalizeFailureText,
   type RegressionJudgement,
   type RegressionObservation,
   type RegressionPolicy,
 } from "./verdict.js";
+
+/** Enough of the break to act on, short enough to sit in a prompt beside the
+ * rest of the round's context. */
+const FAILURE_TEXT_LIMIT = 2_000;
 
 export interface RegressionRecord {
   scenarioId: string;
@@ -38,6 +43,8 @@ export async function regressionPolicy(config: ConfigStore): Promise<RegressionP
 export interface OpenRegressionCard {
   scenarioId: string;
   failureSignature: string;
+  /** The break in words. Null only for a card raised before this was kept. */
+  failureText: string | null;
   attributedStory: string | null;
 }
 
@@ -50,12 +57,16 @@ export class RegressionStore {
   ) {}
 
   async record(input: RegressionRecord, policy: RegressionPolicy): Promise<RegressionResult> {
-    const signature = input.outcome === "failed" ? failureSignature(input.output ?? "") : null;
+    const failed = input.outcome === "failed";
+    const signature = failed ? failureSignature(input.output ?? "") : null;
+    // The same text the hash is taken over, bounded: a card carries it to the
+    // Story reopened to fix the break, and a hash tells that Story nothing.
+    const text = failed ? normalizeFailureText(input.output ?? "").slice(0, FAILURE_TEXT_LIMIT) : null;
     const time = this.now();
     await this.client.execute({
-      sql: `INSERT INTO regression_runs (scenario_id, pool, revision, outcome, failure_signature, ts)
-            VALUES (?, ?, ?, ?, ?, ?)`,
-      args: [input.scenarioId, input.pool, input.revision, input.outcome, signature, time],
+      sql: `INSERT INTO regression_runs (scenario_id, pool, revision, outcome, failure_signature, failure_text, ts)
+            VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      args: [input.scenarioId, input.pool, input.revision, input.outcome, signature, text, time],
     });
 
     const judgement = judgeRegression(await this.history(input.scenarioId, policy.windowSize), policy);
@@ -72,12 +83,12 @@ export class RegressionStore {
     if (judgement.kind !== "raise") return { judgement, cardRaised: false, cardsCleared: [] };
 
     const inserted = await this.client.execute({
-      sql: `INSERT INTO regression_cards (scenario_id, failure_signature, created_at)
-            VALUES (?, ?, ?)
+      sql: `INSERT INTO regression_cards (scenario_id, failure_signature, failure_text, created_at)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT(scenario_id, failure_signature) DO UPDATE
               SET resolved_at = NULL, created_at = excluded.created_at
               WHERE regression_cards.resolved_at IS NOT NULL`,
-      args: [input.scenarioId, judgement.signature, time],
+      args: [input.scenarioId, judgement.signature, text, time],
     });
     return { judgement, cardRaised: inserted.rowsAffected === 1, cardsCleared: [] };
   }
@@ -116,10 +127,10 @@ export class RegressionStore {
    * one of that Epic's Stories; an unattributed card belongs to no Epic. */
   async openCards(epicId?: string): Promise<OpenRegressionCard[]> {
     const rows = (await this.client.execute(epicId === undefined
-      ? `SELECT scenario_id, failure_signature, attributed_story FROM regression_cards
+      ? `SELECT scenario_id, failure_signature, failure_text, attributed_story FROM regression_cards
           WHERE resolved_at IS NULL ORDER BY created_at, scenario_id`
       : {
-        sql: `SELECT c.scenario_id, c.failure_signature, c.attributed_story
+        sql: `SELECT c.scenario_id, c.failure_signature, c.failure_text, c.attributed_story
                 FROM regression_cards c JOIN stories s ON s.id = c.attributed_story
                WHERE c.resolved_at IS NULL AND s.epic_id = ?
                ORDER BY c.created_at, c.scenario_id`,
@@ -131,7 +142,7 @@ export class RegressionStore {
   /** The open cards a REGRESSION_FIX round of this Story has to answer for. */
   async openCardsForStory(storyId: string): Promise<OpenRegressionCard[]> {
     const rows = (await this.client.execute({
-      sql: `SELECT scenario_id, failure_signature, attributed_story FROM regression_cards
+      sql: `SELECT scenario_id, failure_signature, failure_text, attributed_story FROM regression_cards
              WHERE resolved_at IS NULL AND attributed_story = ? ORDER BY created_at, scenario_id`,
       args: [storyId],
     })).rows;
@@ -165,6 +176,7 @@ function toOpenCard(row: Record<string, unknown>): OpenRegressionCard {
   return {
     scenarioId: String(row.scenario_id),
     failureSignature: String(row.failure_signature),
+    failureText: row.failure_text === null || row.failure_text === undefined ? null : String(row.failure_text),
     attributedStory: row.attributed_story === null ? null : String(row.attributed_story),
   };
 }
