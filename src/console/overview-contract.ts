@@ -95,7 +95,13 @@ export interface OverviewSummary {
   runningCount: number;
   failureCount: number;
   costUsd: number;
+  /** Requirements whose spend inside the summary window is over the ceiling. */
   overruns: OverviewCostOverrun[];
+  /** Requirements whose whole spend is over the ceiling. A ceiling caps the
+   * requirement rather than one week of it, so this is the list the overview
+   * shows beside a requirement's name; the seven-day `overruns` above answers
+   * only what the summary window alone contains. */
+  lifetimeOverruns?: OverviewCostOverrun[];
 }
 
 export interface OverviewSections {
@@ -244,6 +250,7 @@ interface OverviewRows {
   failureEvents: Array<{ cardId: string; ts: number; data: unknown }>;
   failedRuns: Array<{ cardId: string; phase: string; failure: string | null; endedAt: number | null }>;
   costs: Array<{ cardId: string | null; usd: number }>;
+  lifetimeCosts: Array<{ cardId: string | null; usd: number }>;
   storyRequirement: Map<string, string>;
   epicRequirement: Map<string, string>;
   ceilingUsd: number;
@@ -270,12 +277,13 @@ async function readRows(tx: Transaction, rangeStart: number, nowMs: number): Pro
       WHERE status = 'failed' AND card_id IN (SELECT id FROM stories WHERE state = 'FAILED')
       ORDER BY ended_at`,
     { sql: "SELECT card_id, SUM(cost_usd) AS usd FROM cost_entries WHERE ts >= ? AND ts <= ? GROUP BY card_id", args: [rangeStart, nowMs] },
+    "SELECT card_id, SUM(cost_usd) AS usd FROM cost_entries GROUP BY card_id",
     "SELECT s.id AS story_id, e.requirement_id FROM stories s JOIN epics e ON e.id = s.epic_id WHERE e.requirement_id IS NOT NULL",
     "SELECT e.id, e.requirement_id FROM epics e WHERE e.requirement_id IS NOT NULL",
     "SELECT value_json FROM config_entries WHERE scope_id = 'global' AND key = 'cost.perCardUsdCeiling'",
   ]);
 
-  const [requirementRows, storyRows, clarifyRows, prdRows, solutionRows, failureEventRows, failedRunRows, costRows, storyEpicRows, epicRows, ceilingRows] =
+  const [requirementRows, storyRows, clarifyRows, prdRows, solutionRows, failureEventRows, failedRunRows, costRows, lifetimeCostRows, storyEpicRows, epicRows, ceilingRows] =
     results;
 
   const requirements: RequirementRow[] = (requirementRows?.rows ?? []).map((row) => ({
@@ -332,6 +340,10 @@ async function readRows(tx: Transaction, rangeStart: number, nowMs: number): Pro
     cardId: row.card_id === null ? null : String(row.card_id),
     usd: numberValue(row.usd),
   }));
+  const lifetimeCosts = (lifetimeCostRows?.rows ?? []).map((row) => ({
+    cardId: row.card_id === null ? null : String(row.card_id),
+    usd: numberValue(row.usd),
+  }));
 
   const storyRequirement = new Map<string, string>();
   for (const row of storyEpicRows?.rows ?? []) {
@@ -354,6 +366,7 @@ async function readRows(tx: Transaction, rangeStart: number, nowMs: number): Pro
     failureEvents,
     failedRuns,
     costs,
+    lifetimeCosts,
     storyRequirement,
     epicRequirement,
     ceilingUsd,
@@ -489,33 +502,42 @@ function assemble(rows: OverviewRows, query: OverviewReadQuery): Omit<OverviewSn
   completed.sort((a, b) => b.completedAtMs - a.completedAtMs || a.id.localeCompare(b.id, "en"));
 
   const requirementIds = new Set(rows.requirements.map((row) => row.id));
-  const spendByRequirement = new Map<string, number>();
   let costUsd = 0;
-  for (const entry of rows.costs) {
-    costUsd += entry.usd;
-    if (entry.cardId === null) continue;
-    const requirementId = requirementIds.has(entry.cardId)
-      ? entry.cardId
-      : rows.storyRequirement.get(entry.cardId) ?? rows.epicRequirement.get(entry.cardId);
-    if (requirementId === undefined) continue;
-    spendByRequirement.set(requirementId, (spendByRequirement.get(requirementId) ?? 0) + entry.usd);
-  }
+  for (const entry of rows.costs) costUsd += entry.usd;
 
-  const overruns: OverviewCostOverrun[] = [];
-  for (const [requirementId, spent] of spendByRequirement) {
-    const rounded = Math.round(spent * 100) / 100;
-    if (rounded <= rows.ceilingUsd) continue;
-    overruns.push({
-      requirementId,
-      requirementName: rows.requirements.find((row) => row.id === requirementId)?.title ?? requirementId,
-      spentUsd: rounded,
-      limitUsd: rows.ceilingUsd,
-      status: "over_limit",
-      workContinues: true,
-      costsHref: costsHref(requirementId),
-    });
-  }
-  overruns.sort((a, b) => b.spentUsd - a.spentUsd || a.requirementId.localeCompare(b.requirementId, "en"));
+  const overrunsFrom = (entries: OverviewRows["costs"]): OverviewCostOverrun[] => {
+    const spendByRequirement = new Map<string, number>();
+    for (const entry of entries) {
+      if (entry.cardId === null) continue;
+      const requirementId = requirementIds.has(entry.cardId)
+        ? entry.cardId
+        : rows.storyRequirement.get(entry.cardId) ?? rows.epicRequirement.get(entry.cardId);
+      if (requirementId === undefined) continue;
+      spendByRequirement.set(requirementId, (spendByRequirement.get(requirementId) ?? 0) + entry.usd);
+    }
+    const list: OverviewCostOverrun[] = [];
+    for (const [requirementId, spent] of spendByRequirement) {
+      const rounded = Math.round(spent * 100) / 100;
+      if (rounded <= rows.ceilingUsd) continue;
+      list.push({
+        requirementId,
+        requirementName: rows.requirements.find((row) => row.id === requirementId)?.title ?? requirementId,
+        spentUsd: rounded,
+        limitUsd: rows.ceilingUsd,
+        status: "over_limit",
+        workContinues: true,
+        costsHref: costsHref(requirementId),
+      });
+    }
+    list.sort((a, b) => b.spentUsd - a.spentUsd || a.requirementId.localeCompare(b.requirementId, "en"));
+    return list;
+  };
+
+  const overruns = overrunsFrom(rows.costs);
+  // The ceiling bounds the requirement, not the summary window, so the list a
+  // person acts on is the whole spend; `overruns` above stays the part of it
+  // that falls inside the seven days the rest of the summary describes.
+  const lifetimeOverruns = overrunsFrom(rows.lifetimeCosts);
 
   const empty = todos.length === 0 && active.length === 0 && failures.length === 0 && completed.length === 0;
 
@@ -530,6 +552,7 @@ function assemble(rows: OverviewRows, query: OverviewReadQuery): Omit<OverviewSn
       failureCount: failures.length,
       costUsd: Math.round(costUsd * 100) / 100,
       overruns,
+      lifetimeOverruns,
     },
   };
 }

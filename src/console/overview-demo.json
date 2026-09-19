@@ -41,7 +41,6 @@
   ],
   "costs": [
     { "runId": "demo-cost-1", "cardId": "R-ACTIVE", "provider": "demo", "modelId": "demo-1", "costUsd": 12.4, "offsetMs": -86400000 },
-    { "runId": "demo-cost-2", "cardId": "R-ACTIVE", "provider": "demo", "modelId": "demo-1", "costUsd": 7.6, "offsetMs": -604500000 },
-    { "runId": "demo-cost-old", "cardId": "R-ACTIVE", "provider": "demo", "modelId": "demo-1", "costUsd": 99, "offsetMs": -604800001 }
+    { "runId": "demo-cost-2", "cardId": "R-ACTIVE", "provider": "demo", "modelId": "demo-1", "costUsd": 7.6, "offsetMs": -604800001 }
   ]
 }

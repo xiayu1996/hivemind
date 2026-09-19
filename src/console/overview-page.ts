@@ -261,9 +261,13 @@ function section(id: string, title: string, count: number, inner: string): strin
 
 function renderSummary(snapshot: OverviewSnapshot): string {
   const { summary } = snapshot;
-  const overruns = summary.overruns.length === 0
+  // The ceiling caps the requirement, not the summary window, so the overrun
+  // beside its name is the whole spend. A snapshot carrying only the windowed
+  // list still renders from it.
+  const overrunList = summary.lifetimeOverruns ?? summary.overruns;
+  const overruns = overrunList.length === 0
     ? `<p class="meta">${escapeHtml(copy.emptyPrefix + copy.overrunHeading)}</p>`
-    : `<ul class="summary-list">${summary.overruns.map((overrun) => `
+    : `<ul class="summary-list">${overrunList.map((overrun) => `
         <li class="overrun-item">
           <strong>${escapeHtml(overrun.requirementName)}</strong>
           <span class="meta">${copy.spentLabel} ${formatUsd(overrun.spentUsd)} / ${copy.limitLabel} ${formatUsd(overrun.limitUsd)}</span>
@@ -285,7 +289,7 @@ function renderSummary(snapshot: OverviewSnapshot): string {
     + `<p class="summary-range">${copy.rangePrefix}：${escapeHtml(formatRange(summary.range))}</p>`
     + `</div>`
     + `<div class="panel">`
-    + `<h2>${copy.overrunHeading} ${countLabel(summary.overruns.length)}</h2>`
+    + `<h2>${copy.overrunHeading} ${countLabel(overrunList.length)}</h2>`
     + overruns
     + `</div>`
     + `</aside>`;
