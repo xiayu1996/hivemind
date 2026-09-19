@@ -138,7 +138,12 @@ function parseIpv6(value: string): AddressBytes | null {
   }
   const bytes = groups.flatMap((groupValue) => [(groupValue >> 8) & 0xff, groupValue & 0xff]);
 
-  return bytes;
+  // ::ffff:0:0/96 is an IPv4 address carried in an IPv6 shape. Folding it is
+  // what makes a mapped peer match the IPv4 range it came from; without this a
+  // mapped address would compare against IPv6 ranges and match nothing.
+  const mapped = bytes.slice(0, 10).every((byte) => byte === 0)
+    && bytes[10] === 0xff && bytes[11] === 0xff;
+  return mapped ? bytes.slice(12) : bytes;
 }
 
 function parseAddress(value: string): AddressBytes | null {
