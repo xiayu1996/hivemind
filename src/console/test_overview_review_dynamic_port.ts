@@ -172,4 +172,13 @@ describe("the overview started by a verification round with its dynamic port", (
       expect(completed).not.toContain("重试退避");
     });
   });
+  it("@scenario S-R237511OV-01-refresh does not show the same task at an unobserved later stage", async () => {
+    await inspectOverview((html) => {
+      const active = section(html, 'id="active-title"', 'id="failures-title"');
+      expect(active).not.toContain('aria-label="重试退避 任务 VERIFY 运行中"');
+      // The name appears in both the row's accessible label and its name cell,
+      // so a raw-name count of two would count one row twice. Count the row.
+      expect(active.match(/aria-label="重试退避 任务 CODE 运行中"/gu)).toHaveLength(1);
+    });
+  });
 });
