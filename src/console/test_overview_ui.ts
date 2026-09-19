@@ -223,11 +223,17 @@ describe("overview first screen", () => {
     const snapshot = await demoSnapshot(await demoClient());
     const html = page(snapshot);
 
-    expect(snapshot.summary.costUsd).toBe(20);
-    expect(snapshot.summary.overruns).toHaveLength(1);
+    expect(snapshot.summary.costUsd).toBe(12.4);
+    // The ceiling caps the requirement, not one week of it, so the overrun
+    // beside it carries the requirement's whole spend.
+    expect(snapshot.summary.lifetimeOverruns).toHaveLength(1);
+    expect(snapshot.summary.lifetimeOverruns?.[0]?.spentUsd).toBe(20);
     expect(html).toContain("<h2>\u4e03\u65e5\u4e0e\u8d39\u7528\u6458\u8981</h2>");
     expect(html).toContain("\u6700\u8fd1 7 \u5929\u5b8c\u6210");
-    expect(html).toContain("USD $20.00");
+    // The summary metric carries the seven-day spend; the overrun line carries
+    // the requirement's spend and ceiling.
+    expect(html).toContain("USD $12.40");
+    expect(html).toContain("已花 USD $20.00 / 上限 USD $15.00");
     expect(html).toContain("\u7edf\u8ba1\u8303\u56f4");
     expect(html).toContain(TIME_ZONE);
     expect(html).toContain("\u5df2\u8d85\u9650");

@@ -93,7 +93,9 @@ describe("the overview started by a verification round with its dynamic port", (
   it("@scenario S-R237511OV-01-costs shows the seven-day dollar summary and continuing overrun after allocating the review port", async () => {
     await inspectOverview((html) => {
       const summary = section(html, '<aside class="stack"', "</aside>");
-      expect(summary).toContain("USD $20.00");
+      // The summary metric is the seven-day window alone; the overrun is the
+      // requirement's spend against its ceiling, so the two legitimately differ.
+      expect(summary).toContain('美元费用</div><div class="metric-value money">USD $12.40');
       expect(summary).toContain("统计范围");
       expect(summary).toContain("Asia/Shanghai");
       expect(summary).toContain("已花 USD $20.00 / 上限 USD $15.00");
