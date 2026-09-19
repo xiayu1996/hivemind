@@ -155,14 +155,21 @@ async function currentBranch(path: string): Promise<string> {
  * that talk to Notion or to the remote fail whenever the link blinks, and
  * they run before the steps that dispatch cards and land branches: letting
  * one of them abort the cycle stalls the whole pipeline until the link comes
- * back. Anything that is not a transport fault still stops the cycle.
+ * back. A fault that retrying can clear is skipped for this cycle; anything
+ * that needs a decision still stops it.
+ *
+ * The test is retryability rather than one class, because a link that blinks
+ * says so in more than one wording. A Notion request that hit its deadline
+ * reads as TIMEOUT, not TRANSPORT, and cost a whole cycle -- dispatch, Epic
+ * upkeep and the regression sweep -- plus a P0 about a request that would
+ * have succeeded on the next pass.
  */
 const step = async (name: string, run: () => Promise<void>): Promise<void> => {
   try {
     await run();
   } catch (error) {
     const message = (error as Error).message;
-    if (classifyError(message).class !== "TRANSPORT") throw error;
+    if (!classifyError(message).retryable) throw error;
     console.warn(`${name} was skipped this cycle after a transient network fault: ${message}`);
   }
 };
