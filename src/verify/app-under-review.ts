@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { createServer } from "node:net";
 import { setTimeout as sleep } from "node:timers/promises";
 
 /**
@@ -45,9 +46,35 @@ const OUTPUT_LIMIT = 8 * 1024;
 const READY_POLL_MS = 500;
 const STOP_GRACE_MS = 2_000;
 const DEFAULT_SEED_TIMEOUT_MS = 60_000;
+/** The placeholder a repository writes where its application's port goes. */
+const PORT_PLACEHOLDER = "{port}";
 
 function tail(text: string): string {
   return text.length > OUTPUT_LIMIT ? text.slice(text.length - OUTPUT_LIMIT) : text;
+}
+
+/**
+ * A port the application may bind, released before it starts.
+ *
+ * A repository asks for a free port with `{port}` because a fixed one collides
+ * with whatever else the host runs, and a review that cannot start its
+ * application reports every screen inconclusive. The port is probed on the
+ * loopback interface and closed immediately; the application then binds it.
+ */
+async function freePort(): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    const probe = createServer();
+    probe.unref();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
+      const port = typeof address === "object" && address !== null ? address.port : 0;
+      probe.close(() => {
+        if (port > 0) resolve(port);
+        else reject(new Error("could not allocate a port for the application under review"));
+      });
+    });
+  });
 }
 
 async function ready(url: string): Promise<boolean> {
@@ -81,7 +108,20 @@ export class AppUnderReview {
   async start(input: AppStartInput): Promise<AppStartResult> {
     if (input.command.length === 0) return { started: false, reason: "no application start command is configured" };
     if (this.child) return { started: false, reason: "an application is already running" };
-    const [file, ...args] = input.command;
+    let command = input.command;
+    let readyUrl = input.readyUrl;
+    if ([...input.command, input.readyUrl].some((part) => part.includes(PORT_PLACEHOLDER))) {
+      let port: number;
+      try {
+        port = await freePort();
+      } catch (error) {
+        return { started: false, reason: (error as Error).message };
+      }
+      const allocated = String(port);
+      command = input.command.map((part) => part.replaceAll(PORT_PLACEHOLDER, allocated));
+      readyUrl = input.readyUrl.replaceAll(PORT_PLACEHOLDER, allocated);
+    }
+    const [file, ...args] = command;
     const log = input.log ?? (() => undefined);
     let child: ChildProcess;
     try {
@@ -108,22 +148,22 @@ export class AppUnderReview {
     });
     child.unref();
 
-    if (!input.readyUrl) return { started: true, url: "" };
+    if (!readyUrl) return { started: true, url: "" };
     const deadline = Date.now() + input.timeoutMs;
     let exitReason: string | null = null;
     void this.exited.then((reason) => { exitReason = reason; });
     while (Date.now() < deadline) {
       if (exitReason !== null) {
         await this.stop();
-        return { started: false, reason: `the application ${exitReason} before answering at ${input.readyUrl}: ${this.output.trim()}` };
+        return { started: false, reason: `the application ${exitReason} before answering at ${readyUrl}: ${this.output.trim()}` };
       }
-      if (await ready(input.readyUrl)) return { started: true, url: input.readyUrl };
+      if (await ready(readyUrl)) return { started: true, url: readyUrl };
       await sleep(READY_POLL_MS);
     }
     await this.stop();
     return {
       started: false,
-      reason: `the application did not answer at ${input.readyUrl} within ${input.timeoutMs}ms: ${this.output.trim()}`,
+      reason: `the application did not answer at ${readyUrl} within ${input.timeoutMs}ms: ${this.output.trim()}`,
     };
   }
 

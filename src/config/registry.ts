@@ -496,14 +496,14 @@ export const CONFIG_KEYS = {
     default: [],
     scope: "per-repo",
     reload: "hot",
-    description: "How to start the repository's application for the UI acceptance review, as argv run in the Story worktree. The reviewer needs a running page with data on it, not only the functional lane's screenshots; empty means there is no application to start and the review judges from screenshots alone.",
+    description: "How to start the repository's application for the UI acceptance review, as argv run in the Story worktree. The reviewer needs a running page with data on it, not only the functional lane's screenshots; empty means there is no application to start and the review judges from screenshots alone. Write {port} where the application takes its listening port and one is allocated per review, so the command never collides with another process on the host.",
   }),
   "verify.appReadyUrl": def({
     schema: z.string().trim(),
     default: "",
     scope: "per-repo",
     reload: "hot",
-    description: "URL polled until it answers 2xx or 3xx before the UI acceptance review starts, and handed to the reviewer as where the application is. Empty means do not wait.",
+    description: "URL polled until it answers 2xx or 3xx before the UI acceptance review starts, and handed to the reviewer as where the application is. Write {port} for the port allocated to verify.appStartCommand. Empty means do not wait.",
   }),
   "verify.appReadyTimeoutMs": def({
     schema: positiveInt,
