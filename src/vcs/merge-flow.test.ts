@@ -77,6 +77,28 @@ describe("EpicMergeFlow", () => {
     expect(calls).toContainEqual({ cwd: "story", args: ["diff", "--name-only", "--diff-filter=U"] });
     expect(verify).not.toHaveBeenCalled();
     expect(calls.some(({ args }) => args[0] === "merge")).toBe(false);
+    // The conflict is read out of the worktree and then the worktree is handed
+    // back on its branch. Left mid-rebase it sits detached, and the next
+    // dispatch of this card refuses to start in it.
+    const inspected = calls.findIndex(({ args }) => args.join(" ") === "diff --name-only --diff-filter=U");
+    const abandoned = calls.findIndex(({ args }) => args.join(" ") === "rebase --abort");
+    expect(abandoned).toBeGreaterThan(inspected);
+    expect(calls[abandoned]?.cwd).toBe("story");
+  });
+
+  it("says the worktree still needs a hand when the rebase cannot be abandoned", async () => {
+    const git = { run: vi.fn(async (cwd: string, args: string[]) => {
+      if (args.join(" ") === "branch --show-current") return cwd === "story" ? story.branch : "epic/E-1";
+      if (args.join(" ") === "rebase epic/E-1") throw new Error("rebase failed");
+      if (args.join(" ") === "diff --name-only --diff-filter=U") return "src/vcs/merge-flow.ts\n";
+      if (args.join(" ") === "rebase --abort") throw new Error("no rebase in progress");
+      return "";
+    }) };
+    const flow = new EpicMergeFlow(git, vi.fn(), { storyWorktree: "story", integrationWorktree: "integration" });
+
+    const result = await flow.merge({ epicId: "E-1", story, integratedStories: [] });
+    expect(result).toMatchObject({ kind: "conflict", files: ["src/vcs/merge-flow.ts"] });
+    expect((result as { reason: string }).reason).toContain("still mid-rebase");
   });
 
   it("S-M2-05-subset does not reverify or merge from a dirty integration worktree", async () => {
