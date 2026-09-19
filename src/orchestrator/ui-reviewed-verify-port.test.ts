@@ -484,6 +484,32 @@ describe("UiReviewedVerifyPort and the interface contract", () => {
     expect(result.verdict).toBe("accepted");
   });
 
+  it("distinguishes an application that would not come up from one nobody declared", async () => {
+    // The two ask for different things, and one sentence for both pointed at a
+    // setting that was in fact configured: the friction log said
+    // `verify.appStartCommand is empty` next to a record holding that command.
+    const friction: Array<{ kind: string; detail: string }> = [];
+    const styles = collector(offTable);
+    const { instance } = port({
+      functional,
+      friction: async (given) => { friction.push(given); },
+      app: { startCommand: ["npm", "run", "dev"], readyUrl: "http://app.local:3000/", readyTimeoutMs: 1000, seedCommand: [] },
+      appUnderReview: () => ({
+        start: async () => ({ started: false, reason: "exited with code 1 before answering" }),
+        seed: async () => ({ ok: true, output: "" }),
+        stop: async () => undefined,
+      }),
+      uiContract: { enforce: "warn", tokens: async () => tokens, collector: styles.make },
+    });
+
+    await instance.run(verifyInput(dod([["ui"]])));
+
+    const noApp = friction.find((entry) => entry.kind === "ui_contract_no_app");
+    expect(noApp?.detail).toContain("did not come up");
+    expect(noApp?.detail).toContain("exited with code 1 before answering");
+    expect(noApp?.detail).not.toContain("verify.appStartCommand is empty");
+  });
+
   it("delivers the round but records what it found while the layer is only warning", async () => {
     const friction: Array<{ kind: string; detail: string }> = [];
     const styles = collector(offTable);
