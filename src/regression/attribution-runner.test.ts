@@ -57,6 +57,13 @@ describe("attribution over a real integration sequence", () => {
     });
   });
 
+  // `git checkout --detach ''` is a fatal pathspec error that takes down the
+  // sweep for the whole Epic, so a sequence with a hole in it is no sequence.
+  it("reports no sequence when a captured revision is missing", async () => {
+    await integrate("S-M2-04", 4, "rev-base", "");
+    await expect(attributionSequence(client, "M2")).resolves.toEqual({ base: "", steps: [] });
+  });
+
   it("reopens the Story that introduced the break, ahead of everything else", async () => {
     const failing = new Set(["rev-2", "rev-3"]);
     const probe = vi.fn(async (revision: string) => failing.has(revision));
