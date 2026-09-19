@@ -143,3 +143,52 @@ describe("role configuration versions", () => {
     await app.close();
   });
 });
+
+describe("role configuration differences", () => {
+  it("@scenario S-R237511RC-01-diff 每处差异都保留具体前后内容并带文字标识", () => {
+    const difference = compareRoleConfigurationVersions(current, previous);
+    const state: RoleConfigurationViewState = {
+      status: "ready",
+      roles,
+      selectedRoleId: "prototype",
+      pair: { ...pairWith(previous), difference },
+    };
+
+    expect(difference.currentPrompt.map((segment) => segment.text).join("")).toBe(current.prompt);
+    expect(difference.previousPrompt.map((segment) => segment.text).join("")).toBe(previous.prompt);
+    expect(difference.provider).toEqual({ current: current.provider, previous: previous.provider, changed: true });
+    expect(difference.model).toEqual({ current: current.model, previous: previous.model, changed: true });
+
+    const html = renderRoleConfigurationPage(state);
+    expect(html).toContain("新增：每页优先证明它承接了业务场景。");
+    expect(html).toContain("删除：先按页面清单逐页绘制。");
+    expect(html).toContain("上一版：OpenAI 已变更");
+    expect(html).toContain("上一版：GPT-5 Codex 已变更");
+    expect(html).toContain("Anthropic");
+    expect(html).toContain("Claude Sonnet 4");
+    expect(html).not.toContain("无变化");
+  });
+
+  it("@scenario S-R237511RC-01-diff 相同内容不显示为差异", () => {
+    const sameContent: RoleConfigurationVersion = { ...current, version: 11, savedAt: previous.savedAt };
+    const difference = compareRoleConfigurationVersions(current, sameContent);
+
+    expect(difference.currentPrompt.map((segment) => segment.text).join("")).toBe(current.prompt);
+    expect(difference.previousPrompt.map((segment) => segment.text).join("")).toBe(current.prompt);
+    expect(difference.currentPrompt.some((segment) => segment.kind === "added")).toBe(false);
+    expect(difference.previousPrompt.some((segment) => segment.kind === "removed")).toBe(false);
+    expect(difference.provider.changed).toBe(false);
+    expect(difference.model.changed).toBe(false);
+
+    const html = renderRoleConfigurationPage({
+      status: "ready",
+      roles,
+      selectedRoleId: "prototype",
+      pair: { roleId: "prototype", current, previous: sameContent, difference },
+    });
+    expect(html).not.toContain("已变更");
+    expect(html).not.toContain("新增：");
+    expect(html).not.toContain("删除：");
+    expect(html).not.toContain("无变化");
+  });
+});
