@@ -106,10 +106,24 @@ export async function startAppLane(
 /** The three settings the lane reads, so both lanes read the same ones. */
 export interface AppLaneSettings {
   get<K extends ConfigKey>(key: K): ConfigValue<K>;
+  /** Which repository these settings are for; null when they are for none. */
+  readonly repository: string | null;
 }
 
-/** The lane's configuration for a repository, minus the tree it starts in. */
+/**
+ * The lane's configuration for a repository, minus the tree it starts in.
+ *
+ * All three keys are per-repo, and a store with no repository answers them
+ * with a value nobody configured rather than with the repository's: the rows
+ * that would have overridden them are never even selected. Refusing here is
+ * what keeps the two verification lanes agreeing about whether an application
+ * is running -- a regression sweep read these unscoped and judged screens with
+ * no application while the Story's own round had been handed one.
+ */
 export function appLaneConfig(settings: AppLaneSettings): Omit<AppLaneConfig, "cwd"> {
+  if (settings.repository === null) {
+    throw new Error("the application lane needs settings scoped to a repository");
+  }
   return {
     command: settings.get("verify.appStartCommand"),
     readyUrl: settings.get("verify.appReadyUrl"),

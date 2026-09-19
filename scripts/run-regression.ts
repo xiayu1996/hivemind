@@ -15,6 +15,7 @@ import { migrate } from "../src/persistence/migrate.js";
 import { attributeCard, attributionSequence } from "../src/regression/attribution-runner.js";
 import { BlindSweepPort } from "../src/regression/blind-sweep-port.js";
 import { ScenarioRegistry, type ScenarioPool } from "../src/regression/scenario-registry.js";
+import { sweepRepository } from "../src/regression/sweep-repository.js";
 import { RegressionStore, regressionPolicy } from "../src/regression/store.js";
 import { RegressionSweeper } from "../src/regression/sweeper.js";
 import { resolveModel } from "../src/runner/model-resolver.js";
@@ -44,6 +45,7 @@ async function main(): Promise<void> {
   const branch = one("--branch");
   const worktreePath = resolve(one("--worktree"));
   const scenarioIds = one("--scenarios").split(",").map((id) => id.trim()).filter(Boolean);
+  const repositoryFlag = process.argv.includes("--repository") ? one("--repository") : null;
   const epicId = process.argv.includes("--epic") ? one("--epic") : null;
   const provider = one("--provider", "openai-codex");
   const modelId = one("--model");
@@ -57,7 +59,14 @@ async function main(): Promise<void> {
   const handle = openDb(dbUrl);
   try {
     await migrate(handle.client);
-    const config = await ConfigStore.load(handle.client);
+    // Per-repo settings -- how this repository starts its application, which
+    // hosts the browser may reach. An unscoped sweep read the code defaults
+    // instead and judged the same scenario without the application the Story's
+    // own round was handed, which is the disagreement between the two lanes
+    // that verify.appStartCommand exists to end.
+    const repository = repositoryFlag
+      ?? await sweepRepository(handle.client, { epicId, scenarioIds });
+    const config = await ConfigStore.load(handle.client, { repository });
     // The sweep spawns the verifier once per pool run, on the provider this
     // invocation names; there is no failover chain to walk inside a sweep and
     // no provider capacity to hold beyond it.
