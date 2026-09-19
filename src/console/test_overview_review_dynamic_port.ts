@@ -181,4 +181,10 @@ describe("the overview started by a verification round with its dynamic port", (
       expect(active.match(/aria-label="重试退避 任务 CODE 运行中"/gu)).toHaveLength(1);
     });
   });
+  it("@scenario S-R237511OV-01-costs never describes an overrun as paused", async () => {
+    await inspectOverview((html) => {
+      const summary = section(html, '<aside class="stack"', "</aside>");
+      expect(summary).not.toContain("已暂停");
+    });
+  });
 });
