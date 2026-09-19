@@ -165,4 +165,15 @@ describe("the overview a verification round opens", () => {
     expect(completed).toContain("已完成");
     expect(completed.indexOf("状态投影核对")).toBeLessThan(completed.indexOf("候选词表更新"));
   });
+  it("@scenario S-R237511OV-01-refresh re-reads the same block while the page stays open", async () => {
+    const active = section(html, 'id="active-title"', 'id="failures-title"');
+    expect(html).toContain("/assets/overview.js");
+    expect(html).toContain('id="refreshed-at"');
+    expect(html).toContain("每 30 秒自动刷新");
+    expect(active).toContain('aria-label="重试退避 任务 CODE 运行中"');
+    const refreshed = JSON.parse(await get("/overview/sections")) as { body: string; refreshed: string; revision: string };
+    expect(refreshed.body).toContain('aria-label="重试退避 任务 CODE 运行中"');
+    expect(refreshed.refreshed).toContain("最近刷新");
+    expect(refreshed.revision.length).toBeGreaterThan(0);
+  });
 });
