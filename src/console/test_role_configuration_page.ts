@@ -221,3 +221,29 @@ describe("role configuration loading state", () => {
     expect(html).not.toContain("编辑当前配置");
   });
 });
+
+describe("role configuration error state", () => {
+  it("@scenario S-R237511RC-01-error 读取失败后说明不会改变已有配置并可重试且保留所选角色", async () => {
+    const html = renderRoleConfigurationPage({
+      status: "error",
+      roles,
+      selectedRoleId: "prototype",
+      retryable: true,
+    });
+
+    expect(html).toContain("无法读取角色配置");
+    expect(html).toContain("已有配置不会改变");
+    expect(html).toContain("重新读取");
+    expect(html).toContain("value=\"prototype\" selected");
+    expect(html).not.toContain("还没有角色配置");
+
+    const state = await readRoleConfigurationView(
+      resolveRoleConfigurationPageRequest({ role: "prototype" }),
+      {
+        readCatalog: async () => ({ status: "ready", roles }),
+        readVersionPair: async () => ({ status: "unavailable", roleId: "prototype", retryable: true }),
+      },
+    );
+    expect(state).toMatchObject({ status: "error", selectedRoleId: "prototype" });
+  });
+});
