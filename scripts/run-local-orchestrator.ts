@@ -783,12 +783,20 @@ async function main(): Promise<void> {
           case "ignored":
             break;
           case "reenter":
+            // Same reason as a provider fault: the card keeps its budget and
+            // this host runs it again on its own. The warn line and the durable
+            // story.dispatch_failed event are the record, and the alert comes
+            // when the budget runs out below. A CODE exit that spends its
+            // rounds is an ordinary refusal, and it raised one P0 per attempt.
             console.warn(`Story ${cardId} will re-enter ${decision.state} (attempt ${decision.attempt}/${decision.budget})`);
-            break;
+            return;
           case "park":
             console.warn(`Story ${cardId} parked after ${decision.attempt} failed attempt(s) in ${decision.state}`);
+            // This is the alert for a parked card: one summary, to every sink.
+            // Raising P0 as well sent a second one carrying the subprocess
+            // command line, which says less and arrives after it.
             await announceStop(cardId);
-            break;
+            return;
         }
         throw error;
       }
