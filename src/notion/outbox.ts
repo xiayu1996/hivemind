@@ -85,6 +85,15 @@ export interface DeadLetter {
   lastError: string | null;
 }
 
+/** A row retired without sending because a later payload got there first. */
+export interface SupersededRow {
+  id: number;
+  cardId: string | null;
+  operation: string;
+  target: string;
+  attempts: number;
+}
+
 export interface OutboxFailure {
   id: number;
   cardId: string | null;
@@ -102,6 +111,10 @@ export interface ReplayResult {
   failures: OutboxFailure[];
   /** Rows that crossed OUTBOX_MAX_ATTEMPTS during this pass. */
   dead: DeadLetter[];
+  /** Rows retired without sending because the target had already moved past
+   * them. Reported so a stalled row in the log reads as a board that is
+   * current rather than one still waiting. */
+  superseded: SupersededRow[];
 }
 
 export interface ReplayOptions {
@@ -112,6 +125,16 @@ export interface ReplayOptions {
    * and could hold the head of the queue so its own rows never came up.
    */
   operations?: readonly string[];
+  /**
+   * The operations whose payload is the target's whole desired state. A
+   * pending row of one of those is moot once a later payload for the same
+   * target has landed: the remote holds that later state, and sending the
+   * older row would put the page back to what it said before. Create and
+   * comment operations are deliberately absent -- each of their rows is its
+   * own piece of work, and two rows for one target mean two things must
+   * appear on the page.
+   */
+  wholeStateOperations?: readonly string[];
 }
 
 function canonicalValue(value: unknown, seen: Set<object>): unknown {
@@ -212,12 +235,17 @@ export class NotionOutbox {
       throw new Error("an outbox replay must name at least one operation or none");
     }
     const filter = operations.length > 0 ? ` AND operation IN (${operations.map(() => "?").join(", ")})` : "";
+    const wholeState = new Set(options.wholeStateOperations ?? []);
     const now = this.now();
     const rows = (await this.client.execute({
       // Oldest desired state first, and a row revived by a recurring payload
       // carries the instant it was revived, so it lands after whatever was
       // queued for the same target in between.
-      sql: `SELECT id, card_id, priority, operation, target, payload, payload_hash, attempts, created_at
+      sql: `SELECT id, card_id, priority, operation, target, payload, payload_hash, attempts, created_at,
+                   EXISTS (SELECT 1 FROM notion_outbox later
+                           WHERE later.target = notion_outbox.target AND later.state = 'sent'
+                                 AND (later.created_at, later.id) > (notion_outbox.created_at, notion_outbox.id)
+                          ) AS overtaken
             FROM notion_outbox
             WHERE state = 'pending' AND (claimed_until IS NULL OR claimed_until <= ?)
                   AND (next_attempt_at IS NULL OR next_attempt_at <= ?)${filter}
@@ -228,6 +256,7 @@ export class NotionOutbox {
     let sent = 0;
     let failed = 0;
     const dead: DeadLetter[] = [];
+    const superseded: SupersededRow[] = [];
     const failures: OutboxFailure[] = [];
 
     for (const row of rows) {
@@ -241,6 +270,31 @@ export class NotionOutbox {
         payloadHash: String(row.payload_hash),
         attempts: Number(row.attempts) + 1,
       };
+      // The target moved past this row while it was failing, so what it asks
+      // for is a page that no longer exists. Retiring it as `sent` is the same
+      // statement the already-applied path below makes: the row needs no send.
+      // Compared on created_at rather than id because a payload that recurs is
+      // revived in place -- it keeps its id and carries the instant it was
+      // wanted again, which is what puts it after whatever landed in between.
+      if (Boolean(row.overtaken) && wholeState.has(record.operation)) {
+        const retired = await this.client.execute({
+          sql: `UPDATE notion_outbox
+                SET state = 'sent', sent_at = ?, last_error = NULL,
+                    claimed_until = NULL, next_attempt_at = NULL
+                WHERE id = ? AND state = 'pending' AND (claimed_until IS NULL OR claimed_until <= ?)`,
+          args: [this.now(), record.id, this.now()],
+        });
+        if (retired.rowsAffected > 0) {
+          superseded.push({
+            id: record.id,
+            cardId: record.cardId,
+            operation: record.operation,
+            target: record.target,
+            attempts: Number(row.attempts),
+          });
+        }
+        continue;
+      }
       // Claiming is what keeps two overlapping replays from both sending this
       // row. An operation that appends to a page cannot tell its own append
       // from somebody else's, so a lost race here shows up as a duplicated
@@ -296,7 +350,7 @@ export class NotionOutbox {
       }
     }
 
-    return { sent, failed, failures, dead };
+    return { sent, failed, failures, dead, superseded };
   }
 }
 

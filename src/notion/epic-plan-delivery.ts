@@ -67,6 +67,13 @@ export const EPIC_OUTBOX_OPERATIONS = [
   "present_epic_plan", "create_story_page", SYNC_EPIC_STATUS, COMMENT_EPIC_PAGE, SYNC_EPIC_PAGE,
 ] as const;
 
+/**
+ * The subset whose payload is the Epic page's whole desired state, re-derived
+ * every cycle. The others each put something new on a page -- a plan, a Story,
+ * a comment -- so no later payload can stand in for them.
+ */
+export const EPIC_WHOLE_STATE_OPERATIONS = [SYNC_EPIC_STATUS, SYNC_EPIC_PAGE] as const;
+
 // Older projections printed the replay key as a line on the page. The key
 // lives in `epic_notion_sections` now; these prefixes are only how such a
 // line is recognised so it can be removed when the page is next written.
