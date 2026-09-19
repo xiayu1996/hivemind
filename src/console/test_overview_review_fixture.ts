@@ -157,4 +157,12 @@ describe("the overview a verification round opens", () => {
     expect(failures).toContain("方案无法形成");
     expect(failures.indexOf("账单导出")).toBeLessThan(failures.indexOf("账单导出规则"));
   });
+  it("@scenario S-R237511OV-01-recent7d includes both sides of the seven-day boundary and drops everything outside it", () => {
+    const completed = section(html, 'id="completed-title"', '<aside class="stack"');
+    expect(completed).toContain("最近完成 <span class=\"heading-count\">2 项");
+    expect(completed).toContain("状态投影核对");
+    expect(completed).toContain("候选词表更新");
+    expect(completed).toContain("已完成");
+    expect(completed.indexOf("状态投影核对")).toBeLessThan(completed.indexOf("候选词表更新"));
+  });
 });
