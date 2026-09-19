@@ -1,4 +1,5 @@
 import { normalizeActualFootprint, type ActualFootprintRecorder } from "./actual-footprint.js";
+import { unpredictedDirectories } from "../orchestrator/footprint-deviation.js";
 
 export interface MergeGitPort {
   run(cwd: string, args: string[]): Promise<string>;
@@ -53,6 +54,23 @@ export interface EpicMergeFlowOptions {
   integrationWorktree: string;
   mainBranch?: string;
   actualFootprints?: ActualFootprintRecorder;
+  /**
+   * Called when the diff reached outside the Story's predicted footprint.
+   *
+   * Not a refusal: a prediction made before the work is a prediction, and the
+   * connected change a card has to make next door is ordinary. But nothing at
+   * all was said about it before -- the deviation was computed, stored, and
+   * read by no production code -- so a card that rewrote the verifier judging
+   * it and the build configuration every other card shares passed through
+   * every gate in silence, and those changes are still on its Epic branch.
+   * Recording it is what makes the size of the problem answerable.
+   */
+  onFootprintOverreach?: (overreach: {
+    storyId: string;
+    predicted: readonly string[];
+    actual: readonly string[];
+    unpredicted: readonly string[];
+  }) => Promise<void>;
 }
 
 /**
@@ -217,15 +235,28 @@ export class EpicMergeFlow {
         candidateRevision: verifiedRevision,
       };
     }
-    if (this.options.actualFootprints) {
+    if (this.options.actualFootprints || this.options.onFootprintOverreach) {
       const nameStatus = await this.git.run(this.options.integrationWorktree, ["diff", "--name-status", "-z", "--find-renames", baseRevision, verifiedRevision]);
-      await this.options.actualFootprints.capture({
+      const actualFootprint = normalizeActualFootprint(nameStatus);
+      await this.options.actualFootprints?.capture({
         storyId: input.story.id,
         integrationBranch: target,
         baseRevision,
         storyRevision: verifiedRevision,
-        actualFootprint: normalizeActualFootprint(nameStatus),
+        actualFootprint,
       });
+      const unpredicted = unpredictedDirectories(input.story.predictedFootprint, actualFootprint);
+      // Reported, never refused, and never able to fail the merge: the record
+      // exists to be counted, and a sink that throws would turn a bookkeeping
+      // problem into a Story that cannot land.
+      if (unpredicted.length > 0) {
+        await this.options.onFootprintOverreach?.({
+          storyId: input.story.id,
+          predicted: input.story.predictedFootprint,
+          actual: actualFootprint,
+          unpredicted,
+        }).catch(() => undefined);
+      }
     }
     await this.git.run(this.options.integrationWorktree, ["merge", "--ff-only", input.story.branch]);
     // The Story's draft MR stacks onto this branch on origin, so origin has to

@@ -29,10 +29,29 @@ function rate(deviating: number, total: number): number {
   return total === 0 ? 0 : deviating / total;
 }
 
+/**
+ * Directories a Story touched that its prediction does not cover.
+ *
+ * The scheduler treats an unpredicted directory as free ground while the Story
+ * runs, so this is the set that made the parallelism claim untrue. It is also
+ * the set worth telling somebody about: one card reached outside console-ui and
+ * src/console into src/verify, src/runner and the repository root, which is to
+ * say it rewrote the verifier that judges it and the build configuration every
+ * other card shares.
+ */
+export function unpredictedDirectories(
+  predictedFootprint: readonly string[],
+  actualFootprint: readonly string[],
+): string[] {
+  const predicted = [...new Set(predictedFootprint)].toSorted();
+  return [...new Set(actualFootprint)].toSorted()
+    .filter((directory) => !predicted.some((candidate) => covers(candidate, directory)));
+}
+
 function deviationOf(prediction: FootprintPrediction): StoryFootprintDeviation {
   const predicted = [...new Set(prediction.predictedFootprint)].toSorted();
   const actual = [...new Set(prediction.actualFootprint)].toSorted();
-  const unpredicted = actual.filter((directory) => !predicted.some((candidate) => covers(candidate, directory)));
+  const unpredicted = unpredictedDirectories(predicted, actual);
   const unused = predicted.filter((directory) => !actual.some((candidate) => covers(directory, candidate)));
   return {
     storyId: prediction.storyId,
