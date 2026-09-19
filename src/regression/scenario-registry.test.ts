@@ -35,7 +35,7 @@ describe("ScenarioRegistry", () => {
   afterEach(() => client.close());
 
   it("registers every scenario a Story declares, into its Epic's pool", async () => {
-    await seedStory("S-M2-01", "CODE", ["S-M2-01-a", "S-M2-01-b"]);
+    await seedStory("S-M2-01", "DELIVERED", ["S-M2-01-a", "S-M2-01-b"]);
 
     await expect(registry.registerStory("S-M2-01")).resolves.toBe(2);
     await expect(registry.pool("epic")).resolves.toMatchObject([
@@ -45,8 +45,8 @@ describe("ScenarioRegistry", () => {
   });
 
   it("narrows a pool to one repository, because a sweep runs in one checkout", async () => {
-    await seedStory("S-M2-01", "CODE", ["S-M2-01-a"]);
-    await seedStory("S-M2-02", "CODE", ["S-M2-02-a"]);
+    await seedStory("S-M2-01", "DELIVERED", ["S-M2-01-a"]);
+    await seedStory("S-M2-02", "DELIVERED", ["S-M2-02-a"]);
     await client.execute("UPDATE stories SET repo = 'acme/widget' WHERE id = 'S-M2-01'");
     await client.execute("UPDATE stories SET repo = 'acme/gadget' WHERE id = 'S-M2-02'");
     await registry.registerStory("S-M2-01");
@@ -57,7 +57,7 @@ describe("ScenarioRegistry", () => {
   });
 
   it("does not forget when a scenario was last verified if the Story registers again", async () => {
-    await seedStory("S-M2-01", "CODE", ["S-M2-01-a"]);
+    await seedStory("S-M2-01", "DELIVERED", ["S-M2-01-a"]);
     await registry.registerStory("S-M2-01");
     await registry.markVerified(["S-M2-01-a"], 5_000);
 
@@ -70,6 +70,7 @@ describe("ScenarioRegistry", () => {
   it("moves a standalone Story's scenarios into the main pool", async () => {
     await seedStory("S-VAL-02", "CODE", ["S-VAL-02-a"], null);
     await registry.registerStory("S-VAL-02");
+    await client.execute("UPDATE stories SET state = 'DELIVERED' WHERE id = 'S-VAL-02'");
 
     await registry.promoteToMain("S-VAL-02");
 
@@ -89,7 +90,7 @@ describe("ScenarioRegistry", () => {
   });
 
   it("orders a pool least-recently-verified first, with the never-verified ahead of everything", async () => {
-    await seedStory("S-M2-01", "CODE", ["S-M2-01-a", "S-M2-01-b", "S-M2-01-c"]);
+    await seedStory("S-M2-01", "DELIVERED", ["S-M2-01-a", "S-M2-01-b", "S-M2-01-c"]);
     await registry.registerStory("S-M2-01");
     await registry.markVerified(["S-M2-01-b"], 8_000);
     await registry.markVerified(["S-M2-01-c"], 3_000);
@@ -99,6 +100,19 @@ describe("ScenarioRegistry", () => {
       { scenarioId: "S-M2-01-c", lastVerifiedAt: 3_000 },
       { scenarioId: "S-M2-01-b", lastVerifiedAt: 8_000 },
     ]);
+  });
+
+  it("keeps a Story that has not delivered out of the sweep", async () => {
+    // Its code is not on the branch a sweep checks out, so the run can only
+    // fail, and a failure never ages the scenario -- it stays at the head of
+    // the queue and is swept again every idle cycle until three identical
+    // failures raise a regression card against behaviour nobody ever built.
+    await seedStory("S-M2-01", "DELIVERED", ["S-M2-01-a"]);
+    await seedStory("S-M2-02", "CODE", ["S-M2-02-a"]);
+    await registry.registerStory("S-M2-01");
+    await registry.registerStory("S-M2-02");
+
+    await expect(registry.pool("epic")).resolves.toMatchObject([{ scenarioId: "S-M2-01-a" }]);
   });
 
   it("collects every scenario an Epic owns, whichever pool they sit in", async () => {
