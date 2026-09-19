@@ -85,7 +85,12 @@ export class PiModelCatalog implements ModelCatalog {
       windowsHide: true,
       maxBuffer: 4 * 1024 * 1024,
     });
-    return parseModelTable(result.stdout);
+    // The provider argument is a substring filter over model ids, not a
+    // provider selector: asking for `deepseek` on a host where command-code
+    // serves `deepseek/deepseek-v4.1-flash` prints that foreign row. Keep only
+    // the rows whose own provider is the one asked for, so a caller never
+    // treats another provider's model as this provider's catalogue.
+    return parseModelTable(result.stdout).filter((model) => model.provider === provider);
   }
 }
 
