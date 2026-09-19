@@ -1,3 +1,4 @@
+import { createServer } from "node:net";
 import { AppUnderReview } from "./app-under-review.js";
 import type { ConfigKey, ConfigValue } from "../config/registry.js";
 
@@ -39,6 +40,35 @@ export interface AppLane {
   stop(): Promise<void>;
 }
 
+/**
+ * The port a round's application listens on, when the repository asks for one.
+ *
+ * A repository that names a fixed port has every lane on this host starting its
+ * application there, and only the first one gets it. The rest poll the ready
+ * URL, are answered by somebody else's application, and judge that: a Story's
+ * round verified the console of a different Epic's worktree, called its own
+ * screens unconfirmable and spent its budget down to `retry_limit_exceeded`.
+ *
+ * So `{port}` in the start command or the ready URL is replaced by a port this
+ * host has just confirmed free. The socket is closed before the application is
+ * started, which is a window somebody else could still take -- the poll below
+ * is not proof of ownership either, so the reason a lane may not be answered by
+ * its own application is narrowed here rather than eliminated.
+ */
+const PORT_PLACEHOLDER = "{port}";
+
+async function reservePort(): Promise<number> {
+  return new Promise<number>((resolve, reject) => {
+    const probe = createServer();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const address = probe.address();
+      const port = typeof address === "object" && address !== null ? address.port : 0;
+      probe.close(() => (port === 0 ? reject(new Error("the host gave no port")) : resolve(port)));
+    });
+  });
+}
+
 function hostOf(url: string): string | undefined {
   try {
     return new URL(url).hostname;
@@ -68,13 +98,37 @@ export async function startAppLane(
   if (!config || config.command.length === 0) {
     return { app: { unavailable: NOT_CONFIGURED }, allowedHosts: hosts, stop: async () => undefined };
   }
+  const declared = Object.entries(config.env ?? {});
+  const wantsPort = config.command.some((argument) => argument.includes(PORT_PLACEHOLDER))
+    || config.readyUrl.includes(PORT_PLACEHOLDER)
+    || declared.some(([, value]) => value?.includes(PORT_PLACEHOLDER));
+  let command = config.command;
+  let readyUrl = config.readyUrl;
+  let env = config.env;
+  if (wantsPort) {
+    let port: number;
+    try {
+      port = await reservePort();
+    } catch (cause) {
+      const reason = cause instanceof Error ? cause.message : String(cause);
+      return {
+        app: { unavailable: `No port could be reserved for the application this round: ${reason}` },
+        allowedHosts: hosts,
+        stop: async () => undefined,
+      };
+    }
+    const substitute = (text: string): string => text.replaceAll(PORT_PLACEHOLDER, String(port));
+    command = config.command.map(substitute);
+    readyUrl = substitute(config.readyUrl);
+    env = Object.fromEntries(declared.map(([name, value]) => [name, value === undefined ? value : substitute(value)]));
+  }
   const application = new AppUnderReview();
   const started = await application.start({
     cwd: config.cwd,
-    command: config.command,
-    readyUrl: config.readyUrl,
+    command,
+    readyUrl,
     timeoutMs: config.timeoutMs,
-    ...(config.env === undefined ? {} : { env: config.env }),
+    ...(env === undefined ? {} : { env }),
     ...(config.log === undefined ? {} : { log: config.log }),
   });
   if (!started.started) {
