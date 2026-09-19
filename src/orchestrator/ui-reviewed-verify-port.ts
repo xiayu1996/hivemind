@@ -6,6 +6,7 @@ import {
 } from "../judge/environment-reasons.js";
 import { splitScenarioFailures } from "../pipeline/failure-classification.js";
 import { AppUnderReview } from "../verify/app-under-review.js";
+import { reserveAppPort } from "../verify/app-lane.js";
 import type { DesignToken } from "../pipeline/interface-contract.js";
 import {
   allowedValues,
@@ -270,29 +271,42 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
     try {
       let appUrl: string | undefined;
       if (handle && app) {
-        const started = await handle.start({
-          cwd: this.options.worktreePath,
-          command: app.startCommand,
-          readyUrl: app.readyUrl,
-          timeoutMs: app.readyTimeoutMs,
-        });
-        if (started.started) {
-          appUrl = started.url || undefined;
-          if (app.seedCommand.length > 0) {
-            for (const scenario of scenarios) {
-              const seed = seedOf(scenario);
-              if (!seed) continue;
-              const seeded = await handle.seed({
-                cwd: this.options.worktreePath,
-                command: app.seedCommand,
-                scenarioId: scenario.id,
-                seed,
-              });
-              if (!seeded.ok) seedFailures.push(`${scenario.id}: ${seeded.output}`);
+        // The same port reservation the blind lane makes. Without it this lane
+        // starts the application with the literal `{port}` and judges a round
+        // of screens nothing was ever serving.
+        let substitute: ((text: string) => string) | null = null;
+        try {
+          substitute = await reserveAppPort([...app.startCommand, app.readyUrl, ...app.seedCommand]);
+        } catch (cause) {
+          const reason = cause instanceof Error ? cause.message : String(cause);
+          appFailure = `No port could be reserved for the application this round: ${reason}`;
+        }
+        const replace = substitute ?? ((text: string): string => text);
+        if (appFailure === null) {
+          const started = await handle.start({
+            cwd: this.options.worktreePath,
+            command: app.startCommand.map(replace),
+            readyUrl: replace(app.readyUrl),
+            timeoutMs: app.readyTimeoutMs,
+          });
+          if (started.started) {
+            appUrl = started.url || undefined;
+            if (app.seedCommand.length > 0) {
+              for (const scenario of scenarios) {
+                const seed = seedOf(scenario);
+                if (!seed) continue;
+                const seeded = await handle.seed({
+                  cwd: this.options.worktreePath,
+                  command: app.seedCommand.map(replace),
+                  scenarioId: scenario.id,
+                  seed,
+                });
+                if (!seeded.ok) seedFailures.push(`${scenario.id}: ${seeded.output}`);
+              }
             }
+          } else {
+            appFailure = started.reason;
           }
-        } else {
-          appFailure = started.reason;
         }
       }
 

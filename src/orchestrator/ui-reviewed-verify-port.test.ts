@@ -316,6 +316,33 @@ describe("UiReviewedVerifyPort", () => {
       expect(calls.stopped).toBe(1);
     });
 
+    it("gives the application a port of its own, as the blind lane does", async () => {
+      const { calls, handle } = fakeApp();
+      let seen: { appUrl?: string } | undefined;
+      const { instance } = port({
+        functional: functionalResult(),
+        onReview: (input) => { seen = input as typeof seen; },
+        app: {
+          startCommand: ["npx", "tsx", "scripts/serve-console.ts", "--port", "{port}"],
+          readyUrl: "http://127.0.0.1:{port}/",
+          readyTimeoutMs: 1000,
+          seedCommand: ["npm", "run", "seed", "--", "--port", "{port}"],
+        },
+        appUnderReview: () => handle,
+      });
+
+      await instance.run(verifyInput(withSeed(dod([["ui"], ["ui"]]))));
+
+      // Whatever port the host handed out, the same one everywhere: a literal
+      // `{port}` reaches the application as an argument it refuses.
+      const started = calls.start[0]!;
+      const chosen = started.command.at(-1)!;
+      expect(chosen).toMatch(/^\d+$/);
+      expect(started.readyUrl).toBe(`http://127.0.0.1:${chosen}/`);
+      expect(calls.seed[0]!.command.at(-1)).toBe(chosen);
+      expect(seen?.appUrl).toBe(`http://127.0.0.1:${chosen}/`);
+    });
+
     it("stops the application even when the reviewer throws", async () => {
       const { calls, handle } = fakeApp();
       const { instance } = port({

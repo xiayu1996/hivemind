@@ -69,6 +69,25 @@ async function reservePort(): Promise<number> {
   });
 }
 
+/**
+ * The substitution for one round's `{port}` placeholders, or null when nothing
+ * in `texts` asks for a port.
+ *
+ * Every lane that starts an application goes through this. The UI review lane
+ * started its own copy straight from the repository's configuration for a
+ * while, so it launched the console with the literal `{port}`, the process
+ * exited before answering, and the round judged screens of an application that
+ * never came up -- the failure this placeholder exists to prevent, arriving
+ * through the one lane that did not use it.
+ */
+export async function reserveAppPort(
+  texts: readonly (string | undefined)[],
+): Promise<((text: string) => string) | null> {
+  if (!texts.some((text) => text?.includes(PORT_PLACEHOLDER))) return null;
+  const port = await reservePort();
+  return (text: string) => text.replaceAll(PORT_PLACEHOLDER, String(port));
+}
+
 function hostOf(url: string): string | undefined {
   try {
     return new URL(url).hostname;
@@ -99,28 +118,25 @@ export async function startAppLane(
     return { app: { unavailable: NOT_CONFIGURED }, allowedHosts: hosts, stop: async () => undefined };
   }
   const declared = Object.entries(config.env ?? {});
-  const wantsPort = config.command.some((argument) => argument.includes(PORT_PLACEHOLDER))
-    || config.readyUrl.includes(PORT_PLACEHOLDER)
-    || declared.some(([, value]) => value?.includes(PORT_PLACEHOLDER));
   let command = config.command;
   let readyUrl = config.readyUrl;
   let env = config.env;
-  if (wantsPort) {
-    let port: number;
-    try {
-      port = await reservePort();
-    } catch (cause) {
-      const reason = cause instanceof Error ? cause.message : String(cause);
-      return {
-        app: { unavailable: `No port could be reserved for the application this round: ${reason}` },
-        allowedHosts: hosts,
-        stop: async () => undefined,
-      };
-    }
-    const substitute = (text: string): string => text.replaceAll(PORT_PLACEHOLDER, String(port));
-    command = config.command.map(substitute);
-    readyUrl = substitute(config.readyUrl);
-    env = Object.fromEntries(declared.map(([name, value]) => [name, value === undefined ? value : substitute(value)]));
+  let substitute: ((text: string) => string) | null;
+  try {
+    substitute = await reserveAppPort([...config.command, config.readyUrl, ...declared.map(([, value]) => value)]);
+  } catch (cause) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    return {
+      app: { unavailable: `No port could be reserved for the application this round: ${reason}` },
+      allowedHosts: hosts,
+      stop: async () => undefined,
+    };
+  }
+  if (substitute !== null) {
+    const replace = substitute;
+    command = config.command.map(replace);
+    readyUrl = replace(config.readyUrl);
+    env = Object.fromEntries(declared.map(([name, value]) => [name, value === undefined ? value : replace(value)]));
   }
   const application = new AppUnderReview();
   const started = await application.start({
