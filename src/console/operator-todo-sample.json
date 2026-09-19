@@ -37,6 +37,8 @@
   },
   "detail": {
     "stateLabel": "运行中",
+    "currentResult": "2 项未通过",
+    "currentBlocker": "等待修正",
     "currentTrigger": "验证未通过",
     "secondTrigger": "合流验证未通过",
     "secondResult": "已修正",

@@ -1344,12 +1344,15 @@ function renderRoundTabs(detail: OperatorDetail, selected: number): string {
     + "</form>";
 }
 
-function renderDetailBody(detail: OperatorDetail, selectedRound: number | undefined): string {
+function renderDetailBody(detail: OperatorDetail, selectedRound: number | undefined, pendingResult: boolean): string {
   const current = detail.currentRound.number;
   const selected = selectedRound !== undefined && selectedRound !== current
     ? detail.history.find((round) => round.number === selectedRound)
     : undefined;
-  const panel = selected ? renderRoundPanel(selected, false) : renderRoundPanel(detail.currentRound, true);
+  // Waiting for the round's result means the round has not produced one yet:
+  // showing a recorded result beside that statement would contradict it.
+  const currentRound = pendingResult ? { ...detail.currentRound, result: null, blocker: null } : detail.currentRound;
+  const panel = selected ? renderRoundPanel(selected, false) : renderRoundPanel(currentRound, true);
   return renderRoundTabs(detail, selected ? selected.number : current)
     + `<div class="split section"><div>${panel}</div>`
     + renderCostPanel(detail)
@@ -1518,8 +1521,12 @@ function todoNotice(state: ConsolePageState<OperatorTodoResult>): string {
   return "";
 }
 
-function renderDetailPageBody(value: OperatorDetailResult, selectedRound: number | undefined): string {
-  if (value.kind === "available") return renderDetailBody(value.detail, selectedRound);
+function renderDetailPageBody(
+  value: OperatorDetailResult,
+  selectedRound: number | undefined,
+  pendingResult: boolean,
+): string {
+  if (value.kind === "available") return renderDetailBody(value.detail, selectedRound, pendingResult);
   return renderEmptyState(copy.detail.noRoundsHeading, copy.detail.noRoundsBody, {
     href: "/operator/overview",
     label: copy.detail.back,
@@ -1537,7 +1544,9 @@ export function renderOperatorDetailPage(
     body: backLink()
       + detailPageHead(value, state.kind === "ready" && state.refreshing)
       + detailNotice(state)
-      + (value === undefined ? "" : renderDetailPageBody(value, selectedRound)),
+      + (value === undefined
+        ? ""
+        : renderDetailPageBody(value, selectedRound, state.kind === "waiting" && state.waitingFor === "round_result")),
   });
 }
 

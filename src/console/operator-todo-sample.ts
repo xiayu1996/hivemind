@@ -6,8 +6,9 @@
  * is a set of ports with no adapter to the central store yet: the verification
  * round starts it with no database and no seed command, so the app itself
  * supplies the sample. The values are the ones the frozen contract test uses
- * (round 3 at $1.24 with $3.80 recorded, round 2 at $0.86), so what a reviewer
- * sees on the screen is what the contract proves.
+ * (round 3 at $1.24 with $3.80 recorded, round 2 at $0.86), and the current
+ * round carries the result and blocker the definition of done names, so what a
+ * reviewer sees on the screen is what the contract proves.
  *
  * Submitting is answered in memory, and it is answered the way the real
  * command port would: a saved todo leaves the waiting area, and one todo
@@ -116,8 +117,8 @@ function sampleDetail(now: number): OperatorDetail {
       number: 3,
       trigger: copy.detail.currentTrigger,
       phase: "VERIFY",
-      result: null,
-      blocker: null,
+      result: copy.detail.currentResult,
+      blocker: copy.detail.currentBlocker,
       costUsd: 1.24,
       startedAt: now - 2 * 60_000,
       endedAt: null,
