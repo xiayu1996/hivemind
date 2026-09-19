@@ -220,4 +220,9 @@ describe("the overview a verification round opens", () => {
     expect(failures).not.toContain("已经恢复的旧失败");
     expect(failures).not.toContain("旧失败原因");
   });
+  it("@scenario S-R237511OV-01-recent7d excludes completions older than seven days and work still running", () => {
+    const completed = section(html, 'id="completed-title"', '<aside class="stack"');
+    expect(completed).not.toContain("旧任务");
+    expect(completed).not.toContain("旧需求归档");
+  });
 });
