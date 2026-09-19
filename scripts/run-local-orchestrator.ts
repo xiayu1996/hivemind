@@ -989,6 +989,9 @@ async function main(): Promise<void> {
         console.log(`Epic ${outcome.epicId} is done: its review request landed`);
         await retireEpicTrees(outcome.epicId);
       }
+      if (outcome.kind === "gap") {
+        console.log(`Epic ${outcome.epicId} goes back to work: ${outcome.storyIds.join(", ")} carry what acceptance found missing`);
+      }
       if (outcome.kind === "unreadable") console.warn(`Epic ${outcome.epicId} review state unreadable: ${outcome.reason}`);
     }
 

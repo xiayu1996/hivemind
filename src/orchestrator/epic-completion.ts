@@ -39,6 +39,19 @@ export class EpicCompletion {
     for (const row of rows) {
       const epicId = String(row.id);
       const mrUrl = String(row.mr_url);
+      // A gap is the batch being told it is not finished, and that is true
+      // whether or not the code has landed yet. Reading it only after the
+      // merge asks the person to land work they have just refused: the
+      // walkthrough happens while the request is open, so R237511TD recorded
+      // its gap, the request stayed open because the defect was real, and the
+      // follow-up Story it should have opened was never reached (2026-09-20).
+      // The delivery lane was already built for this -- it reuses an open
+      // request whose Epic went back to work -- so only this order was wrong.
+      const settled = await this.acceptance.settle(epicId);
+      if (settled.kind === "gap") {
+        outcomes.push({ epicId, kind: "gap", storyIds: settled.storyIds });
+        continue;
+      }
       let state: MergeRequestState;
       try {
         state = await this.mergeRequests.state(mrUrl);
@@ -66,15 +79,10 @@ export class EpicCompletion {
                WHERE epic_id = ? AND pool <> 'main'`,
         args: [this.now(), epicId],
       });
-      // What the batch promised is judged here, on the batch: the merge says
-      // the code landed, and the ticks say it does what was asked for.
-      const settled = await this.acceptance.settle(epicId);
+      // What the batch promised is judged on the batch: the merge says the
+      // code landed, and the ticks say it does what was asked for.
       if (settled.kind === "waiting") {
         outcomes.push({ epicId, kind: "awaiting_acceptance", open: settled.open });
-        continue;
-      }
-      if (settled.kind === "gap") {
-        outcomes.push({ epicId, kind: "gap", storyIds: settled.storyIds });
         continue;
       }
       // An Epic nobody raised from a requirement has no scenarios to tick, so
