@@ -53,4 +53,11 @@ describe("the waiting state each todo scenario is judged on", () => {
     expect((await listPendingTodos(client))[0]?.decision?.status).toBe("awaiting_notion");
   });
 
+  it("@scenario S-R237511TD-01-loading the loading scenario is judged on a ledger with nothing waiting", async () => {
+    expect(fixtureFor("S-R237511TD-01-loading")).toBe("empty");
+    await applyVerifyFixture(client, fixtureFor("S-R237511TD-01-loading"), 9000);
+
+    expect(await listPendingTodos(client)).toEqual([]);
+  });
+
 });

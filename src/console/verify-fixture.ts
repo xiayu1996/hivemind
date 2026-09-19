@@ -70,8 +70,9 @@ export function fixtureFor(scenarioId: string | null): VerifyFixture {
       // made the failed-read scenario show "目前没有待办" instead.
       return "error";
     case "existing":
-    case "loading":
       return "empty";
+    case "loading":
+      return "full";
     // An id whose state this table does not know is a scenario about something
     // else; the full sample set is the answer that keeps a waiting page on
     // screen rather than an empty one, which is what every failure looked like.
