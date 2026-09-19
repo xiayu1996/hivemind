@@ -3,12 +3,6 @@ import { describe, expect, it } from "vitest";
 import { migrate } from "../persistence/migrate.js";
 import { LibsqlConsoleDataSource } from "./libsql-data-source.js";
 import { createConsoleServer, type ConsoleDataSource } from "./server.js";
-import { createConsoleAccessPage } from "./access-control.js";
-
-const openAccess = {
-  accessPolicy: { authorize: () => ({ allowed: true as const, matchedNetwork: "0.0.0.0/0" }) },
-  accessPage: createConsoleAccessPage(),
-};
 
 describe("M2-19 provider health on the console", () => {
   it("reads every provider's breaker state with its window and last error", async () => {
@@ -40,7 +34,7 @@ describe("M2-19 provider health on the console", () => {
       queue: async () => ({ waiting: [], running: [], providerSlots: [] }),
   providers: async () => [{ provider: "openai-codex", state: "closed" }],
     };
-    const app = await createConsoleServer(data, { serveUi: false, ...openAccess });
+    const app = await createConsoleServer(data, { serveUi: false });
 
     const response = await app.inject({ method: "GET", url: "/api/providers" });
     expect(response.statusCode).toBe(200);

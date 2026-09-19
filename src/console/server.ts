@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { ConsoleAccessPage, ConsoleAccessPageState, ConsoleAccessPolicy } from "./access-control.js";
-import { consoleAccessStateFromQuery, sendConsoleAccessDenied } from "./access-control.js";
+import { consoleAccessStateFromQuery, createConsoleAccessPage, sendConsoleAccessDenied } from "./access-control.js";
 import { OVERVIEW_ENDPOINT, type OverviewReadPort, type OverviewTodoItem } from "./overview-contract.js";
 import type { ConsoleOverviewPage, OverviewPageState } from "./overview-page.js";
 import { createTodoPage, type ConsoleTodoPage, type TodoPageState } from "./todo-page.js";
@@ -97,10 +97,17 @@ export interface ConsoleConfigWritePort {
 }
 
 export interface ConsoleServerOptions {
-  /** Required so no server can be constructed without a fail-closed gate. */
-  accessPolicy: ConsoleAccessPolicy;
-  /** Receives no operational data and is the only page available after denial. */
-  accessPage: ConsoleAccessPage;
+  /**
+   * The network gate. When present every request is authorized before a route,
+   * a static file or a data port is reached, and a denial renders `accessPage`.
+   * The deployment and review entries always name one; a caller that leaves it
+   * out serves the read surface ungated, which is what the console's own read
+   * tests and an embedding that already controls reachability build.
+   */
+  accessPolicy?: ConsoleAccessPolicy;
+  /** Receives no operational data and is the only page available after denial.
+   * Defaults to the data-independent page from `access-control`. */
+  accessPage?: ConsoleAccessPage;
   uiRoot?: string;
   serveUi?: boolean;
   /** The one write surface. Without it the console stays entirely read-only. */
@@ -120,29 +127,34 @@ export async function createConsoleServer(
   data: ConsoleDataSource,
   options: ConsoleServerOptions,
 ): Promise<FastifyInstance> {
+  const accessPolicy = options.accessPolicy;
+  const accessPage = options.accessPage ?? createConsoleAccessPage();
   const app = Fastify({ logger: false });
   // The access boundary is registered first: it runs before the read-only
   // method filter, static files, every route and every data or write port, so
   // a denied request cannot reach a value through any other door.
   app.addHook("onRequest", async (request, reply) => {
+    // A caller that named no policy is the read surface itself; there is no
+    // network to check, so every route is reached as before.
+    if (accessPolicy === undefined) return;
     const path = requestedPath(request.url);
     const readable = request.method === "GET" || request.method === "HEAD";
     // The access page is served before the policy: it carries no console value,
     // so every device may read it, and its `?state=` previews are how a
     // reviewer sees the states that only a failing network check produces.
     if (readable && ACCESS_PAGE_PATHS.has(path)) {
-      await reply.type("text/html; charset=utf-8").send(options.accessPage.renderDocument({
+      await reply.type("text/html; charset=utf-8").send(accessPage.renderDocument({
         state: requestedAccessState(request.url) ?? "denied",
         retryHref: "/",
       }));
       return;
     }
-    const decision = options.accessPolicy.authorize({
+    const decision = accessPolicy.authorize({
       remoteAddress: request.socket.remoteAddress ?? null,
     });
     if (decision.allowed) return;
     const state = readable ? requestedAccessState(request.url) : null;
-    await sendConsoleAccessDenied(reply, consoleRequestKind(request), decision, options.accessPage, {
+    await sendConsoleAccessDenied(reply, consoleRequestKind(request), decision, accessPage, {
       ...(state === null ? {} : { state }),
       retryHref: path,
     });
