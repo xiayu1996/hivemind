@@ -238,4 +238,8 @@ describe("the overview a verification round opens", () => {
     expect(await get("/?state=empty")).not.toContain("重试退避");
     expect(await get("/?state=error")).toContain("重新读取");
   });
+  it("@scenario S-R237511OV-01-costs never says an overrun paused the work", () => {
+    const summary = section(html, '<aside class="stack"', "</aside>");
+    expect(summary).not.toContain("已暂停");
+  });
 });
