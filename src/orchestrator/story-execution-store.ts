@@ -957,7 +957,13 @@ export class StoryExecutionStore {
       cardId,
       reason,
       spent: numberValue(detail?.spent ?? rounds.length + mergeBounces.length, "rounds spent"),
-      budget: numberValue(detail?.budget ?? 0, "round budget"),
+      ...(detail?.budget === undefined ? {} : { budget: numberValue(detail.budget, "round budget") }),
+      ...(detail?.inconclusive === undefined ? {} : {
+        inconclusive: {
+          attempts: numberValue(detail.inconclusive, "inconclusive attempts"),
+          scenarios: parseStringArray(JSON.stringify(detail.inconclusiveScenarios ?? []), "inconclusive scenarios"),
+        },
+      }),
       rounds,
       mergeBounces,
       baselineFailures,
