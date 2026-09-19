@@ -428,12 +428,21 @@ function renderState(state: RoleConfigurationViewState): string {
         + `<h2>无法读取角色配置</h2>`
         + `<p>当前版和上一版没有载入。检查内网连接后重新读取；已有配置不会改变。</p>`
         + `<button type="button" class="retry">重新读取</button></div></section>`;
+    case "waiting":
+      return renderRoleSelector(state.roles, state.selectedRoleId)
+        + `<section class="state-page"><div class="state-card">`
+        + `<h2>正在等待配置保存</h2>`
+        + `<p>新版本尚未确认保存；确认前仍使用原当前版，已经开始工作的智能体不会改变。</p>`
+        + `<button type="button" class="retry">检查保存结果</button></div></section>`;
     default: return "";
   }
 }
 
 function renderStatusChip(state: RoleConfigurationViewState): string {
   if (state.status === "ready") return `<span class="status running">当前版 v${state.pair.current.version}</span>`;
+  if (state.status === "waiting") {
+    return `<span class="status running">当前版 v${state.confirmedPair.current.version}</span>`;
+  }
   return "";
 }
 
