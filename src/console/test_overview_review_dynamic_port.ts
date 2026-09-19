@@ -192,4 +192,18 @@ describe("the overview started by a verification round with its dynamic port", (
       expect((html.match(/aria-current="page"/gu) ?? []).length).toBe(2);
     });
   });
+  it("@scenario S-R237511OV-01-states offers a retry from the error state", async () => {
+    await inspectOverview((html) => {
+      const body = section(html, 'id="overview-body"', "</main>");
+      expect(body).toContain("无法读取运行总览");
+      expect(body).toContain("重新读取");
+    }, "/?state=error");
+  });
+  it("@scenario S-R237511OV-01-states announces the one-minute refresh while waiting", async () => {
+    await inspectOverview((html) => {
+      const body = section(html, 'id="overview-body"', "</main>");
+      expect(body).toContain("运行结果尚未产生");
+      expect(body).toContain("在 1 分钟内自动刷新");
+    }, "/?state=waiting");
+  });
 });
