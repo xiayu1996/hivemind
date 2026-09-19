@@ -129,6 +129,11 @@ export interface BlindVerifyResult {
  */
 const VERDICT_HANDBACKS = 2;
 
+/** How many times a verdict is asked to name the page structure records it
+ * judged by. Two, like the malformed-verdict handback: a verifier that still
+ * has not taken one is answering a question it did not look at. */
+const SNAPSHOT_HANDBACKS = 2;
+
 const VERDICT_HANDBACK_PROMPT =
   "Your last message carried no verdict this system can read. Send the verdict again as one JSON object "
   + "and nothing else: no prose around it, no code fence, every field of the contract present. "
@@ -262,6 +267,33 @@ function readVerdict(events: readonly RpcEvent[]): z.infer<typeof verifierReplyS
     .map((candidate) => verifierReplySchema.safeParse(candidate))
     .flatMap((candidate) => (candidate.success ? [candidate.data] : []))
     .at(-1);
+}
+
+/**
+ * Scenarios claimed passed whose `visible` list has nothing to be checked
+ * against. The structural layer (08 section 6) reads those records; with none
+ * declared there is nothing to read, and the claim can only be refused.
+ */
+function undeclaredSnapshots(
+  document: VerdictDocument,
+  requirements: ReadonlyMap<string, readonly VisibleRequirement[]> | undefined,
+): readonly string[] {
+  if (!requirements) return [];
+  return document.scenarios
+    .filter((scenario) => scenario.status === "passed"
+      && (requirements.get(scenario.id) ?? []).length > 0
+      && (scenario.snapshots ?? []).length === 0)
+    .map((scenario) => scenario.id)
+    .toSorted();
+}
+
+function snapshotHandbackPrompt(scenarioIds: readonly string[]): string {
+  return [
+    `These scenarios are marked passed and declare \`visible\`, but name no page structure record: ${scenarioIds.join(", ")}.`,
+    "A claim with nothing behind it is refused, so judge them again: open each scenario's page in the browser, call",
+    "`snapshot` there, and put the file name in that scenario's `snapshots`. If the page does not show what `visible`",
+    "asks for, say so and mark the scenario failed. Then send the whole verdict again as one JSON object and nothing else.",
+  ].join(" ");
 }
 
 function toVerdictDocument(value: z.infer<typeof verifierReplySchema>): VerdictDocument {
@@ -456,9 +488,31 @@ export class BlindVerifyExecutor {
         }
         parsed = readVerdict(retry.events);
       }
-      messages = await runner.getMessages();
       if (parsed === undefined) throw new Error("VERIFY returned a malformed verdict");
       document = toVerdictDocument(parsed);
+      // A scenario passed with no page structure record behind it is not a
+      // judgement the code can check, and the verifier is the only session that
+      // can fix it: it is the one standing in front of the page. The structural
+      // layer refuses such a claim, the refusal travels to CODE, and CODE can
+      // do nothing with it -- S-R237511TD-01 ran four identical rounds that way
+      // and parked. So it is asked here, in the session that can still look.
+      for (let handback = 0; handback < SNAPSHOT_HANDBACKS; handback += 1) {
+        const undeclared = undeclaredSnapshots(document, input.visibleRequirements);
+        if (undeclared.length === 0) break;
+        const retry = await promptWithContinueRetry(runner, snapshotHandbackPrompt(undeclared), {
+          maxContinueRetries: input.maxContinueRetries ?? 8,
+        });
+        events = [...events, ...retry.events];
+        usage = addUsage(usage, retry.usage);
+        if (retry.failure) {
+          providerFailure = retry.failure.errorMessage;
+          throw new Error(retry.failure.errorMessage);
+        }
+        const reparsed = readVerdict(retry.events);
+        if (reparsed === undefined) break;
+        document = toVerdictDocument(reparsed);
+      }
+      messages = await runner.getMessages();
     } catch (cause) {
       runnerError = cause instanceof Error ? cause.message : "VERIFY failed";
     } finally {
