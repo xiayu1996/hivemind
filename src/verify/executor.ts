@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ResolvedAgentSpec } from "../runner/agent-spec.js";
 import { EVIDENCE_DIR_ENV, assembleGuardPolicy, type GuardPolicy } from "../guard/policy.js";
-import { captureTreePin, evaluateTreePin, type TreePin } from "../guard/tree-pin.js";
+import { captureTreePin, describeTreePinMismatch, evaluateTreePin, type TreePin } from "../guard/tree-pin.js";
 import {
   type EnvironmentJudgeSettings,
   judgeEnvironmentReasons,
@@ -570,7 +570,7 @@ export class BlindVerifyExecutor {
     const after = this.pins.capture(input.worktreePath);
     const pin = evaluateTreePin(before, after);
     if (!pin.matches) {
-      await this.pins.quarantine(input.worktreePath, "tree-pin mismatch after VERIFY");
+      await this.pins.quarantine(input.worktreePath, `tree-pin mismatch after VERIFY: ${describeTreePinMismatch(before, after)}`);
     }
 
     const observed = trajectory(events);
