@@ -187,4 +187,9 @@ describe("the overview started by a verification round with its dynamic port", (
       expect(summary).not.toContain("已暂停");
     });
   });
+  it("@scenario S-R237511OV-01-responsive marks the current page in both navigations", async () => {
+    await inspectOverview((html) => {
+      expect((html.match(/aria-current="page"/gu) ?? []).length).toBe(2);
+    });
+  });
 });
