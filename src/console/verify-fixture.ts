@@ -55,7 +55,7 @@ export function fixtureFor(scenarioId: string | null): VerifyFixture {
   if (scenarioId === null || scenarioId === "") return "empty";
   switch (stateOf(scenarioId)) {
     case "answer":
-      return "answer";
+      return "empty";
     case "open":
     case "approve":
       return "approve";

@@ -29,4 +29,10 @@ describe("the waiting state each todo scenario is judged on", () => {
     expect((await listPendingTodos(client)).map((todo) => todo.kind)).toContain("approve");
   });
 
+  it("@scenario S-R237511TD-01-answer the answer scenario is judged on a waiting question", async () => {
+    await applyVerifyFixture(client, fixtureFor("S-R237511TD-01-answer"), 9000);
+
+    expect((await listPendingTodos(client)).map((todo) => todo.kind)).toContain("answer");
+  });
+
 });
