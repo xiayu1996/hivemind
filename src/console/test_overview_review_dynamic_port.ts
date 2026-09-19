@@ -101,4 +101,17 @@ describe("the overview started by a verification round with its dynamic port", (
       expect(summary).toContain("工作仍继续");
     });
   });
+  it("@scenario S-R237511OV-01-responsive renders both navigations and the fixed section order on the started page", async () => {
+    await inspectOverview((html) => {
+      expect(html).toContain('aria-label="主要导航"');
+      expect(html).toContain('aria-label="手机导航"');
+      const positions = ["id=\"todos-title\"", "id=\"active-title\"", "id=\"failures-title\"", "id=\"completed-title\""]
+        .map((marker) => html.indexOf(marker));
+      expect(positions.every((position) => position >= 0)).toBe(true);
+      for (let index = 1; index < positions.length; index += 1) {
+        expect(positions[index - 1]).toBeLessThan(positions[index]);
+      }
+      expect(html).toContain('aria-label="总览摘要"');
+    });
+  });
 });
