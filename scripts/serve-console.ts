@@ -14,13 +14,17 @@
  * blockers -- a freshly migrated database renders every page as its empty
  * state, which is exactly one of the things the scenarios need to tell apart.
  */
+import { execFile } from "node:child_process";
 import { hostname } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { existsSync } from "node:fs";
 import { createConsoleServer, listenConsole } from "../src/console/server.js";
 import { LibsqlConsoleDataSource } from "../src/console/libsql-data-source.js";
 import { openDb } from "../src/persistence/client.js";
 import { pinnedPiVersion } from "../src/runner/pi-binary.js";
+
+const execFileAsync = promisify(execFile);
 
 const ROOT = new URL("..", import.meta.url).pathname;
 
@@ -46,8 +50,23 @@ if (file !== "" && !existsSync(file)) {
   throw new Error(`no database at ${file}: set HIVEMIND_DB_URL or pass --db`);
 }
 
-const handle = openDb(url);
 const uiRoot = join(ROOT, "console-ui", "dist");
+// The console's screens are a built shell, and the build output is ignored by
+// git, so it survives in a worktree from one round to the next. Serving what
+// happens to be there would show a verification round the interface of an
+// earlier round rather than of the tree it is judging, so starting the console
+// means building it. It takes well under a second, and a repository with no
+// shell to build keeps its server-rendered pages.
+if (existsSync(join(ROOT, "vite.config.ts"))) {
+  try {
+    await execFileAsync(join(ROOT, "node_modules", ".bin", "vite"), ["build"], { cwd: ROOT });
+  } catch (cause) {
+    const output = cause instanceof Error && "stderr" in cause ? String(cause.stderr) : String(cause);
+    throw new Error(`the console's screens could not be built, so there is nothing to serve: ${output.trim()}`);
+  }
+}
+
+const handle = openDb(url);
 const app = await createConsoleServer(
   new LibsqlConsoleDataSource(handle.client, async () => [{
     hostId: hostname(),
