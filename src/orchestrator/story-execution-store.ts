@@ -364,9 +364,14 @@ export class StoryExecutionStore {
         // and does not get the count back watches it park again on the next
         // failure. Answering in Notion arrives here rather than there, so
         // leaving it out made the door people actually use the broken one.
+        // The regression reopens come back on the same occasion, but only on
+        // the human one: they bound how often the sweep may send one Story
+        // back, and that bound would mean nothing if the Story moving forward
+        // inside a reopen cleared it.
         sql: `UPDATE stories
               SET state = ?, phase = ?, stop_reason = NULL, resume_state = NULL,
                   phase_reentries = CASE WHEN ? THEN 0 ELSE phase_reentries END,
+                  regression_reopens = CASE WHEN ? THEN 0 ELSE regression_reopens END,
                   last_human_action_at = CASE WHEN ? THEN ? ELSE last_human_action_at END,
                   updated_at = ?
               WHERE id = ? AND state = ?`,
@@ -375,6 +380,7 @@ export class StoryExecutionStore {
           phaseForState(to),
           (actor === "human" && expectedFrom === "NEEDS_INPUT")
             || (actor === "system" && isForwardStoryTransition(expectedFrom, to)) ? 1 : 0,
+          actor === "human" && expectedFrom === "NEEDS_INPUT" ? 1 : 0,
           actor === "human" ? 1 : 0,
           time,
           time,
@@ -422,8 +428,11 @@ export class StoryExecutionStore {
       ? input.expectedFrom
       : null;
     // A person resuming a Story that stopped on its retry budget grants a new
-    // budget; otherwise the very next failure would stop it again.
-    const resetReentries = input.expectedFrom === "NEEDS_INPUT" && input.to !== "HUMAN_PARKED";
+    // budget; otherwise the very next failure would stop it again. Every
+    // budget, not only the phase re-entries: the regression reopens were left
+    // standing, so a Story that spent them stopped again on the next sweep
+    // however many times a person sent it back.
+    const resetBudgets = input.expectedFrom === "NEEDS_INPUT" && input.to !== "HUMAN_PARKED";
     if (input.to === "SHAPE") await this.resetForRedesign(input.cardId, "a person moved the Story to SHAPE");
     const [update] = await this.client.batch([
       {
@@ -431,6 +440,7 @@ export class StoryExecutionStore {
               SET state = ?, phase = ?, stop_reason = NULL, resume_state = ?,
                   notion_ai_status_shadow = ?, human_wins_until = ?,
                   phase_reentries = CASE WHEN ? THEN 0 ELSE phase_reentries END,
+                  regression_reopens = CASE WHEN ? THEN 0 ELSE regression_reopens END,
                   last_human_action_at = ?, updated_at = ?
               WHERE id = ? AND state = ?`,
         args: [
@@ -439,7 +449,8 @@ export class StoryExecutionStore {
           resumeState,
           input.observedAiStatus,
           input.humanWinsUntil,
-          resetReentries ? 1 : 0,
+          resetBudgets ? 1 : 0,
+          resetBudgets ? 1 : 0,
           time,
           time,
           input.cardId,

@@ -648,7 +648,13 @@ export class SingleStoryWorker {
     }
     if (story.regressionReopens >= this.maxRegressionReopens) {
       const runId = this.createRunId(cardId, "REGRESSION_FIX", story.innerLoopRounds);
-      await this.store.stopForInput(cardId, "REGRESSION_FIX", "retry_limit_exceeded", runId);
+      // Carries its own numbers: the page showed "重试次数用尽" over a budget
+      // that belongs to the inner loop, which this stop is not about.
+      await this.store.stopForInput(cardId, "REGRESSION_FIX", "retry_limit_exceeded", runId, {
+        spent: story.regressionReopens,
+        budget: this.maxRegressionReopens,
+        reopened: cards.map((card) => card.scenarioId),
+      });
       await this.projection.enqueue(cardId);
       return {
         state: "NEEDS_INPUT",

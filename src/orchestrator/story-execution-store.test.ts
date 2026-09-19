@@ -382,6 +382,28 @@ describe("StoryExecutionStore resume after a stop", () => {
     expect((await store.getStory("S-EPIC1-01")).phaseReentries).toBe(0);
   });
 
+  it("grants the regression reopens back as well, so a resumed Story is not parked by the next sweep", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, () => 1_000);
+    await store.createStory({
+      id: "S-EPIC1-01",
+      notionPageId: "page-1",
+      title: "Reopened twice",
+      requirement: "A Story that spent its reopens is resumed by a person.",
+      branch: "story/epic1-01",
+    });
+    await store.transition("S-EPIC1-01", "QUEUED", "SHAPE", "system", "run-shape");
+    await store.countRegressionReopen("S-EPIC1-01");
+    await store.countRegressionReopen("S-EPIC1-01");
+    await store.stopForInput("S-EPIC1-01", "SHAPE", "retry_limit_exceeded", "run-stop");
+
+    await store.transition("S-EPIC1-01", "NEEDS_INPUT", "SHAPE", "human", "notion-comment");
+
+    expect((await store.getStory("S-EPIC1-01")).regressionReopens).toBe(0);
+    client.close();
+  });
+
   it("clears the crash count once the card moves on, and keeps it when it is sent back", async () => {
     const client = createClient({ url: ":memory:" });
     await migrate(client);
