@@ -1033,6 +1033,22 @@ async function main(): Promise<void> {
     const model = modelOverride ?? (await modelPolicy.resolve("verify", provider)).id;
 
     const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+    // Same debt the Epic decomposition had: the provider is chosen from the
+    // breaker, so a fault it does not hear about leaves that provider "usable"
+    // and every cycle spawns the sweep into the same refusal. A sweep that
+    // cannot run is not background hygiene -- an Epic whose Stories have all
+    // landed cannot open its review request until its scenarios pass, so this
+    // is the thing standing between the requirement and delivery.
+    const reportProviderFault = async (cause: unknown): Promise<never> => {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      // Only what the error catalogue recognises says anything about the
+      // provider; a defect of ours is UNKNOWN and must not open a breaker.
+      if (classifyError(message).class !== "UNKNOWN") {
+        await providerHealth.recordFailure(provider, message, await breakerPolicy(config))
+          .catch(() => undefined);
+      }
+      throw cause;
+    };
     const result = await execFileAsync(npm, [
       "run", "regression:run", "--",
       "--pool", plan.pool,
@@ -1050,7 +1066,7 @@ async function main(): Promise<void> {
       shell: process.platform === "win32",
       maxBuffer: 10 * 1024 * 1024,
       env: { ...process.env, HIVEMIND_DB_URL: dbUrl, ...(await providerEnvFor(provider)) },
-    });
+    }).catch(reportProviderFault);
     if (result.stdout.trim()) console.log(`regression sweep (${plan.reason}): ${result.stdout.trim()}`);
     try {
       const summary = JSON.parse(result.stdout.trim()) as { attributionsSkipped?: string; attributions?: unknown[] };
