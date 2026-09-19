@@ -107,9 +107,9 @@ describe("the overview started by a verification round with its dynamic port", (
       expect(html).toContain('aria-label="手机导航"');
       const positions = ["id=\"todos-title\"", "id=\"active-title\"", "id=\"failures-title\"", "id=\"completed-title\""]
         .map((marker) => html.indexOf(marker));
-      expect(positions.every((position) => position >= 0)).toBe(true);
+      for (const position of positions) expect(position).toBeGreaterThanOrEqual(0);
       for (let index = 1; index < positions.length; index += 1) {
-        expect(positions[index - 1]).toBeLessThan(positions[index]);
+        expect(positions[index - 1] ?? -1).toBeLessThan(positions[index] ?? -1);
       }
       expect(html).toContain('aria-label="总览摘要"');
     });
