@@ -76,11 +76,26 @@ describe("RegressionStore", () => {
     await expect(store.openCards()).resolves.toEqual([]);
   });
 
-  it("separates two different breaks in the same scenario into their own cards", async () => {
+  it("keeps one open card per scenario however differently it fails", async () => {
+    // A screen's failure is a sentence somebody wrote about it, so a scenario
+    // that is simply broken produces a new signature every sweep. A card per
+    // signature meant another copy of the same work item every round, in the
+    // Story's fix round and in the Epic's gate message.
     for (let attempt = 0; attempt < 3; attempt++) await fail("AssertionError: expected 3 to be 4");
     for (let attempt = 0; attempt < 8; attempt++) await fail("TypeError: cart is not iterable");
 
-    await expect(store.openCards()).resolves.toHaveLength(2);
+    await expect(store.openCards()).resolves.toMatchObject([{ failureText: "assertionerror: expected <n> to be <n>" }]);
+  });
+
+  it("raises again for the next break once the card for the last one is closed", async () => {
+    for (let attempt = 0; attempt < 3; attempt++) await fail("AssertionError: expected 3 to be 4");
+    const [first] = await store.openCards();
+    await store.attribute(first!.scenarioId, first!.failureSignature, "S-M2-03");
+    await store.resolveCard(first!.scenarioId, first!.failureSignature, "S-M2-03");
+
+    for (let attempt = 0; attempt < 3; attempt++) await fail("TypeError: cart is not iterable");
+
+    await expect(store.openCards()).resolves.toMatchObject([{ failureText: "typeerror: cart is not iterable" }]);
   });
 
   it("records the Story a card was attributed to", async () => {
@@ -135,7 +150,12 @@ describe("RegressionStore", () => {
       args: [],
     });
     for (let attempt = 0; attempt < 3; attempt++) await fail("AssertionError: expected 3 to be 4");
-    for (let attempt = 0; attempt < 8; attempt++) await fail("TypeError: cart is not iterable");
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await store.record({
+        scenarioId: "S-M2-01-b", pool: "main", revision: "abc123", outcome: "failed",
+        output: "TypeError: cart is not iterable",
+      }, policy);
+    }
     const [attributed] = await store.openCards();
     await store.attribute(attributed!.scenarioId, attributed!.failureSignature, "S-M2-03");
 
