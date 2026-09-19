@@ -76,9 +76,12 @@ async function registeredOwner(client: Client, scenarioId: string): Promise<stri
  * registered owner is not a guess, and `retry.maxRegressionReopens` bounds how
  * often it may happen.
  *
- * A failure that will not reproduce stays unattributed on purpose: there is
- * nothing to fix, and the card closes on its own the next time the scenario
- * runs green.
+ * The caller only asks about cards whose scenario failed in the sweep it is
+ * running, at this very revision, so a probe that passes at the tip is not
+ * news that the break is gone -- it contradicts the evidence the card is made
+ * of, and the bisect standing on it cannot name anyone either. A card whose
+ * scenario really has gone green is closed by the sweep itself, without anyone
+ * being asked to fix it.
  */
 export async function attributeCard(
   client: Client,
@@ -101,7 +104,12 @@ export async function attributeCard(
         card.scenarioId,
       ),
     );
-  if (attribution.kind === "not_reproduced") return attribution;
+  // Every kind but "introduced" names nobody, and each of them is asked about
+  // a scenario the sweep just failed at this very revision: the break predates
+  // the sequence, or a revision could not be judged, or the tip probe passed
+  // and so contradicts the evidence this card is made of. None of the three is
+  // grounds to blame a Story in the sequence, and none of them means there is
+  // nothing to fix -- so the scenario goes to the Story that registered it.
   const owner = attribution.kind === "introduced"
     ? attribution.item
     : await registeredOwner(client, card.scenarioId);
