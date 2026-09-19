@@ -418,6 +418,10 @@ function renderState(state: RoleConfigurationViewState): string {
         + `<h2>还没有角色配置</h2>`
         + `<p>创建首个角色配置后，可以在这里查看 Prompt、供应商、模型和版本差异。</p>`
         + `<button type="button">创建首个配置</button></div></section>`;
+    case "loading":
+      return `<section class="state-page" aria-live="polite"><div class="state-card">`
+        + `<h2>正在读取角色版本</h2>`
+        + `<p>正在加载当前版、上一版及 Prompt 差异，请稍候。</p></div></section>`;
     default: return "";
   }
 }
