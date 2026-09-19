@@ -632,6 +632,15 @@ export class BlindVerifyExecutor {
         .filter((scenario) => scenario.status !== "passed" && scenario.reason)
         .map((scenario) => ({ scenarioId: scenario.id, reason: scenario.reason! })) ?? [],
       ...structural.map((finding) => ({ scenarioId: finding.id, reason: finding.reason })),
+      // A scenario the trajectory failed while the verdict called it passed has
+      // no reason of the verifier's own: the verifier did not think it had
+      // failed. The box knows why it is failed anyway and says so, because a
+      // failure carried forward without a reason reaches a person as a blank
+      // and reaches the regression lane as one break indistinguishable from
+      // every other reasonless one.
+      ...observedFailures
+        .filter((id) => !(document?.scenarios ?? []).some((scenario) => scenario.id === id && scenario.status !== "passed"))
+        .map((id) => ({ scenarioId: id, reason: "这条场景在运行记录里判为未通过，但结论里写成通过" })),
     ];
     const environmentReasons = [
       ...scenarioReasons,

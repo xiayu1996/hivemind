@@ -431,4 +431,27 @@ describe("BlindVerifyExecutor", () => {
     ).run(input());
     expect(result.record.verdict).toBe("accepted");
   });
+
+  it("says why a scenario the trajectory failed is failed, when the verdict called it passed", async () => {
+    const instance = runner({
+      events: [
+        { type: "test_result", scenarioId: "S-EPIC-01-unit", status: "failed" },
+        assistant(JSON.stringify({ scenarios: [{ id: "S-EPIC-01-unit", status: "passed" }] })),
+      ],
+    });
+    const executor = new BlindVerifyExecutor(
+      { create: () => instance },
+      { insert: async () => undefined },
+      pins(),
+      (() => { let time = 100; return () => time++; })(),
+    );
+
+    const result = await executor.run(input());
+
+    expect(result.record.failedScenarios).toEqual(["S-EPIC-01-unit"]);
+    expect(result.reasons).toContainEqual({
+      scenarioId: "S-EPIC-01-unit",
+      reason: "这条场景在运行记录里判为未通过，但结论里写成通过",
+    });
+  });
 });
