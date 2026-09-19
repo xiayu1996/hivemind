@@ -468,6 +468,7 @@ export const STORY_PROGRESS_COPY = {
   resultsPending: "本轮结果尚未产生，将自动刷新",
   noRounds: "当前还没有工作轮次",
   backToOverview: "返回运行总览",
+  currentRunEntry: "当前",
   overLimitStatus: "已超限",
   workContinues: "工作仍继续",
   workStopped: "工作已停止",

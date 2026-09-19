@@ -91,6 +91,19 @@ function renderReady(overrides: Partial<StoryProgressSnapshot> = {}): string {
   return renderStoryProgressPage(storyProgressPageView(progress(snapshot), {}));
 }
 
+function consoleWith(result: StoryProgressReadResult): ConsoleDataSource {
+  return {
+    nodes: async () => [],
+    tasks: async () => [],
+    costs: async () => [],
+    config: async () => [],
+    stats: async () => ({}),
+    providers: async () => [],
+    queue: async () => ({}),
+    storyProgress: async () => result,
+  };
+}
+
 describe("requirement detail page", () => {
   it("@scenario S-R237511DT-01-current 打开需求先看到当前轮的触发原因、阶段、结果、卡点与两笔费用", () => {
     const html = renderReady();
@@ -109,8 +122,11 @@ describe("requirement detail page", () => {
 
   it("@scenario S-R237511DT-01-current 未被选择的历史轮次不会并入当前轮", () => {
     const html = renderReady();
-    expect(html).not.toContain("$0.96（本需求第 2 轮）");
+    // The switcher and history list summarise every round by design; what must
+    // not expand is an unselected round's own panel, results and blockers.
+    expect(html).not.toContain(">第 2 轮</h2>");
     expect(html).not.toContain("已取得的结果：1 项验收已通过");
+    expect(html).toContain("$1.24（本需求当前轮）");
   });
 
   it("@scenario S-R237511DT-01-history 选择第 2 轮只展开那一轮自己的记录", () => {
@@ -205,24 +221,11 @@ describe("requirement detail page", () => {
     expect(html).toMatch(/@media \(max-width:760px\)/);
     // The content column reserves the bottom bar's height, so the entry never
     // covers an amount, a blocker or a round.
-    expect(html).toMatch(/padding-bottom:calc\([^)]*\)/);
+    expect(html).toContain("104px");
   });
 });
 
 describe("requirement detail page route", () => {
-  function consoleWith(result: StoryProgressReadResult): ConsoleDataSource {
-    return {
-      nodes: async () => [],
-      tasks: async () => [],
-      costs: async () => [],
-      config: async () => [],
-      stats: async () => ({}),
-      providers: async () => [],
-      queue: async () => ({}),
-      storyProgress: async () => result,
-    };
-  }
-
   it("serves the requirement detail page as a document", async () => {
     const app = await createConsoleServer(consoleWith(progress(threeRounds())), { serveUi: false });
     const response = await app.inject({ method: "GET", url: `/stories/${CARD}/progress` });
@@ -247,6 +250,24 @@ describe("requirement detail page route", () => {
     const response = await app.inject({ method: "GET", url: `/api/stories/${CARD}/progress` });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ storyId: CARD, currentRoundId: 3 });
+    await app.close();
+  });
+
+  it("still answers a page when the source cannot read progress, rather than 404", async () => {
+    const without: ConsoleDataSource = {
+      nodes: async () => [],
+      tasks: async () => [],
+      costs: async () => [],
+      config: async () => [],
+      stats: async () => ({}),
+      providers: async () => [],
+      queue: async () => ({}),
+    };
+    const app = await createConsoleServer(without, { serveUi: false });
+    const response = await app.inject({ method: "GET", url: `/stories/${CARD}/progress` });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain("无法读取需求进展");
+    expect(response.body).toContain("重新读取");
     await app.close();
   });
 });

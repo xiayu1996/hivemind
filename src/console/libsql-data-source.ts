@@ -5,6 +5,7 @@ import { renderTraceHtml } from "../observability/projections/trace-html.js";
 import { traceProjection } from "../observability/projections/units.js";
 import { summarizeFootprintDeviation } from "../orchestrator/footprint-deviation.js";
 import type { ConsoleDataSource } from "./server.js";
+import { LibsqlStoryProgressReadPort, type StoryProgressReadResult } from "./story-progress.js";
 
 function plain(row: Row): Record<string, unknown> {
   return Object.fromEntries(Object.entries(row));
@@ -19,6 +20,15 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
      * view costs one read rather than a walk over every event. */
     private readonly fleet?: () => unknown,
   ) {}
+
+  /** The requirement-progress read, built once and reused: it holds no state
+   * beyond the client it reads from. */
+  #storyProgress: LibsqlStoryProgressReadPort | null = null;
+
+  async storyProgress(storyId: string): Promise<StoryProgressReadResult> {
+    this.#storyProgress ??= new LibsqlStoryProgressReadPort(this.client);
+    return this.#storyProgress.readStoryProgress(storyId);
+  }
 
   nodes(): Promise<unknown[]> {
     return this.nodeSnapshot();

@@ -2,6 +2,8 @@ import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { registerStoryProgressPageRoute } from "./story-progress-page.js";
+import { registerStoryProgressRoute, type StoryProgressReadResult } from "./story-progress.js";
 
 export interface ConsoleDataSource {
   nodes(): Promise<unknown[]>;
@@ -14,6 +16,10 @@ export interface ConsoleDataSource {
    * store: the queue is a set of rows there, and a board over a separate broker
    * would be a second account of the same thing, free to disagree with it. */
   queue(): Promise<unknown>;
+  /** One requirement's progress, as the detail page and its JSON reading need
+   * it. Optional so a source that cannot serve the screen reports that rather
+   * than the console inventing a route that answers nothing. */
+  storyProgress?(storyId: string): Promise<StoryProgressReadResult>;
 }
 
 export interface ConsoleConfigWritePort {
@@ -55,6 +61,17 @@ export async function createConsoleServer(
   app.get("/api/stats", async () => data.stats());
   app.get("/api/providers", async () => data.providers());
   app.get("/api/queue", async () => data.queue());
+
+  // A requirement's progress is the central ledger's answer, so it is served
+  // by the process that holds the store, whether or not a browser bundle was
+  // built. The document route is the person-visible half; the JSON route below
+  // is the same snapshot for pages that do not need one. The routes exist even
+  // when the source cannot read progress, so a console that has no store says
+  // so on the page rather than answering a 404 that reads as "no such screen".
+  const storyProgress = data.storyProgress?.bind(data)
+    ?? (async (): Promise<StoryProgressReadResult> => ({ kind: "failed" }));
+  registerStoryProgressPageRoute(app, { readStoryProgress: storyProgress });
+  registerStoryProgressRoute(app, { readStoryProgress: storyProgress });
 
   const writer = options.configWriter;
   if (writer) {
