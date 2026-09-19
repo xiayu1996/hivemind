@@ -210,14 +210,44 @@ export function createConsoleAccessPolicy(config: ConsoleAccessConfig): ConsoleA
   };
 }
 
+const ACCESS_STATE_COPY: Partial<Record<ConsoleAccessPageState, { heading: string; detail: string; retry: boolean }>> = {
+  denied: {
+    heading: "\u5f53\u524d\u8bbe\u5907\u65e0\u6cd5\u8fdb\u5165\u540e\u53f0",
+    detail: "\u65e0\u6cd5\u8bbf\u95ee\u3002\u8bf7\u5148\u8fde\u63a5\u5bb6\u5ead\u6216\u529e\u516c\u7f51\u7edc\uff0c\u7136\u540e\u9009\u62e9\u201c\u91cd\u65b0\u68c0\u67e5\u7f51\u7edc\u201d\u3002",
+    retry: true,
+  },
+};
+
+const ACCESS_PAGE_FALLBACK = { heading: "\u4e0d\u53ef\u7528", detail: "", retry: false };
+
+const ACCESS_PAGE_STYLE = `:root{color-scheme:light}`
+  + `body{margin:0;background:#f4f7fa;color:#172b3a;font-family:"IBM Plex Sans","Segoe UI",sans-serif;font-size:14px}`
+  + `main{max-width:560px;margin:0 auto;padding:28px 28px;min-height:100vh;box-sizing:border-box}`
+  + `h1{font-size:26px;margin:20px 0 12px}`
+  + `h2{font-size:18px;margin:0 0 12px}`
+  + `.access-state{background:#ffffff;border:1px solid #cbd5df;border-radius:10px;padding:20px;box-shadow:0 2px 8px #172b3a14}`
+  + `p{margin:0 0 12px;line-height:1.6}`
+  + `.access-badge{display:inline-block;border-radius:999px;background:#fff0ef;color:#b42318;padding:4px 12px;font-size:12px;margin-bottom:12px}`
+  + `button{border:1px solid #173f63;background:#173f63;color:#ffffff;border-radius:6px;min-height:44px;padding:8px 20px;font:inherit;cursor:pointer}`
+  + `button:hover{background:#0b6bcb;border-color:#0b6bcb}`;
+
 /** Creates the data-independent access-check page. */
 export function createConsoleAccessPage(): ConsoleAccessPage {
   return {
-    renderDocument(): string {
-      return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">`
+    renderDocument({ state }: { state: ConsoleAccessPageState }): string {
+      const copy = ACCESS_STATE_COPY[state] ?? ACCESS_PAGE_FALLBACK;
+      const action = copy.retry
+        ? `<button type="button" onclick="location.reload()">\u91cd\u65b0\u68c0\u67e5\u7f51\u7edc</button>`
+        : "";
+      return `<!doctype html>`
+        + `<html lang="zh-CN"><head><meta charset="utf-8">`
         + `<meta name="viewport" content="width=device-width,initial-scale=1">`
-        + `<title>\u8bbf\u95ee\u9a8c\u8bc1\uff5cHivemind</title></head><body><main>`
-        + `<h1>\u8bbf\u95ee\u9a8c\u8bc1</h1></main></body></html>`;
+        + `<title>\u8bbf\u95ee\u9a8c\u8bc1\uff5cHivemind</title>`
+        + `<style>${ACCESS_PAGE_STYLE}</style></head><body><main>`
+        + `<h1>\u8bbf\u95ee\u9a8c\u8bc1</h1>`
+        + `<section class="access-state">` + `<span class="access-badge">\u65e0\u6cd5\u8bbf\u95ee</span>` + ``
+        + `<h2>${copy.heading}</h2><p>${copy.detail}</p>${action}</section>`
+        + `</main></body></html>`;
     },
   };
 }
