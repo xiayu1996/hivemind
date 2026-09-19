@@ -59,6 +59,7 @@ import { CostLedger } from "../src/observability/cost-ledger.js";
 import { costCeilingUsd } from "../src/pipeline/cost-ceiling.js";
 import { retryLimits } from "../src/pipeline/retry-limits.js";
 import { specifyGatePorts } from "../src/pipeline/specify-gate.js";
+import { describeGitFailure } from "../src/vcs/git-failure.js";
 import { ScenarioRegistry } from "../src/regression/scenario-registry.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
@@ -148,12 +149,16 @@ function safeSegment(value: string): string {
 
 
 async function git(worktreePath: string, args: readonly string[]): Promise<string> {
-  const result = await execFileAsync("git", [...args], {
-    cwd: worktreePath,
-    windowsHide: true,
-    maxBuffer: 8 * 1024 * 1024,
-  });
-  return result.stdout;
+  try {
+    const result = await execFileAsync("git", [...args], {
+      cwd: worktreePath,
+      windowsHide: true,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    return result.stdout;
+  } catch (cause) {
+    throw describeGitFailure(cause);
+  }
 }
 
 /** The tree a verdict was reached on. A conclusion carried onto a tree that
