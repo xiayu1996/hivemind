@@ -1,6 +1,7 @@
 import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { isWithinRoot } from "../guard/danger-rules.js";
+import { evidenceCandidates } from "./evidence-path.js";
 import { SCREEN_EVIDENCE_MISSING } from "./failure-classification.js";
 
 export interface ScenarioVerdict {
@@ -152,19 +153,24 @@ export async function validateVerdict(input: VerdictInput): Promise<VerdictValid
       ["snapshot", scenario.snapshots ?? []],
     ] as const) {
       for (const file of files) {
-        const path = resolve(evidenceRoot, file);
-        if (!isWithinRoot(path, evidenceRoot)) {
+        const candidates = evidenceCandidates(evidenceRoot, file)
+          .filter((path) => isWithinRoot(path, evidenceRoot));
+        if (candidates.length === 0) {
           errors.push(`${scenario.id}: ${kind} escapes the evidence root`);
           continue;
         }
-        try {
-          const details = await stat(path);
-          if (!details.isFile()) refuseMissing(`${scenario.id}: ${kind} is not a file (${file})`);
-          if (details.mtimeMs < input.roundStartedAt || details.mtimeMs > input.roundEndedAt) {
-            errors.push(`${scenario.id}: ${kind} mtime is outside the verification round (${file})`);
-          }
-        } catch {
+        let details: Awaited<ReturnType<typeof stat>> | null = null;
+        for (const path of candidates) {
+          details = await stat(path).catch(() => null);
+          if (details !== null) break;
+        }
+        if (details === null) {
           refuseMissing(`${scenario.id}: ${kind} does not exist (${file})`);
+          continue;
+        }
+        if (!details.isFile()) refuseMissing(`${scenario.id}: ${kind} is not a file (${file})`);
+        if (details.mtimeMs < input.roundStartedAt || details.mtimeMs > input.roundEndedAt) {
+          errors.push(`${scenario.id}: ${kind} mtime is outside the verification round (${file})`);
         }
       }
     }
