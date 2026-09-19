@@ -51,4 +51,15 @@ describe("the overview started by a verification round with its dynamic port", (
       expect(todos).toContain("/todo?requirement=R-PRD");
     });
   });
+  it("@scenario S-R237511OV-01-active shows the declared running requirement and tasks after allocating the review port", async () => {
+    await inspectOverview((html) => {
+      const active = section(html, 'id="active-title"', 'id="failures-title"');
+      expect(active).toContain("运行中 <span class=\"heading-count\">3 项");
+      expect(active).toContain('aria-label="重试退避 任务 CODE 运行中"');
+      expect(active).toContain('aria-label="重试策略收敛 需求 SOLUTION 运行中"');
+      expect(active).toContain('aria-label="异常归类 任务 VERIFY 运行中"');
+      expect(active.indexOf("重试退避")).toBeLessThan(active.indexOf("重试策略收敛"));
+      expect(active.indexOf("重试策略收敛")).toBeLessThan(active.indexOf("异常归类"));
+    });
+  });
 });
