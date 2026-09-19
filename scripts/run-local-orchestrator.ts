@@ -2,7 +2,7 @@ import type { Row } from "@libsql/client";
 import { execFile } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
@@ -90,7 +90,7 @@ import { ConsoleConfigWriter } from "../src/console/config-writer.js";
 import { resolveAgentSpec } from "../src/runner/agent-spec.js";
 import { cacheRetentionEnv } from "../src/runner/cache-retention.js";
 import { StoryExecutionStore } from "../src/orchestrator/story-execution-store.js";
-import { openDb } from "../src/persistence/client.js";
+import { absoluteDbUrl, openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
 import { assertSchemaCurrent } from "../src/persistence/schema-fingerprint.js";
 import { createWorktree, locateWorktree, worktreeLayout } from "../src/vcs/worktree.js";
@@ -184,13 +184,6 @@ function repositoryIdFor(slug: string): string {
 
 /** A `file:` URL made absolute against this process's cwd; anything else is
  * left as it is, since a remote libsql URL has no cwd to resolve against. */
-function absoluteDbUrl(url: string): string {
-  if (!url.startsWith("file:")) return url;
-  const path = url.slice("file:".length);
-  const [file, query] = path.split(/(?=\?)/);
-  return isAbsolute(file!) ? url : `file:${resolve(file!)}${query ?? ""}`;
-}
-
 async function main(): Promise<void> {
   const stored = await loadSecretsFile();
   const token = process.env.NOTION_TOKEN ?? stored.get("NOTION_TOKEN");
