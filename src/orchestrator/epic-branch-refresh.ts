@@ -73,6 +73,7 @@ export class EpicBranchFreshness {
       return { epicId, outcome: "failed", reason };
     }
     const sourceRevision = (await this.git.run(cwd, ["rev-parse", source])).trim();
+    const published = await this.publishedAhead(cwd, integrationBranch);
     const time = this.now();
     // What makes a branch due is main moving, not a clock reaching a number.
     //
@@ -98,7 +99,7 @@ export class EpicBranchFreshness {
       args: [epicId],
     })).rows[0];
     const settled = typeof last?.ts === "number" && time - last.ts < this.intervalMs;
-    if (settled && String(last?.source_revision ?? "") === sourceRevision) {
+    if (settled && String(last?.source_revision ?? "") === sourceRevision && !published) {
       // Not recorded: nothing reads a skip. The interval query reads
       // 'succeeded' and the progress probe reads 'succeeded' and 'failed', so
       // a row per cycle per Epic only grows the table -- one Epic had 742 of
@@ -118,6 +119,9 @@ export class EpicBranchFreshness {
       await this.record(epicId, "failed", sourceRevision, time, reason);
       return { epicId, outcome: "failed", reason };
     }
+    // Fast-forward only, so a published branch can add to this one and can
+    // never rewrite it; it is strictly ahead or this is not reached.
+    if (published) await this.git.run(cwd, ["merge", "--ff-only", `refs/remotes/origin/${integrationBranch}`]);
     try {
       await this.git.run(cwd, ["merge", "--no-ff", source]);
     } catch (cause) {
@@ -147,6 +151,37 @@ export class EpicBranchFreshness {
     }
     await this.record(epicId, "succeeded", sourceRevision, time);
     return { epicId, outcome: "succeeded" };
+  }
+
+  /**
+   * Whether the platform holds commits for this same branch that this worktree
+   * does not.
+   *
+   * The integration branch lives there too, and a conflict this merge cannot do
+   * is one a person resolves there -- by hand, or with the host's own "update
+   * branch" button. The local branch is what every Story merge and every push
+   * builds on, and it never hears about that: R237511DT was resolved and pushed
+   * on 09-19 while the worktree stayed 88 commits behind, so the same conflict
+   * was rediscovered every cycle for a day and the eventual push would have
+   * been refused as non-fast-forward.
+   *
+   * Asked before the throttle because it changes the answer: the same main
+   * against a branch that has moved is a different question. Nothing is merged
+   * here -- the worktree has not been checked yet, and a tree on the wrong
+   * branch must not receive commits.
+   */
+  private async publishedAhead(cwd: string, integrationBranch: string): Promise<boolean> {
+    try {
+      await this.git.run(cwd, ["fetch", "origin", integrationBranch]);
+      const behind = await this.git.run(cwd, [
+        "rev-list", "--count", `HEAD..refs/remotes/origin/${integrationBranch}`,
+      ]);
+      return Number(behind.trim()) > 0;
+    } catch {
+      // No such branch on the platform yet, which is every Epic before its
+      // first delivery. The local branch is the only one there is.
+      return false;
+    }
   }
 
   /** The paths git stopped on, or none when the failure was not a conflict. */
