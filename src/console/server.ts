@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { ConsoleAccessPage, ConsoleAccessPolicy } from "./access-control.js";
+import { sendConsoleAccessDenied } from "./access-control.js";
 import { OVERVIEW_ENDPOINT, type OverviewReadPort, type OverviewTodoItem } from "./overview-contract.js";
 import type { ConsoleOverviewPage, OverviewPageState } from "./overview-page.js";
 import { createTodoPage, type ConsoleTodoPage, type TodoPageState } from "./todo-page.js";
@@ -33,6 +34,16 @@ function isTimeZone(value: string): boolean {
     // rejection, and no other failure can reach here.
     return false;
   }
+}
+
+/**
+ * How a denied request is answered. A page navigation gets the access page;
+ * everything else is a read or write and gets the fixed JSON envelope.
+ */
+function consoleRequestKind(request: FastifyRequest): "page" | "api" {
+  const path = request.url.split("?")[0] ?? "";
+  if (request.method !== "GET" && request.method !== "HEAD") return "api";
+  return path === "/health" || path.startsWith("/api/") ? "api" : "page";
 }
 
 export interface ConsoleDataSource extends OverviewReadPort {
@@ -80,6 +91,16 @@ export async function createConsoleServer(
   options: ConsoleServerOptions,
 ): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
+  // The access boundary is registered first: it runs before the read-only
+  // method filter, static files, every route and every data or write port, so
+  // a denied request cannot reach a value through any other door.
+  app.addHook("onRequest", async (request, reply) => {
+    const decision = options.accessPolicy.authorize({
+      remoteAddress: request.socket.remoteAddress ?? null,
+    });
+    if (decision.allowed) return;
+    await sendConsoleAccessDenied(reply, consoleRequestKind(request), decision, options.accessPage);
+  });
   const writable = new Set(options.configWriter
     ? ["/api/config/value", "/api/config/rollback"]
     : []);

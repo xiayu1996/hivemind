@@ -9,9 +9,15 @@ import { LibsqlConsoleDataSource } from "./libsql-data-source.js";
 import { seedOverviewDemo } from "./overview-demo.js";
 import { createOverviewPage } from "./overview-page.js";
 import { createConsoleServer } from "./server.js";
+import { createConsoleAccessPage } from "./access-control.js";
 
 const clients: Client[] = [];
 const directories: string[] = [];
+
+const openAccess = {
+  accessPolicy: { authorize: () => ({ allowed: true as const, matchedNetwork: "0.0.0.0/0" }) },
+  accessPage: createConsoleAccessPage(),
+};
 
 async function demoServer(): Promise<FastifyInstance> {
   const directory = await mkdtemp(join(tmpdir(), "overview-todo-"));
@@ -22,6 +28,7 @@ async function demoServer(): Promise<FastifyInstance> {
   await seedOverviewDemo(client, Date.now());
   return createConsoleServer(new LibsqlConsoleDataSource(client, async () => []), {
     overviewPage: createOverviewPage(),
+    ...openAccess,
   });
 }
 

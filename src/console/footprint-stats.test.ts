@@ -3,6 +3,12 @@ import { describe, expect, it } from "vitest";
 import { migrate } from "../persistence/migrate.js";
 import { LibsqlConsoleDataSource } from "./libsql-data-source.js";
 import { createConsoleServer, type ConsoleDataSource } from "./server.js";
+import { createConsoleAccessPage } from "./access-control.js";
+
+const openAccess = {
+  accessPolicy: { authorize: () => ({ allowed: true as const, matchedNetwork: "0.0.0.0/0" }) },
+  accessPage: createConsoleAccessPage(),
+};
 
 describe("S-M2-07-stats footprint deviation on the statistics page", () => {
   it("summarizes only the Stories whose actual footprint was recorded at merge", async () => {
@@ -38,7 +44,7 @@ describe("S-M2-07-stats footprint deviation on the statistics page", () => {
       queue: async () => ({ waiting: [], running: [], providerSlots: [] }),
   providers: async () => [],
     };
-    const app = await createConsoleServer(data, { serveUi: false });
+    const app = await createConsoleServer(data, { serveUi: false, ...openAccess });
     const response = await app.inject({ method: "GET", url: "/api/stats" });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ footprintDeviation: { stories: 0 } });

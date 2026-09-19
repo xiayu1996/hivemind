@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createConsoleServer, listenConsole, type ConsoleDataSource } from "./server.js";
+import { createConsoleAccessPage } from "./access-control.js";
 
 const data: ConsoleDataSource = {
   readOverview: async (query) => ({
@@ -29,9 +30,14 @@ const data: ConsoleDataSource = {
   queue: async () => ({ waiting: [{ id: "story-2" }], running: [], providerSlots: [] }),
 };
 
+const openAccess = {
+  accessPolicy: { authorize: () => ({ allowed: true as const, matchedNetwork: "0.0.0.0/0" }) },
+  accessPage: createConsoleAccessPage(),
+};
+
 describe("read-only console", () => {
   it("serves four real-data API views and health", async () => {
-    const app = await createConsoleServer(data, { serveUi: false });
+    const app = await createConsoleServer(data, { serveUi: false, ...openAccess });
     await expect(app.inject({ method: "GET", url: "/health" }).then((response) => response.json())).resolves.toEqual({ status: "ok" });
     for (const route of ["nodes", "tasks", "costs", "config", "providers"]) {
       const response = await app.inject({ method: "GET", url: `/api/${route}` });
@@ -43,7 +49,7 @@ describe("read-only console", () => {
 
   it("@scenario S-R237511OV-01-active serves one overview snapshot with a validated time zone and server time", async () => {
     const readOverview = vi.fn(data.readOverview);
-    const app = await createConsoleServer({ ...data, readOverview }, { serveUi: false });
+    const app = await createConsoleServer({ ...data, readOverview }, { serveUi: false, ...openAccess });
     const before = Date.now();
 
     const response = await app.inject({ method: "GET", url: "/api/overview?timeZone=Asia%2FShanghai" });
@@ -66,7 +72,7 @@ describe("read-only console", () => {
 
   it("@scenario S-R237511OV-01-active rejects an invalid time zone before reading overview data", async () => {
     const readOverview = vi.fn(data.readOverview);
-    const app = await createConsoleServer({ ...data, readOverview }, { serveUi: false });
+    const app = await createConsoleServer({ ...data, readOverview }, { serveUi: false, ...openAccess });
 
     const response = await app.inject({ method: "GET", url: "/api/overview?timeZone=not-a-zone" });
 
@@ -76,20 +82,20 @@ describe("read-only console", () => {
   });
 
   it("rejects every write method", async () => {
-    const app = await createConsoleServer(data, { serveUi: false });
+    const app = await createConsoleServer(data, { serveUi: false, ...openAccess });
     const response = await app.inject({ method: "POST", url: "/api/config", payload: { value: 1 } });
     expect(response.statusCode).toBe(405);
     await app.close();
   });
 
   it("refuses a public wildcard bind", async () => {
-    const app = await createConsoleServer(data, { serveUi: false });
+    const app = await createConsoleServer(data, { serveUi: false, ...openAccess });
     await expect(listenConsole(app, { host: "0.0.0.0", port: 0 })).rejects.toThrow(/public wildcard/);
     await app.close();
   });
 
   it("serves the queue from the central store rather than a broker dashboard", async () => {
-    const app = await createConsoleServer(data, { serveUi: false });
+    const app = await createConsoleServer(data, { serveUi: false, ...openAccess });
     const response = await app.inject({ method: "GET", url: "/api/queue" });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ waiting: [{ id: "story-2" }] });

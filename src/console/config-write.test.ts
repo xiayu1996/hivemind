@@ -4,6 +4,7 @@ import { ConfigStore } from "../config/store.js";
 import { migrate } from "../persistence/migrate.js";
 import { ConsoleConfigWriter } from "./config-writer.js";
 import { createConsoleServer, type ConsoleDataSource } from "./server.js";
+import { createConsoleAccessPage } from "./access-control.js";
 
 const data: ConsoleDataSource = {
   readOverview: async () => { throw new Error("overview is not used in configuration tests"); },
@@ -14,6 +15,11 @@ const data: ConsoleDataSource = {
   stats: async () => ({}),
   queue: async () => ({ waiting: [], running: [], providerSlots: [] }),
   providers: async () => [],
+};
+
+const openAccess = {
+  accessPolicy: { authorize: () => ({ allowed: true as const, matchedNetwork: "0.0.0.0/0" }) },
+  accessPage: createConsoleAccessPage(),
 };
 
 describe("M2-13 console configuration write plane", () => {
@@ -29,7 +35,7 @@ describe("M2-13 console configuration write plane", () => {
   afterEach(() => client.close());
 
   async function server() {
-    return createConsoleServer(data, { serveUi: false, configWriter: writer });
+    return createConsoleServer(data, { serveUi: false, configWriter: writer, ...openAccess });
   }
 
   it("describes every key with the schema a form can be generated from", async () => {
@@ -146,7 +152,7 @@ describe("M2-13 console configuration write plane", () => {
   });
 
   it("keeps the console read-only when no writer is wired in", async () => {
-    const app = await createConsoleServer(data, { serveUi: false });
+    const app = await createConsoleServer(data, { serveUi: false, ...openAccess });
 
     expect((await app.inject({ method: "GET", url: "/api/config/schema" })).statusCode).toBe(404);
     expect((await app.inject({
