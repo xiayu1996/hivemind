@@ -15,6 +15,7 @@ import {
 } from "../persistence/requirement-cost-limit.js";
 import type { RequirementSummaryRow } from "./requirement-detail-page.js";
 import type { ConsoleDataSource } from "./server.js";
+import { LibsqlStoryProgressReadPort, type StoryProgressReadResult } from "./story-progress.js";
 
 function plain(row: Row): Record<string, unknown> {
   return Object.fromEntries(Object.entries(row));
@@ -42,6 +43,15 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
       this.requirementCostPort,
       this.requirementCostLimitStore,
     );
+  }
+
+  /** The requirement-progress read, built once and reused: it holds no state
+   * beyond the client it reads from. */
+  #storyProgress: LibsqlStoryProgressReadPort | null = null;
+
+  async storyProgress(storyId: string): Promise<StoryProgressReadResult> {
+    this.#storyProgress ??= new LibsqlStoryProgressReadPort(this.client);
+    return this.#storyProgress.readStoryProgress(storyId);
   }
 
   nodes(): Promise<unknown[]> {
