@@ -54,4 +54,27 @@ describe("verification fixture request ownership", () => {
       expect.objectContaining({ todoId: "answer:S-R237-ANSWER:q1", kind: "answer" }),
     ]);
   });
+
+  it("@scenario S-R237511TD-02-empty 未指定验收样例的页面导航清除样例并显示真实空状态", async () => {
+    await applyVerifyFixture(client, "answer", 9_000);
+    expect(await listPendingTodos(client)).toHaveLength(1);
+
+    const navigation = await applyRequest(client, "GET", "/todo");
+
+    expect(navigation).toMatchObject({
+      kind: "select",
+      plan: { fixture: "empty", todoRead: "available", decisionDelivery: "confirm" },
+    });
+    expect(await listPendingTodos(client)).toEqual([]);
+  });
+
+  it("@scenario S-R237511TD-02-empty 空状态场景不会遗留其他场景的样例待办", async () => {
+    await applyVerifyFixture(client, "full", 9_000);
+    expect((await listPendingTodos(client)).length).toBeGreaterThan(1);
+
+    const navigation = await applyRequest(client, "GET", "/todo?scenario=S-R237511TD-02-empty");
+
+    expect(navigation).toMatchObject({ kind: "select", plan: { fixture: "empty" } });
+    expect(await listPendingTodos(client)).toEqual([]);
+  });
 });
