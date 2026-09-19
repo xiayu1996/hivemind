@@ -314,6 +314,10 @@ async function main(): Promise<void> {
     try {
       const repositoryPath = checkoutOf(await repoOf("epics", epicId));
       const result = await publishEpicBranch({ git: processGitCommand, repositoryPath, epicId });
+      // Recorded here, not at the first merge: the freshness pass reads this
+      // column to decide what to keep close to main, and a branch its Stories
+      // are already being written against is exactly what has to be kept.
+      await store.recordIntegrationBranch(epicId, result.branch);
       if (result.pushed) console.log(`Published ${result.branch} to origin`);
     } catch (error) {
       console.error(`Publishing epic/${epicId} failed; delivery will retry before the first Story worktree is cut:`, (error as Error).message);
@@ -786,7 +790,8 @@ async function main(): Promise<void> {
         const epicBranch = `epic/${epicId}`;
         // Normally already done at approval; this is the retry for an approval
         // whose push failed, and it must succeed before a Story stacks on it.
-        await publishEpicBranch({ git: processGitCommand, repositoryPath, epicId });
+        const published = await publishEpicBranch({ git: processGitCommand, repositoryPath, epicId });
+        await store.recordIntegrationBranch(epicId, published.branch);
         let integration = locateWorktree(repositoryId, integrationCard, layout);
         if (!(await exists(integration.worktreePath))) {
           integration = await createWorktree({
