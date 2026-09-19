@@ -107,3 +107,253 @@ export type RoleConfigurationViewState =
     confirmedPair: RoleVersionPair;
     pendingSaveId: string;
   };
+
+/** One of the four states the interface contract exposes directly. */
+export type RoleConfigurationForcedState = "empty" | "loading" | "error" | "waiting";
+
+export interface RoleConfigurationPageRequest {
+  /** Set when the page is opened with `?state=`, so each state is a URL. */
+  forcedState: RoleConfigurationForcedState | null;
+  /** The role the person selected, carried in `?role=`. */
+  roleId: RoleId | null;
+}
+
+/** Turns the query string into the role and state the page should show. */
+export function resolveRoleConfigurationPageRequest(
+  query: Readonly<Record<string, string | undefined>>,
+): RoleConfigurationPageRequest {
+  const state = query.state;
+  const forcedState = state === "empty" || state === "loading" || state === "error" || state === "waiting"
+    ? state
+    : null;
+  const role = query.role;
+  return { forcedState, roleId: role !== undefined && role !== "" ? role : null };
+}
+
+async function readCatalog(
+  reader: RoleConfigurationReadPort,
+): Promise<RoleCatalogReadResult> {
+  try {
+    return await reader.readCatalog();
+  } catch {
+    // A reader that throws is the same answer as one that reports unavailable:
+    // the catalog could not be read, and retrying is the only next step.
+    return { status: "unavailable", retryable: true };
+  }
+}
+
+async function readVersionPair(
+  reader: RoleConfigurationReadPort,
+  roleId: RoleId,
+): Promise<RoleVersionPairReadResult> {
+  try {
+    return await reader.readVersionPair(roleId);
+  } catch {
+    return { status: "unavailable", roleId, retryable: true };
+  }
+}
+
+function confirmedPairOf(read: RoleVersionPairReadResult): RoleVersionPair | null {
+  if (read.status === "ready") return read.pair;
+  if (read.status === "waiting") return read.confirmedPair;
+  return null;
+}
+
+/**
+ * Reads the state the page renders from the reader and the query. Selection is
+ * only ever carried through: an unreadable pair keeps the chosen role on the
+ * page, and a pending save can never be shown as the confirmed current version.
+ */
+export async function readRoleConfigurationView(
+  request: RoleConfigurationPageRequest,
+  reader: RoleConfigurationReadPort | undefined,
+): Promise<RoleConfigurationViewState> {
+  if (request.forcedState === "loading") return { status: "loading", selectedRoleId: request.roleId };
+  if (request.forcedState === "empty") return { status: "empty" };
+  if (!reader) return { status: "error", roles: [], selectedRoleId: request.roleId, retryable: true };
+
+  const catalog = await readCatalog(reader);
+  if (catalog.status === "empty") return { status: "empty" };
+  if (catalog.status === "unavailable") {
+    return { status: "error", roles: [], selectedRoleId: request.roleId, retryable: true };
+  }
+
+  const selectedRoleId = request.roleId ?? catalog.roles.at(0)?.id ?? null;
+  if (selectedRoleId === null) return { status: "empty" };
+
+  const read = await readVersionPair(reader, selectedRoleId);
+  if (request.forcedState === "error") {
+    return { status: "error", roles: catalog.roles, selectedRoleId, retryable: true };
+  }
+  if (request.forcedState === "waiting") {
+    const confirmedPair = confirmedPairOf(read);
+    // A pending save shown without a confirmed pair would be a version nobody
+    // confirmed; the natural read result is the honest answer instead.
+    if (confirmedPair !== null) {
+      return {
+        status: "waiting",
+        roles: catalog.roles,
+        selectedRoleId,
+        confirmedPair,
+        pendingSaveId: read.status === "waiting" ? read.pendingSaveId : "preview",
+      };
+    }
+  }
+
+  switch (read.status) {
+    case "ready": return { status: "ready", roles: catalog.roles, selectedRoleId, pair: read.pair };
+    case "waiting":
+      return {
+        status: "waiting",
+        roles: catalog.roles,
+        selectedRoleId,
+        confirmedPair: read.confirmedPair,
+        pendingSaveId: read.pendingSaveId,
+      };
+    case "unavailable":
+      return { status: "error", roles: catalog.roles, selectedRoleId, retryable: true };
+  }
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function pad(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+/** A stable, zone-labelled instant so two readers never disagree on the minute. */
+export function formatRoleVersionTime(savedAt: string): string {
+  const parsed = new Date(savedAt);
+  if (Number.isNaN(parsed.getTime())) return savedAt;
+  return `${parsed.getUTCFullYear()}-${pad(parsed.getUTCMonth() + 1)}-${pad(parsed.getUTCDate())}`
+    + ` ${pad(parsed.getUTCHours())}:${pad(parsed.getUTCMinutes())} UTC`;
+}
+
+function renderCurrentPanel(pair: RoleVersionPair): string {
+  const version = pair.current;
+  return `<section class="panel" aria-labelledby="current-title"><div class="section-head">`
+    + `<div><div class="version-label">当前版 v${version.version}</div><h2 id="current-title">编辑当前配置</h2></div>`
+    + `<span class="status running" role="status">使用中</span></div>`
+    + `<div class="section"><span class="field-label">版本时间</span>`
+    + `<p><time datetime="${escapeHtml(version.savedAt)}">${escapeHtml(formatRoleVersionTime(version.savedAt))}</time></p></div>`
+    + `<div class="section"><span class="field-label">模型供应商</span>`
+    + `<p>${escapeHtml(version.provider.label)}</p></div>`
+    + `<div class="section"><span class="field-label">模型</span>`
+    + `<p>${escapeHtml(version.model.label)}</p></div>`
+    + `<div class="section"><span class="field-label">角色 Prompt</span>`
+    + `<div class="prompt-box">${escapeHtml(version.prompt)}</div></div>`
+    + `</section>`;
+}
+
+function renderPreviousPanel(pair: RoleVersionPair): string {
+  const version = pair.previous;
+  if (version === null) {
+    return `<section class="panel" aria-labelledby="previous-title"><div class="section-head">`
+      + `<div><h2 id="previous-title">上一版配置</h2></div></div>`
+      + `<div class="section"><p>这个角色还没有上一版配置。</p></div></section>`;
+  }
+  return `<section class="panel" aria-labelledby="previous-title"><div class="section-head">`
+    + `<div><div class="version-label">上一版 v${version.version}</div><h2 id="previous-title">上一版配置</h2></div></div>`
+    + `<div class="section"><span class="field-label">版本时间</span>`
+    + `<p><time datetime="${escapeHtml(version.savedAt)}">${escapeHtml(formatRoleVersionTime(version.savedAt))}</time></p></div>`
+    + `<div class="section"><span class="field-label">模型供应商</span>`
+    + `<p>${escapeHtml(version.provider.label)}</p></div>`
+    + `<div class="section"><span class="field-label">模型</span>`
+    + `<p>${escapeHtml(version.model.label)}</p></div>`
+    + `<div class="section"><span class="field-label">角色 Prompt</span>`
+    + `<div class="prompt-box">${escapeHtml(version.prompt)}</div></div>`
+    + `</section>`;
+}
+
+function renderRoleSelector(
+  roles: readonly RoleReference[],
+  selectedRoleId: RoleId | null,
+): string {
+  const options = roles
+    .map((role) => `<option value="${escapeHtml(role.id)}"${role.id === selectedRoleId ? " selected" : ""}>${escapeHtml(role.label)}</option>`)
+    .join("");
+  return `<form class="toolbar" method="get" action="/roles">`
+    + `<div><label for="role-select">智能体角色</label>`
+    + `<select id="role-select" name="role">${options}</select></div>`
+    + `<button type="submit">查看配置</button></form>`;
+}
+
+function renderReady(state: Extract<RoleConfigurationViewState, { status: "ready" }>): string {
+  return renderRoleSelector(state.roles, state.selectedRoleId)
+    + `<div class="role-split" data-layout="split">`
+    + renderCurrentPanel(state.pair)
+    + renderPreviousPanel(state.pair)
+    + `</div>`;
+}
+
+function renderState(state: RoleConfigurationViewState): string {
+  switch (state.status) {
+    case "ready": return renderReady(state);
+    default: return "";
+  }
+}
+
+function renderStatusChip(state: RoleConfigurationViewState): string {
+  if (state.status === "ready") return `<span class="status running">当前版 v${state.pair.current.version}</span>`;
+  return "";
+}
+
+const ROLE_CONFIGURATION_PAGE_STYLE = [
+  ":root{--color-action:#173f63;--color-attention:#a75b00;--color-border:#cbd5df;--color-danger:#b42318;",
+  "--color-page:#f4f7fa;--color-surface:#fff;--color-surface-attention:#fff4df;--color-surface-danger:#fff0ef;",
+  "--color-surface-selected:#e9f1f8;--color-text:#172b3a;--color-text-muted:#526477;",
+  "--font-interface:'IBM Plex Sans','Segoe UI',sans-serif;--font-numeric:'IBM Plex Mono','SFMono-Regular',monospace;",
+  "--space-gutter:28px;--space-gap:12px;--radius-panel:10px;--radius-control:6px;--radius-pill:999px}",
+  "*{box-sizing:border-box}body{margin:0;background:var(--color-page);color:var(--color-text);font-family:var(--font-interface);font-size:14px}",
+  ".shell{display:grid;grid-template-columns:220px 1fr;min-height:100vh}",
+  ".sidebar{background:var(--color-surface);border-right:1px solid var(--color-border);padding:var(--space-gutter)}",
+  ".brand{font-weight:700;margin-bottom:20px}.brand small{display:block;color:var(--color-text-muted);font-size:12px;font-weight:400}",
+  ".nav{display:flex;flex-direction:column;gap:4px}.nav-link{color:var(--color-text);text-decoration:none;padding:8px 10px;border-radius:var(--radius-control)}.nav-link[aria-current=page]{background:var(--color-surface-selected);color:var(--color-action);font-weight:550}",
+  "main{padding:var(--space-gutter)}",
+  ".page-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px}.page-head h1{font-size:26px;margin:0 0 6px}.page-head p{margin:0;color:var(--color-text-muted)}",
+  ".toolbar{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-bottom:20px}.toolbar div{display:flex;flex-direction:column;gap:4px}",
+  "label{color:var(--color-text-muted);font-size:12px}select{min-height:44px;min-width:160px;padding:8px 10px;border:1px solid var(--color-border);border-radius:var(--radius-control);background:var(--color-surface);color:var(--color-text)}",
+  "button{min-height:44px;min-width:44px;padding:8px 16px;border-radius:var(--radius-control);border:1px solid var(--color-action);background:var(--color-action);color:#fff;font-weight:550}",
+  ".role-split{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:stretch}",
+  ".panel{background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-panel);padding:16px}",
+  ".section{margin-top:12px}.section-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.section-head h2{font-size:18px;margin:0}",
+  ".field-label,.version-label{color:var(--color-text-muted);font-size:12px}.version-label{font-family:var(--font-numeric)}",
+  ".prompt-box{white-space:pre-wrap;background:var(--color-page);border:1px solid var(--color-border);border-radius:var(--radius-control);padding:12px;margin-top:4px}",
+  ".diff-add{background:var(--color-surface-attention);color:var(--color-attention);border-radius:2px;padding:0 2px}",
+  ".diff-remove{background:var(--color-surface-danger);color:var(--color-danger);border-radius:2px;padding:0 2px}",
+  ".diff-change{color:var(--color-attention)}",
+  ".status{display:inline-block;padding:2px 10px;border-radius:var(--radius-pill);font-size:12px}.status.running{background:var(--color-surface-selected);color:var(--color-action)}",
+  ".state-page{display:flex;justify-content:center;padding:40px 0}.state-card{background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-panel);padding:24px;max-width:520px}",
+  ".state-card h2{font-size:18px;margin:0 0 8px}.mobile-nav{display:none}",
+].join("");
+
+/** The complete role-configuration document, one document per reachable state. */
+export function renderRoleConfigurationPage(state: RoleConfigurationViewState): string {
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">`
+    + `<meta name="viewport" content="width=device-width,initial-scale=1">`
+    + `<title>智能体角色配置｜Hivemind</title><style>${ROLE_CONFIGURATION_PAGE_STYLE}</style></head><body>`
+    + `<div class="shell"><aside class="sidebar"><div class="brand">Hivemind<small>内网运行控制台</small></div>`
+    + `<nav class="nav" aria-label="主要导航">`
+    + `<a class="nav-link" href="/">运行总览</a>`
+    + `<a class="nav-link" href="/costs">费用分析</a>`
+    + `<a class="nav-link" aria-current="page" href="/roles">角色配置</a>`
+    + `<a class="nav-link" href="/records">工作记录</a>`
+    + `</nav><div class="network-note">家庭网络 · 已连接</div></aside>`
+    + `<main><header class="page-head"><div><h1>智能体角色配置</h1>`
+    + `<p>修改只影响之后新开始的智能体；已经开始工作的智能体继续使用原配置。</p></div>`
+    + renderStatusChip(state) + `</header>`
+    + renderState(state)
+    + `</main></div>`
+    + `<nav class="mobile-nav" aria-label="手机导航">`
+    + `<a class="mobile-link" href="/">总览</a>`
+    + `<a class="mobile-link" href="/costs">费用</a>`
+    + `<a class="mobile-link" aria-current="page" href="/roles">配置</a>`
+    + `<a class="mobile-link" href="/records">记录</a></nav>`
+    + `</body></html>`;
+}

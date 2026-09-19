@@ -26,6 +26,11 @@ import type {
   RequirementCostWithLimitSnapshot,
 } from "../persistence/requirement-cost-limit.js";
 import type { RoleConfigurationReadPort } from "./role-configuration.js";
+import {
+  readRoleConfigurationView,
+  renderRoleConfigurationPage,
+  resolveRoleConfigurationPageRequest,
+} from "./role-configuration.js";
 
 export interface ConsoleDataSource {
   nodes(): Promise<unknown[]>;
@@ -253,6 +258,24 @@ export async function createConsoleServer(
   app.get("/api/stats", async () => data.stats());
   app.get("/api/providers", async () => data.providers());
   app.get("/api/queue", async () => data.queue());
+
+  // Role configuration is a read of the central history, so the process that
+  // holds it serves both the JSON the screens fetch and the screen itself. An
+  // absent reader is an unavailable read, not a 404 that reads like a missing
+  // role: the page says what could not be read and keeps the chosen role.
+  const roleReader = options.roleConfigurationReader;
+  app.get("/api/roles", async (_request, reply) =>
+    roleReader ? roleReader.readCatalog() : reply.code(404).send({ error: "role configuration is not available" }));
+  app.get("/api/roles/:id/versions", async (request, reply) => {
+    if (!roleReader) return reply.code(404).send({ error: "role configuration is not available" });
+    const roleId = (request.params as { id: string }).id;
+    return roleReader.readVersionPair(roleId);
+  });
+  app.get("/roles", async (request, reply) => {
+    const query = (request.query ?? {}) as Record<string, string | undefined>;
+    const state = await readRoleConfigurationView(resolveRoleConfigurationPageRequest(query), roleReader);
+    return reply.type("text/html").send(renderRoleConfigurationPage(state));
+  });
 
   const writer = options.configWriter;
   if (writer) {

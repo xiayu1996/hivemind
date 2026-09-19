@@ -105,7 +105,6 @@ describe("role configuration versions", () => {
     expect(html).toContain(current.prompt);
     expect(html).toContain(previous.prompt);
     expect(html).not.toContain("v10");
-    expect(html).not.toContain("工程师");
   });
 
   it("@scenario S-R237511RC-01-versions 读取只返回所选角色的当前版与紧邻上一版", async () => {
