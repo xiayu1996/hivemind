@@ -174,6 +174,67 @@ describe("BlindVerifyExecutor", () => {
     expect(result.record.failedScenarios).toEqual(["S-EPIC-01-unit"]);
   });
 
+  it("does not count a scenario the verifier said it could not settle against the code", async () => {
+    // S-R237511OV-02 round 3: all four screen scenarios came back inconclusive
+    // because the application never started, in a sentence the prompt requires
+    // to be Chinese and the pattern table can only read in English.
+    const instance = runner({
+      events: [assistant(JSON.stringify({
+        scenarios: [{
+          id: "S-EPIC-01-unit",
+          status: "inconclusive",
+          reason: "\u672c\u8f6e\u540e\u53f0\u5e94\u7528\u6ca1\u80fd\u6253\u5f00\uff0c\u770b\u4e0d\u5230\u8fd0\u884c\u603b\u89c8\u957f\u4ec0\u4e48\u6837\u3002",
+        }],
+      }))],
+    });
+    const result = await new BlindVerifyExecutor(
+      { create: () => instance },
+      { insert: async () => undefined },
+      pins(),
+    ).run(input());
+    expect(result.record.verdict).toBe("inconclusive");
+    expect(result.record.failedScenarios).toEqual(["S-EPIC-01-unit"]);
+  });
+
+  it("still counts an inconclusive scenario the trajectory shows failing", async () => {
+    const instance = runner({
+      events: [
+        { type: "test_result", scenarioId: "S-EPIC-01-unit", status: "failed" },
+        assistant(JSON.stringify({
+          scenarios: [{ id: "S-EPIC-01-unit", status: "inconclusive", reason: "\u770b\u4e0d\u5230" }],
+        })),
+      ],
+    });
+    const result = await new BlindVerifyExecutor(
+      { create: () => instance },
+      { insert: async () => undefined },
+      pins(),
+    ).run(input());
+    expect(result.record.verdict).toBe("rejected");
+  });
+
+  it("reads a snapshot the verifier declared and did not leave as the round's own failure", async () => {
+    // The pattern table said `screenshot`, so the same sentence about a
+    // snapshot fell through to the judge and got a different answer per
+    // scenario in the same round.
+    const events = [
+      { type: "test_result", scenarioId: "S-EPIC-01-unit", status: "passed" },
+      assistant(JSON.stringify({ scenarios: [
+        { id: "S-EPIC-01-unit", status: "passed", snapshots: ["missing.yml"] },
+      ] })),
+    ];
+    const result = await new BlindVerifyExecutor(
+      { create: () => runner({ events }) },
+      { insert: async () => undefined },
+      pins(),
+    ).run(input());
+    expect(result.record.failedScenarios).toEqual(["S-EPIC-01-unit"]);
+    expect(result.validationErrors).toEqual(expect.arrayContaining([
+      "S-EPIC-01-unit: snapshot does not exist (missing.yml)",
+    ]));
+    expect(result.record.verdict).toBe("inconclusive");
+  });
+
   it("keeps the verifier's reason for every scenario that did not pass", async () => {
     const events = [
       { type: "test_result", scenarioId: "S-EPIC-01-unit", status: "failed" },

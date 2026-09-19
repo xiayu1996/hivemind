@@ -118,3 +118,38 @@ describe("checkStructuralLayer", () => {
     expect(findings[0]?.detail).toBe("unreadable snapshots: page-missing.yml");
   });
 });
+
+describe("checkStructuralLayer evidence", () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "structural-evidence-"));
+  });
+  afterEach(() => rm(root, { recursive: true, force: true }));
+
+  it("marks a subject with nothing to read as the run's own gap, not the page's", async () => {
+    const findings = await checkStructuralLayer({
+      root,
+      subjects: [
+        { id: "none", snapshots: [], required: [{ role: "heading", text: "\u8fd0\u884c\u603b\u89c8" }] },
+        { id: "unreadable", snapshots: ["gone.yml"], required: [{ role: "heading", text: "\u8fd0\u884c\u603b\u89c8" }] },
+      ],
+    });
+
+    expect(findings.map((finding) => [finding.id, finding.evidenceMissing])).toEqual([
+      ["none", true],
+      ["unreadable", true],
+    ]);
+  });
+
+  it("leaves a finding about the page itself unmarked", async () => {
+    await writeFile(join(root, "page.yml"), '- main [ref=e1]:\n  - heading "\u4efb\u52a1\u5217\u8868" [level=1] [ref=e2]');
+    const findings = await checkStructuralLayer({
+      root,
+      subjects: [{ id: "missing-text", snapshots: ["page.yml"], required: [{ role: "heading", text: "\u8fd0\u884c\u603b\u89c8" }] }],
+    });
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.evidenceMissing).toBeUndefined();
+  });
+});
