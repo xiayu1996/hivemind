@@ -58,6 +58,24 @@ describe("parseDesignTokens", () => {
     ]);
   });
 
+  it("writes a dimension the way CSS does, whichever form the table uses", () => {
+    // The W3C format allows both, and this repository's own table uses the
+    // object. Stringified as JSON it matched no computed style, so the allowed
+    // lengths held only `0px` and the contract layer called every non-zero
+    // length on every screen off-contract.
+    const parsed = parseDesignTokens(JSON.stringify({
+      space: {
+        $type: "dimension",
+        gutter: { $value: { value: 28, unit: "px" } },
+        tight: { $value: { value: 0.5, unit: "rem" } },
+      },
+    }));
+    expect("tokens" in parsed && parsed.tokens).toEqual([
+      { name: "space.gutter", type: "dimension", value: "28px" },
+      { name: "space.tight", type: "dimension", value: "0.5rem" },
+    ]);
+  });
+
   it("refuses a token no group gave a type, instead of guessing one", () => {
     const parsed = parseDesignTokens(JSON.stringify({ radius: { small: { $value: "4px" } } }));
     expect("reasons" in parsed && parsed.reasons).toEqual([
