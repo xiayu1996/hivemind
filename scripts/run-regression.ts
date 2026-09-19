@@ -147,13 +147,18 @@ async function main(): Promise<void> {
     });
     const result = await new RegressionSweeper(registry, store, sweepPort).sweep({ pool, branch, scenarioIds }, policy);
 
-    // A raised card is only actionable once it names the Story that broke it.
+    // A card is only actionable once it names the Story that has to answer for
+    // it, so every ownerless card is offered an owner again this sweep -- not
+    // only the ones raised just now. One that found none stayed ownerless for
+    // good, open and unreachable, holding its Epic at the review gate.
     const attributions = [];
     let attributionsSkipped: string | undefined;
-    if (result.raised.length > 0 && !(epicId && probeWorktree)) {
+    const pending = (await store.unattributedCards(result.failed))
+      .map((card) => ({ scenarioId: card.scenarioId, failureSignature: card.failureSignature }));
+    if (pending.length > 0 && !(epicId && probeWorktree)) {
       attributionsSkipped = probeWorktree ? "no epic" : "no probe worktree";
     }
-    if (epicId && probeWorktree && result.raised.length > 0) {
+    if (epicId && probeWorktree && pending.length > 0) {
       const sequence = await attributionSequence(handle.client, epicId);
       const probeSweep = new BlindSweepPort({
         worktreeFor: async () => probeWorktree,
@@ -168,8 +173,7 @@ async function main(): Promise<void> {
         chromiumSandbox: config.get("verify.chromiumSandbox"),
       });
       try {
-        for (const raised of result.raised) {
-          const card = { scenarioId: raised.scenarioId, failureSignature: raised.signature };
+        for (const card of pending) {
           const attribution = await attributeCard(handle.client, store, card, sequence, async (revision, scenarioId) => {
             await execFileAsync("git", ["checkout", "--detach", revision], { cwd: probeWorktree, windowsHide: true });
             const probed = await probeSweep.run({ pool, branch: revision, scenarioIds: [scenarioId] });

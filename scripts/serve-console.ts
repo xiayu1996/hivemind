@@ -62,7 +62,7 @@ if (existsSync(join(ROOT, "vite.config.ts"))) {
     await execFileAsync(join(ROOT, "node_modules", ".bin", "vite"), ["build"], { cwd: ROOT });
   } catch (cause) {
     const output = cause instanceof Error && "stderr" in cause ? String(cause.stderr) : String(cause);
-    throw new Error(`the console's screens could not be built, so there is nothing to serve: ${output.trim()}`);
+    throw new Error(`the console's screens could not be built, so there is nothing to serve: ${output.trim()}`, { cause });
   }
 }
 

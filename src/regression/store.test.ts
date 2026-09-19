@@ -92,6 +92,20 @@ describe("RegressionStore", () => {
     await expect(store.openCards()).resolves.toMatchObject([{ attributedStory: "S-M2-03" }]);
   });
 
+  it("offers an ownerless card up again, and stops once it has an owner", async () => {
+    // A card nobody owns is reached by no other query, so a sweep that stopped
+    // looking after the round that raised it left the card open forever.
+    for (let attempt = 0; attempt < 3; attempt++) await fail();
+    const [card] = await store.openCards();
+
+    await expect(store.unattributedCards([card!.scenarioId])).resolves.toHaveLength(1);
+    await expect(store.unattributedCards(["S-M2-03-elsewhere"])).resolves.toEqual([]);
+    await expect(store.unattributedCards([])).resolves.toEqual([]);
+
+    await store.attribute(card!.scenarioId, card!.failureSignature, "S-M2-03");
+    await expect(store.unattributedCards([card!.scenarioId])).resolves.toEqual([]);
+  });
+
   it("closes a card only for the Story it was attributed to, then lets the same break raise again", async () => {
     for (let attempt = 0; attempt < 3; attempt++) await fail();
     const [card] = await store.openCards();

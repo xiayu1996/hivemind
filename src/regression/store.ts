@@ -139,6 +139,26 @@ export class RegressionStore {
     return rows.map(toOpenCard);
   }
 
+  /**
+   * Open cards nobody owns yet, among the scenarios named. Every other query
+   * reaches a card through its attributed Story, so a card without one is
+   * invisible to the Epic it blocks and to the only actor that could close it.
+   * Attribution is retried from here each sweep rather than only at the moment
+   * a card is raised, because a card that found no owner once would otherwise
+   * never be offered one again.
+   */
+  async unattributedCards(scenarioIds: readonly string[]): Promise<OpenRegressionCard[]> {
+    if (scenarioIds.length === 0) return [];
+    const rows = (await this.client.execute({
+      sql: `SELECT scenario_id, failure_signature, failure_text, attributed_story FROM regression_cards
+             WHERE resolved_at IS NULL AND attributed_story IS NULL
+               AND scenario_id IN (${scenarioIds.map(() => "?").join(", ")})
+             ORDER BY created_at, scenario_id`,
+      args: [...scenarioIds],
+    })).rows;
+    return rows.map(toOpenCard);
+  }
+
   /** The open cards a REGRESSION_FIX round of this Story has to answer for. */
   async openCardsForStory(storyId: string): Promise<OpenRegressionCard[]> {
     const rows = (await this.client.execute({
