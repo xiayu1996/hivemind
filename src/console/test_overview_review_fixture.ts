@@ -209,4 +209,10 @@ describe("the overview a verification round opens", () => {
     expect(todos).not.toContain("已经处理的需求");
     expect(todos).not.toContain("R-HANDLED");
   });
+  it("@scenario S-R237511OV-01-active does not substitute unrelated central-store work for the declared running items", () => {
+    const active = section(html, 'id="active-title"', 'id="failures-title"');
+    expect(active).not.toContain("别的运行需求");
+    expect(active).not.toContain("别的运行任务");
+    expect(active).not.toContain("已经恢复的旧失败");
+  });
 });
