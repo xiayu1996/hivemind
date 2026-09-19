@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { CANONICAL_CAPTURE_ENV } from "../observability/capture-contract.js";
+import { finishLaneCapture, laneCapturePath } from "../observability/lane-capture.js";
 import { loadPmPromptLayers, type PmPhase } from "../pipeline/prompt-loader.js";
 import { promptWithContinueRetry } from "../runner/continue-retry.js";
 import { lastAssistantText } from "../runner/assistant-text.js";
@@ -85,6 +87,11 @@ export interface PiPmPortOptions {
   extensions?: string[];
   /** Extra variables for the pi spawn; an API-key provider needs its key here. */
   env?: Record<string, string>;
+  /** Where to keep the exact requests each session sent. One file per session,
+   * packed when that session ends: this lane builds no canonical log to fold a
+   * capture into, so a single shared file was appended to for the daemon's
+   * whole life and nothing ever finished it. */
+  captureRoot?: string;
   createRunner?: (config: RpcRunnerConfig) => PiRunner;
   /** What one session cost, reported per session. The requirement lane spends
    * real money and used to record none of it, so a card's total was the
@@ -125,6 +132,9 @@ export class PiPmPort implements ClarifyPort, PrdPort, SolutionPort, Requirement
 
   private async session<T>(phase: PmPhase, prompt: string, schema: z.ZodType<T>): Promise<T> {
     const layers = await loadPmPromptLayers(this.options.promptRoot, phase);
+    const capturePath = this.options.captureRoot === undefined
+      ? null
+      : laneCapturePath(this.options.captureRoot, `pm-${phase}`, Date.now());
     const runner = (this.options.createRunner ?? ((config) => new RpcPiRunner(config)))({
       binary: this.options.binary,
       provider: this.options.spec.model.provider,
@@ -135,7 +145,12 @@ export class PiPmPort implements ClarifyPort, PrdPort, SolutionPort, Requirement
       skills: [...this.options.spec.skills],
       contextFiles: "explicit",
       ...(this.options.extensions ? { extensions: this.options.extensions } : {}),
-      ...(this.options.env ? { env: this.options.env } : {}),
+      ...(this.options.env || capturePath ? {
+        env: {
+          ...this.options.env,
+          ...(capturePath ? { [CANONICAL_CAPTURE_ENV]: capturePath } : {}),
+        },
+      } : {}),
       systemPrompt: { mode: "replace", text: layers.combined },
     });
 
@@ -159,6 +174,7 @@ export class PiPmPort implements ClarifyPort, PrdPort, SolutionPort, Requirement
       throw new Error(`${phase} returned nothing matching the product manager contract`);
     } finally {
       await runner.stop().catch(() => undefined);
+      if (capturePath) await finishLaneCapture(capturePath);
     }
   }
 }

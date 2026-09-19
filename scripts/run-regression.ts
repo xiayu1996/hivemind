@@ -10,6 +10,7 @@ import { ConfigStore } from "../src/config/store.js";
 import { cacheRetentionEnv } from "../src/runner/cache-retention.js";
 import { POLICY_ENV_VAR, serializeGuardPolicy, type GuardPolicy } from "../src/guard/policy.js";
 import { CANONICAL_CAPTURE_ENV } from "../src/observability/capture-contract.js";
+import { finishLaneCapture, laneCapturePath } from "../src/observability/lane-capture.js";
 import { absoluteDbUrl, openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
 import { attributeCard, attributionSequence } from "../src/regression/attribution-runner.js";
@@ -53,6 +54,7 @@ async function main(): Promise<void> {
   const evidenceRoot = resolve(one("--evidence-root", join(homedir(), ".hivemind", "evidence", `regression-${pool}`)));
   const probeWorktree = process.argv.includes("--probe-worktree") ? resolve(one("--probe-worktree")) : null;
   const auditPath = join(evidenceRoot, "tool-audit.jsonl");
+  const capturePath = laneCapturePath(evidenceRoot, "sweep", Date.now());
   const dbUrl = absoluteDbUrl(process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db");
   // Everything this process starts reads the database this process resolved.
   // The application a verification round starts runs in the worktree under
@@ -110,7 +112,7 @@ async function main(): Promise<void> {
             ...browserEnv,
             ...cacheRetentionEnv(config),
             [POLICY_ENV_VAR]: serializeGuardPolicy(guard),
-            [CANONICAL_CAPTURE_ENV]: join(guard.extraWriteRoots[0] ?? evidenceRoot, "provider-requests.jsonl"),
+            [CANONICAL_CAPTURE_ENV]: capturePath,
             [EVIDENCE_DIR_ENV]: guard.extraWriteRoots[0] ?? evidenceRoot,
           },
         }),
@@ -192,6 +194,7 @@ async function main(): Promise<void> {
     }
     console.log(JSON.stringify({ ...result, attributions, ...(attributionsSkipped ? { attributionsSkipped } : {}) }));
   } finally {
+    await finishLaneCapture(capturePath);
     handle.close();
   }
 }

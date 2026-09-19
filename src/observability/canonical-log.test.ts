@@ -3,9 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  CANONICAL_LOG_SUFFIX,
   CanonicalLogWriter,
-  packCanonicalLog,
   parseCanonicalLog,
   rebuildModelRequest,
   rebuildProviderPayload,
@@ -13,6 +11,7 @@ import {
   recoverInterruptedTurns,
   validateCoordinates,
 } from "./canonical-log.js";
+import { PACKED_SUFFIX, packFile } from "./packed-file.js";
 
 describe("canonical log", () => {
   it("serialises concurrent append calls with monotonic sequence numbers", async () => {
@@ -84,11 +83,11 @@ describe("packing a finished log", () => {
     await writer.flush();
     const before = await readCanonicalLog(path);
 
-    await packCanonicalLog(path);
+    await packFile(path);
 
     // The plain file is gone and the caller still names it.
     await expect(stat(path)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(stat(`${path}${CANONICAL_LOG_SUFFIX}`)).resolves.toBeTruthy();
+    await expect(stat(`${path}${PACKED_SUFFIX}`)).resolves.toBeTruthy();
     expect(await readCanonicalLog(path)).toEqual(before);
   });
 
@@ -105,9 +104,9 @@ describe("packing a finished log", () => {
     await writer.flush();
     const plain = (await stat(path)).size;
 
-    await packCanonicalLog(path);
+    await packFile(path);
 
-    const packed = (await stat(`${path}${CANONICAL_LOG_SUFFIX}`)).size;
+    const packed = (await stat(`${path}${PACKED_SUFFIX}`)).size;
     expect(plain / packed).toBeGreaterThan(100);
   });
 
