@@ -8,7 +8,7 @@ import {
 } from "../pipeline/convergence.js";
 import type { MergeFailureAttribution } from "../vcs/merge-flow.js";
 import { evaluateSpecExit, applyDowngrades, renderSpecExitFindings, type SpecExitPorts } from "../pipeline/spec-exit-gate.js";
-import { parseTestContract, type TestContract } from "../pipeline/test-contract.js";
+import { parseTestContract, TestContractValidationError, type TestContract } from "../pipeline/test-contract.js";
 import { costCeilingVerdict, renderCostCeilingReport, type CardSpend } from "../pipeline/cost-ceiling.js";
 import {
   DoDValidationError,
@@ -980,8 +980,32 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
       exhausted: "fail",
       maxRounds: this.specifyExitRounds,
       evaluate: async (artifacts) => {
-        const contractYaml = artifactOf(artifacts, "test-contract");
-        const contract = parseTestContract(contractYaml);
+        const contractYaml = artifacts.find((item) => item.kind === "test-contract")?.body;
+        if (contractYaml === undefined) {
+          return { passed: false, findings: "This phase produced no test contract. Write one." };
+        }
+        let contract: TestContract;
+        try {
+          contract = parseTestContract(contractYaml);
+        } catch (cause) {
+          // A contract that does not parse is a work item, not a verdict on
+          // the Story. Thrown, it escaped the gate entirely: out of the phase,
+          // out of the process, and back to the coordinator as an unknown
+          // crash that also spent a phase re-entry -- for a model that wrote
+          // one key the schema does not have and could have dropped it in one
+          // turn. S-R237511DT-03 and -04 each lost a run that way.
+          if (!(cause instanceof TestContractValidationError)) throw cause;
+          // Counted so the next reading of this rule has numbers: a contract
+          // the schema keeps refusing is either a prompt that does not say
+          // what the shape is or a schema that is stricter than it needs.
+          await this.friction?.record({
+            cardId, runId, kind: "specify_contract_unparsable", detail: cause.message,
+          });
+          return {
+            passed: false,
+            findings: `${cause.message}\nRewrite the contract with only the keys the schema defines.`,
+          };
+        }
         if (contract.mode !== expectedMode) {
           // A narrow rerun that writes a full contract would put every
           // scenario of a delivered card back under proof, and a full one

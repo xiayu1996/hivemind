@@ -785,6 +785,38 @@ describe("SingleStoryWorker SHAPE re-entry after a crash", () => {
     expect(titles.rows.map((row) => row.title)).toEqual(["上一阶段的产出还在", "打回后问题变少"]);
   });
 
+  it("hands back a contract that does not parse instead of throwing out of the phase", async () => {
+    const phases = vi.fn(async (input: ManagedPhaseInput) => {
+      if (input.phase === "SPECIFY") {
+        const gate = input.exitGates!.find((candidate) => candidate.name === "specify-exit")!;
+        // What the model actually wrote: the contract plus one key the schema
+        // does not have. Thrown, this left the process and cost a re-entry.
+        const refused = await gate.evaluate(
+          [{ kind: "test-contract", body: `${TEST_CONTRACT}\nobservations: []\n` }],
+          1,
+        );
+        expect(refused).toMatchObject({ passed: false, findings: expect.stringContaining("observations") });
+        return {
+          sessionId: "session-specify",
+          artifacts: [{ kind: "test-contract", body: TEST_CONTRACT }],
+          exitGateRounds: { "specify-exit": 2 },
+        };
+      }
+      const front = frontPhase(input);
+      if (front) return front;
+      if (input.phase === "CODE") return { sessionId: `session-code-${input.round}`, artifacts: [{ kind: "implementation", body: "done" }] };
+      return { sessionId: "session-merge", artifacts: [{ kind: "delivery-report", body: "Both scenarios passed." }] };
+    });
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => ({ sessionId: `session-verify-${input.round}`, verdict: "accepted" as const, failedScenarios: [], artifact: "{}" })),
+    };
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier,
+      { deliver: vi.fn(async () => ({ mrUrl: null })) }, { enqueue: vi.fn(async () => undefined) });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
+    expect(phases.mock.calls.filter(([input]) => input.phase === "SPECIFY")).toHaveLength(1);
+  });
+
   it("lets the SPECIFY session correct a contract the exit refuses, without spending a phase run", async () => {
     const phases = vi.fn(async (input: ManagedPhaseInput) => {
       if (input.phase === "SPECIFY") {
