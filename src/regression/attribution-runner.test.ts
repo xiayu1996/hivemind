@@ -178,7 +178,13 @@ describe("attribution over a real integration sequence", () => {
     await expect(store.openCards()).resolves.toMatchObject([{ attributedStory: "S-M2-01" }]);
   });
 
-  it("does not reopen anything for a failure it cannot reproduce", async () => {
+  it("blames nobody in the sequence when the probe cannot reproduce what the sweep just saw", async () => {
+    // The card exists because the sweep failed this scenario at this very
+    // revision. A probe that passes there contradicts that, so the bisect
+    // standing on it names nobody -- and the scenario goes to its owner rather
+    // than staying open with no one able to close it.
+    await register("S-M2-01-a", "S-M2-01");
+
     const attribution = await attributeCard(
       client,
       store,
@@ -189,7 +195,9 @@ describe("attribution over a real integration sequence", () => {
     );
 
     expect(attribution).toMatchObject({ kind: "not_reproduced" });
-    await expect(store.openCards()).resolves.toMatchObject([{ attributedStory: null }]);
+    await expect(store.openCards()).resolves.toMatchObject([{ attributedStory: "S-M2-01" }]);
+    expect((await client.execute("SELECT state FROM stories WHERE id = 'S-M2-03'")).rows[0]?.state)
+      .toBe("DELIVERED");
   });
 
   it("leaves a Story that is already back in the pipeline where it is", async () => {
