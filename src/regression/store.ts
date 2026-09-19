@@ -25,7 +25,8 @@ export interface RegressionRecord {
 
 export interface RegressionResult {
   judgement: RegressionJudgement;
-  /** True only the first time this exact break is seen for this scenario. */
+  /** True when this observation opened a card; false when the scenario was
+   * already carrying one. */
   cardRaised: boolean;
   /** Signatures of cards this observation closed, if any. */
   cardsCleared: readonly string[];
@@ -82,13 +83,20 @@ export class RegressionStore {
     }
     if (judgement.kind !== "raise") return { judgement, cardRaised: false, cardsCleared: [] };
 
+    // One open card per scenario. A scenario that is simply broken fails in a
+    // new signature every sweep when a person writing about the screen is what
+    // produces the text, so keying the card on the break alone opened another
+    // one every round: the same work item, worded differently, piling up in
+    // the Story's fix round and in the Epic's gate message.
     const inserted = await this.client.execute({
       sql: `INSERT INTO regression_cards (scenario_id, failure_signature, failure_text, created_at)
-            VALUES (?, ?, ?, ?)
+            SELECT ?, ?, ?, ?
+             WHERE NOT EXISTS (SELECT 1 FROM regression_cards
+                                WHERE scenario_id = ? AND resolved_at IS NULL)
             ON CONFLICT(scenario_id, failure_signature) DO UPDATE
               SET resolved_at = NULL, created_at = excluded.created_at
               WHERE regression_cards.resolved_at IS NOT NULL`,
-      args: [input.scenarioId, judgement.signature, text, time],
+      args: [input.scenarioId, judgement.signature, text, time, input.scenarioId],
     });
     return { judgement, cardRaised: inserted.rowsAffected === 1, cardsCleared: [] };
   }
