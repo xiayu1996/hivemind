@@ -75,6 +75,7 @@ export function fixtureFor(scenarioId: string | null): VerifyFixture {
       // made the failed-read scenario show "目前没有待办" instead.
       return "error";
     case "existing":
+    case "empty":
     case "loading":
       return "empty";
     // An id whose state this table does not know is a scenario about something
