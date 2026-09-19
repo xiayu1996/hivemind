@@ -104,13 +104,29 @@ export class BlindSweepPort implements SweepPort {
       return { revision, outcomes: [], inconclusive: declaredScenarioIds };
     }
     const failed = new Set(result.record.failedScenarios);
-    const output = [result.runnerFailure, ...result.validationErrors].filter(Boolean).join("; ")
-      || "regression scenario failed without a reported reason";
+    const reasons = new Map(result.reasons.map((entry) => [entry.scenarioId, entry.reason]));
+    const validationFor = (scenarioId: string) =>
+      result.validationErrors.filter((error) => error.startsWith(`${scenarioId}: `));
+    // What the run said about this scenario, and nothing about any other. The
+    // sweep used to hand every failed scenario one shared line -- and when the
+    // verifier reached a verdict without a runner failure, that line was the
+    // placeholder. Every break in the repository then hashed to one signature,
+    // so a card carried no reason a person could act on and, worse, recurrences
+    // counted across unrelated scenarios: five failures of five different
+    // things pushed each other over the threshold that opens a card.
+    const outputFor = (scenarioId: string): string => {
+      const own = [reasons.get(scenarioId), ...validationFor(scenarioId)].filter(Boolean).join("; ");
+      if (own) return own;
+      if (result.runnerFailure) return result.runnerFailure;
+      // Still nothing specific: name the scenario, so two scenarios failing
+      // for reasons nobody recorded stay two breaks rather than becoming one.
+      return `${scenarioId} failed and the verification recorded no reason`;
+    };
 
     return {
       revision,
       outcomes: declaredScenarioIds.map((scenarioId) => (failed.has(scenarioId)
-        ? { scenarioId, outcome: "failed" as const, output }
+        ? { scenarioId, outcome: "failed" as const, output: outputFor(scenarioId) }
         : { scenarioId, outcome: "passed" as const })),
     };
   }
