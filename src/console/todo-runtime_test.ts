@@ -11,6 +11,11 @@ import {
 } from "../../console-ui/src/pages/todo/contracts.js";
 import { createTodoConsoleRuntime } from "./todo-runtime.js";
 
+const inertDelivery: NotionOutboxDelivery = {
+  isApplied: async () => false,
+  send: async () => undefined,
+};
+
 const data: ConsoleDataSource = {
   nodes: async () => [],
   tasks: async () => [],
@@ -299,8 +304,6 @@ describe("the todo surface used by a running console", () => {
 describe("the states a todo read can end in", () => {
   let client: Client;
 
-  const delivery = (): NotionOutboxDelivery => ({ isApplied: async () => false, send: async () => undefined });
-
   beforeEach(async () => {
     client = createClient({ url: ":memory:" });
     await migrate(client);
@@ -309,7 +312,7 @@ describe("the states a todo read can end in", () => {
   afterEach(() => client.close());
 
   it("@scenario S-R237511TD-01-existing an empty ledger answers with an empty list, not a failed read", async () => {
-    const app = await createTodoConsoleRuntime(data, { client, delivery: delivery(), now: () => 9000, server: { serveUi: false } });
+    const app = await createTodoConsoleRuntime(data, { client, delivery: inertDelivery, now: () => 9000, server: { serveUi: false } });
 
     const response = await app.inject({ method: "GET", url: "/api/todos" });
 
@@ -319,7 +322,7 @@ describe("the states a todo read can end in", () => {
   });
 
   it("@scenario S-R237511TD-01-error a todo the ledger never held reads as not found", async () => {
-    const app = await createTodoConsoleRuntime(data, { client, delivery: delivery(), now: () => 9000, server: { serveUi: false } });
+    const app = await createTodoConsoleRuntime(data, { client, delivery: inertDelivery, now: () => 9000, server: { serveUi: false } });
 
     const response = await app.inject({ method: "GET", url: todoDetailPath("answer:no-such-story:q1") });
 
