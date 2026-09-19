@@ -23,6 +23,7 @@ describe("the waiting state each todo scenario is judged on", () => {
   });
 
   afterEach(() => client.close());
+
   it("@scenario S-R237511TD-01-open the open scenario is judged on a waiting approval", async () => {
     await applyVerifyFixture(client, fixtureFor("S-R237511TD-01-open"), 9000);
 
@@ -73,5 +74,4 @@ describe("the waiting state each todo scenario is judged on", () => {
 
     expect(await listPendingTodos(client)).toEqual([]);
   });
-
 });
