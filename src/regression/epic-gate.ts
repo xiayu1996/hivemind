@@ -18,6 +18,50 @@ export interface EpicRegressionGate {
  * against an earlier head says the Epic used to integrate, which is not the
  * claim a review request makes.
  */
+/**
+ * The scenarios standing between an Epic and its review request: registered
+ * under it with no passing run at the revision that request would propose.
+ *
+ * Exported because the sweep scheduler has to ask the same question. It sweeps
+ * these ahead of everything else and without waiting for the host to go idle,
+ * and asking a looser one ("has it ever passed?") let an Epic whose head had
+ * moved drop out of that set: every scenario of S-R237511DT-02 had passed on
+ * the previous head, so the Epic waited on an idle host that a 7x24 service
+ * does not reliably produce.
+ */
+export async function unprovenScenarios(
+  client: Client,
+  epicId: string,
+  revision: string,
+): Promise<string[]> {
+  return (await client.execute({
+    sql: `SELECT r.scenario_id
+            FROM scenario_registry r
+           WHERE r.epic_id = ?
+             AND NOT EXISTS (
+               SELECT 1 FROM regression_runs u
+                WHERE u.scenario_id = r.scenario_id
+                  AND u.revision = ?
+                  AND u.outcome = 'passed'
+             )
+           ORDER BY r.scenario_id`,
+    args: [epicId, revision],
+  })).rows.map((row) => String(row.scenario_id));
+}
+
+/** Epics in a repository whose Stories have all landed and which have not yet
+ * opened a review request: the ones whose only remaining obstacle is evidence. */
+export async function epicsAwaitingDelivery(client: Client, repo: string): Promise<string[]> {
+  return (await client.execute({
+    sql: `SELECT e.id FROM epics e
+           WHERE e.state = 'EXECUTING' AND e.mr_url IS NULL AND e.repo = ?
+             AND EXISTS (SELECT 1 FROM stories s WHERE s.epic_id = e.id)
+             AND NOT EXISTS (SELECT 1 FROM stories s WHERE s.epic_id = e.id AND s.state <> 'DELIVERED')
+           ORDER BY e.id`,
+    args: [repo],
+  })).rows.map((row) => String(row.id));
+}
+
 export async function epicRegressionClean(
   client: Client,
   epicId: string,
@@ -40,19 +84,7 @@ export async function epicRegressionClean(
     };
   }
 
-  const unproven = (await client.execute({
-    sql: `SELECT r.scenario_id
-            FROM scenario_registry r
-           WHERE r.epic_id = ?
-             AND NOT EXISTS (
-               SELECT 1 FROM regression_runs u
-                WHERE u.scenario_id = r.scenario_id
-                  AND u.revision = ?
-                  AND u.outcome = 'passed'
-             )
-           ORDER BY r.scenario_id`,
-    args: [epicId, revision],
-  })).rows.map((row) => String(row.scenario_id));
+  const unproven = await unprovenScenarios(client, epicId, revision);
   if (unproven.length > 0) {
     return {
       clean: false,
