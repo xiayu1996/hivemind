@@ -849,6 +849,16 @@ async function main(): Promise<void> {
   const announceStop = async (cardId: string): Promise<void> => {
     const summary = await store.stopSummary(cardId);
     if (!summary) return;
+    // The board is the fourth listener, and the only one a person actually
+    // looks at. Refreshing it lived on the path a run takes when it succeeds,
+    // so a card parked by a dead run kept its page reading "进行中" and "现在
+    // 没有等你处理的事" until a later cycle got round to projecting -- behind
+    // decomposition, Epic upkeep and a full regression sweep, which is half an
+    // hour on this host. A stop nobody is told about is not a stop for a
+    // person, it is a halt.
+    await reconcileProjections().catch((error: unknown) => {
+      console.error(`Story ${cardId} stopped but its page could not be refreshed: ${(error as Error).message}`);
+    });
     console.warn(renderStopSummary(summary));
     const { failed } = await notifyStoryStopped(stopSinks, summary);
     for (const failure of failed) console.error(`Story ${cardId} stopped but a sink refused it: ${failure}`);
