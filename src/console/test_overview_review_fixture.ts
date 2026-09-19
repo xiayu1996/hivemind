@@ -148,4 +148,13 @@ describe("the overview a verification round opens", () => {
     expect(active.indexOf("重试退避")).toBeLessThan(active.indexOf("重试策略收敛"));
     expect(active.indexOf("重试策略收敛")).toBeLessThan(active.indexOf("异常归类"));
   });
+  it("@scenario S-R237511OV-01-failures presents both current failures with stage, reason and newest-first time", () => {
+    const failures = section(html, 'id="failures-title"', 'id="completed-title"');
+    expect(failures).toContain("失败 <span class=\"heading-count\">2 项");
+    expect(failures).toContain('aria-label="账单导出 任务 VERIFY 失败 验收未通过 ');
+    expect(failures).toContain('aria-label="账单导出规则 需求 SOLUTION 失败 方案无法形成 ');
+    expect(failures).toContain("验收未通过");
+    expect(failures).toContain("方案无法形成");
+    expect(failures.indexOf("账单导出")).toBeLessThan(failures.indexOf("账单导出规则"));
+  });
 });
