@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { createWorktree, locateWorktree, quarantineWorktree, worktreeLayout } from "./worktree.js";
+import { createWorktree, locateWorktree, quarantineWorktree, retireWorktree, worktreeLayout } from "./worktree.js";
 
 async function repository(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "hm-worktree-repo-"));
@@ -48,6 +48,32 @@ describe("worktree lifecycle", () => {
     expect((await stat(location.evidencePath)).isDirectory()).toBe(true);
     expect(execFileSync("git", ["branch", "--show-current"], { cwd: location.worktreePath, encoding: "utf8" }).trim())
       .toBe("story/sample-1");
+  });
+
+  it("gives back a retired worktree's commits when the card is reopened", async () => {
+    const repo = await repository();
+    const root = await mkdtemp(join(tmpdir(), "hm-worktree-retire-"));
+    const layout = worktreeLayout(root);
+    const input = {
+      repositoryPath: repo,
+      repositoryId: "sample",
+      cardId: "story-4",
+      branch: "story/sample-4",
+      startPoint: "main",
+    };
+    const first = await createWorktree(input, layout);
+    await writeFile(join(first.worktreePath, "work.txt"), "delivered work\n", "utf8");
+    execFileSync("git", ["add", "work.txt"], { cwd: first.worktreePath });
+    execFileSync("git", ["commit", "-m", "story work"], { cwd: first.worktreePath });
+
+    expect(await retireWorktree(repo, first.worktreePath)).toBe(true);
+    await expect(stat(first.worktreePath)).rejects.toMatchObject({ code: "ENOENT" });
+
+    // A delivered card that regression reopens is dispatched again, and what
+    // it gets back has to be its own branch, not a fresh one off main.
+    const again = await createWorktree(input, layout);
+    expect((await readFile(join(again.worktreePath, "work.txt"), "utf8")).replaceAll("\r\n", "\n"))
+      .toBe("delivered work\n");
   });
 
   it("puts a worktree back after its directory left without git being told", async () => {
