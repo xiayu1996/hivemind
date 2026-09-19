@@ -27,7 +27,7 @@ import { quarantineWorktree, worktreeLayout } from "../src/vcs/worktree.js";
 import { LibsqlActualFootprintStore } from "../src/vcs/actual-footprint.js";
 import { NotionStoryProjection } from "../src/notion/story-projection.js";
 import { SingleStoryWorker } from "../src/orchestrator/story-worker.js";
-import { openDb } from "../src/persistence/client.js";
+import { absoluteDbUrl, openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
 import { POLICY_ENV_VAR, serializeGuardPolicy, type GuardPolicy } from "../src/guard/policy.js";
 import { probeProviderReadiness } from "../src/runner/auth-probe.js";
@@ -50,7 +50,7 @@ import { defaultModelCatalog } from "../src/runner/catalog.js";
 import { ModelPolicy } from "../src/runner/model-policy.js";
 import { SpawnBroker } from "../src/runner/spawn-broker.js";
 import { ProviderSlotStore } from "../src/queue/provider-slots.js";
-import { LeaseStore, holderKey, type LeaseHolder } from "../src/persistence/lease.js";
+import { LeaseStore, holderKey, startLeaseHeartbeat, type LeaseHolder } from "../src/persistence/lease.js";
 import { resolveAgentSpec } from "../src/runner/agent-spec.js";
 import type { CacheKeyScope } from "../src/runner/session-file.js";
 import type { StoryState } from "../src/orchestrator/state-machine.js";
@@ -59,6 +59,7 @@ import { CostLedger } from "../src/observability/cost-ledger.js";
 import { costCeilingUsd } from "../src/pipeline/cost-ceiling.js";
 import { retryLimits } from "../src/pipeline/retry-limits.js";
 import { specifyGatePorts } from "../src/pipeline/specify-gate.js";
+import { describeGitFailure } from "../src/vcs/git-failure.js";
 import { ScenarioRegistry } from "../src/regression/scenario-registry.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
@@ -67,13 +68,18 @@ import { BlindVerifyExecutor, EVIDENCE_DIR_ENV } from "../src/verify/executor.js
 import { loadPromptLayers } from "../src/pipeline/prompt-loader.js";
 import { discoverMRPort } from "../src/vcs/mr/adapters.js";
 import { GitMrStoryDelivery, processGitCommand } from "../src/vcs/story-delivery.js";
+import { appLaneConfig } from "../src/verify/app-lane.js";
 
 const execFileAsync = promisify(execFile);
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
-/** Long enough to outlive one phase, short enough that a killed worker's card
- * comes back on the next sweep rather than the next day. */
+/** How long the card stays this holder's after the last renewal. Short enough
+ * that a killed worker's card comes back on the next sweep rather than the next
+ * day; a phase that runs longer than this is carried by the heartbeat below,
+ * not by a longer TTL. */
 const LEASE_TTL_MS = 15 * 60_000;
+/** A third of the TTL, so two renewals may be lost before the lease lapses. */
+const LEASE_RENEW_MS = LEASE_TTL_MS / 3;
 /** Provider capacity is heartbeaten by the spawn that holds it; this is how
  * long a slot survives with nobody heartbeating it. */
 const SLOT_LEASE_MS = 10 * 60_000;
@@ -143,12 +149,16 @@ function safeSegment(value: string): string {
 
 
 async function git(worktreePath: string, args: readonly string[]): Promise<string> {
-  const result = await execFileAsync("git", [...args], {
-    cwd: worktreePath,
-    windowsHide: true,
-    maxBuffer: 8 * 1024 * 1024,
-  });
-  return result.stdout;
+  try {
+    const result = await execFileAsync("git", [...args], {
+      cwd: worktreePath,
+      windowsHide: true,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    return result.stdout;
+  } catch (cause) {
+    throw describeGitFailure(cause);
+  }
 }
 
 /** The tree a verdict was reached on. A conclusion carried onto a tree that
@@ -180,7 +190,12 @@ async function main(): Promise<void> {
     ? resolve(one("--integration-worktree"))
     : null;
   const piBinary = resolve(one("--pi", defaultPiBinary()));
-  const dbUrl = process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db";
+  const dbUrl = absoluteDbUrl(process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db");
+  // Everything this process starts reads the database this process resolved.
+  // The application a verification round starts runs in the worktree under
+  // verification, inherits this environment, and a relative address means a
+  // different file there -- or no file at all, which is what it got.
+  process.env.HIVEMIND_DB_URL = dbUrl;
   const safeCardId = safeSegment(cardId);
   const evidenceRoot = resolve(one("--evidence-root", join(homedir(), ".hivemind", "evidence", safeCardId)));
   const sessionRoot = resolve(one("--session-root", join(homedir(), ".hivemind", "sessions", safeCardId)));
@@ -192,6 +207,7 @@ async function main(): Promise<void> {
 
   const handle = openDb(dbUrl);
   let held: { fence: number } | null = null;
+  let stopHeartbeat: (() => void) | null = null;
   const providerHealth = new LibsqlProviderHealthStore(handle.client);
   let events = new EventBuffer();
   let drain: DrainLoop | null = null;
@@ -216,6 +232,13 @@ async function main(): Promise<void> {
     }
     held = { fence: lease.fence };
     const fence = lease.fence;
+    // Without this the card became dispatchable again mid-phase: CODE routinely
+    // runs past one TTL. The fence still refuses a revoked holder's writes, so
+    // losing the lease is reported here and enforced there.
+    stopHeartbeat = startLeaseHeartbeat(leases, cardId, instance, fence, {
+      intervalMs: LEASE_RENEW_MS,
+      onLost: (reason) => console.warn(`lease on ${cardId} is no longer ours: ${reason}`),
+    });
     const store = new StoryExecutionStore(handle.client, Date.now, {
       assert: (id) => leases.assertHolds(id, instance, fence),
     });
@@ -432,6 +455,10 @@ async function main(): Promise<void> {
       evidenceRoot,
       auditPath,
       allowedHosts,
+      // The same application the UI review opens, started for the functional
+      // lane too: telling the verifier to stand one up itself made the answer
+      // depend on what it stood up.
+      app: appLaneConfig(config),
       chromiumSandbox: config.get("verify.chromiumSandbox"),
       resolveSpec: () => grant("verify"),
       commitMessages: () => gitMessages(worktreePath, targetBranch),
@@ -538,7 +565,24 @@ async function main(): Promise<void> {
               { run: (check, cwd) => runProjectCheck(cwd, check) },
               config.get("codeExit.projectChecks"),
             ),
-            { storyWorktree: worktreePath, integrationWorktree, mainBranch: targetBranch },
+            {
+              storyWorktree: worktreePath,
+              integrationWorktree,
+              mainBranch: targetBranch,
+              // Counted, not refused. Until there are numbers, "a card may not
+              // work outside what it declared" is a rule nobody can size.
+              onFootprintOverreach: async (overreach) => {
+                await store.recordFriction({
+                  cardId: overreach.storyId,
+                  runId: `merge-${overreach.storyId}`,
+                  kind: "footprint_overreach",
+                  detail: JSON.stringify({
+                    unpredicted: overreach.unpredicted,
+                    predicted: overreach.predicted,
+                  }),
+                });
+              },
+            },
           ),
         )
       : undefined;
@@ -638,6 +682,7 @@ async function main(): Promise<void> {
     // expires, and a lease nobody released is a card nobody picks up.
     // Last pass before the process goes away, so the tail of the evidence is
     // not lost with it. It writes what is already buffered and nothing more.
+    stopHeartbeat?.();
     await drain?.stop().catch(() => undefined);
     if (events.dropped > 0) console.warn(`observability dropped ${events.dropped} event(s) under back pressure`);
     await slots.releaseHolder(holderKey(instance)).catch(() => undefined);

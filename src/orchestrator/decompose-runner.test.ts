@@ -2,7 +2,7 @@
 import { createClient } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { migrate } from "../persistence/migrate.js";
-import { EpicDecomposer, type DecomposeRequest } from "./decompose-runner.js";
+import { DecompositionContractError, EpicDecomposer, type DecomposeRequest } from "./decompose-runner.js";
 import { answerBlocker } from "./epic-blocker.js";
 import { PlanApprovalStore } from "./plan-approval.js";
 import type { DecompositionCandidate } from "./decompose.js";
@@ -271,6 +271,43 @@ describe("EpicDecomposer", () => {
     await expect(decomposer.decompose(epic())).resolves.toMatchObject({ kind: "rejected" });
     expect(port.run).toHaveBeenCalledTimes(4);
     expect(await state()).toBe("BLOCKED");
+  });
+
+  it("tells the model its answer did not parse and takes another attempt", async () => {
+    let call = 0;
+    const port = { run: vi.fn(async () => {
+      if (call++ === 0) throw new DecompositionContractError("回复里没有任何一段能按拆解契约解析");
+      return plan;
+    }) };
+    const decomposer = new EpicDecomposer(client, approvals, port, () => 1_000);
+
+    await expect(decomposer.decompose(epic())).resolves.toMatchObject({ kind: "presented" });
+    const second = port.run.mock.calls.at(1)?.at(0) as { previousRejections: readonly string[] } | undefined;
+    expect(second?.previousRejections).toContain("回复里没有任何一段能按拆解契约解析");
+  });
+
+  it("blocks the Epic when the answer fails to parse the same way twice", async () => {
+    // Before this the throw escaped the loop: no attempt was counted, the Epic
+    // stayed in DECOMPOSE, and every cycle paid the brain tier again with
+    // nothing on the board for a person to see.
+    const port = { run: vi.fn(async () => {
+      throw new DecompositionContractError("回复里没有任何一段能按拆解契约解析");
+    }) };
+    const decomposer = new EpicDecomposer(client, approvals, port, () => 1_000);
+
+    await expect(decomposer.decompose(epic())).resolves.toMatchObject({ kind: "rejected" });
+    expect(port.run).toHaveBeenCalledTimes(2);
+    expect(await state()).toBe("BLOCKED");
+  });
+
+  it("lets a provider failure through instead of spending an attempt on it", async () => {
+    // It says nothing about the split; the breaker upstream is what reads it.
+    const port = { run: vi.fn(async () => { throw new Error("Codex error: The usage limit has been reached"); }) };
+    const decomposer = new EpicDecomposer(client, approvals, port, () => 1_000);
+
+    await expect(decomposer.decompose(epic())).rejects.toThrow("usage limit");
+    expect(port.run).toHaveBeenCalledTimes(1);
+    expect(await state()).toBe("DECOMPOSE");
   });
 
   it("accepts a second attempt that fixed what the first got wrong", async () => {

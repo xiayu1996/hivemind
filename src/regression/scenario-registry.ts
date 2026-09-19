@@ -89,20 +89,32 @@ export class ScenarioRegistry {
   }
 
   /**
-   * A pool, optionally narrowed to one repository. A sweep runs in a checkout,
-   * and a scenario from another repository cannot be run there, so the caller
-   * that serves several repositories has to ask per repository.
+   * The scenarios a sweep may run, optionally narrowed to one repository. A
+   * sweep runs in a checkout, and a scenario from another repository cannot be
+   * run there, so the caller that serves several repositories has to ask per
+   * repository.
+   *
+   * Only a delivered Story's scenarios are swept. A Story is registered the
+   * moment its Definition of Done exists, which is long before its code is on
+   * the branch a sweep checks out, so until it merges its scenarios cannot
+   * pass. They also cannot age: a failure never sets last_verified_at, so they
+   * stay at the head of this queue and are swept again every idle cycle,
+   * crowding out the scenarios that can say something. Three such sweeps meet
+   * `regression.minFailures` with one identical signature and raise a
+   * regression card against behaviour that was never built -- which then holds
+   * its own Epic's gate shut and asks a person to look at it.
    */
   async pool(pool: ScenarioPool, repo?: string): Promise<RegisteredScenario[]> {
     const rows = (await this.client.execute(repo === undefined ? {
-      sql: `SELECT scenario_id, story_id, epic_id, pool, last_verified_at
-              FROM scenario_registry WHERE pool = ?
-             ORDER BY last_verified_at IS NOT NULL, last_verified_at, scenario_id`,
+      sql: `SELECT r.scenario_id, r.story_id, r.epic_id, r.pool, r.last_verified_at
+              FROM scenario_registry r JOIN stories s ON s.id = r.story_id
+             WHERE r.pool = ? AND s.state = 'DELIVERED'
+             ORDER BY r.last_verified_at IS NOT NULL, r.last_verified_at, r.scenario_id`,
       args: [pool],
     } : {
       sql: `SELECT r.scenario_id, r.story_id, r.epic_id, r.pool, r.last_verified_at
               FROM scenario_registry r JOIN stories s ON s.id = r.story_id
-             WHERE r.pool = ? AND s.repo = ?
+             WHERE r.pool = ? AND s.repo = ? AND s.state = 'DELIVERED'
              ORDER BY r.last_verified_at IS NOT NULL, r.last_verified_at, r.scenario_id`,
       args: [pool, repo],
     })).rows;

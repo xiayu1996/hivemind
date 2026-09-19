@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { POLICY_ENV_VAR, assembleGuardPolicy, serializeGuardPolicy } from "../guard/policy.js";
 import { loadPromptLayers } from "../pipeline/prompt-loader.js";
+import { promptWithContinueRetry } from "../runner/continue-retry.js";
 import { lastAssistantText } from "../runner/assistant-text.js";
 import { loadExplicitContextBundle, type ExplicitContextFile } from "../runner/context-files.js";
 import type { ResolvedAgentSpec } from "../runner/agent-spec.js";
@@ -8,6 +9,7 @@ import { RpcPiRunner, type RpcRunnerConfig } from "../runner/rpc-runner.js";
 import type { PiRunner, PromptResult } from "../runner/types.js";
 import { jsonPayloadCandidates } from "../util/json-payload.js";
 import { storyIdStem } from "./decompose.js";
+import { DecompositionContractError } from "./decompose-runner.js";
 import type { DecomposePort, DecomposeRequest } from "./decompose-runner.js";
 import type { DecompositionCandidate } from "./decompose.js";
 import { humanQuestionInputSchema } from "./human-question.js";
@@ -108,7 +110,11 @@ export class PiDecomposePort implements DecomposePort {
     try {
       await runner.start();
       await runner.setAutoRetry(false);
-      const result = await runner.prompt(promptFor(input));
+      // Resumed rather than replayed, like every other lane that drives a
+      // model: the pi process and its in-memory session survive a broken
+      // stream, and this lane's turns are long enough that throwing one
+      // away costs a whole fifteen-minute window and buys nothing.
+      const result = await promptWithContinueRetry(runner, promptFor(input), { maxContinueRetries: 8 });
       if (result.failure) throw new Error(result.failure.errorMessage);
       await this.options.recordUsage?.({ usage: result.usage, spec: this.options.spec });
       const raw = lastAssistantText(await runner.getMessages());
@@ -118,7 +124,9 @@ export class PiDecomposePort implements DecomposePort {
         const { blockingQuestion, ...candidate } = parsed.data;
         return blockingQuestion === undefined ? candidate : { ...candidate, blockingQuestion };
       }
-      throw new Error("DECOMPOSE returned no candidate matching the decomposition contract");
+      throw new DecompositionContractError(
+        "回复里没有任何一段能按拆解契约解析：整份回复只写一个 JSON 对象，字段按契约给全，不要夹叙述性文字",
+      );
     } finally {
       await runner.stop().catch(() => undefined);
     }
@@ -145,6 +153,7 @@ function promptFor(input: DecomposeRequest): string {
     "这是本 Epic 自己的编号空间：需求里出现的场景 id 属于 PRD，不能拿来当 scenario id，",
     "要承接哪条 PRD 场景就在 given/when/then 的业务语言里说清楚。",
     `本 Epic 最多 ${input.maxStories} 张 Story，超出即整份打回。`,
+    "predictedFootprint: 每条只写路径本身，小写，例如 src/orchestrator；不写文件名、不写扩展名、路径后面不跟任何说明文字。",
   ].join("\n"));
   parts.push([
     "只输出一个 JSON 对象，不要附加解释。字段:",

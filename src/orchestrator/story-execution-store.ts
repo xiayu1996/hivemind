@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { StorySection } from "../notion/blocks/story-page.js";
-import type { Client } from "@libsql/client";
+import type { Client, InStatement } from "@libsql/client";
 import { redactForExport } from "../observability/redact.js";
 import {
   assertStoryTransition,
@@ -10,7 +10,7 @@ import {
   type StoryStopReason,
   type TransitionActor,
 } from "./state-machine.js";
-import type { PhaseInput, PhaseRejection, ScenarioFailure } from "../pipeline/phase-input.js";
+import type { PhaseInput, PhaseRejection, RegressionCardRef, ScenarioFailure } from "../pipeline/phase-input.js";
 import { parseDoD, type DefinitionOfDone } from "../pipeline/dod.js";
 import { dodVersion, scenarioVersions } from "../pipeline/dod-version.js";
 import { isProviderFault } from "../pipeline/failure-classification.js";
@@ -37,6 +37,8 @@ const DISPATCH_FAILURE_MESSAGE_LIMIT = 4000;
  */
 export interface MergeRejectionDetail {
   attribution?: "story_regression" | "baseline_failing" | "environment";
+  /** Paths the rebase could not reconcile, sorted. */
+  conflictedFiles?: readonly string[];
   failures?: readonly string[];
   failedChecks?: readonly string[];
   baseRevision?: string;
@@ -92,6 +94,46 @@ export interface CompletePhaseInput {
   runId: string;
   sessionId: string;
   artifacts: Array<{ kind: string; body: string }>;
+}
+
+export interface CompleteVerificationInput extends CompletePhaseInput {
+  record: VerificationRecordInput;
+}
+
+/**
+ * Everything a completed phase run writes, in the order a batch must carry
+ * them: the artifacts first, then the completion, then the event. The caller
+ * checks that the completion affected exactly one row, which is how a run
+ * somebody else already finished is refused.
+ */
+function completionStatements(
+  input: CompletePhaseInput,
+  run: { cardId: string; phase: string; round: number },
+  time: number,
+): InStatement[] {
+  return [
+    ...input.artifacts.map((artifact) => ({
+      sql: `INSERT INTO phase_artifacts
+              (run_id, card_id, phase, round, kind, body, created_at)
+            SELECT run_id, card_id, phase, round, ?, ?, ? FROM phase_runs
+            WHERE run_id = ? AND status = 'running'`,
+      args: [artifact.kind, artifact.body, time, input.runId],
+    })),
+    {
+      sql: `UPDATE phase_runs
+            SET session_id = ?, status = 'completed', ended_at = ?
+            WHERE run_id = ? AND status = 'running'`,
+      args: [input.sessionId, time, input.runId],
+    },
+    eventStatement(
+      input.runId,
+      run.cardId,
+      run.phase,
+      "phase.exit",
+      { round: run.round, artifactKinds: input.artifacts.map((artifact) => artifact.kind).toSorted() },
+      time,
+    ),
+  ];
 }
 
 export interface ScenarioConclusion {
@@ -322,17 +364,31 @@ export class StoryExecutionStore {
         // and does not get the count back watches it park again on the next
         // failure. Answering in Notion arrives here rather than there, so
         // leaving it out made the door people actually use the broken one.
+        // The regression reopens come back on the same occasion, but only on
+        // the human one: they bound how often the sweep may send one Story
+        // back, and that bound would mean nothing if the Story moving forward
+        // inside a reopen cleared it.
+        // Going back to where it stopped keeps the lane it stopped in; a
+        // person sending it somewhere else is choosing an ordinary round.
+        // `resume_state` is NULL on every transition that is not a release,
+        // so this reads as today's behaviour everywhere else.
         sql: `UPDATE stories
-              SET state = ?, phase = ?, stop_reason = NULL, resume_state = NULL,
+              SET state = ?,
+                  phase = CASE WHEN phase = 'REGRESSION_FIX' AND ? = resume_state
+                               THEN 'REGRESSION_FIX' ELSE ? END,
+                  stop_reason = NULL, resume_state = NULL,
                   phase_reentries = CASE WHEN ? THEN 0 ELSE phase_reentries END,
+                  regression_reopens = CASE WHEN ? THEN 0 ELSE regression_reopens END,
                   last_human_action_at = CASE WHEN ? THEN ? ELSE last_human_action_at END,
                   updated_at = ?
               WHERE id = ? AND state = ?`,
         args: [
           to,
+          to,
           phaseForState(to),
           (actor === "human" && expectedFrom === "NEEDS_INPUT")
             || (actor === "system" && isForwardStoryTransition(expectedFrom, to)) ? 1 : 0,
+          actor === "human" && expectedFrom === "NEEDS_INPUT" ? 1 : 0,
           actor === "human" ? 1 : 0,
           time,
           time,
@@ -380,24 +436,35 @@ export class StoryExecutionStore {
       ? input.expectedFrom
       : null;
     // A person resuming a Story that stopped on its retry budget grants a new
-    // budget; otherwise the very next failure would stop it again.
-    const resetReentries = input.expectedFrom === "NEEDS_INPUT" && input.to !== "HUMAN_PARKED";
+    // budget; otherwise the very next failure would stop it again. Every
+    // budget, not only the phase re-entries: the regression reopens were left
+    // standing, so a Story that spent them stopped again on the next sweep
+    // however many times a person sent it back.
+    const resetBudgets = input.expectedFrom === "NEEDS_INPUT" && input.to !== "HUMAN_PARKED";
     if (input.to === "SHAPE") await this.resetForRedesign(input.cardId, "a person moved the Story to SHAPE");
     const [update] = await this.client.batch([
       {
         sql: `UPDATE stories
-              SET state = ?, phase = ?, stop_reason = NULL, resume_state = ?,
+              SET state = ?,
+                  phase = CASE WHEN ? = 'HUMAN_PARKED' THEN phase
+                               WHEN phase = 'REGRESSION_FIX' AND ? = resume_state
+                               THEN 'REGRESSION_FIX' ELSE ? END,
+                  stop_reason = NULL, resume_state = ?,
                   notion_ai_status_shadow = ?, human_wins_until = ?,
                   phase_reentries = CASE WHEN ? THEN 0 ELSE phase_reentries END,
+                  regression_reopens = CASE WHEN ? THEN 0 ELSE regression_reopens END,
                   last_human_action_at = ?, updated_at = ?
               WHERE id = ? AND state = ?`,
         args: [
+          input.to,
+          input.to,
           input.to,
           phaseForState(input.to),
           resumeState,
           input.observedAiStatus,
           input.humanWinsUntil,
-          resetReentries ? 1 : 0,
+          resetBudgets ? 1 : 0,
+          resetBudgets ? 1 : 0,
           time,
           time,
           input.cardId,
@@ -484,7 +551,29 @@ export class StoryExecutionStore {
     ], "write");
     const inserted = Number(results[1]?.rowsAffected ?? 0);
     if (inserted !== 1) {
-      throw new Error(`cannot start ${input.phase} while Story is not in that phase`);
+      // Two different things refuse this insert and they need different
+      // answers: the Story left the phase between the check above and this
+      // write, or a completed run already holds the slot. One message for
+      // both sent the reader to look at a state that was right, and the reason
+      // reached the coordinator as an UNKNOWN crash rather than as something
+      // anybody could act on. The extra read is on the failure path only.
+      const held = await this.client.execute({
+        sql: `SELECT (SELECT state FROM stories WHERE id = ?) AS state,
+                     (SELECT status FROM phase_runs WHERE card_id = ? AND phase = ? AND round = ?) AS status`,
+        args: [input.cardId, input.cardId, input.phase, input.round],
+      });
+      const state = held.rows[0]?.state;
+      if (state !== stateForPhase) {
+        throw new Error(
+          `cannot start ${input.phase} while Story is not in that phase (it is ${String(state ?? "gone")})`,
+        );
+      }
+      // The state still fits, so the slot is what refused: only a completed
+      // run survives the delete above.
+      throw new Error(
+        `cannot start ${input.phase} round ${input.round} for ${input.cardId}: `
+        + `that round is already ${String(held.rows[0]?.status ?? "taken")} and a completed run is reused, not started again`,
+      );
     }
     // How many times this exact slot has been entered, counted from the event
     // log because `phase_runs` keeps only the live attempt. Callers use it to
@@ -510,41 +599,47 @@ export class StoryExecutionStore {
       }
     }
     const time = this.now();
+    const { cardId, phase, round } = await this.#runningPhase(input.runId);
+    const results = await this.client.batch(
+      completionStatements(input, { cardId, phase, round }, time),
+      "write",
+    );
+    if (results.at(-2)?.rowsAffected !== 1) throw new Error(`phase run is no longer running: ${input.runId}`);
+  }
+
+  /**
+   * Completes the VERIFY run and records its verdict in one write.
+   *
+   * They used to be two, and the gap between them was a trap with no way out.
+   * Completion is immutable by design -- a completed run is reused, never
+   * started again -- so a failure after it left the slot holding a run that
+   * had produced no verdict. Every later dispatch computed the same round,
+   * collided with that row, and the card could not be resumed even by hand;
+   * the failure that opened the gap was reading the tree sha of a worktree
+   * that had been removed.
+   */
+  async completeVerification(input: CompleteVerificationInput): Promise<void> {
+    const run = await this.#runningPhase(input.runId);
+    const verification = await this.#verificationStatements(input.runId, input.record);
+    const completion = completionStatements(input, run, this.now());
+    const results = await this.client.batch([...verification, ...completion], "write");
+    if (results.at(-2)?.rowsAffected !== 1) throw new Error(`phase run is no longer running: ${input.runId}`);
+  }
+
+  /** The run a completion is about, refusing one that is not still running. */
+  async #runningPhase(runId: string): Promise<{ cardId: string; phase: string; round: number }> {
     const run = await this.client.execute({
       sql: "SELECT card_id, phase, round, status FROM phase_runs WHERE run_id = ?",
-      args: [input.runId],
+      args: [runId],
     });
     const row = run.rows[0];
-    if (!row) throw new Error(`phase run does not exist: ${input.runId}`);
+    if (!row) throw new Error(`phase run does not exist: ${runId}`);
     if (row.status !== "running") throw new Error(`phase run is already ${String(row.status)}`);
-    const cardId = stringValue(row.card_id, "phase card id");
-    const phase = stringValue(row.phase, "phase");
-    const round = numberValue(row.round, "phase round");
-    const statements = input.artifacts.map((artifact) => ({
-          sql: `INSERT INTO phase_artifacts
-                  (run_id, card_id, phase, round, kind, body, created_at)
-                SELECT run_id, card_id, phase, round, ?, ?, ? FROM phase_runs
-                WHERE run_id = ? AND status = 'running'`,
-          args: [artifact.kind, artifact.body, time, input.runId],
-        }));
-    const results = await this.client.batch([
-      ...statements,
-      {
-        sql: `UPDATE phase_runs
-              SET session_id = ?, status = 'completed', ended_at = ?
-              WHERE run_id = ? AND status = 'running'`,
-        args: [input.sessionId, time, input.runId],
-      },
-      eventStatement(
-        input.runId,
-        cardId,
-        phase,
-        "phase.exit",
-        { round, artifactKinds: input.artifacts.map((artifact) => artifact.kind).toSorted() },
-        time,
-      ),
-    ], "write");
-    if (results.at(-2)?.rowsAffected !== 1) throw new Error(`phase run is no longer running: ${input.runId}`);
+    return {
+      cardId: stringValue(row.card_id, "phase card id"),
+      phase: stringValue(row.phase, "phase"),
+      round: numberValue(row.round, "phase round"),
+    };
   }
 
   async failPhase(runId: string, failure: string): Promise<void> {
@@ -662,6 +757,12 @@ export class StoryExecutionStore {
   }
 
   async recordVerification(runId: string, input: VerificationRecordInput): Promise<void> {
+    await this.client.batch(await this.#verificationStatements(runId, input), "write");
+  }
+
+  /** Everything a verdict writes, so a caller may land it with the completion
+   * of the run that reached it. */
+  async #verificationStatements(runId: string, input: VerificationRecordInput): Promise<InStatement[]> {
     const time = this.now();
     const declared = new Set((await this.client.execute({
       sql: "SELECT spec_id FROM story_specs WHERE story_id = ?",
@@ -706,7 +807,7 @@ export class StoryExecutionStore {
         time,
       ],
     }));
-    await this.client.batch([
+    return [
       {
         sql: `INSERT INTO verify_records
                 (card_id, round, code_session_id, verify_session_id, verdict,
@@ -736,7 +837,7 @@ export class StoryExecutionStore {
         verdict: input.verdict,
         failedScenarios: failed,
       }, time),
-    ], "write");
+    ];
   }
 
   /**
@@ -764,8 +865,15 @@ export class StoryExecutionStore {
     const time = this.now();
     const [update] = await this.client.batch([
       {
+        // `phase` is kept. It is the only field that says which lane a card is
+        // in -- everywhere else it just mirrors `state` -- so erasing it here
+        // and recomputing it at the release turned a narrow regression fix
+        // into an ordinary round: S-R237511OV-01 was stopped mid-lane on
+        // 09-19, released by a person, and ran the full definition of done
+        // without ever touching the two scenarios it had been reopened for.
+        // A stop is a pause, not a decision about what the card was doing.
         sql: `UPDATE stories
-              SET state = 'NEEDS_INPUT', phase = NULL, stop_reason = ?, resume_state = ?,
+              SET state = 'NEEDS_INPUT', stop_reason = ?, resume_state = ?,
                   stop_summary = ?, updated_at = ?
               WHERE id = ? AND state = ?`,
         args: [reason, expectedFrom, JSON.stringify(summary), time, cardId, expectedFrom],
@@ -881,7 +989,13 @@ export class StoryExecutionStore {
       cardId,
       reason,
       spent: numberValue(detail?.spent ?? rounds.length + mergeBounces.length, "rounds spent"),
-      budget: numberValue(detail?.budget ?? 0, "round budget"),
+      ...(detail?.budget === undefined ? {} : { budget: numberValue(detail.budget, "round budget") }),
+      ...(detail?.inconclusive === undefined ? {} : {
+        inconclusive: {
+          attempts: numberValue(detail.inconclusive, "inconclusive attempts"),
+          scenarios: parseStringArray(JSON.stringify(detail.inconclusiveScenarios ?? []), "inconclusive scenarios"),
+        },
+      }),
       rounds,
       mergeBounces,
       baselineFailures,
@@ -1108,9 +1222,17 @@ export class StoryExecutionStore {
   }
 
   /** A rebase conflict remains in the Story worktree for the CODE agent; it is
-   * not a delivery and must not be hidden behind an automatic choice. */
-  recordMergeConflict(cardId: string, runId: string, reason: string): Promise<void> {
-    return this.returnMergeToCode(cardId, runId, "merge.conflict", reason);
+   * not a delivery and must not be hidden behind an automatic choice. The
+   * files travel with it: they are what the next round has to reconcile, and
+   * what a count of these conflicts is worth reading by. */
+  recordMergeConflict(
+    cardId: string,
+    runId: string,
+    reason: string,
+    files: readonly string[] = [],
+  ): Promise<void> {
+    return this.returnMergeToCode(cardId, runId, "merge.conflict", reason,
+      files.length > 0 ? { conflictedFiles: files } : undefined);
   }
 
   /** Re-verifying the affected scenarios on the Epic head failed. The Story is
@@ -1687,14 +1809,20 @@ export class StoryExecutionStore {
       || (phase === "SPECIFY" && story.phase === "REGRESSION_FIX");
     const regressions = readsRegressionCards
       ? (await this.client.execute({
-          sql: `SELECT scenario_id, failure_signature, attributed_story FROM regression_cards
+          sql: `SELECT scenario_id, failure_signature, failure_text, attributed_story FROM regression_cards
                  WHERE attributed_story = ? AND resolved_at IS NULL ORDER BY created_at, scenario_id`,
           args: [cardId],
-        })).rows.map((row) => ({
-          scenarioId: stringValue(row.scenario_id, "regression scenario"),
-          signature: stringValue(row.failure_signature, "regression signature"),
-          attributedStory: stringValue(row.attributed_story, "attributed story"),
-        }))
+        })).rows.map((row) => {
+          const card: RegressionCardRef = {
+            scenarioId: stringValue(row.scenario_id, "regression scenario"),
+            signature: stringValue(row.failure_signature, "regression signature"),
+            attributedStory: stringValue(row.attributed_story, "attributed story"),
+          };
+          if (row.failure_text !== null && row.failure_text !== undefined) {
+            card.failureText = String(row.failure_text);
+          }
+          return card;
+        })
       : null;
     const latestVerify = verifyResult.rows.at(-1);
     const failedScenarios = regressions
@@ -1765,6 +1893,7 @@ export class StoryExecutionStore {
           const event = JSON.parse(stringValue(row.data, "merge event")) as {
             reason?: string;
             failures?: string[];
+            conflictedFiles?: string[];
           };
           const headline = String(row.type) === "merge.conflict"
             ? "rebase onto the Epic head conflicted"
@@ -1775,7 +1904,10 @@ export class StoryExecutionStore {
             phase: "MERGE",
             reason: `${headline}: ${String(event.reason ?? "")}`.slice(0, 800),
           };
-          if (event.failures && event.failures.length > 0) rejection.failures = event.failures;
+          // For a conflict the paths are the names: a round handed git's prose
+          // alone has to guess which files the two Stories both touched.
+          const named = event.failures ?? event.conflictedFiles;
+          if (named && named.length > 0) rejection.failures = named;
           return rejection;
         }),
       ],

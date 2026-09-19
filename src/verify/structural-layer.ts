@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { isWithinRoot } from "../guard/danger-rules.js";
+import { evidenceCandidates } from "../pipeline/evidence-path.js";
 import { describeMissing, missingFromSnapshot, type VisibleRequirement } from "./aria-snapshot.js";
 
 /**
@@ -32,6 +33,13 @@ export interface StructuralFinding {
   reason: string;
   /** For whoever debugs it: which snapshots were read. */
   detail: string;
+  /**
+   * The snapshot was missing or unreadable, so this finding says nothing about
+   * the page: the round has nothing to look at, which is a fact about the run
+   * and not about the code. A finding without it names something the page was
+   * required to show and did not.
+   */
+  evidenceMissing?: true;
 }
 
 export interface StructuralInput {
@@ -58,24 +66,23 @@ export async function checkStructuralLayer(input: StructuralInput): Promise<Stru
         id: subject.id,
         reason: "这个场景要看见的内容无从查证：没有留下任何页面结构记录",
         detail: "no accessibility snapshot was declared",
+        evidenceMissing: true,
       });
       continue;
     }
     let best: VisibleRequirement[] | null = null;
     const unreadable: string[] = [];
     for (const name of subject.snapshots) {
-      const path = resolve(root, name);
       // Validation already refuses an escaping path for the round as a whole;
       // repeated here because this function is also called on a prototype,
       // where nothing else has looked at these names yet.
-      if (!isWithinRoot(path, root)) {
-        unreadable.push(name);
-        continue;
+      const candidates = evidenceCandidates(root, name).filter((path) => isWithinRoot(path, root));
+      let snapshot: string | null = null;
+      for (const path of candidates) {
+        snapshot = await readFile(path, "utf8").catch(() => null);
+        if (snapshot !== null) break;
       }
-      let snapshot: string;
-      try {
-        snapshot = await readFile(path, "utf8");
-      } catch {
+      if (snapshot === null) {
         unreadable.push(name);
         continue;
       }
@@ -92,6 +99,7 @@ export async function checkStructuralLayer(input: StructuralInput): Promise<Stru
         id: subject.id,
         reason: "这个场景要看见的内容无从查证：留下的页面结构记录读不出来",
         detail: `unreadable snapshots: ${[...unreadable].toSorted().join(", ")}`,
+        evidenceMissing: true,
       });
       continue;
     }

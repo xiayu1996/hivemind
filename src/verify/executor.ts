@@ -1,15 +1,16 @@
 import { z } from "zod";
 import type { ResolvedAgentSpec } from "../runner/agent-spec.js";
 import { EVIDENCE_DIR_ENV, assembleGuardPolicy, type GuardPolicy } from "../guard/policy.js";
-import { captureTreePin, evaluateTreePin, type TreePin } from "../guard/tree-pin.js";
+import { captureTreePin, describeTreePinMismatch, evaluateTreePin, type TreePin } from "../guard/tree-pin.js";
 import {
   type EnvironmentJudgeSettings,
   judgeEnvironmentReasons,
 } from "../judge/environment-reasons.js";
-import { splitScenarioFailures } from "../pipeline/failure-classification.js";
+import { type ScenarioReason, splitScenarioFailures } from "../pipeline/failure-classification.js";
 import { validateVerdict, type TrajectoryEvidence, type VerdictDocument } from "../pipeline/verdict.js";
 import type { PiRunner, RpcEvent, TokenUsage } from "../runner/types.js";
 import { promptWithContinueRetry } from "../runner/continue-retry.js";
+import { addUsage } from "../runner/failure.js";
 import { jsonPayloadCandidates } from "../util/json-payload.js";
 import { browserLaneEnv } from "./browser-config.js";
 import type { VisibleRequirement } from "./aria-snapshot.js";
@@ -51,6 +52,12 @@ export interface BlindVerifyInput {
    */
   visibleRequirements?: ReadonlyMap<string, readonly VisibleRequirement[]>;
   allowedHosts: string[];
+  /**
+   * Where the repository's application runs this round, or why it has none.
+   * Undefined leaves the verifier to start whatever a page needs itself, which
+   * is only right for a repository that has no application to start.
+   */
+  app?: AppAddress;
   /** From verify.chromiumSandbox; undefined keeps the sandbox. */
   chromiumSandbox?: boolean;
   commitMessages: string[];
@@ -119,6 +126,24 @@ export interface BlindVerifyResult {
   usage: TokenUsage;
   messages: unknown[];
 }
+
+/**
+ * How many times a reply that did not parse is handed back inside the same
+ * session. Small on purpose: a verifier that cannot restate its own verdict
+ * twice is not going to on the third ask, and the round ends inconclusive as
+ * it did before.
+ */
+const VERDICT_HANDBACKS = 2;
+
+/** How many times a verdict is asked to name the page structure records it
+ * judged by. Two, like the malformed-verdict handback: a verifier that still
+ * has not taken one is answering a question it did not look at. */
+const SNAPSHOT_HANDBACKS = 2;
+
+const VERDICT_HANDBACK_PROMPT =
+  "Your last message carried no verdict this system can read. Send the verdict again as one JSON object "
+  + "and nothing else: no prose around it, no code fence, every field of the contract present. "
+  + "Judge nothing further and run no tools -- restate what you already decided.";
 
 function assistantText(events: readonly RpcEvent[]): string | null {
   for (const event of events.toReversed()) {
@@ -236,6 +261,47 @@ function textOfContent(content: unknown): string {
     : "";
 }
 
+/**
+ * The verdict in a reply, or undefined when there is none to read. The last
+ * well-formed payload wins: an earlier one is a draft the verifier wrote while
+ * reasoning and then replaced.
+ */
+function readVerdict(events: readonly RpcEvent[]): z.infer<typeof verifierReplySchema> | undefined {
+  const raw = assistantText(events);
+  if (!raw) return undefined;
+  return jsonPayloadCandidates(raw)
+    .map((candidate) => verifierReplySchema.safeParse(candidate))
+    .flatMap((candidate) => (candidate.success ? [candidate.data] : []))
+    .at(-1);
+}
+
+/**
+ * Scenarios claimed passed whose `visible` list has nothing to be checked
+ * against. The structural layer (08 section 6) reads those records; with none
+ * declared there is nothing to read, and the claim can only be refused.
+ */
+function undeclaredSnapshots(
+  document: VerdictDocument,
+  requirements: ReadonlyMap<string, readonly VisibleRequirement[]> | undefined,
+): readonly string[] {
+  if (!requirements) return [];
+  return document.scenarios
+    .filter((scenario) => scenario.status === "passed"
+      && (requirements.get(scenario.id) ?? []).length > 0
+      && (scenario.snapshots ?? []).length === 0)
+    .map((scenario) => scenario.id)
+    .toSorted();
+}
+
+function snapshotHandbackPrompt(scenarioIds: readonly string[]): string {
+  return [
+    `These scenarios are marked passed and declare \`visible\`, but name no page structure record: ${scenarioIds.join(", ")}.`,
+    "A claim with nothing behind it is refused, so judge them again: open each scenario's page in the browser, call",
+    "`snapshot` there, and put the file name in that scenario's `snapshots`. If the page does not show what `visible`",
+    "asks for, say so and mark the scenario failed. Then send the whole verdict again as one JSON object and nothing else.",
+  ].join(" ");
+}
+
 function toVerdictDocument(value: z.infer<typeof verifierReplySchema>): VerdictDocument {
   return {
     scenarios: value.scenarios.map((scenario) => ({
@@ -251,12 +317,16 @@ function toVerdictDocument(value: z.infer<typeof verifierReplySchema>): VerdictD
 }
 
 /**
- * What the verifier is told about the browser it may drive. Only the host list
- * and the card id enter the text, so the same round produces the same prompt
- * on any machine; the paths the browser writes to are already fixed in the
- * worktree's Playwright configuration.
+ * What the verifier is told about the browser it may drive. Only the host list,
+ * the card id and the application's configured address enter the text, so the
+ * same round produces the same prompt on any machine; the paths the browser
+ * writes to are already fixed in the worktree's Playwright configuration.
  */
-export function browserLaneInstructions(session: string, allowedHosts: readonly string[]): string {
+export function browserLaneInstructions(
+  session: string,
+  allowedHosts: readonly string[],
+  app?: AppAddress,
+): string {
   const hosts = [...allowedHosts].toSorted().join(", ");
   return [
     "Browser lane: a headless Chromium is available through the `playwright-cli` command; always pass the session flag",
@@ -271,12 +341,46 @@ export function browserLaneInstructions(session: string, allowedHosts: readonly 
     `Typical use: \`playwright-cli -s=${session} open <url>\`, then \`snapshot\`, \`click <ref>\`, \`fill <ref> <text>\`, \`screenshot\`, and \`close\`.`,
     "A scenario whose layer is ui or e2e must be exercised in the browser: report the page you judged in `url` and the",
     "screenshot file names in `screenshots`. Close the browser before returning the verdict.",
-    "Other verifiers may be running on this machine: pick a port nobody is listening on (check with `lsof -i :<port>`),",
-    "never assume a page on a well-known port is yours, and stop every process you started before returning the verdict.",
-    "If a page needs a running service, start it yourself in the background and confirm it answers before opening pages:",
-    `\`nohup <command> > "$${EVIDENCE_DIR_ENV}/service.log" 2>&1 &\` — that directory is the only place you may write,`,
-    "and a process that is not detached does not outlive the command that started it.",
+    ...applicationInstructions(app),
   ].join(" ");
+}
+
+/** Where this round's application is, or why it has none. */
+export type AppAddress = { url: string } | { unavailable: string };
+
+/**
+ * How the lane reaches the application under verification.
+ *
+ * Without an address the verifier is told to stand one up itself, which is how
+ * the same scenario on the same tree came back passed from one session and
+ * inconclusive from the next: each invented its own service and judged what it
+ * had invented. When the box knows the address it says so and forbids the
+ * substitute; when the box has none it says that instead, and the scenarios
+ * that need a screen are inconclusive for a reason that does not change
+ * between rounds.
+ */
+function applicationInstructions(app: AppAddress | undefined): string[] {
+  if (app === undefined) {
+    return [
+      "Other verifiers may be running on this machine: pick a port nobody is listening on (check with `lsof -i :<port>`),",
+      "never assume a page on a well-known port is yours, and stop every process you started before returning the verdict.",
+      "If a page needs a running service, start it yourself in the background and confirm it answers before opening pages:",
+      `\`nohup <command> > "$${EVIDENCE_DIR_ENV}/service.log" 2>&1 &\` — that directory is the only place you may write,`,
+      "and a process that is not detached does not outlive the command that started it.",
+    ];
+  }
+  if ("url" in app) {
+    return [
+      `The application under verification is already running at ${app.url}: open its pages there.`,
+      "Do not start a service of your own and do not look for the application on another port -- a page you served",
+      "yourself is not the one under verification, and a verdict read off it is refused.",
+    ];
+  }
+  return [
+    `${app.unavailable}.`,
+    "Do not stand up a substitute and judge that: a scenario that has to be read off a screen is inconclusive this round,",
+    "and its reason says the application could not be opened. Scenarios you can settle without a page are judged as usual.",
+  ];
 }
 
 function promptFor(input: BlindVerifyInput): string {
@@ -286,7 +390,9 @@ function promptFor(input: BlindVerifyInput): string {
     "Choose and run the relevant tests from the repository and the specification.",
     "Run tests in a mode that reports each individual test name, so every scenario's outcome is observable in the transcript.",
     "Evidence protocol (mandatory): after observing the outcome of each scenario, print a line exactly of the form HIVEMIND_TEST_RESULT <scenario_id> <passed|failed|inconclusive>, once per declared scenario id. A verdict whose scenarios have no observable evidence in this session is rejected.",
-    ...(input.allowedHosts.length > 0 ? [browserLaneInstructions(browserSessionFor(input), input.allowedHosts)] : []),
+    ...(input.allowedHosts.length > 0
+      ? [browserLaneInstructions(browserSessionFor(input), input.allowedHosts, input.app)]
+      : []),
     "Return only JSON: {\"scenarios\":[{\"id\":string,\"status\":\"passed\"|\"failed\"|\"inconclusive\",\"reason\"?:string,\"detail\"?:string,\"url\"?:string,\"screenshots\"?:string[]}]}",
     "For every scenario that is not passed, `reason` is mandatory and is written in Chinese, in the words of the person who ordered the card: one sentence saying what does not work from their side. They decide what to do next from that sentence alone, so it carries no test name, no file path and no stack frame; all of that goes in `detail`, which is written for whoever debugs it.",
     "Specification:",
@@ -317,6 +423,12 @@ const defaultTreePin: TreePinPort = {
  * did fail for environmental reasons alone is inconclusive, so the convergence
  * criterion never sees it (03 section 8.6).
  */
+/** Kept absent rather than false, so a reason nobody classified stays the two
+ * fields it has always been to everything that reads it. */
+function scenarioReason(scenarioId: string, reason: string, environmental: boolean): ScenarioReason {
+  return environmental ? { scenarioId, reason, environmental } : { scenarioId, reason };
+}
+
 function verdictOf(input: {
   hasDocument: boolean;
   valid: boolean;
@@ -404,22 +516,55 @@ export class BlindVerifyExecutor {
       }
       events = [...result.events];
       usage = result.usage;
-      messages = await runner.getMessages();
       if (result.failure) {
         providerFailure = result.failure.errorMessage;
         throw new Error(result.failure.errorMessage);
       }
-      const raw = assistantText(events);
-      if (!raw) throw new Error("VERIFY returned no assistant verdict");
-      const candidates = jsonPayloadCandidates(raw);
-      if (candidates.length === 0) throw new Error("VERIFY returned no parseable JSON verdict");
-      // The last well-formed payload is the verdict; an earlier one is a draft
-      // the verifier wrote while reasoning and then replaced.
-      const verdicts = candidates.map((candidate) => verifierReplySchema.safeParse(candidate))
-        .flatMap((candidate) => (candidate.success ? [candidate.data] : []));
-      const parsed = verdicts.at(-1);
-      if (!parsed) throw new Error("VERIFY returned a malformed verdict");
+      // A reply that does not parse is told so and asked again in the same
+      // session, the way every other phase is. Re-running the round instead
+      // showed the verifier nothing about what was wrong with the last answer,
+      // so the second attempt was the first one repeated: S-R237511TD-01 was
+      // parked on retry_limit_exceeded after two identical "malformed verdict"
+      // rounds, having been judged on nothing. Reading the verdict costs no
+      // tools and moves no files, and the tree pin below still holds.
+      let parsed = readVerdict(events);
+      for (let handback = 0; parsed === undefined && handback < VERDICT_HANDBACKS; handback += 1) {
+        const retry = await promptWithContinueRetry(runner, VERDICT_HANDBACK_PROMPT, {
+          maxContinueRetries: input.maxContinueRetries ?? 8,
+        });
+        events = [...events, ...retry.events];
+        usage = addUsage(usage, retry.usage);
+        if (retry.failure) {
+          providerFailure = retry.failure.errorMessage;
+          throw new Error(retry.failure.errorMessage);
+        }
+        parsed = readVerdict(retry.events);
+      }
+      if (parsed === undefined) throw new Error("VERIFY returned a malformed verdict");
       document = toVerdictDocument(parsed);
+      // A scenario passed with no page structure record behind it is not a
+      // judgement the code can check, and the verifier is the only session that
+      // can fix it: it is the one standing in front of the page. The structural
+      // layer refuses such a claim, the refusal travels to CODE, and CODE can
+      // do nothing with it -- S-R237511TD-01 ran four identical rounds that way
+      // and parked. So it is asked here, in the session that can still look.
+      for (let handback = 0; handback < SNAPSHOT_HANDBACKS; handback += 1) {
+        const undeclared = undeclaredSnapshots(document, input.visibleRequirements);
+        if (undeclared.length === 0) break;
+        const retry = await promptWithContinueRetry(runner, snapshotHandbackPrompt(undeclared), {
+          maxContinueRetries: input.maxContinueRetries ?? 8,
+        });
+        events = [...events, ...retry.events];
+        usage = addUsage(usage, retry.usage);
+        if (retry.failure) {
+          providerFailure = retry.failure.errorMessage;
+          throw new Error(retry.failure.errorMessage);
+        }
+        const reparsed = readVerdict(retry.events);
+        if (reparsed === undefined) break;
+        document = toVerdictDocument(reparsed);
+      }
+      messages = await runner.getMessages();
     } catch (cause) {
       runnerError = cause instanceof Error ? cause.message : "VERIFY failed";
     } finally {
@@ -431,7 +576,7 @@ export class BlindVerifyExecutor {
     const after = this.pins.capture(input.worktreePath);
     const pin = evaluateTreePin(before, after);
     if (!pin.matches) {
-      await this.pins.quarantine(input.worktreePath, "tree-pin mismatch after VERIFY");
+      await this.pins.quarantine(input.worktreePath, `tree-pin mismatch after VERIFY: ${describeTreePinMismatch(before, after)}`);
     }
 
     const observed = trajectory(events);
@@ -489,17 +634,53 @@ export class BlindVerifyExecutor {
       ...structural.map((finding) => finding.id),
     ])].toSorted();
     const scenarioReasons = [
+      // `inconclusive` is the verifier saying it could not tell, and it is
+      // carried here rather than recovered from the sentence afterwards. The
+      // schema offers the status, the prompt teaches it, and the UI review
+      // lane has always honoured it; only this lane folded it into `failed`
+      // and then asked a pattern table written in English to recognise a
+      // reason the same prompt requires to be written in Chinese. What got
+      // through was whatever the judge happened to score above the threshold:
+      // S-R237511OV-02 round 3 answered `inconclusive` for all four screen
+      // scenarios with `net::ERR_CONNECTION_REFUSED` in their detail, three
+      // moved at 0.74-0.84 and the fourth did not, so the round counted
+      // against the code and the card was parked two rounds later.
+      //
+      // A claim of `inconclusive` cannot hide a failure. The trajectory is the
+      // box's own record, so a scenario it shows failing is failed whatever
+      // the verdict says about it -- the status is taken at its word only for
+      // a scenario nothing else contradicts. A refused claim or a structural
+      // finding adds its own reason for the same scenario, and a scenario is
+      // environmental only if every reason for it is. A lane that answers
+      // nothing but `inconclusive` is bounded by the consecutive-inconclusive
+      // limit, which stops the card saying exactly that.
       ...document?.scenarios
         .filter((scenario) => scenario.status !== "passed" && scenario.reason)
-        .map((scenario) => ({ scenarioId: scenario.id, reason: scenario.reason! })) ?? [],
-      ...structural.map((finding) => ({ scenarioId: finding.id, reason: finding.reason })),
+        .map((scenario) =>
+          scenarioReason(
+            scenario.id,
+            scenario.reason!,
+            scenario.status === "inconclusive" && !observedFailures.includes(scenario.id),
+          )) ?? [],
+      ...structural.map((finding) =>
+        scenarioReason(finding.id, finding.reason, finding.evidenceMissing === true)),
+      // A scenario the trajectory failed while the verdict called it passed has
+      // no reason of the verifier's own: the verifier did not think it had
+      // failed. The box knows why it is failed anyway and says so, because a
+      // failure carried forward without a reason reaches a person as a blank
+      // and reaches the regression lane as one break indistinguishable from
+      // every other reasonless one.
+      ...observedFailures
+        .filter((id) => !(document?.scenarios ?? []).some((scenario) => scenario.id === id && scenario.status !== "passed"))
+        .map((id) => ({ scenarioId: id, reason: "这条场景在运行记录里判为未通过，但结论里写成通过" })),
     ];
+    const missingEvidence = new Set(validation?.missingEvidence ?? []);
     const environmentReasons = [
       ...scenarioReasons,
-      ...(validation?.errors ?? []).map((error) => ({
-        scenarioId: error.slice(0, error.indexOf(": ")),
-        reason: error,
-      })),
+      // The check that wrote one of these looked for a file and did not find
+      // it, so there is nothing to recognise and nothing to be confident about.
+      ...(validation?.errors ?? []).map((error) =>
+        scenarioReason(error.slice(0, error.indexOf(": ")), error, missingEvidence.has(error))),
     ];
     // A round the box lost says nothing about the code, and the convergence
     // criterion only means something on code-level failures (03 section 8.6).

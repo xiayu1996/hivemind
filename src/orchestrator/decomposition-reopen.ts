@@ -48,23 +48,34 @@ export async function reopenRejectedDecompositions(
       args: [runId, REOPENED],
     })).rows.map((row) => ({ type: String(row.type), data: String(row.data) }));
 
-    // The refusal that put it here, and every version it has been retried
-    // under since. Read together because a retry only counts when it came
-    // after the block it answers.
+    // The refusal that put it here and the versions whose retry it has already
+    // spent. A retry is spent by the refusal it produced, not by the reopen
+    // that started it: an Epic reopened under v and refused again under v has
+    // had its attempt, and offering another is offering the attempt that just
+    // failed. Clearing the set on every block instead made the version a
+    // counter that reset itself, so R237511RC was re-decomposed every cycle at
+    // brain-tier prices and never reached a person.
     let refusedBy: string | null = null;
-    const triedSinceBlock = new Set<string>();
+    let spent = new Set<string>();
+    let openedUnder: string | null = null;
     for (const event of events) {
       const parsed = JSON.parse(event.data) as { to?: string; reason?: string; criteriaVersion?: string };
       if (event.type === REOPENED) {
-        if (parsed.criteriaVersion) triedSinceBlock.add(parsed.criteriaVersion);
+        if (parsed.criteriaVersion) {
+          spent.add(parsed.criteriaVersion);
+          openedUnder = parsed.criteriaVersion;
+        }
         continue;
       }
       if (parsed.to !== "BLOCKED") continue;
       refusedBy = parsed.reason ?? "";
-      triedSinceBlock.clear();
+      // Anything older describes a split made from a different requirement,
+      // which is why a person answering a question earns a fresh attempt.
+      spent = new Set(openedUnder ? [openedUnder] : []);
+      openedUnder = null;
     }
     if (refusedBy === null || !refusedBy.startsWith(REJECTED_PREFIX)) continue;
-    if (triedSinceBlock.has(input.criteriaVersion)) continue;
+    if (spent.has(input.criteriaVersion)) continue;
 
     const at = now();
     const reason = "the decomposition criteria changed since this split was refused";

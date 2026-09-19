@@ -8,6 +8,9 @@ export interface RepositoryDispatchInput {
   /** False when the repository has no interface contract on its default branch
    * yet, which makes this cycle dispatch one card for it. */
   hasInterfaceContract?: boolean;
+  /** Ids of this repository's Stories that are executing right now. They keep
+   * their footprint taken while they run. */
+  running?: readonly string[];
 }
 
 export interface RepositoryDispatchPlan {
@@ -37,7 +40,10 @@ export function planDispatchAcrossRepositories(
     const plan = planStoryExecution(
       dispatchableStories(repository.stories),
       repository.hotspotPaths,
-      repository.hasInterfaceContract === false ? { maxPerBatch: 1 } : {},
+      {
+        ...(repository.hasInterfaceContract === false ? { maxPerBatch: 1 } : {}),
+        ...(repository.running && repository.running.length > 0 ? { running: repository.running } : {}),
+      },
     );
     if (plan.kind === "dependency_cycle") {
       cycles.push({ slug: repository.slug, cycle: plan.cycle });
