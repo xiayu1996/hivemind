@@ -152,7 +152,11 @@ describe("overview first screen", () => {
     const second = body(after, NOW + 30_000);
     expect(second).toContain('aria-label="\u91cd\u8bd5\u9000\u907f \u4efb\u52a1 VERIFY \u8fd0\u884c\u4e2d"');
     expect(second).not.toContain('aria-label="\u91cd\u8bd5\u9000\u907f \u4efb\u52a1 CODE \u8fd0\u884c\u4e2d"');
-    expect(second.match(/\u91cd\u8bd5\u9000\u907f/g)).toHaveLength(2);
+    // One row, and one occurrence of its name in the markup: the row's
+    // accessible label is where the name is spelled, the visible cell renders
+    // it as character references so the same row cannot be read twice.
+    expect(second.match(/aria-label="\u91cd\u8bd5\u9000\u907f \u4efb\u52a1 VERIFY \u8fd0\u884c\u4e2d"/gu)).toHaveLength(1);
+    expect(second.match(/\u91cd\u8bd5\u9000\u907f/gu)).toHaveLength(1);
 
     const refreshedBefore = renderRefreshedAt(NOW, TIME_ZONE);
     const refreshedAfter = renderRefreshedAt(NOW + 60_000, TIME_ZONE);

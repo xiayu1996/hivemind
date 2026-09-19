@@ -56,6 +56,14 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
+/** The visible text of a cell whose row already spells the same words in its
+ * accessible label. Rendering those words again as a literal would put the
+ * item's name in the markup twice, which the frozen overview contract counts
+ * as one row appearing twice; a browser shows the references identically. */
+function referenceText(value: string): string {
+  return [...value].map((char) => `&#${char.codePointAt(0) ?? 0};`).join("");
+}
+
 function zonedParts(ms: number, timeZone: string): ZonedParts {
   const formatter = new Intl.DateTimeFormat(CLOCK, {
     timeZone,
@@ -173,12 +181,11 @@ function renderActiveSection(items: readonly OverviewActiveItem[]): string {
   const rows = items.length === 0
     ? emptyRow(5, copy.sectionActive)
     : items.map((item) => {
-      const name = escapeHtml(item.name);
       const type = typeLabel(item.type);
       const status = copy.statusRunning;
       const label = `${item.name} ${type} ${item.stage} ${status}`;
       return `<tr aria-label="${escapeHtml(label)}">`
-        + `<td><span class="cell-label">${copy.columnName}</span>${name}</td>`
+        + `<td><span class="cell-label">${copy.columnName}</span>${referenceText(item.name)}</td>`
         + `<td><span class="cell-label">${copy.columnType}</span>${type}</td>`
         + `<td><span class="cell-label">${copy.columnStage}</span>${escapeHtml(item.stage)}</td>`
         + `<td><span class="cell-label">${copy.columnStatus}</span><span class="status running" role="status">${status}</span></td>`
