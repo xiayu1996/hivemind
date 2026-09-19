@@ -3,6 +3,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import type { ConsoleAccessPage, ConsoleAccessPolicy } from "./access-control.js";
 import { OVERVIEW_ENDPOINT, type OverviewReadPort, type OverviewTodoItem } from "./overview-contract.js";
 import type { ConsoleOverviewPage, OverviewPageState } from "./overview-page.js";
 import { createTodoPage, type ConsoleTodoPage, type TodoPageState } from "./todo-page.js";
@@ -55,6 +56,10 @@ export interface ConsoleConfigWritePort {
 }
 
 export interface ConsoleServerOptions {
+  /** Required so no server can be constructed without a fail-closed gate. */
+  accessPolicy: ConsoleAccessPolicy;
+  /** Receives no operational data and is the only page available after denial. */
+  accessPage: ConsoleAccessPage;
   uiRoot?: string;
   serveUi?: boolean;
   /** The one write surface. Without it the console stays entirely read-only. */
@@ -72,7 +77,7 @@ export interface ConsoleServerOptions {
 /** Builds the read-only intranet console. */
 export async function createConsoleServer(
   data: ConsoleDataSource,
-  options: ConsoleServerOptions = {},
+  options: ConsoleServerOptions,
 ): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
   const writable = new Set(options.configWriter

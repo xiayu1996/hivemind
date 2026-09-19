@@ -1,0 +1,167 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  ConsoleAccessDecision,
+  ConsoleAccessPage,
+  ConsoleAccessPolicy,
+} from "./access-control.js";
+import type { OverviewSnapshot } from "./overview-contract.js";
+import type { ConsoleOverviewPage } from "./overview-page.js";
+import {
+  createConsoleServer,
+  type ConsoleConfigWritePort,
+  type ConsoleDataSource,
+} from "./server.js";
+
+const OVERVIEW = "\u8fd0\u884c\u603b\u89c8";
+const TODO = "\u7b49\u5f85\u672c\u4eba\u5904\u7406";
+const ACCESS_VERIFICATION = "\u8bbf\u95ee\u9a8c\u8bc1";
+const UNAVAILABLE = "\u65e0\u6cd5\u8bbf\u95ee";
+const DEVICE_DENIED = "\u5f53\u524d\u8bbe\u5907\u65e0\u6cd5\u8fdb\u5165\u540e\u53f0";
+const RETRY_NETWORK = "\u91cd\u65b0\u68c0\u67e5\u7f51\u7edc";
+const SECRET_RUN = "RUN-SECRET-91";
+const SECRET_CONFIG = "CONFIG-SECRET-72";
+const apps: Array<{ close(): Promise<void> }> = [];
+
+function snapshot(): OverviewSnapshot {
+  return {
+    revision: SECRET_RUN,
+    generatedAtMs: 1_800_000_000_000,
+    contentState: { kind: "ready" },
+    sections: {
+      todos: [],
+      active: [],
+      failures: [],
+      completed: [],
+    },
+    summary: {
+      range: {
+        startInclusiveMs: 1_799_395_200_000,
+        endInclusiveMs: 1_800_000_000_000,
+        timeZone: "Asia/Shanghai",
+      },
+      completedCount: 0,
+      runningCount: 1,
+      failureCount: 0,
+      costUsd: 73.21,
+      overruns: [],
+    },
+  };
+}
+
+function dataSource(): ConsoleDataSource {
+  return {
+    readOverview: vi.fn(async () => snapshot()),
+    nodes: vi.fn(async () => [{ name: SECRET_RUN }]),
+    tasks: vi.fn(async () => [{ id: SECRET_RUN }]),
+    costs: vi.fn(async () => [{ amount: 73.21 }]),
+    config: vi.fn(async () => [{ value: SECRET_CONFIG }]),
+    stats: vi.fn(async () => ({ status: SECRET_RUN })),
+    providers: vi.fn(async () => [{ value: SECRET_CONFIG }]),
+    queue: vi.fn(async () => ({ waiting: [{ id: SECRET_RUN }] })),
+  };
+}
+
+function writer(): ConsoleConfigWritePort {
+  return {
+    describe: vi.fn(async () => [{ value: SECRET_CONFIG }]),
+    apply: vi.fn(async () => ({ value: SECRET_CONFIG })),
+    rollback: vi.fn(async () => ({ value: SECRET_CONFIG })),
+    history: vi.fn(async () => [{ value: SECRET_CONFIG }]),
+  };
+}
+
+function overviewPage(): ConsoleOverviewPage {
+  return {
+    renderDocument: vi.fn(() => `<h1>${OVERVIEW}</h1><h2>${TODO}</h2><p>${SECRET_RUN}</p>`),
+    renderBody: vi.fn(() => `<h2>${TODO}</h2><p>${SECRET_RUN}</p>`),
+    renderRefreshedAt: vi.fn(() => "12:00"),
+  };
+}
+
+function accessPage(): ConsoleAccessPage {
+  return {
+    renderDocument: vi.fn(() => `<main><h1>${ACCESS_VERIFICATION}</h1><h2>${UNAVAILABLE}</h2>`
+      + `<p>${DEVICE_DENIED}</p><p>HOME-OFFICE-NETWORK</p><button>${RETRY_NETWORK}</button></main>`),
+  };
+}
+
+function policy(
+  decide: (remoteAddress: string | null) => ConsoleAccessDecision,
+): ConsoleAccessPolicy & { authorize: ReturnType<typeof vi.fn> } {
+  return {
+    authorize: vi.fn((source: { remoteAddress: string | null }) => decide(source.remoteAddress)),
+  };
+}
+
+function deniedPolicy(reason: "allowed_networks_unconfigured" | "source_outside_allowed_networks" = "source_outside_allowed_networks") {
+  return policy(() => ({ allowed: false, reason }));
+}
+
+function callsOf(data: ConsoleDataSource, configWriter?: ConsoleConfigWritePort): unknown[] {
+  const ports = [
+    data.readOverview,
+    data.nodes,
+    data.tasks,
+    data.costs,
+    data.config,
+    data.stats,
+    data.providers,
+    data.queue,
+    configWriter?.describe,
+    configWriter?.apply,
+    configWriter?.rollback,
+    configWriter?.history,
+  ];
+  return ports.flatMap((port) => port && "mock" in port ? (port as ReturnType<typeof vi.fn>).mock.calls : []);
+}
+
+async function server(input: {
+  accessPolicy: ConsoleAccessPolicy;
+  source?: ConsoleDataSource;
+  configWriter?: ConsoleConfigWritePort;
+}) {
+  const app = await createConsoleServer(input.source ?? dataSource(), {
+    accessPolicy: input.accessPolicy,
+    accessPage: accessPage(),
+    ...(input.configWriter === undefined ? {} : { configWriter: input.configWriter }),
+    overviewPage: overviewPage(),
+  });
+  apps.push(app);
+  return app;
+}
+
+afterEach(async () => {
+  for (const app of apps.splice(0)) await app.close();
+  vi.restoreAllMocks();
+});
+
+describe("console access boundary", () => {
+  it("@scenario S-R237511OV-02-allowed serves overview content from home and office peers", async () => {
+    const accessPolicy = policy((remoteAddress) => remoteAddress === "192.0.2.40" || remoteAddress === "198.51.100.60"
+      ? { allowed: true, matchedNetwork: remoteAddress === "192.0.2.40" ? "192.0.2.0/24" : "198.51.100.0/24" }
+      : { allowed: false, reason: "source_outside_allowed_networks" });
+    const app = await server({ accessPolicy });
+
+    for (const remoteAddress of ["192.0.2.40", "198.51.100.60"]) {
+      const response = await app.inject({ method: "GET", url: "/overview", remoteAddress });
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toContain(OVERVIEW);
+      expect(response.body).toContain(TODO);
+      expect(response.body).not.toContain(ACCESS_VERIFICATION);
+      expect(response.body).not.toContain(UNAVAILABLE);
+    }
+    expect(accessPolicy.authorize).toHaveBeenNthCalledWith(1, { remoteAddress: "192.0.2.40" });
+    expect(accessPolicy.authorize).toHaveBeenNthCalledWith(2, { remoteAddress: "198.51.100.60" });
+  });
+
+  it("@scenario S-R237511OV-02-allowed checks every request rather than trusting an earlier allowed request", async () => {
+    const accessPolicy = policy((remoteAddress) => remoteAddress === "192.0.2.40"
+      ? { allowed: true, matchedNetwork: "192.0.2.0/24" }
+      : { allowed: false, reason: "source_outside_allowed_networks" });
+    const app = await server({ accessPolicy });
+
+    expect((await app.inject({ method: "GET", url: "/overview", remoteAddress: "192.0.2.40" })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: "/overview", remoteAddress: "203.0.113.90" })).statusCode).toBe(403);
+    expect(accessPolicy.authorize).toHaveBeenCalledTimes(2);
+  });
+});
