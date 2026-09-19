@@ -138,7 +138,68 @@ describe("@scenario S-M2-06-freshness refreshing from the remote", () => {
     expect(fetchIndex).toBeGreaterThanOrEqual(0);
     expect(fetchIndex).toBeLessThan(revParseIndex);
     expect(calls.find((args) => args[0] === "rev-parse")).toEqual(["rev-parse", "origin/main"]);
-    expect(calls.find((args) => args[0] === "merge")).toEqual(["merge", "--no-ff", "origin/main"]);
+    expect(calls.find((args) => args[0] === "merge" && args[1] === "--no-ff")).toEqual(["merge", "--no-ff", "origin/main"]);
+    client.close();
+  });
+
+  it("takes a resolution somebody published for the same branch before merging main again", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    await client.execute(
+      "INSERT INTO epics (id, notion_page_id, title, state, integration_branch, created_at, updated_at) VALUES ('M2','p','M2','EXECUTING','epic/M2',1,1)",
+    );
+    // Somebody resolved the conflict on the platform: the published branch is
+    // ahead, so the local one takes it and the merge that used to conflict is
+    // tried again on the resolved tree.
+    let published = true;
+    const calls: string[][] = [];
+    const git = { run: vi.fn(async (_cwd: string, args: string[]) => {
+      calls.push(args);
+      if (args.join(" ") === "rev-parse origin/main") return "main-revision\n";
+      if (args[0] === "rev-list") return published ? "3\n" : "0\n";
+      if (args[0] === "branch") return "epic/M2\n";
+      if (args.join(" ") === "merge --ff-only refs/remotes/origin/epic/M2") {
+        published = false;
+        return "";
+      }
+      return "";
+    }) };
+    const refresh = new EpicBranchFreshness(client, { worktreePath: "integration", git, intervalMs: 86_400_000, now: () => 1_000 });
+
+    await expect(refresh.tick()).resolves.toEqual([{ epicId: "M2", outcome: "succeeded" }]);
+    expect(calls).toContainEqual(["fetch", "origin", "epic/M2"]);
+    expect(calls).toContainEqual(["merge", "--ff-only", "refs/remotes/origin/epic/M2"]);
+
+    // And the refresh it just answered for is not skipped when the branch it
+    // answered on has moved: the same main against a resolved tree is a
+    // different question.
+    await expect(refresh.tick()).resolves.toEqual([{ epicId: "M2", outcome: "skipped" }]);
+    published = true;
+    await expect(refresh.tick()).resolves.toEqual([{ epicId: "M2", outcome: "succeeded" }]);
+    client.close();
+  });
+
+  it("leaves the local branch alone when nothing was published for it", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    await client.execute(
+      "INSERT INTO epics (id, notion_page_id, title, state, integration_branch, created_at, updated_at) VALUES ('M2','p','M2','EXECUTING','epic/M2',1,1)",
+    );
+    const calls: string[][] = [];
+    const git = { run: vi.fn(async (_cwd: string, args: string[]) => {
+      calls.push(args);
+      if (args.join(" ") === "rev-parse origin/main") return "main-revision\n";
+      if (args[0] === "branch") return "epic/M2\n";
+      if (args.join(" ") === "fetch origin epic/M2") {
+        throw new Error("fatal: couldn't find remote ref epic/M2");
+      }
+      return "";
+    }) };
+
+    await expect(new EpicBranchFreshness(client, { worktreePath: "integration", git, now: () => 1_000 }).tick())
+      .resolves.toEqual([{ epicId: "M2", outcome: "succeeded" }]);
+    expect(calls.some((args) => args[1] === "--ff-only")).toBe(false);
+    expect(calls).toContainEqual(["merge", "--no-ff", "origin/main"]);
     client.close();
   });
 
@@ -161,7 +222,7 @@ describe("@scenario S-M2-06-freshness refreshing from the remote", () => {
       now: () => 1_000,
     }).tick();
 
-    expect(calls.find((args) => args[0] === "merge")).toEqual(["merge", "--no-ff", "origin/trunk"]);
+    expect(calls.find((args) => args[0] === "merge" && args[1] === "--no-ff")).toEqual(["merge", "--no-ff", "origin/trunk"]);
     client.close();
   });
 
