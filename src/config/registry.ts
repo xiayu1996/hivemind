@@ -170,7 +170,7 @@ export const CONFIG_KEYS = {
     default: 86_400_000,
     scope: "global",
     reload: "hot",
-    description: "Minimum interval between successful merges of main into an active Epic integration branch.",
+    description: "Floor under how often an Epic integration branch is refreshed from main. What makes a branch due is main having moved; this only rate-limits a main that moves constantly.",
   }),
   "schedule.workerGraceMs": def({
     schema: positiveInt.min(60_000),
