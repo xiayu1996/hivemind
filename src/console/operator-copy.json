@@ -17,8 +17,8 @@
     "records": "工作记录",
     "overviewShort": "总览",
     "costsShort": "费用",
-    "rolesShort": "配置",
-    "recordsShort": "记录"
+    "rolesShort": "角色",
+    "recordsShort": "工作记录"
   },
   "subjectKinds": {
     "requirement": "需求",
