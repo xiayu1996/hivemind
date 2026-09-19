@@ -1364,8 +1364,7 @@ async function main(): Promise<void> {
   let operationsConsole: Awaited<ReturnType<typeof createConsoleServer>> | undefined;
   if (config.get("console.enabled")) {
     const uiRoot = join(ROOT, "console-ui", "dist");
-    operationsConsole = await createConsoleServer(
-      new LibsqlConsoleDataSource(handle.client, async () => [{
+    const consoleData = new LibsqlConsoleDataSource(handle.client, async () => [{
         hostId: hostname(),
         status: "healthy",
         node: process.version,
@@ -1374,11 +1373,16 @@ async function main(): Promise<void> {
         ...projections.fleet(),
         invariantFindings: projections.findings(),
         rejections: projections.rejections(),
-      })),
+      }));
+    operationsConsole = await createConsoleServer(
+      consoleData,
       {
         uiRoot,
         serveUi: await exists(join(uiRoot, "index.html")),
         configWriter: new ConsoleConfigWriter(config, handle.client),
+        // This process owns the central store, so it is the mount that may
+        // write. A mount that wants the form says so; nothing infers it.
+        costLimitStore: consoleData.requirementCostLimitStore,
       },
     );
     const address = await listenConsole(operationsConsole, {
