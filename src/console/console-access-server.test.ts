@@ -208,6 +208,41 @@ describe("console access boundary", () => {
     expect(callsOf(source)).toEqual([]);
   });
 
+  it("@scenario S-R237511OV-02-retry enters the same requested page after the peer joins an allowed network", async () => {
+    const accessPolicy = policy((remoteAddress) => remoteAddress === "192.0.2.40"
+      ? { allowed: true, matchedNetwork: "192.0.2.0/24" }
+      : { allowed: false, reason: "source_outside_allowed_networks" });
+    const app = await server({ accessPolicy });
+    const originalUrl = "/overview?state=empty";
+
+    const denied = await app.inject({ method: "GET", url: originalUrl, remoteAddress: "203.0.113.90" });
+    expect(denied.statusCode).toBe(403);
+    expect(denied.body).toContain(DEVICE_DENIED);
+    expect(denied.body).toContain(RETRY_NETWORK);
+
+    const retried = await app.inject({ method: "GET", url: originalUrl, remoteAddress: "192.0.2.40" });
+    expect(retried.statusCode).toBe(200);
+    expect(retried.body).toContain(OVERVIEW);
+    expect(retried.body).not.toContain(DEVICE_DENIED);
+    expect(accessPolicy.authorize).toHaveBeenCalledTimes(2);
+  });
+
+  it("@scenario S-R237511OV-02-retry does not use a caller-supplied return target", async () => {
+    const app = await server({ accessPolicy: deniedPolicy() });
+    const externalTarget = "https://example.invalid/stolen";
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/overview?returnTo=${encodeURIComponent(externalTarget)}`,
+      remoteAddress: "203.0.113.90",
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.body).toContain(RETRY_NETWORK);
+    expect(response.body).not.toContain(externalTarget);
+    expect(response.headers.location).toBeUndefined();
+  });
+
   it("@scenario S-R237511OV-02-spoof ignores forwarding headers and claimed source parameters", async () => {
     const accessPolicy = deniedPolicy();
     const source = dataSource();
