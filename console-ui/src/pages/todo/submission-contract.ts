@@ -48,8 +48,21 @@ export type TodoSubmissionProjection =
  * the work is still waiting. Concurrent refresh and submit responses are
  * ordered by the page request id before this projection is applied.
  */
-export declare function projectTodoSubmission(
+export function projectTodoSubmission(
   todo: TodoDetailDto,
   submission: TodoSubmissionDto,
   result: TodoSubmitResultDto,
-): TodoSubmissionProjection;
+): TodoSubmissionProjection {
+  if (result.kind === "invalid") {
+    return { kind: "validation_failed", todo, submission, issues: result.issues };
+  }
+  if (result.kind === "recorded") {
+    if (result.state.status === "processed") {
+      return { kind: "confirmed", todo, submission, decision: result.state };
+    }
+    return { kind: "awaiting_confirmation", todo, submission, decision: result.state };
+  }
+  // `failed` and `gone` are the same answer to the person: the result was not
+  // kept, so the todo stays and the draft is kept for a retry.
+  return { kind: "submission_rejected", todo, submission, messageKey: "answer_not_submitted" };
+}
