@@ -1,0 +1,5 @@
+{
+  "todoActionLabel": "处理",
+  "requirementFailureReason": "需求未能继续",
+  "storyFailureReason": "阶段执行失败"
+}

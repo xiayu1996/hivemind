@@ -2,7 +2,18 @@ import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import type { OverviewReadPort } from "./overview-contract.js";
+import { OVERVIEW_ENDPOINT, type OverviewReadPort } from "./overview-contract.js";
+
+function isTimeZone(value: string): boolean {
+  try {
+    const formatter = new Intl.DateTimeFormat("en-US", { timeZone: value });
+    return formatter.resolvedOptions().timeZone.length > 0;
+  } catch {
+    // Intl throws a RangeError for a name it does not know; that throw is the
+    // rejection, and no other failure can reach here.
+    return false;
+  }
+}
 
 export interface ConsoleDataSource extends OverviewReadPort {
   nodes(): Promise<unknown[]>;
@@ -49,6 +60,13 @@ export async function createConsoleServer(
   });
 
   app.get("/health", async () => ({ status: "ok" }));
+  app.get(OVERVIEW_ENDPOINT, async (request, reply) => {
+    const timeZone = (request.query as { timeZone?: string }).timeZone;
+    if (typeof timeZone !== "string" || !isTimeZone(timeZone)) {
+      return reply.code(400).send({ error: "timeZone must be a valid IANA name" });
+    }
+    return data.readOverview({ nowMs: Date.now(), timeZone });
+  });
   app.get("/api/nodes", async () => data.nodes());
   app.get("/api/tasks", async () => data.tasks());
   app.get("/api/costs", async () => data.costs());
@@ -95,7 +113,7 @@ export async function createConsoleServer(
     });
     const index = await readFile(join(uiRoot, "index.html"), "utf8");
     app.get("/", async (_request, reply) => reply.type("text/html").send(index));
-    for (const route of ["/nodes", "/tasks", "/costs", "/config", "/stats", "/providers", "/queue"]) {
+    for (const route of ["/overview", "/nodes", "/tasks", "/costs", "/config", "/stats", "/providers", "/queue"]) {
       app.get(route, async (_request, reply) => reply.type("text/html").send(index));
     }
   }

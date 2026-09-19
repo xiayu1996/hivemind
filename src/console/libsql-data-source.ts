@@ -4,6 +4,7 @@ import { ProjectionRegistry } from "../observability/projections/registry.js";
 import { renderTraceHtml } from "../observability/projections/trace-html.js";
 import { traceProjection } from "../observability/projections/units.js";
 import { summarizeFootprintDeviation } from "../orchestrator/footprint-deviation.js";
+import { createLibsqlOverviewReader, type OverviewReadPort } from "./overview-contract.js";
 import type { ConsoleDataSource } from "./server.js";
 
 function plain(row: Row): Record<string, unknown> {
@@ -11,6 +12,8 @@ function plain(row: Row): Record<string, unknown> {
 }
 
 export class LibsqlConsoleDataSource implements ConsoleDataSource {
+  private readonly overviewReader: OverviewReadPort;
+
   constructor(
     private readonly client: Client,
     private readonly nodeSnapshot: () => Promise<unknown[]>,
@@ -18,7 +21,13 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
      * never recomputed here: the whole point of the cascade is that the widest
      * view costs one read rather than a walk over every event. */
     private readonly fleet?: () => unknown,
-  ) {}
+  ) {
+    this.overviewReader = createLibsqlOverviewReader(client);
+  }
+
+  readOverview(...args: Parameters<OverviewReadPort["readOverview"]>): ReturnType<OverviewReadPort["readOverview"]> {
+    return this.overviewReader.readOverview(...args);
+  }
 
   nodes(): Promise<unknown[]> {
     return this.nodeSnapshot();
