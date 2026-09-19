@@ -22,7 +22,7 @@
   "stories": [
     { "id": "S-CODE", "title": "重试退避", "state": "CODE", "phase": "CODE", "createdOffsetMs": -9000000, "updatedOffsetMs": -1200000 },
     { "id": "S-VERIFY", "title": "异常归类", "state": "VERIFY", "phase": "VERIFY", "createdOffsetMs": -9000000, "updatedOffsetMs": -2400000 },
-    { "id": "S-FAILED", "title": "账单导出", "state": "FAILED", "phase": "VERIFY", "createdOffsetMs": -172800000, "updatedOffsetMs": -3600000 },
+    { "id": "S-FAILED", "title": "账单导出", "state": "FAILED", "phase": "VERIFY", "createdOffsetMs": -172800000, "updatedOffsetMs": -3000000 },
     { "id": "S-RECOVERED", "title": "已经恢复的导出", "state": "DELIVERED", "phase": "MERGE", "createdOffsetMs": -777600000, "updatedOffsetMs": -691200000 },
     { "id": "S-RECENT-DONE", "title": "状态投影核对", "state": "DELIVERED", "phase": "MERGE", "createdOffsetMs": -259200000, "updatedOffsetMs": -10800000 },
     { "id": "S-OLD", "title": "旧任务", "state": "DELIVERED", "phase": "MERGE", "createdOffsetMs": -950400000, "updatedOffsetMs": -864000000 }
@@ -36,7 +36,7 @@
     }
   ],
   "phaseRuns": [
-    { "runId": "demo-story-failure", "cardId": "S-FAILED", "phase": "VERIFY", "round": 1, "status": "failed", "failure": "验收未通过", "startedOffsetMs": -3900000, "endedOffsetMs": -3600000 },
+    { "runId": "demo-story-failure", "cardId": "S-FAILED", "phase": "VERIFY", "round": 1, "status": "failed", "failure": "验收未通过", "startedOffsetMs": -3300000, "endedOffsetMs": -3000000 },
     { "runId": "demo-old-failure", "cardId": "S-RECOVERED", "phase": "SPECIFY", "round": 1, "status": "failed", "failure": "旧失败", "startedOffsetMs": -691500000, "endedOffsetMs": -691200000 }
   ],
   "costs": [
