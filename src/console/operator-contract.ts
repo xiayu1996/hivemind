@@ -1005,6 +1005,16 @@ function escapeHtml(value: string): string {
     .replaceAll('"', "&quot;");
 }
 
+/** Disables the form's own actions as soon as it is submitted, so a second
+ * tap during the request cannot create a second action for one answer. Server
+ * rendering covers the confirmed states; this covers the request in flight. */
+const SUBMIT_ONCE_SCRIPT = "<script>document.addEventListener('submit',function(event){"
+  + "var form=event.target;"
+  + "if(!form.hasAttribute||!form.hasAttribute('data-submit-once'))return;"
+  + "var controls=form.querySelectorAll('button,input[type=submit]');"
+  + "for(var index=0;index<controls.length;index+=1)controls[index].disabled=true;"
+  + "});</script>";
+
 function documentHtml(options: { title: string; body: string }): string {
   return [
     "<!doctype html>",
@@ -1012,7 +1022,7 @@ function documentHtml(options: { title: string; body: string }): string {
     '<meta name="viewport" content="width=device-width,initial-scale=1">',
     `<title>${escapeHtml(options.title)}</title>`,
     `<style>${STYLES}</style>`,
-    `</head><body>${options.body}</body></html>`,
+    `</head><body>${options.body}${SUBMIT_ONCE_SCRIPT}</body></html>`,
   ].join("");
 }
 
@@ -1278,7 +1288,7 @@ function renderTodoBody(
     + (retry
       ? `<div class="notice danger section"><p role="alert">${copy.todo.notSavedHeading}</p><p>${copy.todo.notSavedBody}</p></div>`
       : "")
-    + `<form class="panel section" method="post" action="/operator/todos/${encodeURIComponent(todo.id)}">`
+    + `<form class="panel section" method="post" action="/operator/todos/${encodeURIComponent(todo.id)}" data-submit-once>`
     + `<input type="hidden" name="revision" value="${escapeHtml(todo.revision)}">`
     + renderTodoFields(todo, {
       submittedValue: options.submittedValue ?? "",
