@@ -1,7 +1,15 @@
 import { createClient, type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { migrate } from "../persistence/migrate.js";
-import { NotionOutbox, OUTBOX_CLAIM_MS, OUTBOX_MAX_ATTEMPTS, deadLetters, type NotionOutboxDelivery } from "./outbox.js";
+import {
+  NotionOutbox,
+  OUTBOX_CLAIM_MS,
+  OUTBOX_MAX_ATTEMPTS,
+  OUTBOX_TRANSIENT_WINDOW_MS,
+  deadLetters,
+  transientBackoffMs,
+  type NotionOutboxDelivery,
+} from "./outbox.js";
 
 let client: Client;
 
@@ -225,5 +233,73 @@ describe("replay", () => {
     const row = (await client.execute("SELECT state, attempts, last_error FROM notion_outbox WHERE target = 'page-1'")).rows[0];
     expect(row).toMatchObject({ state: "dead", attempts: OUTBOX_MAX_ATTEMPTS, last_error: "validation_error on page-1" });
     expect(await deadLetters(client)).toEqual([expect.objectContaining({ target: "page-1", attempts: OUTBOX_MAX_ATTEMPTS })]);
+  });
+});
+
+const timeout = (): never => {
+  throw new Error("The operation was aborted due to timeout");
+};
+
+describe("a send that fails on something other than its payload", () => {
+  it("waits before trying again rather than spending the pass it was offered", async () => {
+    let clock = 1_000;
+    const outbox = new NotionOutbox(client, () => clock);
+    await outbox.enqueue({ target: "page-1", operation: "sync_story_page", payload: { n: 1 }, priority: 2 });
+    let sends = 0;
+    const delivery: NotionOutboxDelivery = {
+      isApplied: async () => false,
+      send: async () => { sends++; timeout(); },
+    };
+
+    expect(await outbox.replay(delivery)).toMatchObject({ failed: 1, dead: [] });
+    expect(sends).toBe(1);
+
+    // The cycle comes round again straight away; the row is not offered yet.
+    clock += 1_000;
+    expect(await outbox.replay(delivery)).toEqual({ sent: 0, failed: 0, failures: [], dead: [] });
+    expect(sends).toBe(1);
+
+    clock += transientBackoffMs(1);
+    expect(await outbox.replay(delivery)).toMatchObject({ failed: 1, dead: [] });
+    expect(sends).toBe(2);
+  });
+
+  it("keeps the row alive past the budget a refused payload gets", async () => {
+    let clock = 1_000;
+    const outbox = new NotionOutbox(client, () => clock);
+    await outbox.enqueue({ target: "page-1", operation: "sync_story_page", payload: { n: 1 }, priority: 2 });
+    let fail = true;
+    const delivery: NotionOutboxDelivery = {
+      isApplied: async () => false,
+      send: async () => { if (fail) timeout(); },
+    };
+
+    for (let attempt = 1; attempt <= OUTBOX_MAX_ATTEMPTS + 2; attempt++) {
+      expect(await outbox.replay(delivery)).toMatchObject({ failed: 1, dead: [] });
+      clock += transientBackoffMs(attempt);
+    }
+    fail = false;
+    expect(await outbox.replay(delivery)).toMatchObject({ sent: 1, dead: [] });
+    const row = (await client.execute("SELECT state, next_attempt_at FROM notion_outbox WHERE target = 'page-1'")).rows[0];
+    expect(row).toMatchObject({ state: "sent", next_attempt_at: null });
+  });
+
+  it("declares the row dead once it has been failing this way for longer than an outage", async () => {
+    let clock = 1_000;
+    const outbox = new NotionOutbox(client, () => clock);
+    await outbox.enqueue({ target: "page-1", operation: "sync_story_page", payload: { n: 1 }, priority: 2 });
+    const delivery: NotionOutboxDelivery = {
+      isApplied: async () => false,
+      send: async () => timeout(),
+    };
+
+    for (let attempt = 1; attempt <= OUTBOX_MAX_ATTEMPTS; attempt++) {
+      expect(await outbox.replay(delivery)).toMatchObject({ failed: 1, dead: [] });
+      clock += transientBackoffMs(attempt);
+    }
+    clock += OUTBOX_TRANSIENT_WINDOW_MS;
+    expect(await outbox.replay(delivery)).toMatchObject({
+      dead: [expect.objectContaining({ target: "page-1" })],
+    });
   });
 });

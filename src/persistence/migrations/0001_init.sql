@@ -518,6 +518,10 @@ CREATE TABLE IF NOT EXISTS notion_outbox (
   -- cycle both reconcile), and a send that appends to a page is not idempotent
   -- by itself, so a row is claimed before it is sent and released after.
   claimed_until INTEGER,
+  -- Not before this instant: a send that failed on something that says nothing
+  -- about the payload (a timeout, a 5xx) waits rather than spending its
+  -- attempts, which are budgeted for a payload the API refuses outright.
+  next_attempt_at INTEGER,
   created_at    INTEGER NOT NULL,
   sent_at       INTEGER,
   UNIQUE (target, payload_hash)
