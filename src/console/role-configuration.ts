@@ -474,6 +474,9 @@ const ROLE_CONFIGURATION_PAGE_STYLE = [
   ".status{display:inline-block;padding:2px 10px;border-radius:var(--radius-pill);font-size:12px}.status.running{background:var(--color-surface-selected);color:var(--color-action)}",
   ".state-page{display:flex;justify-content:center;padding:40px 0}.state-card{background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-panel);padding:24px;max-width:520px}",
   ".state-card h2{font-size:18px;margin:0 0 8px}.mobile-nav{display:none}",
+  "@media (max-width:760px){.shell{grid-template-columns:1fr}.sidebar{display:none}main{padding:16px}.role-split{grid-template-columns:1fr;align-items:start}",
+  ".mobile-nav{display:flex;position:sticky;bottom:0;background:var(--color-surface);border-top:1px solid var(--color-border);justify-content:space-around;padding:8px 0}",
+  ".mobile-link{padding:8px 12px;text-decoration:none;color:var(--color-text)}.mobile-link[aria-current=page]{color:var(--color-action);font-weight:550}}",
 ].join("");
 
 /** The complete role-configuration document, one document per reachable state. */
