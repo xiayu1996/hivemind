@@ -87,6 +87,12 @@ export class LibsqlPhaseRecorder {
       await writer.append("request/provider-payload", payload);
       await writer.append("step_end", { turn: 1, step });
     }
+    // The RPC stream lives here and only here. event_log is the orchestration
+    // decision stream that Epic and requirement state are derived from (04
+    // section 3); mirroring every token delta into it duplicated this file into
+    // the table those reads go through, and 2.4 million message_update rows had
+    // grown the central database past a gigabyte. Nothing reads them there --
+    // inspect-round excludes rpc.% explicitly.
     for (const event of input.result.events) {
       await writer.append("rpc/event", event, { ignorable: true });
     }
@@ -129,20 +135,5 @@ export class LibsqlPhaseRecorder {
       ],
     }));
     if (turnStatements.length > 0) await this.client.batch(turnStatements, "write");
-    const statements = input.result.events.map((event) => ({
-      sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
-            VALUES (?, (SELECT COALESCE(MAX(seq), -1) + 1 FROM event_log WHERE run_id = ?),
-                    ?, ?, ?, ?, ?)`,
-      args: [
-        input.runId,
-        input.runId,
-        input.cardId,
-        input.phase,
-        `rpc.${event.type}`,
-        time,
-        JSON.stringify(event),
-      ],
-    }));
-    if (statements.length > 0) await this.client.batch(statements, "write");
   }
 }
