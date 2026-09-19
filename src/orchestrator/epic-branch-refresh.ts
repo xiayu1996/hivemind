@@ -74,12 +74,26 @@ export class EpicBranchFreshness {
     }
     const sourceRevision = (await this.git.run(cwd, ["rev-parse", source])).trim();
     const time = this.now();
-    const lastSuccess = (await this.client.execute({
-      sql: `SELECT ts FROM epic_branch_refresh_events
-            WHERE epic_id = ? AND outcome = 'succeeded' ORDER BY ts DESC, id DESC LIMIT 1`,
+    // The last attempt that settled, not the last one that worked. Keyed on
+    // success alone, an Epic whose merge conflicts has no recent success ever,
+    // so the interval never applies and every cycle runs another fetch, merge
+    // and abort against an unchanged main -- the same answer, two rows, and a
+    // warning line, every cycle for as long as the conflict lives. R237511OV
+    // did that for hours and put 4523 rows in this table (2026-09-20).
+    //
+    // A success is throttled on time alone, as before. A failure is throttled
+    // on time and on main standing still, because main moving is the one thing
+    // that can change the answer -- so the branch is retried the moment the
+    // conflict could have been resolved upstream, and not before.
+    const last = (await this.client.execute({
+      sql: `SELECT ts, outcome, source_revision FROM epic_branch_refresh_events
+            WHERE epic_id = ? AND outcome IN ('succeeded','failed') ORDER BY ts DESC, id DESC LIMIT 1`,
       args: [epicId],
     })).rows[0];
-    if (typeof lastSuccess?.ts === "number" && time - lastSuccess.ts < this.intervalMs) {
+    const settled = typeof last?.ts === "number" && time - last.ts < this.intervalMs;
+    const answerCannotHaveChanged = last?.outcome === "succeeded"
+      || String(last?.source_revision ?? "") === sourceRevision;
+    if (settled && answerCannotHaveChanged) {
       // Not recorded: nothing reads a skip. The interval query reads
       // 'succeeded' and the progress probe reads 'succeeded' and 'failed', so
       // a row per cycle per Epic only grows the table -- one Epic had 742 of
