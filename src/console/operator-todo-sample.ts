@@ -15,7 +15,7 @@
  * not-saved screen can be looked at.
  */
 import type {
-  ConsoleAccessDecision,
+  OperatorNetworkAccessDecision,
   OperatorConsoleDependencies,
   OperatorDetail,
   OperatorDetailResult,
@@ -205,7 +205,7 @@ export function createSampleOperatorConsole(options: SampleConsoleOptions = {}):
 
   return {
     access: {
-      decide(clientAddress: string): ConsoleAccessDecision {
+      decide(clientAddress: string): OperatorNetworkAccessDecision {
         return LOOPBACK.test(clientAddress.trim()) ? { kind: "allowed" } : { kind: "denied" };
       },
     },
