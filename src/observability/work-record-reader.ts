@@ -1,3 +1,5 @@
+import { redactForExport } from "./redact.js";
+
 export interface WorkRecordSearchQuery {
   /** A trimmed, case-sensitive substring matched only against display-safe event text. */
   keyword: string;
@@ -87,10 +89,16 @@ export interface WorkRecordDetailResult {
 
 export type WorkRecordReadFailureCode = "unavailable" | "invalid_query" | "not_found";
 
-export declare class WorkRecordReadError extends Error {
+export class WorkRecordReadError extends Error {
   readonly code: WorkRecordReadFailureCode;
   readonly retryable: boolean;
-  constructor(code: WorkRecordReadFailureCode, retryable: boolean, message: string);
+
+  constructor(code: WorkRecordReadFailureCode, retryable: boolean, message: string) {
+    super(message);
+    this.name = "WorkRecordReadError";
+    this.code = code;
+    this.retryable = retryable;
+  }
 }
 
 export type WorkRecordSourceStatus =
@@ -135,9 +143,137 @@ export interface WorkRecordReaderOptions {
   now?: () => number;
 }
 
+function displayText(value: string): DisplayText {
+  // Redaction happens before matching, so a search can never reveal material
+  // the display corpus is not allowed to carry.
+  return { value: redactForExport(value), redaction: "applied" };
+}
+
+/**
+ * Splits a redacted sentence around every literal occurrence of the keyword.
+ * The source sentence is preserved in order; only the runs that equal the
+ * keyword are flagged, which is what lets a page mark the hit without
+ * inventing emphasis the record does not have.
+ */
+function literalParts(text: string, keyword: string): readonly HighlightedTextPart[] {
+  const parts: HighlightedTextPart[] = [];
+  let cursor = 0;
+  for (;;) {
+    const at = text.indexOf(keyword, cursor);
+    if (at === -1) {
+      if (cursor < text.length) parts.push({ value: text.slice(cursor), matched: false, redaction: "applied" });
+      break;
+    }
+    if (at > cursor) parts.push({ value: text.slice(cursor, at), matched: false, redaction: "applied" });
+    parts.push({ value: keyword, matched: true, redaction: "applied" });
+    cursor = at + keyword.length;
+  }
+  return parts;
+}
+
+function displaySteps(steps: readonly WorkRecordSourceStep[], runId: string): WorkRecordSourceStep[] {
+  return steps
+    .filter((step) => step.runId === runId && step.visibility === "display")
+    .toSorted((left, right) => left.sequence - right.sequence);
+}
+
+async function guardUnavailable<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (cause) {
+    if (cause instanceof WorkRecordReadError) throw cause;
+    throw new WorkRecordReadError("unavailable", true, cause instanceof Error ? cause.message : String(cause));
+  }
+}
+
+/**
+ * Read-only projection over a work-record source.
+ *
+ * The reader owns every boundary the source is not trusted for: the source may
+ * over-return runs and steps, so display selection, run isolation, redaction,
+ * literal matching and ordering all happen here. Search is a trimmed,
+ * case-sensitive literal substring over redacted text, keeps at most one match
+ * per run (the earliest step that hits) and orders matches newest first.
+ */
 export function createWorkRecordReader(
-  _source: WorkRecordSource,
-  _options: WorkRecordReaderOptions = {},
+  source: WorkRecordSource,
+  options: WorkRecordReaderOptions = {},
 ): WorkRecordReader {
-  throw new Error("Not implemented: createWorkRecordReader");
+  const now = options.now ?? Date.now;
+
+  return {
+    async search(query: WorkRecordSearchQuery): Promise<WorkRecordSearchResult> {
+      const keyword = query.keyword.trim();
+      if (keyword === "") throw new WorkRecordReadError("invalid_query", false, "a search keyword is required");
+      if (!(query.fromInclusive < query.toExclusive)) {
+        throw new WorkRecordReadError("invalid_query", false, "the time range must be a non-empty half-open interval");
+      }
+      const runs = await guardUnavailable(() => source.loadRuns());
+      const matches: WorkRecordMatch[] = [];
+      for (const run of runs) {
+        if (query.role !== undefined && run.role !== query.role) continue;
+        const steps = displaySteps(await guardUnavailable(() => source.loadSteps(run.runId)), run.runId);
+        for (const step of steps) {
+          const text = redactForExport(step.text);
+          if (!text.includes(keyword)) continue;
+          if (step.occurredAt < query.fromInclusive || step.occurredAt >= query.toExclusive) continue;
+          matches.push({
+            runId: run.runId,
+            role: run.role,
+            name: run.name,
+            occurredAt: step.occurredAt,
+            requirement: run.requirement,
+            hit: literalParts(text, keyword),
+          });
+          break;
+        }
+      }
+      matches.sort((left, right) => right.occurredAt - left.occurredAt);
+      return {
+        query: { ...query, keyword },
+        matches,
+        snapshotAt: now(),
+      };
+    },
+
+    async read(query: WorkRecordDetailQuery): Promise<WorkRecordDetailResult> {
+      if (query.runId === "") throw new WorkRecordReadError("invalid_query", false, "a run id is required");
+      const runs = await guardUnavailable(() => source.loadRuns());
+      const run = runs.find((candidate) => candidate.runId === query.runId);
+      if (!run) throw new WorkRecordReadError("not_found", false, `no work record for ${query.runId}`);
+      const steps = displaySteps(
+        await guardUnavailable(() => source.loadSteps(query.runId, query.afterSequence)),
+        query.runId,
+      );
+      const mapped: WorkRecordStep[] = steps.map((step) => ({
+        runId: step.runId,
+        sequence: step.sequence,
+        occurredAt: step.occurredAt,
+        kind: step.kind,
+        text: displayText(step.text),
+      }));
+      const last = mapped.at(-1);
+      const status: WorkRecordStatus = run.status.kind === "running"
+        ? { kind: "running", refreshAfterMs: run.status.refreshAfterMs }
+        : {
+            kind: "stopped",
+            outcome: run.status.outcome,
+            stoppedAt: run.status.stoppedAt,
+            durationMs: run.status.stoppedAt - run.startedAt,
+          };
+      return {
+        record: {
+          runId: run.runId,
+          role: run.role,
+          name: run.name,
+          requirement: run.requirement,
+          startedAt: run.startedAt,
+          status,
+          steps: mapped,
+          throughSequence: last?.sequence ?? query.afterSequence ?? 0,
+        },
+        incremental: query.afterSequence !== undefined,
+      };
+    },
+  };
 }
