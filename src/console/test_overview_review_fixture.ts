@@ -204,4 +204,9 @@ describe("the overview a verification round opens", () => {
     expect(summary).toContain("已超限");
     expect(summary).toContain("工作仍继续");
   });
+  it("@scenario S-R237511OV-01-todo a handled item never appears in the waiting rail", () => {
+    const todos = section(html, 'id="todos-title"', 'id="active-title"');
+    expect(todos).not.toContain("已经处理的需求");
+    expect(todos).not.toContain("R-HANDLED");
+  });
 });
