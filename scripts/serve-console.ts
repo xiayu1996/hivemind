@@ -43,7 +43,11 @@ import {
   schemaFingerprint,
 } from "../src/persistence/schema-fingerprint.js";
 import type { NotionOutboxDelivery } from "../src/notion/outbox.js";
-import { applyVerifyFixture, fixtureFor, scenarioOfUrl } from "../src/console/verify-fixture.js";
+import { applyVerifyFixture } from "../src/console/verify-fixture.js";
+import {
+  classifyVerifyFixtureRequest,
+  createVerifyFixtureCoordinator,
+} from "../src/console/verify-fixture-contract.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -194,6 +198,17 @@ async function ensureSchema(client: Parameters<typeof migrate>[0]): Promise<void
   await migrate(client);
 }
 
+const snapshot = snapshotOf(resolve(file));
+const handle = openDb(snapshot.url);
+await ensureSchema(handle.client);
+
+// One owner of the active plan, read by the request hook: a page navigation
+// seeds the fixture, and the same plan decides whether this round's submission
+// is meant to be refused.
+const coordinator = createVerifyFixtureCoordinator({
+  apply: (fixture, now) => applyVerifyFixture(handle.client, fixture, now),
+});
+
 /**
  * Where an accepted decision goes for a verification round.
  *
@@ -213,10 +228,6 @@ function verificationDelivery(): NotionOutboxDelivery {
   };
 }
 
-const snapshot = snapshotOf(resolve(file));
-const handle = openDb(snapshot.url);
-await ensureSchema(handle.client);
-
 const uiRoot = join(ROOT, "console-ui", "dist");
 const app = await createVerificationConsole({
   client: handle.client,
@@ -225,26 +236,33 @@ const app = await createVerificationConsole({
   serveUi: existsSync(join(uiRoot, "index.html")),
 });
 
-// The scenario named on a request decides two things: which sample rows the
-// ledger holds, and whether the todo reads are made to fail. A scenario about
-// a read that did not work (`...-error`) is judged on a page that could not
-// read its todo, so its state is an empty ledger whose reads answer 503 -- the
-// page then says it could not read the todo and offers to try again, which is
-// exactly what is under test. Asset and other API requests are left alone: the
-// page's own reads must see the state its page request set.
-let unreadable = false;
+// The plan selected by a page navigation decides three things: which sample
+// rows the ledger holds, whether the todo reads are made to fail, and whether a
+// submission is refused. Only a document navigation may change it -- the
+// content the page pulls in (a favicon, a bundle) and the page's own API calls
+// preserve it, so a page that opened a fixture keeps it. A scenario about a
+// read that did not work (`...-error`) is judged on a page that could not read
+// its todo, so its state is an empty ledger whose reads answer 503 -- the page
+// then says it could not read the todo and offers to try again, which is
+// exactly what is under test. A scenario about a refused submission
+// (`...-rejected`) answers 503 to the decision itself, before anything is
+// written, so the answer never lands and the seeded todo keeps waiting.
 app.addHook("onRequest", async (request, reply) => {
   const path = request.url.split("?")[0] ?? request.url;
+  const effect = classifyVerifyFixtureRequest(request.method, request.url);
   if (path.startsWith("/api/")) {
-    if (unreadable && (path === "/api/todos" || path.startsWith("/api/todos/"))) {
+    if (coordinator.current?.todoRead === "unavailable" && (path === "/api/todos" || path.startsWith("/api/todos/"))) {
       return reply.code(503).send({ error: "the todo could not be read" });
+    }
+    if (coordinator.current?.decisionDelivery === "reject"
+      && request.method === "POST"
+      && path.startsWith("/api/todos/")
+      && path.endsWith("/decision")) {
+      return reply.code(503).send({ error: "the submission could not be delivered" });
     }
     return;
   }
-  if (path.startsWith("/assets/") || path === "/health") return;
-  const fixture = fixtureFor(scenarioOfUrl(request.url));
-  unreadable = fixture === "error";
-  await applyVerifyFixture(handle.client, fixture);
+  if (effect.kind === "select") await coordinator.apply(effect);
 });
 
 const address = await listenConsole(app, { host: "127.0.0.1", port });
