@@ -142,4 +142,11 @@ describe("the overview started by a verification round with its dynamic port", (
       expect(body).toContain("在 1 分钟内自动刷新");
     }, "/?state=waiting");
   });
+  it("@scenario S-R237511OV-01-todo leaves a handled item out of the waiting rail", async () => {
+    await inspectOverview((html) => {
+      const todos = section(html, 'id="todos-title"', 'id="active-title"');
+      expect(todos).not.toContain("已经处理的需求");
+      expect(todos).not.toContain("R-HANDLED");
+    });
+  });
 });
