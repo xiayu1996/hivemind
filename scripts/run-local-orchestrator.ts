@@ -1123,6 +1123,15 @@ async function main(): Promise<void> {
         try {
           await regressionSweep();
         } catch (error) {
+          const message = (error as Error).message;
+          // A provider that is busy is not a person's problem: the sweep is a
+          // safety net that runs again on the next idle cycle, and a rate limit
+          // clears on its own. Only a fault the classifier says needs somebody
+          // pages -- which includes anything it does not recognise.
+          if (!classifyError(message).needsHuman) {
+            console.warn(`regression sweep was skipped this cycle: ${message}`);
+            return;
+          }
           await reportP0("regression sweep failed", error);
         }
       });
