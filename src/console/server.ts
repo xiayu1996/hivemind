@@ -3,8 +3,8 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import type { ConsoleAccessPage, ConsoleAccessPolicy } from "./access-control.js";
-import { sendConsoleAccessDenied } from "./access-control.js";
+import type { ConsoleAccessPage, ConsoleAccessPageState, ConsoleAccessPolicy } from "./access-control.js";
+import { consoleAccessStateFromQuery, sendConsoleAccessDenied } from "./access-control.js";
 import { OVERVIEW_ENDPOINT, type OverviewReadPort, type OverviewTodoItem } from "./overview-contract.js";
 import type { ConsoleOverviewPage, OverviewPageState } from "./overview-page.js";
 import { createTodoPage, type ConsoleTodoPage, type TodoPageState } from "./todo-page.js";
@@ -41,9 +41,39 @@ function isTimeZone(value: string): boolean {
  * everything else is a read or write and gets the fixed JSON envelope.
  */
 function consoleRequestKind(request: FastifyRequest): "page" | "api" {
-  const path = request.url.split("?")[0] ?? "";
+  const path = requestedPath(request.url);
   if (request.method !== "GET" && request.method !== "HEAD") return "api";
   return path === "/health" || path.startsWith("/api/") ? "api" : "page";
+}
+
+/**
+ * Paths that serve the data-independent access page. They are readable from
+ * any peer because the page holds no console value and is the one screen an
+ * unconfigured or outside device is meant to see; the path is also what the
+ * interface contract maps `pages/access.html` to, so a reviewer can open the
+ * denial and its `?state=` previews directly without a configured network.
+ */
+const ACCESS_PAGE_PATHS: ReadonlySet<string> = new Set(["/access", "/access.html"]);
+
+function requestedPath(url: string): string {
+  try {
+    // A base only lets the WHATWG parser resolve a relative request target; no
+    // request is made to it, and the pathname is all that is read back.
+    return new URL(url, "http://console.local").pathname;
+  } catch {
+    // A request target the parser cannot read is still a page navigation the
+    // boundary must answer; treating it as the root keeps the refusal intact.
+    return "/";
+  }
+}
+
+function requestedAccessState(url: string): ConsoleAccessPageState | null {
+  try {
+    return consoleAccessStateFromQuery(new URL(url, "http://console.local").searchParams.get("state") ?? undefined);
+  } catch {
+    // Unparseable target: no preview state was asked for, so the plain denial.
+    return null;
+  }
 }
 
 export interface ConsoleDataSource extends OverviewReadPort {
@@ -95,11 +125,27 @@ export async function createConsoleServer(
   // method filter, static files, every route and every data or write port, so
   // a denied request cannot reach a value through any other door.
   app.addHook("onRequest", async (request, reply) => {
+    const path = requestedPath(request.url);
+    const readable = request.method === "GET" || request.method === "HEAD";
+    // The access page is served before the policy: it carries no console value,
+    // so every device may read it, and its `?state=` previews are how a
+    // reviewer sees the states that only a failing network check produces.
+    if (readable && ACCESS_PAGE_PATHS.has(path)) {
+      await reply.type("text/html; charset=utf-8").send(options.accessPage.renderDocument({
+        state: requestedAccessState(request.url) ?? "denied",
+        retryHref: "/",
+      }));
+      return;
+    }
     const decision = options.accessPolicy.authorize({
       remoteAddress: request.socket.remoteAddress ?? null,
     });
     if (decision.allowed) return;
-    await sendConsoleAccessDenied(reply, consoleRequestKind(request), decision, options.accessPage);
+    const state = readable ? requestedAccessState(request.url) : null;
+    await sendConsoleAccessDenied(reply, consoleRequestKind(request), decision, options.accessPage, {
+      ...(state === null ? {} : { state }),
+      retryHref: path,
+    });
   });
   const writable = new Set(options.configWriter
     ? ["/api/config/value", "/api/config/rollback"]

@@ -356,7 +356,11 @@ function renderNavigation(): string {
     + `<a class="nav-link" href="/costs">${copy.navCosts}</a>`
     + `<a class="nav-link" href="/roles">${copy.navRoles}</a>`
     + `<a class="nav-link" href="/records">${copy.navRecords}</a>`
-    + `</nav></aside>`
+    + `</nav>`
+    // The network note names the state the device is in and carries the way to
+    // the access page, which is otherwise only reachable by being denied: a
+    // device that passes the check has no other reason to see it.
+    + `<div class="network-note">${copy.networkNote} <a href="/access">${copy.networkNoteAction}</a></div></aside>`
     + `<main>`;
 }
 

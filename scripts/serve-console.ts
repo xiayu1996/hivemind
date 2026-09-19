@@ -55,15 +55,26 @@ await migrate(client);
 if (demoDirectory !== undefined) await seedOverviewDemo(client, Date.now());
 
 // The access range is configuration, not a flag: a range passed on the command
-// line would be a second place to widen the console. An unconfigured store
-// denies everything, which is the standalone entry telling the reviewer it has
-// not been told which home or office network may enter.
+// line would be a second place to widen the console. A store that was named
+// explicitly keeps exactly the ranges it was configured with, including none,
+// which denies every peer.
 const config = await ConfigStore.load(client);
+
+// The review store is opened on this machine and filled with demonstration
+// data so the console screen can be looked at; denying the loopback would make
+// that screen impossible to open. Only the temporary demonstration store is
+// widened, and only to the machine it is already private to, so the real
+// deployment keeps whatever `console.allowedNetworks` says.
+const DEMO_ALLOWED_NETWORKS = ["127.0.0.1/32", "::1/128"];
+const configuredNetworks = config.get("console.allowedNetworks");
+const allowedNetworks = demoDirectory !== undefined && configuredNetworks.length === 0
+  ? DEMO_ALLOWED_NETWORKS
+  : configuredNetworks;
 
 const app = await createConsoleServer(
   new LibsqlConsoleDataSource(client, async () => []),
   {
-    accessPolicy: createConsoleAccessPolicy({ allowedNetworks: config.get("console.allowedNetworks") }),
+    accessPolicy: createConsoleAccessPolicy({ allowedNetworks }),
     accessPage: createConsoleAccessPage(),
     uiRoot: join(ROOT, "console-ui"),
     overviewPage: createOverviewPage(),

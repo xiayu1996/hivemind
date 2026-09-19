@@ -44,6 +44,41 @@ export type ConsoleAccessPageState =
   | "error"
   | "waiting";
 
+/**
+ * The address of the page a retry should open once the device has joined an
+ * allowed network. It is always the console path the visitor asked for, never
+ * a value the caller supplied, so the access page cannot be turned into an
+ * open redirect. A path that is not a local absolute path is refused.
+ */
+function safeRetryTarget(value: string | undefined): string | null {
+  if (value === undefined) return null;
+  return value.startsWith("/") && !value.startsWith("//") ? value : null;
+}
+
+/**
+ * Maps the `?state=` preview parameter the interface contract defines onto an
+ * access state. The prototype names the four non-default states the way the
+ * content pages do (`empty`, `loading`, `error`, `waiting`); the direct state
+ * names are accepted too, so a reviewer can open any state by its own name.
+ */
+export function consoleAccessStateFromQuery(value: string | undefined): ConsoleAccessPageState | null {
+  if (value === undefined) return null;
+  switch (value) {
+    case "denied":
+    case "not_found":
+    case "checking":
+    case "error":
+    case "waiting":
+      return value;
+    case "empty":
+      return "not_found";
+    case "loading":
+      return "checking";
+    default:
+      return null;
+  }
+}
+
 export interface ConsoleAccessDeniedPayload {
   error: "console_access_denied";
   reason: ConsoleAccessDenialReason;
@@ -54,7 +89,7 @@ export interface ConsoleAccessDeniedPayload {
  * responses structurally unable to render operational content.
  */
 export interface ConsoleAccessPage {
-  renderDocument(input: { state: ConsoleAccessPageState }): string;
+  renderDocument(input: { state: ConsoleAccessPageState; retryHref?: string }): string;
 }
 
 /** An address as 4 or 16 bytes. An IPv4-mapped IPv6 address is folded to its
@@ -247,6 +282,27 @@ const ACCESS_STATE_COPY: Record<ConsoleAccessPageState, {
   },
 };
 
+function escapeAttribute(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+/** A path embedded in an inline script string. The value is already checked to
+ * be a local absolute path; the escapes keep it from ending the string or the
+ * element it sits in even if a future caller hands over something stranger. */
+function escapeScriptString(value: string): string {
+  return value
+    .replaceAll("\\", "\\\\")
+    .replaceAll("'", "\\'")
+    .replaceAll("<", "\\u003c")
+    .replaceAll("\n", "\\n")
+    .replaceAll("\r", "\\r");
+}
+
 const ACCESS_PAGE_STYLE = `:root{color-scheme:light}`
   + `body{margin:0;background:#f4f7fa;color:#172b3a;font-family:"IBM Plex Sans","Segoe UI",sans-serif;font-size:14px}`
   + `main{max-width:560px;margin:0 auto;padding:28px 28px;min-height:100vh;box-sizing:border-box}`
@@ -261,10 +317,18 @@ const ACCESS_PAGE_STYLE = `:root{color-scheme:light}`
 /** Creates the data-independent access-check page. */
 export function createConsoleAccessPage(): ConsoleAccessPage {
   return {
-    renderDocument({ state }: { state: ConsoleAccessPageState }): string {
+    renderDocument({ state, retryHref }: { state: ConsoleAccessPageState; retryHref?: string }): string {
       const copy = ACCESS_STATE_COPY[state];
+      const target = safeRetryTarget(retryHref);
+      const retryAction = target === null
+        // No known page to return to: a reload re-checks the same address, which
+        // is exactly what a visitor waiting for a network change has to do.
+        ? `location.reload()`
+        // The visitor asked for a console page; after the network check passes,
+        // that is the page they return to, rather than wherever a caller said.
+        : `location.assign('${escapeScriptString(target)}')`;
       const action = copy.retry
-        ? `<button type="button" onclick="location.reload()">\u91cd\u65b0\u68c0\u67e5\u7f51\u7edc</button>`
+        ? `<button type="button" data-retry-to="${escapeAttribute(target ?? "")}" onclick="${retryAction}">\u91cd\u65b0\u68c0\u67e5\u7f51\u7edc</button>`
         : "";
       return `<!doctype html>`
         + `<html lang="zh-CN"><head><meta charset="utf-8">`
@@ -283,15 +347,26 @@ export function createConsoleAccessPage(): ConsoleAccessPage {
  * Terminates a denied request as HTML for page navigation or as a fixed JSON
  * envelope for API and mutation calls. It must not call a data or write port.
  */
+export interface ConsoleAccessDeniedOptions {
+  /** A state to preview via `?state=`; absent means the plain denial. */
+  state?: ConsoleAccessPageState;
+  /** The console path the retry action returns to, when the visitor asked for one. */
+  retryHref?: string;
+}
+
 export async function sendConsoleAccessDenied(
   reply: FastifyReply,
   requestKind: "page" | "api",
   decision: Extract<ConsoleAccessDecision, { allowed: false }>,
   page: ConsoleAccessPage,
+  options: ConsoleAccessDeniedOptions = {},
 ): Promise<void> {
   reply.code(CONSOLE_ACCESS_DENIED_STATUS);
   if (requestKind === "page") {
-    await reply.type("text/html; charset=utf-8").send(page.renderDocument({ state: "denied" }));
+    await reply.type("text/html; charset=utf-8").send(page.renderDocument({
+      state: options.state ?? "denied",
+      ...(options.retryHref === undefined ? {} : { retryHref: options.retryHref }),
+    }));
     return;
   }
   const payload: ConsoleAccessDeniedPayload = { error: "console_access_denied", reason: decision.reason };

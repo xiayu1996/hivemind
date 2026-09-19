@@ -17,6 +17,8 @@
   "refreshPrefix": "最近刷新",
   "refreshJustNow": "刚刚",
   "refreshNote": "每 30 秒自动刷新",
+  "networkNote": "家庭或办公网络 · 已连接",
+  "networkNoteAction": "访问验证",
   "reloadLabel": "重新读取",
   "summaryLabel": "总览摘要",
   "sectionTodos": "等待本人处理",
