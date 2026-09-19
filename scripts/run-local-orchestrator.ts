@@ -72,7 +72,7 @@ import { EpicCompletion } from "../src/orchestrator/epic-completion.js";
 import { EpicMrDelivery } from "../src/vcs/epic-delivery.js";
 import { escalateParkedStories } from "../src/orchestrator/epic-escalation.js";
 import { enqueueEpicPages } from "../src/orchestrator/epic-page-projection.js";
-import { epicRegressionClean } from "../src/regression/epic-gate.js";
+import { epicRegressionClean, epicsAwaitingDelivery, unprovenScenarios } from "../src/regression/epic-gate.js";
 import { discoverMRPort } from "../src/vcs/mr/adapters.js";
 import { NotionStoryProjection } from "../src/notion/story-projection.js";
 import { NotionSyncCoordinator, type NotionSyncPoller } from "../src/notion/sync.js";
@@ -961,18 +961,20 @@ async function main(): Promise<void> {
     // Scenarios an Epic's review request is waiting on. Without this the gate
     // asks for evidence that only an idle host would ever produce, and a
     // delivered Epic could sit behind another Epic's Story indefinitely.
-    const awaitedByDelivery = (await handle.client.execute(
-      `SELECT r.scenario_id FROM scenario_registry r
-         JOIN epics e ON e.id = r.epic_id
-        WHERE e.state = 'EXECUTING'
-          AND e.mr_url IS NULL
-          AND NOT EXISTS (SELECT 1 FROM stories s WHERE s.epic_id = e.id AND s.state <> 'DELIVERED')
-          AND NOT EXISTS (
-            SELECT 1 FROM regression_runs u
-             WHERE u.scenario_id = r.scenario_id AND u.outcome = 'passed'
-          )
-        ORDER BY r.scenario_id`,
-    )).rows.map((row) => String(row.scenario_id));
+    // Asked at the revision the request would propose, which is the question
+    // the gate itself asks: "has it ever passed" let every scenario whose Epic
+    // head had since moved drop out of this set and wait for an idle host.
+    const awaitedByDelivery: string[] = [];
+    for (const epicId of await epicsAwaitingDelivery(handle.client, slug)) {
+      // No branch means nothing was ever published for this Epic, so there is
+      // no revision to prove anything at; the idle sweep still covers it.
+      const head = await processGitCommand
+        .run(repositoryPath, ["rev-parse", `epic/${epicId}`])
+        .then((sha) => sha.trim())
+        .catch(() => "");
+      if (head === "") continue;
+      awaitedByDelivery.push(...await unprovenScenarios(handle.client, epicId, head));
+    }
 
     const plan = planRegressionSweep({
       now: Date.now(),
