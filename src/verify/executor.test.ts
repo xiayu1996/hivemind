@@ -1,8 +1,8 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { testAgentSpec } from "../runner/agent-spec.testing.js";
 import type { GuardPolicy } from "../guard/policy.js";
 import type { PiRunner, PromptResult, RpcEvent } from "../runner/types.js";
@@ -10,6 +10,8 @@ import { BlindVerifyExecutor, type TreePinPort, type VerifyRecord } from "./exec
 
 // The executor writes the browser config under the worktree, so the paths must be real and disposable.
 const scratch = mkdtempSync(join(tmpdir(), "hivemind-verify-"));
+// Left behind, one per run: 886 of them had collected in the host's temp directory.
+afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 function assistant(content: string): RpcEvent {
   return { type: "message_end", message: { role: "assistant", content } };
