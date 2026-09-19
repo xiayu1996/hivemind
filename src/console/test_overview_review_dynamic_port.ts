@@ -157,4 +157,11 @@ describe("the overview started by a verification round with its dynamic port", (
       expect(active).not.toContain("状态投影核对");
     });
   });
+  it("@scenario S-R237511OV-01-failures leaves a recovered historical failure out of the current failure section", async () => {
+    await inspectOverview((html) => {
+      const failures = section(html, 'id="failures-title"', 'id="completed-title"');
+      expect(failures).not.toContain("已经恢复的导出");
+      expect(failures).not.toContain("旧失败");
+    });
+  });
 });
