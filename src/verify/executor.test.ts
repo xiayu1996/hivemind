@@ -241,6 +241,49 @@ describe("BlindVerifyExecutor", () => {
     });
   });
 
+  // The verifier is the only session standing in front of the page, so a
+  // missing page structure record is asked for there. Sent to CODE instead it
+  // is a finding nobody can act on, and the round repeats until the card parks.
+  it("asks the verifier for the page structure record it judged by, in its own session", async () => {
+    await mkdir(input().evidencePath, { recursive: true });
+    const claimed = { type: "test_result", scenarioId: "S-EPIC-01-unit", status: "passed" };
+    const replies = [
+      [claimed, assistant(JSON.stringify({ scenarios: [{ id: "S-EPIC-01-unit", status: "passed" }] }))],
+      [assistant(JSON.stringify({ scenarios: [
+        { id: "S-EPIC-01-unit", status: "passed", snapshots: ["page-late.yml"] },
+      ] }))],
+    ];
+    const asked: string[] = [];
+    const late = {
+      ...runner(),
+      prompt: vi.fn(async (message: string): Promise<PromptResult> => {
+        asked.push(message);
+        writeFileSync(join(input().evidencePath, "page-late.yml"), '- heading "运行控制台" [level=1] [ref=e1]');
+        return {
+          settled: true,
+          failure: null,
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, costUsd: 0 },
+          events: replies[Math.min(asked.length - 1, replies.length - 1)]!,
+        };
+      }),
+    };
+    const result = await new BlindVerifyExecutor(
+      { create: () => late },
+      { insert: async () => undefined },
+      pins(),
+      roundAround(),
+    ).run({
+      ...input(),
+      visibleRequirements: new Map([["S-EPIC-01-unit", [{ role: "heading", text: "运行控制台" }]]]),
+    });
+
+    expect(asked).toHaveLength(2);
+    expect(asked[1]).toContain("S-EPIC-01-unit");
+    expect(asked[1]).toContain("snapshots");
+    expect(result.record.verdict).toBe("accepted");
+    expect(result.record.failedScenarios).toEqual([]);
+  });
+
   it("leaves a scenario passing when its snapshot carries what it declared", async () => {
     await mkdir(input().evidencePath, { recursive: true });
     const events = [
