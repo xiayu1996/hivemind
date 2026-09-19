@@ -670,6 +670,32 @@ async function main(): Promise<void> {
     }
   };
 
+  /**
+   * Background work whose failure is reported rather than raised, and only
+   * when somebody has to look at it.
+   *
+   * Two questions, not one. `step` already skips a fault that retrying clears,
+   * but an inner catch that reports first never lets it: a Notion request that
+   * hit its deadline during decomposition paged the operator about a request
+   * the next cycle would have made successfully. So the classifier is asked
+   * whether a person is needed -- which it answers yes to for anything it does
+   * not recognise -- and only then is the page sent; everything else is a line
+   * in the log and another try next cycle.
+   */
+  const reportedStep = async (name: string, run: () => Promise<void>): Promise<void> =>
+    step(name, async () => {
+      try {
+        await run();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!classifyError(message).needsHuman) {
+          console.warn(`${name} was skipped this cycle: ${message}`);
+          return;
+        }
+        await reportP0(`${name} failed`, error);
+      }
+    });
+
   const inFlight = new Map<string, Promise<void>>();
   // Set the moment shutdown starts. The signal reaches the whole process group,
   // so a Story's pi dies of it too, and the error that surfaces here is
@@ -1117,23 +1143,11 @@ async function main(): Promise<void> {
       // split out of the others. Raising it ended the cycle before dispatch,
       // so a single spent account stopped every Story on the host and kept
       // stopping it, one silent cycle at a time.
-      await step("epic decomposition", async () => {
-        try {
-          await decomposeWaitingEpic();
-        } catch (error) {
-          await reportP0("epic decomposition failed", error);
-        }
-      });
+      await reportedStep("epic decomposition", decomposeWaitingEpic);
       // Same reason again: Epic upkeep is background work about Epics, and a
       // branch or a head recheck it cannot finish says nothing about the
       // Stories waiting to be dispatched below it.
-      await step("epic maintenance", async () => {
-        try {
-          await maintainEpics();
-        } catch (error) {
-          await reportP0("epic maintenance failed", error);
-        }
-      });
+      await reportedStep("epic maintenance", maintainEpics);
       // Before dispatch, not after. Called after, it saw the Stories this very
       // cycle had just put in flight and gave way to them; and the cycle
       // returns early when there is nothing to dispatch, which is exactly when
@@ -1144,22 +1158,7 @@ async function main(): Promise<void> {
       // foreground; letting its failure end the cycle stopped intake,
       // projection and dispatch for every Story on the host because one Epic's
       // worktree was in a state git would not allow.
-      await step("regression sweep", async () => {
-        try {
-          await regressionSweep();
-        } catch (error) {
-          const message = (error as Error).message;
-          // A provider that is busy is not a person's problem: the sweep is a
-          // safety net that runs again on the next idle cycle, and a rate limit
-          // clears on its own. Only a fault the classifier says needs somebody
-          // pages -- which includes anything it does not recognise.
-          if (!classifyError(message).needsHuman) {
-            console.warn(`regression sweep was skipped this cycle: ${message}`);
-            return;
-          }
-          await reportP0("regression sweep failed", error);
-        }
-      });
+      await reportedStep("regression sweep", regressionSweep);
 
       const slugs = servable.map((repository) => repository.slug);
       const rows = (await handle.client.execute({
