@@ -47,10 +47,99 @@ export interface RoleConfigurationDifference {
   model: RoleFieldDifference<RoleModelReference>;
 }
 
-export declare function compareRoleConfigurationVersions(
+/**
+ * Sentence boundaries, terminator included. Diffing whole sentences rather than
+ * characters keeps a rewritten sentence readable as one added and one removed
+ * line instead of a cloud of fragments, and joining the segments back always
+ * reproduces the prompt byte-for-byte.
+ */
+const PROMPT_SENTENCE = /[^。！？!?\n]*[。！？!?\n]|[^。！？!?\n]+$/g;
+
+function splitPromptIntoSentences(prompt: string): string[] {
+  return prompt.match(PROMPT_SENTENCE) ?? [];
+}
+
+function compareReferences(
+  current: RoleModelReference,
+  previous: RoleModelReference,
+): RoleFieldDifference<RoleModelReference> {
+  return {
+    current,
+    previous,
+    changed: current.id !== previous.id || current.label !== previous.label,
+  };
+}
+
+interface PromptSegments {
+  current: CurrentPromptDifferenceSegment[];
+  previous: PreviousPromptDifferenceSegment[];
+}
+
+/**
+ * Ordered diff of the two prompts' sentences. Reads order from the longest
+ * common subsequence, so a sentence only present in the current prompt is
+ * `added`, one only in the previous prompt is `removed`, and shared sentences
+ * stay `unchanged` on both sides.
+ */
+function diffPromptSentences(current: readonly string[], previous: readonly string[]): PromptSegments {
+  const rows = current.length;
+  const columns = previous.length;
+  const lengths: number[][] = Array.from({ length: rows + 1 }, () => new Array<number>(columns + 1).fill(0));
+  for (let row = rows - 1; row >= 0; row -= 1) {
+    for (let column = columns - 1; column >= 0; column -= 1) {
+      lengths[row]![column] = current[row] === previous[column]
+        ? lengths[row + 1]![column + 1]! + 1
+        : Math.max(lengths[row + 1]![column]!, lengths[row]![column + 1]!);
+    }
+  }
+
+  const segments: PromptSegments = { current: [], previous: [] };
+  let row = 0;
+  let column = 0;
+  while (row < rows && column < columns) {
+    if (current[row] === previous[column]) {
+      segments.current.push({ kind: "unchanged", text: current[row]! });
+      segments.previous.push({ kind: "unchanged", text: previous[column]! });
+      row += 1;
+      column += 1;
+      continue;
+    }
+    // Equal-length options leave the extra current sentence as added, which is
+    // the side a person reads first and the only one the change belongs to.
+    if (lengths[row + 1]![column]! >= lengths[row]![column + 1]!) {
+      segments.current.push({ kind: "added", text: current[row]! });
+      row += 1;
+    } else {
+      segments.previous.push({ kind: "removed", text: previous[column]! });
+      column += 1;
+    }
+  }
+  while (row < rows) {
+    segments.current.push({ kind: "added", text: current[row]! });
+    row += 1;
+  }
+  while (column < columns) {
+    segments.previous.push({ kind: "removed", text: previous[column]! });
+    column += 1;
+  }
+  return segments;
+}
+
+export function compareRoleConfigurationVersions(
   current: RoleConfigurationVersion,
   previous: RoleConfigurationVersion,
-): RoleConfigurationDifference;
+): RoleConfigurationDifference {
+  const segments = diffPromptSentences(
+    splitPromptIntoSentences(current.prompt),
+    splitPromptIntoSentences(previous.prompt),
+  );
+  return {
+    currentPrompt: segments.current,
+    previousPrompt: segments.previous,
+    provider: compareReferences(current.provider, previous.provider),
+    model: compareReferences(current.model, previous.model),
+  };
+}
 
 export interface RoleVersionPair {
   roleId: RoleId;
@@ -235,19 +324,43 @@ export function formatRoleVersionTime(savedAt: string): string {
     + ` ${pad(parsed.getUTCHours())}:${pad(parsed.getUTCMinutes())} UTC`;
 }
 
+function renderCurrentPromptNotes(difference: RoleConfigurationDifference | null): string {
+  if (difference === null) return "";
+  const notes = difference.currentPrompt
+    .filter((segment) => segment.kind === "added")
+    .map((segment) => `<span class="diff-add">新增：${escapeHtml(segment.text)}</span>`)
+    .join("");
+  return notes === "" ? "" : `<p class="diff-notes">${notes}</p>`;
+}
+
+function renderPreviousPromptNotes(difference: RoleConfigurationDifference | null): string {
+  if (difference === null) return "";
+  const notes = difference.previousPrompt
+    .filter((segment) => segment.kind === "removed")
+    .map((segment) => `<span class="diff-remove">删除：${escapeHtml(segment.text)}</span>`)
+    .join("");
+  return notes === "" ? "" : `<p class="diff-notes">${notes}</p>`;
+}
+
+function renderReferenceChange(field: RoleFieldDifference<RoleModelReference>): string {
+  if (!field.changed) return "";
+  return ` <span class="diff-change">上一版：${escapeHtml(field.previous.label)} 已变更</span>`;
+}
+
 function renderCurrentPanel(pair: RoleVersionPair): string {
   const version = pair.current;
+  const difference = pair.difference;
   return `<section class="panel" aria-labelledby="current-title"><div class="section-head">`
     + `<div><div class="version-label">当前版 v${version.version}</div><h2 id="current-title">编辑当前配置</h2></div>`
     + `<span class="status running" role="status">使用中</span></div>`
     + `<div class="section"><span class="field-label">版本时间</span>`
     + `<p><time datetime="${escapeHtml(version.savedAt)}">${escapeHtml(formatRoleVersionTime(version.savedAt))}</time></p></div>`
     + `<div class="section"><span class="field-label">模型供应商</span>`
-    + `<p>${escapeHtml(version.provider.label)}</p></div>`
+    + `<p>${escapeHtml(version.provider.label)}${difference === null ? "" : renderReferenceChange(difference.provider)}</p></div>`
     + `<div class="section"><span class="field-label">模型</span>`
-    + `<p>${escapeHtml(version.model.label)}</p></div>`
+    + `<p>${escapeHtml(version.model.label)}${difference === null ? "" : renderReferenceChange(difference.model)}</p></div>`
     + `<div class="section"><span class="field-label">角色 Prompt</span>`
-    + `<div class="prompt-box">${escapeHtml(version.prompt)}</div></div>`
+    + `<div class="prompt-box">${escapeHtml(version.prompt)}</div>${renderCurrentPromptNotes(difference)}</div>`
     + `</section>`;
 }
 
@@ -258,16 +371,21 @@ function renderPreviousPanel(pair: RoleVersionPair): string {
       + `<div><h2 id="previous-title">上一版配置</h2></div></div>`
       + `<div class="section"><p>这个角色还没有上一版配置。</p></div></section>`;
   }
+  const difference = pair.difference;
+  const provider = difference !== null && difference.provider.changed
+    ? `<span class="diff-remove">${escapeHtml(version.provider.label)}</span> <span class="diff-change">已变更</span>`
+    : escapeHtml(version.provider.label);
+  const model = difference !== null && difference.model.changed
+    ? `<span class="diff-remove">${escapeHtml(version.model.label)}</span> <span class="diff-change">已变更</span>`
+    : escapeHtml(version.model.label);
   return `<section class="panel" aria-labelledby="previous-title"><div class="section-head">`
     + `<div><div class="version-label">上一版 v${version.version}</div><h2 id="previous-title">上一版配置</h2></div></div>`
     + `<div class="section"><span class="field-label">版本时间</span>`
     + `<p><time datetime="${escapeHtml(version.savedAt)}">${escapeHtml(formatRoleVersionTime(version.savedAt))}</time></p></div>`
-    + `<div class="section"><span class="field-label">模型供应商</span>`
-    + `<p>${escapeHtml(version.provider.label)}</p></div>`
-    + `<div class="section"><span class="field-label">模型</span>`
-    + `<p>${escapeHtml(version.model.label)}</p></div>`
+    + `<div class="section"><span class="field-label">模型供应商</span><p>${provider}</p></div>`
+    + `<div class="section"><span class="field-label">模型</span><p>${model}</p></div>`
     + `<div class="section"><span class="field-label">角色 Prompt</span>`
-    + `<div class="prompt-box">${escapeHtml(version.prompt)}</div></div>`
+    + `<div class="prompt-box">${escapeHtml(version.prompt)}</div>${renderPreviousPromptNotes(difference)}</div>`
     + `</section>`;
 }
 
@@ -325,6 +443,7 @@ const ROLE_CONFIGURATION_PAGE_STYLE = [
   ".section{margin-top:12px}.section-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.section-head h2{font-size:18px;margin:0}",
   ".field-label,.version-label{color:var(--color-text-muted);font-size:12px}.version-label{font-family:var(--font-numeric)}",
   ".prompt-box{white-space:pre-wrap;background:var(--color-page);border:1px solid var(--color-border);border-radius:var(--radius-control);padding:12px;margin-top:4px}",
+  ".diff-notes{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 0}",
   ".diff-add{background:var(--color-surface-attention);color:var(--color-attention);border-radius:2px;padding:0 2px}",
   ".diff-remove{background:var(--color-surface-danger);color:var(--color-danger);border-radius:2px;padding:0 2px}",
   ".diff-change{color:var(--color-attention)}",
