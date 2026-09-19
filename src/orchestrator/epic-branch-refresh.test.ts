@@ -84,13 +84,29 @@ describe("@scenario S-M2-06-freshness", () => {
     expect(git.run).toHaveBeenCalledWith("integration", ["merge", "--no-ff", "origin/main"]);
   });
 
-  it("records skipped before the daily interval elapses from the durable successful event", async () => {
-    await client.execute("INSERT INTO epic_branch_refresh_events (epic_id, outcome, source_revision, ts) VALUES ('M2', 'succeeded', 'old-main', 50000000)");
-    const git = { run: vi.fn(async (_cwd: string, args: string[]) => args[0] === "branch" ? "epic/M2\n" : "new-main\n") };
+  it("skips a branch that has already answered for this main", async () => {
+    await client.execute("INSERT INTO epic_branch_refresh_events (epic_id, outcome, source_revision, ts) VALUES ('M2', 'succeeded', 'main-revision', 50000000)");
+    const git = { run: vi.fn(async (_cwd: string, args: string[]) => args[0] === "branch" ? "epic/M2\n" : "main-revision\n") };
     const refresh = new EpicBranchFreshness(client, { worktreePath: "integration", git, intervalMs: 86_400_000, now: () => 100_000_000 });
 
     await expect(refresh.tick()).resolves.toEqual([{ epicId: "M2", outcome: "skipped" }]);
     expect(git.run).not.toHaveBeenCalledWith("integration", ["merge", "--no-ff", "origin/main"]);
+  });
+
+  it("takes a main that has moved without waiting out the interval", async () => {
+    // A branch that waits out a day takes whatever main gained in it at once.
+    // R237511DT merged cleanly on 09-18, waited, and conflicted on the next try.
+    await client.execute("INSERT INTO epic_branch_refresh_events (epic_id, outcome, source_revision, ts) VALUES ('M2', 'succeeded', 'old-main', 99000000)");
+    const git = { run: vi.fn(async (_cwd: string, args: string[]) => {
+      if (args[0] === "branch") return "epic/M2\n";
+      if (args[0] === "status") return "";
+      if (args[0] === "rev-parse") return "new-main\n";
+      return "";
+    }) };
+    const refresh = new EpicBranchFreshness(client, { worktreePath: "integration", git, intervalMs: 86_400_000, now: () => 100_000_000 });
+
+    await expect(refresh.tick()).resolves.toEqual([{ epicId: "M2", outcome: "succeeded" }]);
+    expect(git.run).toHaveBeenCalledWith("integration", ["merge", "--no-ff", "origin/main"]);
   });
 });
 
