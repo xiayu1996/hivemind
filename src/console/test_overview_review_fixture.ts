@@ -225,4 +225,9 @@ describe("the overview a verification round opens", () => {
     expect(completed).not.toContain("旧任务");
     expect(completed).not.toContain("旧需求归档");
   });
+  it("@scenario S-R237511OV-01-refresh replaces the old stage rather than showing both", async () => {
+    const refreshed = JSON.parse(await get("/overview/sections")) as { body: string };
+    expect(refreshed.body).not.toContain('aria-label="重试退避 任务 VERIFY 运行中"');
+    expect(refreshed.body).toContain('aria-label="异常归类 任务 VERIFY 运行中"');
+  });
 });
