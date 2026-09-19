@@ -84,7 +84,7 @@ import { PlanApprovalStore } from "../src/orchestrator/plan-approval.js";
 import { DispatchQueue } from "../src/queue/dispatch.js";
 import { CostLedger } from "../src/observability/cost-ledger.js";
 import { CANONICAL_CAPTURE_ENV } from "../src/observability/capture-contract.js";
-import { finishLaneCapture, laneCapturePath } from "../src/observability/lane-capture.js";
+import { finishLaneCapture, laneCapturePath, packFinishedCaptures } from "../src/observability/lane-capture.js";
 import { createConsoleServer, listenConsole } from "../src/console/server.js";
 import { LibsqlConsoleDataSource } from "../src/console/libsql-data-source.js";
 import { ProjectionService } from "../src/observability/projections/service.js";
@@ -824,6 +824,11 @@ async function main(): Promise<void> {
         // and only the last two outcomes charge anything. The reason is
         // written to the card either way, because a card that stops here has
         // nothing else recorded against it.
+        // This card has no live run now, so every capture under it is
+        // finished. A run that died never reached `writeEvidence`, so nothing
+        // else will ever fold these into a log or pack them, and they are the
+        // only record of what that run sent -- 405MB of them had accumulated.
+        await packFinishedCaptures(location.evidencePath).catch(() => 0);
         const decision = await settleDispatchFailure({ store, config, cardId, error, stopping });
         switch (decision.kind) {
           case "cancelled":
