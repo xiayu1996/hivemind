@@ -90,4 +90,15 @@ describe("the overview started by a verification round with its dynamic port", (
       expect(active).toContain('aria-label="重试退避 任务 CODE 运行中"');
     });
   });
+  it("@scenario S-R237511OV-01-costs shows the seven-day dollar summary and continuing overrun after allocating the review port", async () => {
+    await inspectOverview((html) => {
+      const summary = section(html, '<aside class="stack"', "</aside>");
+      expect(summary).toContain("USD $20.00");
+      expect(summary).toContain("统计范围");
+      expect(summary).toContain("Asia/Shanghai");
+      expect(summary).toContain("已花 USD $20.00 / 上限 USD $15.00");
+      expect(summary).toContain("已超限");
+      expect(summary).toContain("工作仍继续");
+    });
+  });
 });
