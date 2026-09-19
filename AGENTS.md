@@ -57,6 +57,8 @@ npm run requirements:run                       # 产品经理常驻（与上者�
 
 npx tsx scripts/repository-add.ts <git-url> [--default-branch main]   # 注册一个仓库并在本机拉出 checkout
 
+npx tsx scripts/serve-console.ts [--port 4319] [--db <url>]          # 只起控制台（只读），供 ui/e2e 场景在浏览器里核验；库由 HIVEMIND_DB_URL 指定
+
 deploy/linux/install.sh --repository-url <git-url>   # 部署唯一入口，幂等；Ubuntu / Arch(Omarchy) / WSL2 Ubuntu 同一条命令
 
 npx tsx scripts/catalog-snapshot.ts <provider>   # 采 provider 目录快照（该机需有这家凭据）
@@ -76,7 +78,7 @@ npx tsx scripts/replay-phase.ts --card-id <id> --phase CODE --print-prompt      
 Node `>=26`，ESM，包管理用 npm。部署只有 Linux 一条路：Windows 主机跑在 WSL2 Ubuntu 里，不再有原生 Windows 路径。
 `deploy/linux/install.sh` 是唯一入口，每个阶段先查再做，人工步骤（凭据、pi 登录、gh 登录）原地停下、重跑续接；见 [docs/runbooks/linux-single-node.md](docs/runbooks/linux-single-node.md)。
 pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src/runner/pi-binary.ts` 取，shell 经 `node -p` 取，不得再出现字面版本号。
-`scripts/` 只放长期入口（run-* / smoke-* / preflight / health-check / notion-bootstrap / install-pi / pi-login / catalog-snapshot / provider-add / repository-add / inspect-round / replay-phase）；一次性排障脚本用完即删，不进仓库。
+`scripts/` 只放长期入口（run-* / smoke-* / serve-console / preflight / health-check / notion-bootstrap / install-pi / pi-login / catalog-snapshot / provider-add / repository-add / inspect-round / replay-phase）；一次性排障脚本用完即删，不进仓库。
 
 ### 本地验证顺序
 

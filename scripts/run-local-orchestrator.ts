@@ -2,7 +2,7 @@ import type { Row } from "@libsql/client";
 import { execFile } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
@@ -182,6 +182,15 @@ function repositoryIdFor(slug: string): string {
   return checkoutKey(slug);
 }
 
+/** A `file:` URL made absolute against this process's cwd; anything else is
+ * left as it is, since a remote libsql URL has no cwd to resolve against. */
+function absoluteDbUrl(url: string): string {
+  if (!url.startsWith("file:")) return url;
+  const path = url.slice("file:".length);
+  const [file, query] = path.split(/(?=\?)/);
+  return isAbsolute(file!) ? url : `file:${resolve(file!)}${query ?? ""}`;
+}
+
 async function main(): Promise<void> {
   const stored = await loadSecretsFile();
   const token = process.env.NOTION_TOKEN ?? stored.get("NOTION_TOKEN");
@@ -209,7 +218,11 @@ async function main(): Promise<void> {
   const once = process.argv.includes("--once");
   if (!Number.isInteger(intervalMs) || intervalMs < 1_000) throw new Error("--interval-ms must be at least 1000");
 
-  const dbUrl = process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db";
+  // Absolute, because this value is handed to child processes that do not share
+  // this cwd: a Story run resolves it from the repository root, but the
+  // application a verification round starts resolves it from the worktree under
+  // verification, where data/ does not exist at all.
+  const dbUrl = absoluteDbUrl(process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db");
   const handle = openDb(dbUrl);
   await migrate(handle.client);
   // Before the first card is picked up. A database an older 0001 created
