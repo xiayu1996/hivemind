@@ -116,6 +116,35 @@ export async function attributeCard(
   if (owner === null) return attribution;
 
   await store.attribute(card.scenarioId, card.failureSignature, owner);
+  await reopenOwner(client, card, owner, attribution.kind, attribution.probes, now);
+  return attribution;
+}
+
+/**
+ * Sends a card's Story back to work on it.
+ *
+ * Separate from the bisect because a card that already names its owner has
+ * nothing left to decide: the sweep failed the scenario again at this
+ * revision, the owner is settled, and the only question is whether that Story
+ * is idle. A delivered owner with an open card against it is the state nothing
+ * used to look at -- S-R237511OV-01 answered its cards once, was stopped
+ * mid-lane and released as an ordinary round, delivered without them, and then
+ * held its Epic at the review gate for seven hours while every sweep paid to
+ * fail the same two scenarios again (2026-09-19). The reopen budget bounds how
+ * often this may happen, and the worker stops the card for a person when it
+ * runs out.
+ *
+ * Returns false when the Story was no longer delivered, which means it is
+ * already back in the pipeline and will carry the fix.
+ */
+export async function reopenOwner(
+  client: Client,
+  card: { scenarioId: string; failureSignature: string },
+  owner: string,
+  origin: string,
+  probes: number,
+  now: () => number = Date.now,
+): Promise<boolean> {
   const time = now();
   // Priority 0 puts it ahead of every ordinary card: a known regression on the
   // Epic head blocks everything else landing there.
@@ -140,16 +169,11 @@ export async function attributeCard(
         JSON.stringify({
           scenarioId: card.scenarioId,
           failureSignature: card.failureSignature,
-          origin: attribution.kind,
-          probes: attribution.probes,
+          origin,
+          probes,
         }),
       ],
     },
   ], "write");
-  if (update?.rowsAffected !== 1) {
-    // The Story is already back in the pipeline; the card keeps the attribution
-    // and the running card will carry the fix.
-    return attribution;
-  }
-  return attribution;
+  return update?.rowsAffected === 1;
 }

@@ -167,6 +167,34 @@ export class RegressionStore {
     return rows.map(toOpenCard);
   }
 
+  /**
+   * Open cards whose owner is idle, among the scenarios named.
+   *
+   * A card is answered by its Story going back through the pipeline, and the
+   * sweep is what closes it. Between those two an owner can reach DELIVERED
+   * with the card still open -- the fix did not make the scenario pass, or the
+   * lane was lost on the way -- and nothing looked at that state: the card was
+   * owned, so the attribution path skipped it, and the Story was delivered, so
+   * no round was running to carry it. S-R237511OV-01 sat there for seven hours
+   * holding its Epic at the review gate while every sweep paid to fail the
+   * same two scenarios again.
+   *
+   * Only DELIVERED counts as idle. A Story anywhere else is either working or
+   * stopped for a person, and both already have somebody to carry the card.
+   */
+  async idleOwnedCards(scenarioIds: readonly string[]): Promise<OpenRegressionCard[]> {
+    if (scenarioIds.length === 0) return [];
+    const rows = (await this.client.execute({
+      sql: `SELECT c.scenario_id, c.failure_signature, c.failure_text, c.attributed_story
+              FROM regression_cards c JOIN stories s ON s.id = c.attributed_story
+             WHERE c.resolved_at IS NULL AND s.state = 'DELIVERED'
+               AND c.scenario_id IN (${scenarioIds.map(() => "?").join(", ")})
+             ORDER BY c.created_at, c.scenario_id`,
+      args: [...scenarioIds],
+    })).rows;
+    return rows.map(toOpenCard);
+  }
+
   /** The open cards a REGRESSION_FIX round of this Story has to answer for. */
   async openCardsForStory(storyId: string): Promise<OpenRegressionCard[]> {
     const rows = (await this.client.execute({
