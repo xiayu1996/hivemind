@@ -957,6 +957,28 @@ describe("SingleStoryWorker inside an Epic", () => {
     expect(delivery.deliver).not.toHaveBeenCalled();
   });
 
+  it("counts a rebase conflict, with the ground the two Stories wanted", async () => {
+    const { phases, verifier, delivery, projection } = ports();
+    const integration = {
+      integrate: vi.fn(async () => ({
+        kind: "conflict",
+        reason: "CONFLICT in src/a",
+        integrationBranch: "epic/EPIC1",
+        files: ["src/a/one.ts", "src/a/two.ts"],
+      })),
+    };
+    const recorded: Array<{ kind: string; detail: string }> = [];
+    const friction = { record: async (input: { kind: string; detail: string }) => { recorded.push(input); } };
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier, delivery, projection, { integration, friction });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "CODE" });
+    expect(recorded).toMatchObject([{ kind: "merge_conflict" }]);
+    expect(JSON.parse(recorded[0]!.detail)).toEqual({
+      branch: "epic/EPIC1",
+      files: ["src/a/one.ts", "src/a/two.ts"],
+    });
+  });
+
   it("spends a round on a merge its own work broke, and stops on the budget", async () => {
     const { phases, verifier, delivery, projection } = ports();
     const integration = {

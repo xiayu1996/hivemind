@@ -72,6 +72,7 @@ describe("EpicMergeFlow", () => {
       kind: "conflict",
       integrationBranch: "epic/E-1",
       reason: "rebase failed",
+      files: ["src/vcs/merge-flow.ts"],
     });
     expect(calls).toContainEqual({ cwd: "story", args: ["diff", "--name-only", "--diff-filter=U"] });
     expect(verify).not.toHaveBeenCalled();

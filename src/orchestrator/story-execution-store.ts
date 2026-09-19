@@ -37,6 +37,8 @@ const DISPATCH_FAILURE_MESSAGE_LIMIT = 4000;
  */
 export interface MergeRejectionDetail {
   attribution?: "story_regression" | "baseline_failing" | "environment";
+  /** Paths the rebase could not reconcile, sorted. */
+  conflictedFiles?: readonly string[];
   failures?: readonly string[];
   failedChecks?: readonly string[];
   baseRevision?: string;
@@ -1108,9 +1110,17 @@ export class StoryExecutionStore {
   }
 
   /** A rebase conflict remains in the Story worktree for the CODE agent; it is
-   * not a delivery and must not be hidden behind an automatic choice. */
-  recordMergeConflict(cardId: string, runId: string, reason: string): Promise<void> {
-    return this.returnMergeToCode(cardId, runId, "merge.conflict", reason);
+   * not a delivery and must not be hidden behind an automatic choice. The
+   * files travel with it: they are what the next round has to reconcile, and
+   * what a count of these conflicts is worth reading by. */
+  recordMergeConflict(
+    cardId: string,
+    runId: string,
+    reason: string,
+    files: readonly string[] = [],
+  ): Promise<void> {
+    return this.returnMergeToCode(cardId, runId, "merge.conflict", reason,
+      files.length > 0 ? { conflictedFiles: files } : undefined);
   }
 
   /** Re-verifying the affected scenarios on the Epic head failed. The Story is
@@ -1765,6 +1775,7 @@ export class StoryExecutionStore {
           const event = JSON.parse(stringValue(row.data, "merge event")) as {
             reason?: string;
             failures?: string[];
+            conflictedFiles?: string[];
           };
           const headline = String(row.type) === "merge.conflict"
             ? "rebase onto the Epic head conflicted"
@@ -1775,7 +1786,10 @@ export class StoryExecutionStore {
             phase: "MERGE",
             reason: `${headline}: ${String(event.reason ?? "")}`.slice(0, 800),
           };
-          if (event.failures && event.failures.length > 0) rejection.failures = event.failures;
+          // For a conflict the paths are the names: a round handed git's prose
+          // alone has to guess which files the two Stories both touched.
+          const named = event.failures ?? event.conflictedFiles;
+          if (named && named.length > 0) rejection.failures = named;
           return rejection;
         }),
       ],
