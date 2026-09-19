@@ -195,4 +195,13 @@ describe("the overview a verification round opens", () => {
     expect(await get("/?state=waiting")).toContain("运行结果尚未产生");
     expect(html).toContain("重试退避");
   });
+  it("@scenario S-R237511OV-01-costs states the amount, its range and an overrun that keeps working", () => {
+    const summary = section(html, '<aside class="stack"', "</aside>");
+    expect(summary).toContain("USD $20.00");
+    expect(summary).toContain("统计范围");
+    expect(summary).toContain("Asia/Shanghai");
+    expect(summary).toContain("已花 USD $20.00 / 上限 USD $15.00");
+    expect(summary).toContain("已超限");
+    expect(summary).toContain("工作仍继续");
+  });
 });
