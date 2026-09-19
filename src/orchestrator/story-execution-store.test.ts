@@ -811,4 +811,25 @@ describe("StoryExecutionStore regression lane across a stop", () => {
       .toMatchObject({ state: "SHAPE", phase: "SHAPE" });
     client.close();
   });
+
+  it("records the integration branch when it is published and never rewrites one", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    let time = 1_000;
+    const store = new StoryExecutionStore(client, () => time++);
+    await client.execute({
+      sql: `INSERT INTO epics (id, notion_page_id, title, state, created_at, updated_at)
+            VALUES ('E-1', 'page-e1', 'A batch', 'EXECUTING', 1, 1)`,
+      args: [],
+    });
+
+    await store.recordIntegrationBranch("E-1", "epic/E-1");
+    expect((await client.execute("SELECT integration_branch FROM epics WHERE id = 'E-1'")).rows[0])
+      .toMatchObject({ integration_branch: "epic/E-1" });
+
+    await store.recordIntegrationBranch("E-1", "epic/somewhere-else");
+    expect((await client.execute("SELECT integration_branch FROM epics WHERE id = 'E-1'")).rows[0])
+      .toMatchObject({ integration_branch: "epic/E-1" });
+    client.close();
+  });
 });
