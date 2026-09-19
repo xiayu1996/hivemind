@@ -234,4 +234,8 @@ describe("the overview a verification round opens", () => {
     expect(html).not.toContain("别的运行需求");
     expect(html).not.toContain("别的运行任务");
   });
+  it("@scenario S-R237511OV-01-states does not show live content behind a forced state and offers a re-read", async () => {
+    expect(await get("/?state=empty")).not.toContain("重试退避");
+    expect(await get("/?state=error")).toContain("重新读取");
+  });
 });
