@@ -95,7 +95,7 @@ import { StoryExecutionStore } from "../src/orchestrator/story-execution-store.j
 import { absoluteDbUrl, openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
 import { assertSchemaCurrent } from "../src/persistence/schema-fingerprint.js";
-import { createWorktree, locateWorktree, worktreeLayout } from "../src/vcs/worktree.js";
+import { createWorktree, locateWorktree, retireWorktree, worktreeLayout } from "../src/vcs/worktree.js";
 import { publishEpicBranch } from "../src/vcs/epic-branch.js";
 import { processGitCommand } from "../src/vcs/story-delivery.js";
 import { checkoutKey, checkoutPath, ensureCheckout, processRemoteGit, remoteDefaultBranch } from "../src/vcs/repository-checkout.js";
@@ -863,6 +863,12 @@ async function main(): Promise<void> {
       await reconcileProjections();
       const completed = await store.getStory(cardId);
       if (completed.state === "NEEDS_INPUT") await announceStop(cardId);
+      // Delivered means the work is on the Epic branch, so this tree is spare.
+      // It is a full checkout with the repository's dependencies in it, and
+      // keeping every one of them is how the work root reached 3.1GB of trees.
+      if (completed.state === "DELIVERED" && await retireWorktree(repositoryPath, location.worktreePath)) {
+        console.log(`Retired the worktree for ${cardId}; its branch keeps every commit`);
+      }
   };
 
   // Everything that wants to know a card stopped hears the same summary: the
