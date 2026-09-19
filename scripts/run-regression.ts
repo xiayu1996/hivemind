@@ -10,7 +10,7 @@ import { ConfigStore } from "../src/config/store.js";
 import { cacheRetentionEnv } from "../src/runner/cache-retention.js";
 import { POLICY_ENV_VAR, serializeGuardPolicy, type GuardPolicy } from "../src/guard/policy.js";
 import { CANONICAL_CAPTURE_ENV } from "../src/observability/capture-contract.js";
-import { openDb } from "../src/persistence/client.js";
+import { absoluteDbUrl, openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
 import { attributeCard, attributionSequence } from "../src/regression/attribution-runner.js";
 import { BlindSweepPort } from "../src/regression/blind-sweep-port.js";
@@ -53,7 +53,9 @@ async function main(): Promise<void> {
   const evidenceRoot = resolve(one("--evidence-root", join(homedir(), ".hivemind", "evidence", `regression-${pool}`)));
   const probeWorktree = process.argv.includes("--probe-worktree") ? resolve(one("--probe-worktree")) : null;
   const auditPath = join(evidenceRoot, "tool-audit.jsonl");
-  const dbUrl = process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db";
+  // Absolute: this process starts the repository's application in the worktree
+  // under verification, and it inherits this address from here.
+  const dbUrl = absoluteDbUrl(process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db");
 
   const model = await resolveModel(defaultModelCatalog(piBinary, worktreePath), provider, modelId);
   const handle = openDb(dbUrl);

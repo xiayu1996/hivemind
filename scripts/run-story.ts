@@ -27,7 +27,7 @@ import { quarantineWorktree, worktreeLayout } from "../src/vcs/worktree.js";
 import { LibsqlActualFootprintStore } from "../src/vcs/actual-footprint.js";
 import { NotionStoryProjection } from "../src/notion/story-projection.js";
 import { SingleStoryWorker } from "../src/orchestrator/story-worker.js";
-import { openDb } from "../src/persistence/client.js";
+import { absoluteDbUrl, openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
 import { POLICY_ENV_VAR, serializeGuardPolicy, type GuardPolicy } from "../src/guard/policy.js";
 import { probeProviderReadiness } from "../src/runner/auth-probe.js";
@@ -185,7 +185,9 @@ async function main(): Promise<void> {
     ? resolve(one("--integration-worktree"))
     : null;
   const piBinary = resolve(one("--pi", defaultPiBinary()));
-  const dbUrl = process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db";
+  // Absolute: this process starts the repository's application in the worktree
+  // under verification, and it inherits this address from here.
+  const dbUrl = absoluteDbUrl(process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db");
   const safeCardId = safeSegment(cardId);
   const evidenceRoot = resolve(one("--evidence-root", join(homedir(), ".hivemind", "evidence", safeCardId)));
   const sessionRoot = resolve(one("--session-root", join(homedir(), ".hivemind", "sessions", safeCardId)));
