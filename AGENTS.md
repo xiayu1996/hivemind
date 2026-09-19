@@ -57,6 +57,8 @@ npm run requirements:run                       # 产品经理常驻（与上者�
 
 npx tsx scripts/repository-add.ts <git-url> [--default-branch main]   # 注册一个仓库并在本机拉出 checkout
 
+npx tsx scripts/serve-console.ts [--port 4319] [--db <url>]          # 只起控制台（只读），供 ui/e2e 场景在浏览器里核验；库由 HIVEMIND_DB_URL 指定
+
 deploy/linux/install.sh --repository-url <git-url>   # 部署唯一入口，幂等；Ubuntu / Arch(Omarchy) / WSL2 Ubuntu 同一条命令
 
 npx tsx scripts/catalog-snapshot.ts <provider>   # 采 provider 目录快照（该机需有这家凭据）
@@ -76,7 +78,7 @@ npx tsx scripts/replay-phase.ts --card-id <id> --phase CODE --print-prompt      
 Node `>=26`，ESM，包管理用 npm。部署只有 Linux 一条路：Windows 主机跑在 WSL2 Ubuntu 里，不再有原生 Windows 路径。
 `deploy/linux/install.sh` 是唯一入口，每个阶段先查再做，人工步骤（凭据、pi 登录、gh 登录）原地停下、重跑续接；见 [docs/runbooks/linux-single-node.md](docs/runbooks/linux-single-node.md)。
 pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src/runner/pi-binary.ts` 取，shell 经 `node -p` 取，不得再出现字面版本号。
-`scripts/` 只放长期入口（run-* / smoke-* / preflight / health-check / notion-bootstrap / install-pi / pi-login / catalog-snapshot / provider-add / repository-add / inspect-round / replay-phase）；一次性排障脚本用完即删，不进仓库。
+`scripts/` 只放长期入口（run-* / smoke-* / serve-console / preflight / health-check / notion-bootstrap / install-pi / pi-login / catalog-snapshot / provider-add / repository-add / inspect-round / replay-phase）；一次性排障脚本用完即删，不进仓库。
 
 ### 本地验证顺序
 
@@ -106,6 +108,8 @@ pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src
 - **出口检查只有一套机制**：`evaluate → findings 回喂同一 session → 重解析`，每个 phase 的出口由一张表声明（`pi-phase-port.ts` 的 `builtInGates`），调用方需要现场状态时自己传 gate。会话内回喂是关键：拒绝是一个工作项，不是对 Story 的判决，所以不耗轮次、不算重入，也不用重新加载这个 session 已经读过的东西——S-AGENTRULES-01 就是被两次"换个 session 重做"的 SPECIFY 拒绝停掉的。每个 gate 声明用尽轮次后是 `fail` 还是 `ship`：没有否决权的那些（交付报告、设计摘要）照发，因为卡在文字上比文字不好读更糟。
 
 - **判官只许把答案从确定性地板上移开，且只往安全的那一边**：`src/judge/` 是 pi 之外的第二条模型路径，只回类型化判断（Noul / Choice / Score），不生成文本、不进 failover chain、不计费用上限。每一个问到它的问题都必须先有一个确定性答案，判官不可用、超时或不确定时那个答案就是全部答案——所以它**永远只能加**，不能把地板已经判定的东西拿走。方向由代价决定而不是由准确率决定，而且**两个问题的安全方向不一样、阈值不共用**：环境/代码这一处，把真缺陷读成环境会让卡永不收敛，把环境失败读成代码只损失一轮，所以只许往环境侧移；Notion 批准意图那一处，漏读一次批准只多重写一版而人会再说一遍，凭空读出一次批准则是没人批准过的东西被拿去建，所以门槛更高（01 §4.2.1）。问题一次只问一条（一条理由 / 一条评论一个请求）：实测同一句话的概率随同批内容摆动 0.29，而固定输入重跑只差 0.02，批量问会让一条的结论取决于同批恰好还有什么。判断随该轮 / 该次轮询用掉，不在 prompt 组装路径上，`assemblePhasePrompt` 的逐字节确定性不受影响。默认关，开了而缺凭据要说出来；每次移动都记 friction，用数据决定留不留。
+
+- **自己写下的理由不进猜的那条路**：模式表读的是模型写的散文，这是它存在的全部理由。hivemind 自己从一个它检查过的条件里发出的理由——验证道声明了却没留下的页面结构记录、验证道自报的 `inconclusive`、箱子没能起起来的应用——不是待识别的散文，写它的那段代码就知道它是什么，所以由产出方直接标注（`ScenarioReason.environmental`），既不问表也不问判官。把这类理由丢进表里，等于让它的分类取决于措辞、再取决于判官对该措辞的把握：`snapshot does not exist` 因为表里写的是 `screenshot` 而长期落空，同一轮四个场景问成四个问题、两个过线两个没过，S-R237511OV-02 的预算就花在这个差别上（2026-09-19）。反向不成立：运行记录里判为失败的场景，`inconclusive` 盖不住它——箱子自己的记录压过模型的自述。
 
 - **状态只经守卫语句写**：Epic 与 Story 的 state 一律由 `epicTransitionStatement` / `storyTransitionStatement` 生成——声明的边与 `WHERE state = ?` 守卫出自同一对状态，不可能分叉，并发下输的那个拿到 `rowsAffected === 0` 而不是覆盖赢家。它们返回语句而不直接写库：迁移必须和它的事件与看板投影同一 batch 落地，拆开就会有状态变了而没有记录的那一刻。全仓不应再出现手写的 `UPDATE epics/stories SET state`。
 

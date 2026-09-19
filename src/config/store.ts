@@ -91,6 +91,17 @@ export class ConfigStore {
     return this.#version;
   }
 
+  /**
+   * The repository this store reads per-repo keys for, or null when it has
+   * none. Null does not mean "the defaults": reload() never selects the rows
+   * that would have overridden a per-repo key, so such a store answers those
+   * keys with a value nobody configured. A caller whose keys are per-repo asks
+   * for this rather than trusting what `get` hands back.
+   */
+  get repository(): string | null {
+    return this.scope.repository ?? null;
+  }
+
   async reload(): Promise<void> {
     const client = this.client;
     if (!client) return;

@@ -27,7 +27,7 @@ import { quarantineWorktree, worktreeLayout } from "../src/vcs/worktree.js";
 import { LibsqlActualFootprintStore } from "../src/vcs/actual-footprint.js";
 import { NotionStoryProjection } from "../src/notion/story-projection.js";
 import { SingleStoryWorker } from "../src/orchestrator/story-worker.js";
-import { openDb } from "../src/persistence/client.js";
+import { absoluteDbUrl, openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
 import { POLICY_ENV_VAR, serializeGuardPolicy, type GuardPolicy } from "../src/guard/policy.js";
 import { probeProviderReadiness } from "../src/runner/auth-probe.js";
@@ -59,6 +59,7 @@ import { CostLedger } from "../src/observability/cost-ledger.js";
 import { costCeilingUsd } from "../src/pipeline/cost-ceiling.js";
 import { retryLimits } from "../src/pipeline/retry-limits.js";
 import { specifyGatePorts } from "../src/pipeline/specify-gate.js";
+import { describeGitFailure } from "../src/vcs/git-failure.js";
 import { ScenarioRegistry } from "../src/regression/scenario-registry.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
@@ -148,12 +149,16 @@ function safeSegment(value: string): string {
 
 
 async function git(worktreePath: string, args: readonly string[]): Promise<string> {
-  const result = await execFileAsync("git", [...args], {
-    cwd: worktreePath,
-    windowsHide: true,
-    maxBuffer: 8 * 1024 * 1024,
-  });
-  return result.stdout;
+  try {
+    const result = await execFileAsync("git", [...args], {
+      cwd: worktreePath,
+      windowsHide: true,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    return result.stdout;
+  } catch (cause) {
+    throw describeGitFailure(cause);
+  }
 }
 
 /** The tree a verdict was reached on. A conclusion carried onto a tree that
@@ -185,7 +190,12 @@ async function main(): Promise<void> {
     ? resolve(one("--integration-worktree"))
     : null;
   const piBinary = resolve(one("--pi", defaultPiBinary()));
-  const dbUrl = process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db";
+  const dbUrl = absoluteDbUrl(process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db");
+  // Everything this process starts reads the database this process resolved.
+  // The application a verification round starts runs in the worktree under
+  // verification, inherits this environment, and a relative address means a
+  // different file there -- or no file at all, which is what it got.
+  process.env.HIVEMIND_DB_URL = dbUrl;
   const safeCardId = safeSegment(cardId);
   const evidenceRoot = resolve(one("--evidence-root", join(homedir(), ".hivemind", "evidence", safeCardId)));
   const sessionRoot = resolve(one("--session-root", join(homedir(), ".hivemind", "sessions", safeCardId)));
@@ -555,7 +565,24 @@ async function main(): Promise<void> {
               { run: (check, cwd) => runProjectCheck(cwd, check) },
               config.get("codeExit.projectChecks"),
             ),
-            { storyWorktree: worktreePath, integrationWorktree, mainBranch: targetBranch },
+            {
+              storyWorktree: worktreePath,
+              integrationWorktree,
+              mainBranch: targetBranch,
+              // Counted, not refused. Until there are numbers, "a card may not
+              // work outside what it declared" is a rule nobody can size.
+              onFootprintOverreach: async (overreach) => {
+                await store.recordFriction({
+                  cardId: overreach.storyId,
+                  runId: `merge-${overreach.storyId}`,
+                  kind: "footprint_overreach",
+                  detail: JSON.stringify({
+                    unpredicted: overreach.unpredicted,
+                    predicted: overreach.predicted,
+                  }),
+                });
+              },
+            },
           ),
         )
       : undefined;

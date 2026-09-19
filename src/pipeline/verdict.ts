@@ -1,6 +1,7 @@
 import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { isWithinRoot } from "../guard/danger-rules.js";
+import { evidenceCandidates } from "./evidence-path.js";
 import { SCREEN_EVIDENCE_MISSING } from "./failure-classification.js";
 
 export interface ScenarioVerdict {
@@ -61,6 +62,18 @@ export interface VerdictValidation {
   greenEvidence: string[];
   /** Screen scenarios the verifier judged without leaving evidence of its own. */
   unproven: string[];
+  /**
+   * The subset of `errors` saying the verifier declared evidence it did not
+   * leave, so the round has nothing to read rather than something wrong to
+   * report.
+   *
+   * Carried rather than recognised again from the wording: this is the one
+   * place that knows a file was looked for and was not there, and a caller
+   * that re-derives it from the text gets a different answer every time the
+   * text is reworded -- `snapshot does not exist` went unrecognised for as
+   * long as the pattern for it said `screenshot`.
+   */
+  missingEvidence: string[];
 }
 
 /**
@@ -96,6 +109,12 @@ function commitEvidence(messages: readonly string[], kind: "red" | "green"): Set
 
 export async function validateVerdict(input: VerdictInput): Promise<VerdictValidation> {
   const errors: string[] = [];
+  const missingEvidence: string[] = [];
+  /** An error about evidence that was declared and is not there to read. */
+  const refuseMissing = (message: string): void => {
+    errors.push(message);
+    missingEvidence.push(message);
+  };
   const declared = new Set(input.declaredScenarioIds);
   const reported = new Set(input.verdict.scenarios.map((scenario) => scenario.id));
   for (const id of declared) if (!reported.has(id)) errors.push(`${id}: verdict is missing`);
@@ -134,19 +153,24 @@ export async function validateVerdict(input: VerdictInput): Promise<VerdictValid
       ["snapshot", scenario.snapshots ?? []],
     ] as const) {
       for (const file of files) {
-        const path = resolve(evidenceRoot, file);
-        if (!isWithinRoot(path, evidenceRoot)) {
+        const candidates = evidenceCandidates(evidenceRoot, file)
+          .filter((path) => isWithinRoot(path, evidenceRoot));
+        if (candidates.length === 0) {
           errors.push(`${scenario.id}: ${kind} escapes the evidence root`);
           continue;
         }
-        try {
-          const details = await stat(path);
-          if (!details.isFile()) errors.push(`${scenario.id}: ${kind} is not a file (${file})`);
-          if (details.mtimeMs < input.roundStartedAt || details.mtimeMs > input.roundEndedAt) {
-            errors.push(`${scenario.id}: ${kind} mtime is outside the verification round (${file})`);
-          }
-        } catch {
-          errors.push(`${scenario.id}: ${kind} does not exist (${file})`);
+        let details: Awaited<ReturnType<typeof stat>> | null = null;
+        for (const path of candidates) {
+          details = await stat(path).catch(() => null);
+          if (details !== null) break;
+        }
+        if (details === null) {
+          refuseMissing(`${scenario.id}: ${kind} does not exist (${file})`);
+          continue;
+        }
+        if (!details.isFile()) refuseMissing(`${scenario.id}: ${kind} is not a file (${file})`);
+        if (details.mtimeMs < input.roundStartedAt || details.mtimeMs > input.roundEndedAt) {
+          errors.push(`${scenario.id}: ${kind} mtime is outside the verification round (${file})`);
         }
       }
     }
@@ -169,7 +193,7 @@ export async function validateVerdict(input: VerdictInput): Promise<VerdictValid
     ];
     if (missing.length === 0) continue;
     unproven.push(scenario.id);
-    errors.push(`${scenario.id}: ${SCREEN_EVIDENCE_MISSING} (${missing.join("; ")})`);
+    refuseMissing(`${scenario.id}: ${SCREEN_EVIDENCE_MISSING} (${missing.join("; ")})`);
   }
 
   const redEvidence = [...red].filter((id) => declared.has(id)).toSorted();
@@ -181,5 +205,6 @@ export async function validateVerdict(input: VerdictInput): Promise<VerdictValid
     redEvidence,
     greenEvidence,
     unproven: unproven.toSorted(),
+    missingEvidence,
   };
 }

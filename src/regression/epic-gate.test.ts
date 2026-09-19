@@ -1,7 +1,7 @@
 import { createClient, type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { migrate } from "../persistence/migrate.js";
-import { epicRegressionClean, epicsAwaitingDelivery, unprovenScenarios } from "./epic-gate.js";
+import { epicRegressionClean, epicsAwaitingDelivery, scenariosAwaitingDelivery, unprovenScenarios } from "./epic-gate.js";
 
 let client: Client;
 
@@ -101,6 +101,19 @@ describe("what the review request is waiting on", () => {
     await expect(unprovenScenarios(client, "M2", HEAD)).resolves.toEqual(["S-M2-01-a"]);
     await sweptClean(HEAD);
     await expect(unprovenScenarios(client, "M2", HEAD)).resolves.toEqual([]);
+  });
+
+  it("keeps sweeping a scenario that passes at the head but still carries a card", async () => {
+    await sweptClean(HEAD);
+    await client.execute("INSERT INTO regression_cards (scenario_id, failure_signature, created_at) VALUES ('S-M2-01-a', 'sig', 1)");
+
+    // Proven, so the narrow question reports nothing to run -- and the card
+    // that holds the gate closes on evidence only a sweep can produce.
+    await expect(unprovenScenarios(client, "M2", HEAD)).resolves.toEqual([]);
+    await expect(scenariosAwaitingDelivery(client, "M2", HEAD)).resolves.toEqual(["S-M2-01-a"]);
+
+    await client.execute("UPDATE regression_cards SET resolved_at = 9");
+    await expect(scenariosAwaitingDelivery(client, "M2", HEAD)).resolves.toEqual([]);
   });
 
   it("offers only the Epics whose remaining obstacle is evidence", async () => {

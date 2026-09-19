@@ -1,4 +1,4 @@
-import { createClient } from "@libsql/client";
+import { createClient, type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { migrate } from "../persistence/migrate.js";
 import { parseDoD } from "../pipeline/dod.js";
@@ -382,6 +382,28 @@ describe("StoryExecutionStore resume after a stop", () => {
     expect((await store.getStory("S-EPIC1-01")).phaseReentries).toBe(0);
   });
 
+  it("grants the regression reopens back as well, so a resumed Story is not parked by the next sweep", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, () => 1_000);
+    await store.createStory({
+      id: "S-EPIC1-01",
+      notionPageId: "page-1",
+      title: "Reopened twice",
+      requirement: "A Story that spent its reopens is resumed by a person.",
+      branch: "story/epic1-01",
+    });
+    await store.transition("S-EPIC1-01", "QUEUED", "SHAPE", "system", "run-shape");
+    await store.countRegressionReopen("S-EPIC1-01");
+    await store.countRegressionReopen("S-EPIC1-01");
+    await store.stopForInput("S-EPIC1-01", "SHAPE", "retry_limit_exceeded", "run-stop");
+
+    await store.transition("S-EPIC1-01", "NEEDS_INPUT", "SHAPE", "human", "notion-comment");
+
+    expect((await store.getStory("S-EPIC1-01")).regressionReopens).toBe(0);
+    client.close();
+  });
+
   it("clears the crash count once the card moves on, and keeps it when it is sent back", async () => {
     const client = createClient({ url: ":memory:" });
     await migrate(client);
@@ -642,6 +664,68 @@ describe("the frozen contract keeps what a person must see", () => {
       { spec_id: "S-EPIC1-01-a", visible_json: '[{"role":"heading","text":"运行控制台"}]' },
       { spec_id: "S-EPIC1-01-b", visible_json: null },
     ]);
+    client.close();
+  });
+});
+
+describe("StoryExecutionStore verification completion", () => {
+  const card = async (client: Client, store: StoryExecutionStore): Promise<void> => {
+    await store.createStory({
+      id: "S-EPIC1-01",
+      notionPageId: "page-1",
+      title: "Verify once",
+      requirement: "A verified round leaves a verdict behind.",
+      branch: "story/epic1-01",
+    });
+    await store.transition("S-EPIC1-01", "QUEUED", "SHAPE", "system", "run-0-shape");
+    await client.execute("INSERT INTO story_specs (spec_id, story_id, seq, text, status) VALUES ('S-EPIC1-01-a','S-EPIC1-01',1,'a','pending')");
+    await store.transition("S-EPIC1-01", "SHAPE", "DESIGN", "system", "run-0");
+    await designToCode(store, "S-EPIC1-01", "run-0");
+    await store.transition("S-EPIC1-01", "CODE", "VERIFY", "system", "run-verify-1");
+    await store.beginPhase({ runId: "run-verify-1", cardId: "S-EPIC1-01", phase: "VERIFY", round: 1, prompt: "verify" });
+  };
+
+  it("refuses the whole write when the verdict names a scenario the card never declared", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, () => 1_000);
+    await card(client, store);
+
+    await expect(store.completeVerification({
+      runId: "run-verify-1",
+      sessionId: "s-verify-1",
+      artifacts: [{ kind: "verification", body: "{}" }],
+      record: {
+        cardId: "S-EPIC1-01", round: 1, codeSessionId: "s-code-1", verifySessionId: "s-verify-1",
+        verdict: "rejected", failedScenarios: ["S-EPIC1-01-invented"],
+      },
+    })).rejects.toThrow(/undeclared scenario/);
+
+    // The run is still startable. Completing it first would have made this
+    // round unreachable for good: a completed run is reused, never restarted.
+    const run = (await client.execute("SELECT status FROM phase_runs WHERE run_id = 'run-verify-1'")).rows[0];
+    expect(run).toMatchObject({ status: "running" });
+    client.close();
+  });
+
+  it("says the round is taken, not that the Story is in the wrong phase, when a completed run holds the slot", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, () => 1_000);
+    await card(client, store);
+    await store.completeVerification({
+      runId: "run-verify-1",
+      sessionId: "s-verify-1",
+      artifacts: [{ kind: "verification", body: "{}" }],
+      record: {
+        cardId: "S-EPIC1-01", round: 1, codeSessionId: "s-code-1", verifySessionId: "s-verify-1",
+        verdict: "rejected", failedScenarios: ["S-EPIC1-01-a"],
+      },
+    });
+
+    await expect(store.beginPhase({
+      runId: "run-verify-1-again", cardId: "S-EPIC1-01", phase: "VERIFY", round: 1, prompt: "verify",
+    })).rejects.toThrow(/round 1 .*already completed/);
     client.close();
   });
 });

@@ -177,13 +177,18 @@ describe("what this round must do", () => {
 });
 
 describe("regression cards", () => {
-  it("turns each open card into a tagged task naming the blamed Story and the signature", () => {
+  it("turns each open card into a tagged task naming the blamed Story and the break", () => {
     const input = {
       ...base,
       phase: "REGRESSION_FIX" as const,
       regressions: [
-        { scenarioId: "S-EPIC3-05", signature: "TypeError: cart is not iterable", attributedStory: "S-EPIC3-02" },
-        { scenarioId: "S-EPIC3-04", signature: "expected 8.1, received 9 " },
+        {
+          scenarioId: "S-EPIC3-05",
+          signature: "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+          failureText: "TypeError: cart is not iterable",
+          attributedStory: "S-EPIC3-02",
+        },
+        { scenarioId: "S-EPIC3-04", signature: "9a8b7c6d5e4f30211203f4e5d6c7b8a9", failureText: "expected 8.1, received 9 " },
       ],
     };
     const tags = roundTasks(input).map((task) => task.tag);
@@ -192,6 +197,18 @@ describe("regression cards", () => {
     expect(prompt).toContain("- [regression:S-EPIC3-05] the scenario fails on the Epic branch since S-EPIC3-02: TypeError: cart is not iterable");
     expect(prompt).toContain("- [regression:S-EPIC3-04] the scenario fails on the Epic branch since an unattributed Story: expected 8.1, received 9");
     expect(assemblePhasePrompt({ ...input, regressions: input.regressions.toReversed() })).toBe(prompt);
+  });
+
+  it("says so when a card kept no text, rather than passing off its key as the break", () => {
+    const prompt = assemblePhasePrompt({
+      ...base,
+      phase: "REGRESSION_FIX" as const,
+      regressions: [{ scenarioId: "S-EPIC3-05", signature: "0f1e2d3c4b5a69788796a5b4c3d2e1f0" }],
+    });
+    expect(prompt).toContain(
+      "- [regression:S-EPIC3-05] the scenario fails on the Epic branch since an unattributed Story: "
+      + "no failure text was recorded (break 0f1e2d3c4b5a69788796a5b4c3d2e1f0)",
+    );
   });
 });
 

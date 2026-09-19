@@ -12,6 +12,26 @@ const story = {
   scenarioIds: ["S-M2-05-integration"],
 };
 
+const consoleStory = {
+  id: "S-E-01",
+  branch: "story/s-e-01",
+  predictedFootprint: ["src/console"],
+  scenarioIds: ["S-E-01-a"],
+};
+
+const passingVerifier = async ({ scenarioIds }: { scenarioIds: readonly string[] }) => ({ passed: true as const, scenarioIds });
+
+/** A tree that merges cleanly and produces the given name-status diff. */
+function footprintGit(nameStatus: string) {
+  return { run: vi.fn(async (cwd: string, args: string[]) => {
+    const command = args.join(" ");
+    if (command === "branch --show-current") return cwd === "story" ? consoleStory.branch : "epic/E-1";
+    if (command === "rev-parse HEAD") return cwd === "story" ? "candidate\n" : "base\n";
+    if (args[0] === "diff" && args[1] === "--name-status") return nameStatus;
+    return "";
+  }) };
+}
+
 describe("EpicMergeFlow", () => {
   it("S-M2-05-integration creates an Epic branch from main and merges a verified Story without touching main", async () => {
     const calls: Array<{ cwd: string; args: string[] }> = [];
@@ -241,5 +261,36 @@ describe("EpicMergeFlow", () => {
       baseRevision: "beef2",
       candidateRevision: "cafe1",
     });
+  });
+
+  it("reports the directories a Story worked in without predicting them", async () => {
+    const overreaches: unknown[] = [];
+    const flow = new EpicMergeFlow(footprintGit("M\u0000src/console/server.ts\u0000M\u0000src/verify/executor.ts\u0000M\u0000vitest.config.ts\u0000"), passingVerifier, {
+      storyWorktree: "story",
+      integrationWorktree: "integration",
+      onFootprintOverreach: async (overreach) => { overreaches.push(overreach); },
+    });
+
+    await flow.merge({ epicId: "E-1", story: consoleStory, integratedStories: [] });
+
+    expect(overreaches).toEqual([{
+      storyId: consoleStory.id,
+      predicted: ["src/console"],
+      actual: [".", "src/console", "src/verify"],
+      unpredicted: [".", "src/verify"],
+    }]);
+  });
+
+  it("says nothing when the diff stayed inside the prediction", async () => {
+    const overreaches: unknown[] = [];
+    const flow = new EpicMergeFlow(footprintGit("M\u0000src/console/server.ts\u0000"), passingVerifier, {
+      storyWorktree: "story",
+      integrationWorktree: "integration",
+      onFootprintOverreach: async (overreach) => { overreaches.push(overreach); },
+    });
+
+    await flow.merge({ epicId: "E-1", story: consoleStory, integratedStories: [] });
+
+    expect(overreaches).toEqual([]);
   });
 });

@@ -134,3 +134,26 @@ describe("notifyStoryStopped", () => {
     expect(friction.record).not.toHaveBeenCalled();
   });
 });
+
+describe("a card stopped because nothing could be judged", () => {
+  it("says the environment never came up, and claims no budget it was not given", () => {
+    const rendered = renderStopSummary({
+      cardId: "S-EPIC-01",
+      reason: "retry_limit_exceeded",
+      spent: 2,
+      inconclusive: { attempts: 3, scenarios: ["S-EPIC-01-open", "S-EPIC-01-save"] },
+      rounds: [],
+      mergeBounces: [],
+      baselineFailures: [],
+      refusals: [],
+      dispatchFailures: [],
+      costUsd: 0,
+    });
+
+    expect(rendered).toContain("The environment would not stand up 3 rounds running");
+    expect(rendered).toContain("S-EPIC-01-open, S-EPIC-01-save");
+    // "of 0" read as a budget of zero, which the code does not allow to exist.
+    expect(rendered).toContain("Rounds spent: 2");
+    expect(rendered).not.toContain("of 0");
+  });
+});

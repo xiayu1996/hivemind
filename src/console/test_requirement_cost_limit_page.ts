@@ -242,14 +242,12 @@ describe("the costs page saves one requirement's limit", () => {
     expect(html).toContain('role="status">已超限 $2.22，工作仍会继续</div>');
   });
 
-  it("@scenario S-R237511CO-03-setlimit 没有显式写入端口时费用分析页仍能保存当前需求上限", async () => {
+  it("@scenario S-R237511CO-03-setlimit 在费用分析页上保存某个需求的费用上限", async () => {
     const store = new MemoryLimitStore();
     const data = consoleData(async (requirementId) =>
       requirementId === "R-none" ? snapshotOf("R-none", "0.00", await store.readRequirementCostLimit("R-none")) : null);
-    // The central store is handed over by the data source itself: a caller that
-    // mounts the console should not have to remember a second write port.
     data.requirementCostLimitStore = store;
-    const app = await createConsoleServer(data, { serveUi: false });
+    const app = await createConsoleServer(data, { serveUi: false, costLimitStore: store });
     try {
       const response = await app.inject({
         method: "POST",
@@ -264,6 +262,28 @@ describe("the costs page saves one requirement's limit", () => {
       expect(page.statusCode).toBe(200);
       expect(page.body).toContain("$15.00");
       expect(page.body).toContain('role="status">上限已保存<');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("refuses the limit write on a mount that was handed no write port", async () => {
+    const store = new MemoryLimitStore();
+    const data = consoleData(async () => null);
+    // A reader that happens to be able to write is not a mount asking to. The
+    // standalone console a verification round opens hands over no ports at
+    // all, and used to serve a form that wrote into the live database.
+    data.requirementCostLimitStore = store;
+    const app = await createConsoleServer(data, { serveUi: false });
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/costs/requirement-limit",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        payload: "requirementId=R-none&limitUsd=15",
+      });
+      expect(response.statusCode).toBe(405);
+      await expect(store.readRequirementCostLimit("R-none")).resolves.toBeNull();
     } finally {
       await app.close();
     }

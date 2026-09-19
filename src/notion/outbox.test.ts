@@ -120,7 +120,7 @@ describe("replay", () => {
       send: async (record) => { seen.push(record.operation); },
     };
 
-    expect(await outbox.replay(delivery, { operations: ["sync_requirement_page"] })).toEqual({ sent: 1, failed: 0, failures: [], dead: [] });
+    expect(await outbox.replay(delivery, { operations: ["sync_requirement_page"] })).toEqual({ sent: 1, failed: 0, failures: [], dead: [], superseded: [] });
     expect(seen).toEqual(["sync_requirement_page"]);
     const untouched = (await client.execute(
       "SELECT state, attempts FROM notion_outbox WHERE operation = 'present_epic_plan'",
@@ -155,7 +155,7 @@ describe("replay", () => {
       failures: [expect.objectContaining({ id: 1, attempts: 1, error: "process died after remote apply" })],
       dead: [],
     });
-    expect(await outbox.replay(delivery)).toEqual({ sent: 1, failed: 0, failures: [], dead: [] });
+    expect(await outbox.replay(delivery)).toEqual({ sent: 1, failed: 0, failures: [], dead: [], superseded: [] });
     expect(sends).toBe(1);
     const row = (await client.execute("SELECT state, attempts, sent_at FROM notion_outbox")).rows[0];
     expect(row?.state).toBe("sent");
@@ -173,7 +173,7 @@ describe("replay", () => {
       isApplied: async () => false,
       send: async (record) => { order.push(record.target); },
     };
-    expect(await outbox.replay(delivery)).toEqual({ sent: 3, failed: 0, failures: [], dead: [] });
+    expect(await outbox.replay(delivery)).toEqual({ sent: 3, failed: 0, failures: [], dead: [], superseded: [] });
     expect(order).toEqual(["high-1", "high-2", "low"]);
   });
 
@@ -224,10 +224,11 @@ describe("replay", () => {
         attempts: OUTBOX_MAX_ATTEMPTS,
         lastError: "validation_error on page-1",
       })],
+      superseded: [],
     });
     // The healthy row went out on the first pass; the dead one is no longer offered.
     expect(sends).toBe(OUTBOX_MAX_ATTEMPTS + 1);
-    expect(await outbox.replay(delivery)).toEqual({ sent: 0, failed: 0, failures: [], dead: [] });
+    expect(await outbox.replay(delivery)).toEqual({ sent: 0, failed: 0, failures: [], dead: [], superseded: [] });
     expect(sends).toBe(OUTBOX_MAX_ATTEMPTS + 1);
 
     const row = (await client.execute("SELECT state, attempts, last_error FROM notion_outbox WHERE target = 'page-1'")).rows[0];
@@ -256,7 +257,7 @@ describe("a send that fails on something other than its payload", () => {
 
     // The cycle comes round again straight away; the row is not offered yet.
     clock += 1_000;
-    expect(await outbox.replay(delivery)).toEqual({ sent: 0, failed: 0, failures: [], dead: [] });
+    expect(await outbox.replay(delivery)).toEqual({ sent: 0, failed: 0, failures: [], dead: [], superseded: [] });
     expect(sends).toBe(1);
 
     clock += transientBackoffMs(1);
@@ -301,5 +302,64 @@ describe("a send that fails on something other than its payload", () => {
     expect(await outbox.replay(delivery)).toMatchObject({
       dead: [expect.objectContaining({ target: "page-1" })],
     });
+  });
+});
+
+const sendsOf = (seen: number[]): NotionOutboxDelivery => ({
+  isApplied: async () => false,
+  send: async (record) => { seen.push(record.id); },
+});
+
+describe("a row the target moved past while it was failing", () => {
+  it("is dropped rather than put back on a page that has since moved on", async () => {
+    let now = 10;
+    const outbox = new NotionOutbox(client, () => now);
+    const stale = await outbox.enqueue({ target: "story-1", operation: "sync_story_page", payload: { round: 1 }, priority: 2 });
+    now = 20;
+    const fresh = await outbox.enqueue({ target: "story-1", operation: "sync_story_page", payload: { round: 2 }, priority: 2 });
+    await client.execute({ sql: "UPDATE notion_outbox SET state = 'sent', sent_at = 21 WHERE id = ?", args: [fresh.id] });
+
+    const sent: number[] = [];
+    const result = await outbox.replay(sendsOf(sent), { wholeStateOperations: ["sync_story_page"] });
+
+    expect(sent).toEqual([]);
+    expect(result.superseded).toEqual([
+      { id: stale.id, cardId: null, operation: "sync_story_page", target: "story-1", attempts: 0 },
+    ]);
+    const row = (await client.execute({ sql: "SELECT state, attempts FROM notion_outbox WHERE id = ?", args: [stale.id] })).rows[0];
+    expect(row).toMatchObject({ state: "sent", attempts: 0 });
+  });
+
+  it("is still sent when it adds something of its own, because two comments mean two comments", async () => {
+    let now = 10;
+    const outbox = new NotionOutbox(client, () => now);
+    const first = await outbox.enqueue({ target: "epic-1", operation: "comment_epic_page", payload: { body: "one" }, priority: 2 });
+    now = 20;
+    const second = await outbox.enqueue({ target: "epic-1", operation: "comment_epic_page", payload: { body: "two" }, priority: 2 });
+    await client.execute({ sql: "UPDATE notion_outbox SET state = 'sent', sent_at = 21 WHERE id = ?", args: [second.id] });
+
+    const sent: number[] = [];
+    const result = await outbox.replay(sendsOf(sent), { wholeStateOperations: ["sync_story_page"] });
+
+    expect(sent).toEqual([first.id]);
+    expect(result.superseded).toEqual([]);
+  });
+
+  it("is sent when the older payload is what the target is wanted to hold again", async () => {
+    let now = 10;
+    const outbox = new NotionOutbox(client, () => now);
+    const stopped = await outbox.enqueue({ target: "story-1", operation: "sync_story_page", payload: { stopped: true }, priority: 2 });
+    await client.execute({ sql: "UPDATE notion_outbox SET state = 'sent', sent_at = 11 WHERE id = ?", args: [stopped.id] });
+    now = 20;
+    const resumed = await outbox.enqueue({ target: "story-1", operation: "sync_story_page", payload: { stopped: false }, priority: 2 });
+    await client.execute({ sql: "UPDATE notion_outbox SET state = 'sent', sent_at = 21 WHERE id = ?", args: [resumed.id] });
+    now = 30;
+    await outbox.enqueue({ target: "story-1", operation: "sync_story_page", payload: { stopped: true }, priority: 2 });
+
+    const sent: number[] = [];
+    const result = await outbox.replay(sendsOf(sent), { wholeStateOperations: ["sync_story_page"] });
+
+    expect(sent).toEqual([stopped.id]);
+    expect(result.superseded).toEqual([]);
   });
 });

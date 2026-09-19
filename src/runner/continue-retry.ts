@@ -1,5 +1,5 @@
 import { classifyError } from "./classify.js";
-import { RunnerTimeoutError, type PiRunner, type PromptImage, type PromptResult } from "./types.js";
+import { RunnerTimeoutError, type PiRunner, type PromptImage, type PromptResult, type RpcEvent, type TokenUsage } from "./types.js";
 
 export class RetryLimitExceededError extends Error {
   readonly stopReason = "retry_limit_exceeded" as const;
@@ -81,11 +81,19 @@ export async function promptWithContinueRetry(
   const backoff = options.backoffMs ?? defaultBackoff;
 
   let result = await promptOnce(runner, message, timeoutMs, images);
+  // Every attempt reports only the events it produced itself, so keeping the
+  // last result alone throws away everything the interrupted attempt had
+  // already done: the tests it ran, the pages it opened, the tokens it spent.
+  // A VERIFY round resumed after a broken stream was judged on the tail alone
+  // and reported that its scenarios had left no evidence at all; the cost
+  // ceiling, which reads the same usage, was undercounting by the same amount.
+  const events: RpcEvent[] = [...result.events];
+  let usage: TokenUsage = result.usage;
   let attempts = 0;
 
   while (result.failure) {
     const classification = classifyError(result.failure.errorMessage);
-    if (!classification.retryable) return { ...result, continueRetries: attempts };
+    if (!classification.retryable) break;
 
     if (attempts >= options.maxContinueRetries) {
       throw new RetryLimitExceededError(attempts, result.failure.errorMessage);
@@ -93,14 +101,30 @@ export async function promptWithContinueRetry(
     if (!runner.alive) {
       // The session is gone, so "continue" has nothing to continue. Recovery is
       // the caller's job: resume from a checkpoint or re-enter the phase.
-      return { ...result, continueRetries: attempts };
+      break;
     }
 
     attempts++;
     options.onRetry?.(attempts, result.failure.errorMessage);
     await sleep(backoff(attempts));
-    result = await promptOnce(runner, "continue", timeoutMs);
+    const next = await promptOnce(runner, "continue", timeoutMs);
+    // Pushed one at a time: a tool-heavy turn emits tens of thousands of
+    // events, past the argument count a spread would pass at once.
+    for (const event of next.events) events.push(event);
+    usage = addUsage(usage, next.usage);
+    result = next;
   }
 
-  return { ...result, continueRetries: attempts };
+  return { ...result, events, usage, continueRetries: attempts };
+}
+
+function addUsage(left: TokenUsage, right: TokenUsage): TokenUsage {
+  return {
+    input: left.input + right.input,
+    output: left.output + right.output,
+    cacheRead: left.cacheRead + right.cacheRead,
+    cacheWrite: left.cacheWrite + right.cacheWrite,
+    reasoning: left.reasoning + right.reasoning,
+    costUsd: left.costUsd + right.costUsd,
+  };
 }

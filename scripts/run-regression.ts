@@ -10,11 +10,13 @@ import { ConfigStore } from "../src/config/store.js";
 import { cacheRetentionEnv } from "../src/runner/cache-retention.js";
 import { POLICY_ENV_VAR, serializeGuardPolicy, type GuardPolicy } from "../src/guard/policy.js";
 import { CANONICAL_CAPTURE_ENV } from "../src/observability/capture-contract.js";
-import { openDb } from "../src/persistence/client.js";
+import { finishLaneCapture, laneCapturePath } from "../src/observability/lane-capture.js";
+import { absoluteDbUrl, openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
 import { attributeCard, attributionSequence } from "../src/regression/attribution-runner.js";
 import { BlindSweepPort } from "../src/regression/blind-sweep-port.js";
 import { ScenarioRegistry, type ScenarioPool } from "../src/regression/scenario-registry.js";
+import { sweepRepository } from "../src/regression/sweep-repository.js";
 import { RegressionStore, regressionPolicy } from "../src/regression/store.js";
 import { RegressionSweeper } from "../src/regression/sweeper.js";
 import { resolveModel } from "../src/runner/model-resolver.js";
@@ -44,6 +46,7 @@ async function main(): Promise<void> {
   const branch = one("--branch");
   const worktreePath = resolve(one("--worktree"));
   const scenarioIds = one("--scenarios").split(",").map((id) => id.trim()).filter(Boolean);
+  const repositoryFlag = process.argv.includes("--repository") ? one("--repository") : null;
   const epicId = process.argv.includes("--epic") ? one("--epic") : null;
   const provider = one("--provider", "openai-codex");
   const modelId = one("--model");
@@ -51,13 +54,26 @@ async function main(): Promise<void> {
   const evidenceRoot = resolve(one("--evidence-root", join(homedir(), ".hivemind", "evidence", `regression-${pool}`)));
   const probeWorktree = process.argv.includes("--probe-worktree") ? resolve(one("--probe-worktree")) : null;
   const auditPath = join(evidenceRoot, "tool-audit.jsonl");
-  const dbUrl = process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db";
+  const capturePath = laneCapturePath(evidenceRoot, "sweep", Date.now());
+  const dbUrl = absoluteDbUrl(process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db");
+  // Everything this process starts reads the database this process resolved.
+  // The application a verification round starts runs in the worktree under
+  // verification, inherits this environment, and a relative address means a
+  // different file there -- or no file at all, which is what it got.
+  process.env.HIVEMIND_DB_URL = dbUrl;
 
   const model = await resolveModel(defaultModelCatalog(piBinary, worktreePath), provider, modelId);
   const handle = openDb(dbUrl);
   try {
     await migrate(handle.client);
-    const config = await ConfigStore.load(handle.client);
+    // Per-repo settings -- how this repository starts its application, which
+    // hosts the browser may reach. An unscoped sweep read the code defaults
+    // instead and judged the same scenario without the application the Story's
+    // own round was handed, which is the disagreement between the two lanes
+    // that verify.appStartCommand exists to end.
+    const repository = repositoryFlag
+      ?? await sweepRepository(handle.client, { epicId, scenarioIds });
+    const config = await ConfigStore.load(handle.client, { repository });
     // The sweep spawns the verifier once per pool run, on the provider this
     // invocation names; there is no failover chain to walk inside a sweep and
     // no provider capacity to hold beyond it.
@@ -96,7 +112,7 @@ async function main(): Promise<void> {
             ...browserEnv,
             ...cacheRetentionEnv(config),
             [POLICY_ENV_VAR]: serializeGuardPolicy(guard),
-            [CANONICAL_CAPTURE_ENV]: join(guard.extraWriteRoots[0] ?? evidenceRoot, "provider-requests.jsonl"),
+            [CANONICAL_CAPTURE_ENV]: capturePath,
             [EVIDENCE_DIR_ENV]: guard.extraWriteRoots[0] ?? evidenceRoot,
           },
         }),
@@ -133,13 +149,18 @@ async function main(): Promise<void> {
     });
     const result = await new RegressionSweeper(registry, store, sweepPort).sweep({ pool, branch, scenarioIds }, policy);
 
-    // A raised card is only actionable once it names the Story that broke it.
+    // A card is only actionable once it names the Story that has to answer for
+    // it, so every ownerless card is offered an owner again this sweep -- not
+    // only the ones raised just now. One that found none stayed ownerless for
+    // good, open and unreachable, holding its Epic at the review gate.
     const attributions = [];
     let attributionsSkipped: string | undefined;
-    if (result.raised.length > 0 && !(epicId && probeWorktree)) {
+    const pending = (await store.unattributedCards(result.failed))
+      .map((card) => ({ scenarioId: card.scenarioId, failureSignature: card.failureSignature }));
+    if (pending.length > 0 && !(epicId && probeWorktree)) {
       attributionsSkipped = probeWorktree ? "no epic" : "no probe worktree";
     }
-    if (epicId && probeWorktree && result.raised.length > 0) {
+    if (epicId && probeWorktree && pending.length > 0) {
       const sequence = await attributionSequence(handle.client, epicId);
       const probeSweep = new BlindSweepPort({
         worktreeFor: async () => probeWorktree,
@@ -154,8 +175,7 @@ async function main(): Promise<void> {
         chromiumSandbox: config.get("verify.chromiumSandbox"),
       });
       try {
-        for (const raised of result.raised) {
-          const card = { scenarioId: raised.scenarioId, failureSignature: raised.signature };
+        for (const card of pending) {
           const attribution = await attributeCard(handle.client, store, card, sequence, async (revision, scenarioId) => {
             await execFileAsync("git", ["checkout", "--detach", revision], { cwd: probeWorktree, windowsHide: true });
             const probed = await probeSweep.run({ pool, branch: revision, scenarioIds: [scenarioId] });
@@ -174,6 +194,7 @@ async function main(): Promise<void> {
     }
     console.log(JSON.stringify({ ...result, attributions, ...(attributionsSkipped ? { attributionsSkipped } : {}) }));
   } finally {
+    await finishLaneCapture(capturePath);
     handle.close();
   }
 }

@@ -74,12 +74,31 @@ export class EpicBranchFreshness {
     }
     const sourceRevision = (await this.git.run(cwd, ["rev-parse", source])).trim();
     const time = this.now();
-    const lastSuccess = (await this.client.execute({
-      sql: `SELECT ts FROM epic_branch_refresh_events
-            WHERE epic_id = ? AND outcome = 'succeeded' ORDER BY ts DESC, id DESC LIMIT 1`,
+    // What makes a branch due is main moving, not a clock reaching a number.
+    //
+    // Keyed on elapsed time since the last *success*, a branch took main once a
+    // day however far main had gone, and a branch whose merge conflicts had no
+    // recent success ever, so the interval never applied at all: R237511OV ran
+    // another fetch, merge and abort every cycle for hours -- the same answer,
+    // two rows and a warning line each time -- and put 4523 rows in this table.
+    // Meanwhile R237511DT took main cleanly on 09-18, waited out its day while
+    // main gained a hundred and fifty commits, and conflicted on the next try.
+    // One number produced both failures at once: too slow to keep a branch
+    // close to main, and no brake at all once it had fallen behind.
+    //
+    // So the source revision decides. A branch that has not seen this main is
+    // due whatever the clock says, which keeps every refresh as small as the
+    // movement that triggered it; a branch that has already answered for this
+    // main is skipped, because nothing about the answer can have changed --
+    // a merge would be a no-op and a conflict would conflict again. The
+    // interval stays as the floor under a main that moves constantly.
+    const last = (await this.client.execute({
+      sql: `SELECT ts, source_revision FROM epic_branch_refresh_events
+            WHERE epic_id = ? AND outcome IN ('succeeded','failed') ORDER BY ts DESC, id DESC LIMIT 1`,
       args: [epicId],
     })).rows[0];
-    if (typeof lastSuccess?.ts === "number" && time - lastSuccess.ts < this.intervalMs) {
+    const settled = typeof last?.ts === "number" && time - last.ts < this.intervalMs;
+    if (settled && String(last?.source_revision ?? "") === sourceRevision) {
       // Not recorded: nothing reads a skip. The interval query reads
       // 'succeeded' and the progress probe reads 'succeeded' and 'failed', so
       // a row per cycle per Epic only grows the table -- one Epic had 742 of
