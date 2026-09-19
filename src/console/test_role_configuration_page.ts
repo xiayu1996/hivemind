@@ -247,3 +247,40 @@ describe("role configuration error state", () => {
     expect(state).toMatchObject({ status: "error", selectedRoleId: "prototype" });
   });
 });
+
+describe("role configuration waiting state", () => {
+  it("@scenario S-R237511RC-01-waiting 新版本未确认前仍展示原当前版并说明已开始的智能体不变", () => {
+    const html = renderRoleConfigurationPage({
+      status: "waiting",
+      roles,
+      selectedRoleId: "prototype",
+      confirmedPair: pairWith(previous),
+      pendingSaveId: "save-1",
+    });
+
+    expect(html).toContain("正在等待配置保存");
+    expect(html).toContain("检查保存结果");
+    expect(html).toContain("确认前仍使用原当前版");
+    expect(html).toContain("已经开始工作的智能体不会改变");
+    expect(html).toContain("当前版 v12");
+    expect(html).not.toContain("已保存");
+  });
+
+  it("@scenario S-R237511RC-01-waiting 读取到的未确认保存不冒充当前版", async () => {
+    const state = await readRoleConfigurationView(
+      resolveRoleConfigurationPageRequest({ role: "prototype" }),
+      {
+        readCatalog: async () => ({ status: "ready", roles }),
+        readVersionPair: async () => ({
+          status: "waiting",
+          roleId: "prototype",
+          confirmedPair: pairWith(previous),
+          pendingSaveId: "save-1",
+        }),
+      },
+    );
+
+    expect(state.status).toBe("waiting");
+    expect(state).toMatchObject({ pendingSaveId: "save-1" });
+  });
+});
