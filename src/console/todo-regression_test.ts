@@ -60,4 +60,11 @@ describe("the waiting state each todo scenario is judged on", () => {
     expect(await listPendingTodos(client)).toEqual([]);
   });
 
+  it("@scenario S-R237511TD-01-error the failed-read scenario is its own state, not the empty ledger", async () => {
+    expect(fixtureFor("S-R237511TD-01-error")).toBe("error");
+    await applyVerifyFixture(client, fixtureFor("S-R237511TD-01-error"), 9000);
+
+    expect(await listPendingTodos(client)).toEqual([]);
+  });
+
 });
