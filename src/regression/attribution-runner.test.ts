@@ -96,6 +96,25 @@ describe("attribution over a real integration sequence", () => {
       .toBe("DELIVERED");
   });
 
+  it("probes nothing on an Epic head nothing has landed on", async () => {
+    // The empty base is what "no Story has integrated yet" looks like. Handed
+    // to the probe it became `git checkout --detach ''`, a fatal pathspec
+    // error that took the whole Epic's sweep down with it.
+    let probes = 0;
+    const attribution = await attributeCard(
+      client,
+      store,
+      { scenarioId: "S-M2-01-a", failureSignature: "sig" },
+      { base: "", steps: [] },
+      async () => { probes += 1; return true; },
+      () => 500,
+    );
+
+    expect(attribution).toMatchObject({ kind: "pre_existing" });
+    expect(probes).toBe(0);
+    await expect(store.openCards()).resolves.toMatchObject([{ attributedStory: null }]);
+  });
+
   it("does not reopen anything for a failure it cannot reproduce", async () => {
     const attribution = await attributeCard(
       client,
