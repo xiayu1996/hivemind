@@ -250,7 +250,7 @@ function renderRoundPanel(
   const resultLine = pendingResult && round.round === currentRoundId
     ? STORY_PROGRESS_COPY.resultsPending
     : formatRoundResultLine(round);
-  return `<section class="panel section" aria-labelledby="round-panel-title">`
+  return `<section class="panel section round-panel" aria-labelledby="round-panel-title">`
     + `<h2 id="round-panel-title">${escapeHtml(heading)}</h2>`
     + `<p class="line" role="status">${escapeHtml(formatRoundTriggerLine(round))}</p>`
     + `<p class="line">${escapeHtml(formatRoundPhaseLine(round))}</p>`
@@ -261,7 +261,7 @@ function renderRoundPanel(
 function renderCostPanel(snapshot: StoryProgressSnapshot, round: StoryProgressRound, currentRoundId: number): string {
   const limit = formatLimitLine(snapshot);
   const limitState = formatLimitStateLine(snapshot);
-  return `<section class="panel section" aria-labelledby="cost-title">`
+  return `<section class="panel section cost-panel" aria-labelledby="cost-title">`
     + `<h2 id="cost-title">${escapeHtml(STORY_PROGRESS_COPY.roundCostHeading)}</h2>`
     + `<p class="money">${escapeHtml(formatRoundCostValue(round, currentRoundId))}</p>`
     + (limit === null ? "" : `<p class="line" role="status">${escapeHtml(limit)}</p>`)
@@ -273,7 +273,7 @@ function renderCostPanel(snapshot: StoryProgressSnapshot, round: StoryProgressRo
 }
 
 function renderBlockerPanel(round: StoryProgressRound): string {
-  return `<section class="panel section" aria-labelledby="blocker-title">`
+  return `<section class="panel section blocker-panel" aria-labelledby="blocker-title">`
     + `<h2 id="blocker-title">卡点</h2>`
     + `<p class="line" role="status">${escapeHtml(formatRoundBlockerLine(round))}</p>`
     + `</section>`;
@@ -297,7 +297,7 @@ function renderRoundSwitcher(
       + `<span class="money">${escapeHtml(formatRoundCostValue(round, currentRoundId))}</span>`
       + `</span></li>`)
     .join("");
-  return `<section class="panel section" aria-labelledby="round-switcher-title">`
+  return `<section class="panel section switcher-panel" aria-labelledby="round-switcher-title">`
     + `<h2 id="round-switcher-title">${escapeHtml(STORY_PROGRESS_COPY.roundSwitcherHeading)}</h2>`
     + `<div class="tabs" role="tablist" aria-label="选择轮次">${tabs}</div>`
     + `<h2 class="subheading">${escapeHtml(STORY_PROGRESS_COPY.historyHeading)}</h2>`
@@ -316,8 +316,8 @@ function renderReadyBody(view: StoryProgressPageView, snapshot: StoryProgressSna
   return renderTitleBar(subtitle)
     + reading
     + renderRoundPanel(selected, currentRoundId, view.pendingResult)
-    + renderCostPanel(snapshot, selected, currentRoundId)
     + renderBlockerPanel(selected)
+    + renderCostPanel(snapshot, selected, currentRoundId)
     + renderRoundSwitcher(snapshot, selected);
 }
 
