@@ -900,12 +900,13 @@ async function loadPageState<T>(load: () => Promise<T>): Promise<ConsolePageStat
 
 /**
  * A state a person named in the query string, the way the interface contract's
- * pages and the costs page already reach their non-default states. Reading and
- * waiting are exactly the states a server-rendered page would otherwise hide
- * behind a read that happened to be slow, so they are reachable on their own.
+ * pages and the costs page already reach their non-default states. Reading,
+ * failure, waiting and empty are exactly the states a server-rendered page
+ * would otherwise hide behind data that happens to be present, so they are
+ * reachable on their own.
  */
-const FORCED_PAGE_STATES = new Set(["loading", "refreshing", "error", "waiting"]);
-type ForcedPageState = "loading" | "refreshing" | "error" | "waiting";
+const FORCED_PAGE_STATES = new Set(["empty", "loading", "refreshing", "error", "waiting"]);
+type ForcedPageState = "empty" | "loading" | "refreshing" | "error" | "waiting";
 
 function forcedPageState(query: unknown): ForcedPageState | null {
   const requested = (query as { state?: unknown } | null | undefined)?.state;
@@ -929,6 +930,9 @@ async function overviewPageState(
   if (forced === "error") return { kind: "failed" };
   const state = await loadPageState(() => reads.overview());
   if (state.kind !== "ready") return state;
+  // The empty overview is the one where nothing waits for the person; what is
+  // running, failing or finished is still real and still shown.
+  if (forced === "empty") return { ...state, value: { ...state.value, waitingForOperator: [] } };
   if (forced === "refreshing") return { ...state, refreshing: true };
   if (forced === "waiting") {
     return { kind: "waiting", value: state.value, waitingFor: "round_result", refreshAfterMs: AUTO_REFRESH_MS };
@@ -945,6 +949,7 @@ async function todoPageState(
   if (forced === "error") return { kind: "failed" };
   const state = await loadPageState(() => reads.todo(todoId));
   if (state.kind !== "ready") return state;
+  if (forced === "empty") return { kind: "ready", value: { kind: "unavailable" }, refreshing: false };
   if (forced === "refreshing") return { ...state, refreshing: true };
   // A todo that no longer waits for anything keeps its own empty state: it is
   // not waiting for a confirmation that this page knows nothing about.
@@ -966,6 +971,12 @@ async function detailPageState(
   if (forced === "error") return { kind: "failed" };
   const state = await loadPageState(() => reads.detail(subject));
   if (state.kind !== "ready") return state;
+  if (forced === "empty") {
+    const value = state.value.kind === "available"
+      ? { kind: "no_rounds" as const, subject: state.value.detail.subject }
+      : state.value;
+    return { ...state, value };
+  }
   if (forced === "refreshing") return { ...state, refreshing: true };
   const pendingResult = state.value.kind === "available" && state.value.detail.currentRound.result === null;
   if (state.value.kind === "available" && (forced === "waiting" || pendingResult)) {

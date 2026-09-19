@@ -1,0 +1,46 @@
+{
+  "subjects": {
+    "household": "家庭采购助手",
+    "console": "管理后台",
+    "costReport": "费用报告",
+    "ledgerSync": "同步账本",
+    "purchaseSync": "采购清单同步",
+    "billing": "账单归集"
+  },
+  "todos": {
+    "reply": {
+      "question": "是否需要扩大重试范围？",
+      "context": "上一次验证没有通过，需要你决定重试的范围。",
+      "sourceLabel": "待澄清",
+      "answerLabel": "你的答复"
+    },
+    "approval": {
+      "question": "是否批准这份方案继续推进？",
+      "context": "方案已经准备好，等待你的批准。",
+      "sourceLabel": "方案",
+      "option": "批准方案",
+      "noteLabel": "决定说明"
+    },
+    "choice": {
+      "question": "费用报告使用哪个时区？",
+      "context": "报告只能使用一个时区。",
+      "sourceLabel": "待决定",
+      "shanghai": "Asia/Shanghai",
+      "utc": "UTC"
+    },
+    "notionDown": {
+      "question": "这条答复怎么处理？",
+      "context": "对应的 Notion 条目现在没有确认保存。",
+      "sourceLabel": "通知",
+      "answerLabel": "你的答复"
+    }
+  },
+  "detail": {
+    "stateLabel": "运行中",
+    "currentTrigger": "验证未通过",
+    "secondTrigger": "合流验证未通过",
+    "secondResult": "已修正",
+    "firstTrigger": "首次执行",
+    "firstResult": "首次执行完成"
+  }
+}
