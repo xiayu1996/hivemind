@@ -81,4 +81,13 @@ describe("the overview started by a verification round with its dynamic port", (
       expect(completed.indexOf("状态投影核对")).toBeLessThan(completed.indexOf("候选词表更新"));
     });
   });
+  it("@scenario S-R237511OV-01-refresh exposes automatic refresh and the current stage after allocating the review port", async () => {
+    await inspectOverview((html) => {
+      const active = section(html, 'id="active-title"', 'id="failures-title"');
+      expect(html).toContain("/assets/overview.js");
+      expect(html).toContain('id="refreshed-at"');
+      expect(html).toContain("每 30 秒自动刷新");
+      expect(active).toContain('aria-label="重试退避 任务 CODE 运行中"');
+    });
+  });
 });
