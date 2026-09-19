@@ -1068,6 +1068,7 @@ async function main(): Promise<void> {
       "--branch", branch,
       "--worktree", sweepTree.worktreePath,
       "--scenarios", plan.scenarioIds.join(","),
+      "--repository", slug,
       "--evidence-root", join(workRoot, "evidence", repositoryId, sweepCard),
       "--provider", provider,
       "--model", model,
