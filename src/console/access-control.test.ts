@@ -60,6 +60,30 @@ describe("console network policy", () => {
     });
   });
 
+  it("@scenario S-R237511OV-02-spoof decides from the transport peer alone", async () => {
+    const createPolicy = await policyContract();
+    const policy = createPolicy({ allowedNetworks: ["10.20.30.0/24"] });
+
+    expect(policy.authorize({ remoteAddress: "203.0.113.90" })).toEqual({
+      allowed: false,
+      reason: "source_outside_allowed_networks",
+    });
+  });
+
+  it("@scenario S-R237511OV-02-spoof canonicalizes mapped transport addresses without widening trust", async () => {
+    const createPolicy = await policyContract();
+    const policy = createPolicy({ allowedNetworks: ["10.20.30.0/24"] });
+
+    expect(policy.authorize({ remoteAddress: "::ffff:10.20.30.40" })).toEqual({
+      allowed: true,
+      matchedNetwork: "10.20.30.0/24",
+    });
+    expect(policy.authorize({ remoteAddress: "::ffff:10.20.31.40" })).toEqual({
+      allowed: false,
+      reason: "source_outside_allowed_networks",
+    });
+  });
+
   it("@scenario S-R237511OV-02-unconfigured denies every source when no ranges are configured", async () => {
     const createPolicy = await policyContract();
     const policy = createPolicy({ allowedNetworks: [] });

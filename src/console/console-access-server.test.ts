@@ -208,6 +208,55 @@ describe("console access boundary", () => {
     expect(callsOf(source)).toEqual([]);
   });
 
+  it("@scenario S-R237511OV-02-spoof ignores forwarding headers and claimed source parameters", async () => {
+    const accessPolicy = deniedPolicy();
+    const source = dataSource();
+    const app = await server({ accessPolicy, source });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/tasks?remoteAddress=192.0.2.40",
+      remoteAddress: "203.0.113.90",
+      headers: {
+        forwarded: "for=192.0.2.40",
+        "x-forwarded-for": "192.0.2.40",
+        "x-real-ip": "192.0.2.40",
+        cookie: "console_source=192.0.2.40",
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({
+      error: "console_access_denied",
+      reason: "source_outside_allowed_networks",
+    });
+    expect(accessPolicy.authorize).toHaveBeenCalledWith({ remoteAddress: "203.0.113.90" });
+    expect(callsOf(source)).toEqual([]);
+  });
+
+  it("@scenario S-R237511OV-02-spoof ignores a claimed source in a mutation body", async () => {
+    const accessPolicy = deniedPolicy();
+    const configWriter = writer();
+    const source = dataSource();
+    const app = await server({ accessPolicy, source, configWriter });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/config/value",
+      remoteAddress: "203.0.113.90",
+      payload: {
+        key: "console.allowedNetworks",
+        value: ["0.0.0.0/0"],
+        updatedBy: "owner",
+        remoteAddress: "192.0.2.40",
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(accessPolicy.authorize).toHaveBeenCalledWith({ remoteAddress: "203.0.113.90" });
+    expect(callsOf(source, configWriter)).toEqual([]);
+  });
+
   it("@scenario S-R237511OV-02-unconfigured denies page and API access before reading content", async () => {
     const source = dataSource();
     const app = await server({ accessPolicy: deniedPolicy("allowed_networks_unconfigured"), source });
