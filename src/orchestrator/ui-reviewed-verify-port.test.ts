@@ -335,11 +335,12 @@ describe("UiReviewedVerifyPort", () => {
 
       // Whatever port the host handed out, the same one everywhere: a literal
       // `{port}` reaches the application as an argument it refuses.
-      const started = calls.start[0]!;
+      const started = calls.start[0] as { command: string[]; readyUrl: string };
+      const seeded = calls.seed[0] as { command: string[] };
       const chosen = started.command.at(-1)!;
       expect(chosen).toMatch(/^\d+$/);
       expect(started.readyUrl).toBe(`http://127.0.0.1:${chosen}/`);
-      expect(calls.seed[0]!.command.at(-1)).toBe(chosen);
+      expect(seeded.command.at(-1)).toBe(chosen);
       expect(seen?.appUrl).toBe(`http://127.0.0.1:${chosen}/`);
     });
 

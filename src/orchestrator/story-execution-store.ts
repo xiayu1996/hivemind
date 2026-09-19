@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { StorySection } from "../notion/blocks/story-page.js";
-import type { Client } from "@libsql/client";
+import type { Client, InStatement } from "@libsql/client";
 import { redactForExport } from "../observability/redact.js";
 import {
   assertStoryTransition,
@@ -94,6 +94,46 @@ export interface CompletePhaseInput {
   runId: string;
   sessionId: string;
   artifacts: Array<{ kind: string; body: string }>;
+}
+
+export interface CompleteVerificationInput extends CompletePhaseInput {
+  record: VerificationRecordInput;
+}
+
+/**
+ * Everything a completed phase run writes, in the order a batch must carry
+ * them: the artifacts first, then the completion, then the event. The caller
+ * checks that the completion affected exactly one row, which is how a run
+ * somebody else already finished is refused.
+ */
+function completionStatements(
+  input: CompletePhaseInput,
+  run: { cardId: string; phase: string; round: number },
+  time: number,
+): InStatement[] {
+  return [
+    ...input.artifacts.map((artifact) => ({
+      sql: `INSERT INTO phase_artifacts
+              (run_id, card_id, phase, round, kind, body, created_at)
+            SELECT run_id, card_id, phase, round, ?, ?, ? FROM phase_runs
+            WHERE run_id = ? AND status = 'running'`,
+      args: [artifact.kind, artifact.body, time, input.runId],
+    })),
+    {
+      sql: `UPDATE phase_runs
+            SET session_id = ?, status = 'completed', ended_at = ?
+            WHERE run_id = ? AND status = 'running'`,
+      args: [input.sessionId, time, input.runId],
+    },
+    eventStatement(
+      input.runId,
+      run.cardId,
+      run.phase,
+      "phase.exit",
+      { round: run.round, artifactKinds: input.artifacts.map((artifact) => artifact.kind).toSorted() },
+      time,
+    ),
+  ];
 }
 
 export interface ScenarioConclusion {
@@ -486,7 +526,29 @@ export class StoryExecutionStore {
     ], "write");
     const inserted = Number(results[1]?.rowsAffected ?? 0);
     if (inserted !== 1) {
-      throw new Error(`cannot start ${input.phase} while Story is not in that phase`);
+      // Two different things refuse this insert and they need different
+      // answers: the Story left the phase between the check above and this
+      // write, or a completed run already holds the slot. One message for
+      // both sent the reader to look at a state that was right, and the reason
+      // reached the coordinator as an UNKNOWN crash rather than as something
+      // anybody could act on. The extra read is on the failure path only.
+      const held = await this.client.execute({
+        sql: `SELECT (SELECT state FROM stories WHERE id = ?) AS state,
+                     (SELECT status FROM phase_runs WHERE card_id = ? AND phase = ? AND round = ?) AS status`,
+        args: [input.cardId, input.cardId, input.phase, input.round],
+      });
+      const state = held.rows[0]?.state;
+      if (state !== stateForPhase) {
+        throw new Error(
+          `cannot start ${input.phase} while Story is not in that phase (it is ${String(state ?? "gone")})`,
+        );
+      }
+      // The state still fits, so the slot is what refused: only a completed
+      // run survives the delete above.
+      throw new Error(
+        `cannot start ${input.phase} round ${input.round} for ${input.cardId}: `
+        + `that round is already ${String(held.rows[0]?.status ?? "taken")} and a completed run is reused, not started again`,
+      );
     }
     // How many times this exact slot has been entered, counted from the event
     // log because `phase_runs` keeps only the live attempt. Callers use it to
@@ -512,41 +574,47 @@ export class StoryExecutionStore {
       }
     }
     const time = this.now();
+    const { cardId, phase, round } = await this.#runningPhase(input.runId);
+    const results = await this.client.batch(
+      completionStatements(input, { cardId, phase, round }, time),
+      "write",
+    );
+    if (results.at(-2)?.rowsAffected !== 1) throw new Error(`phase run is no longer running: ${input.runId}`);
+  }
+
+  /**
+   * Completes the VERIFY run and records its verdict in one write.
+   *
+   * They used to be two, and the gap between them was a trap with no way out.
+   * Completion is immutable by design -- a completed run is reused, never
+   * started again -- so a failure after it left the slot holding a run that
+   * had produced no verdict. Every later dispatch computed the same round,
+   * collided with that row, and the card could not be resumed even by hand;
+   * the failure that opened the gap was reading the tree sha of a worktree
+   * that had been removed.
+   */
+  async completeVerification(input: CompleteVerificationInput): Promise<void> {
+    const run = await this.#runningPhase(input.runId);
+    const verification = await this.#verificationStatements(input.runId, input.record);
+    const completion = completionStatements(input, run, this.now());
+    const results = await this.client.batch([...verification, ...completion], "write");
+    if (results.at(-2)?.rowsAffected !== 1) throw new Error(`phase run is no longer running: ${input.runId}`);
+  }
+
+  /** The run a completion is about, refusing one that is not still running. */
+  async #runningPhase(runId: string): Promise<{ cardId: string; phase: string; round: number }> {
     const run = await this.client.execute({
       sql: "SELECT card_id, phase, round, status FROM phase_runs WHERE run_id = ?",
-      args: [input.runId],
+      args: [runId],
     });
     const row = run.rows[0];
-    if (!row) throw new Error(`phase run does not exist: ${input.runId}`);
+    if (!row) throw new Error(`phase run does not exist: ${runId}`);
     if (row.status !== "running") throw new Error(`phase run is already ${String(row.status)}`);
-    const cardId = stringValue(row.card_id, "phase card id");
-    const phase = stringValue(row.phase, "phase");
-    const round = numberValue(row.round, "phase round");
-    const statements = input.artifacts.map((artifact) => ({
-          sql: `INSERT INTO phase_artifacts
-                  (run_id, card_id, phase, round, kind, body, created_at)
-                SELECT run_id, card_id, phase, round, ?, ?, ? FROM phase_runs
-                WHERE run_id = ? AND status = 'running'`,
-          args: [artifact.kind, artifact.body, time, input.runId],
-        }));
-    const results = await this.client.batch([
-      ...statements,
-      {
-        sql: `UPDATE phase_runs
-              SET session_id = ?, status = 'completed', ended_at = ?
-              WHERE run_id = ? AND status = 'running'`,
-        args: [input.sessionId, time, input.runId],
-      },
-      eventStatement(
-        input.runId,
-        cardId,
-        phase,
-        "phase.exit",
-        { round, artifactKinds: input.artifacts.map((artifact) => artifact.kind).toSorted() },
-        time,
-      ),
-    ], "write");
-    if (results.at(-2)?.rowsAffected !== 1) throw new Error(`phase run is no longer running: ${input.runId}`);
+    return {
+      cardId: stringValue(row.card_id, "phase card id"),
+      phase: stringValue(row.phase, "phase"),
+      round: numberValue(row.round, "phase round"),
+    };
   }
 
   async failPhase(runId: string, failure: string): Promise<void> {
@@ -664,6 +732,12 @@ export class StoryExecutionStore {
   }
 
   async recordVerification(runId: string, input: VerificationRecordInput): Promise<void> {
+    await this.client.batch(await this.#verificationStatements(runId, input), "write");
+  }
+
+  /** Everything a verdict writes, so a caller may land it with the completion
+   * of the run that reached it. */
+  async #verificationStatements(runId: string, input: VerificationRecordInput): Promise<InStatement[]> {
     const time = this.now();
     const declared = new Set((await this.client.execute({
       sql: "SELECT spec_id FROM story_specs WHERE story_id = ?",
@@ -708,7 +782,7 @@ export class StoryExecutionStore {
         time,
       ],
     }));
-    await this.client.batch([
+    return [
       {
         sql: `INSERT INTO verify_records
                 (card_id, round, code_session_id, verify_session_id, verdict,
@@ -738,7 +812,7 @@ export class StoryExecutionStore {
         verdict: input.verdict,
         failedScenarios: failed,
       }, time),
-    ], "write");
+    ];
   }
 
   /**

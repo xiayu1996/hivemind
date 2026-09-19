@@ -1107,25 +1107,30 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
         codeSessionId,
         definitionOfDone,
       });
-      await this.store.completePhase({
+      // Read before anything is committed: this reaches into the worktree, and
+      // a worktree that is gone answers with a failure. Completing the run
+      // first would have made that failure permanent, because a completed run
+      // is reused rather than started again and this round's slot would hold
+      // one that never reached a verdict.
+      const treeSha = this.treeSha ? await this.treeSha() : "";
+      await this.store.completeVerification({
         runId,
         sessionId: result.sessionId,
         artifacts: [{ kind: "verification", body: result.artifact }],
-      });
-      const treeSha = this.treeSha ? await this.treeSha() : "";
-      await this.store.recordVerification(runId, {
-        cardId,
-        round,
-        codeSessionId,
-        verifySessionId: result.sessionId,
-        verdict: result.verdict,
-        failedScenarios: result.failedScenarios,
-        // Only what this round actually looked at. A narrow round that judged
-        // one scenario must not mark the rest of the card passed by default.
-        verifiedScenarios: definitionOfDone.scenarios.map((scenario) => scenario.id),
-        ...(treeSha === "" ? {} : { verifiedTreeSha: treeSha }),
-        ...(result.evidenceDir ? { evidenceDir: result.evidenceDir } : {}),
-        ...(result.screenshots ? { screenshots: result.screenshots } : {}),
+        record: {
+          cardId,
+          round,
+          codeSessionId,
+          verifySessionId: result.sessionId,
+          verdict: result.verdict,
+          failedScenarios: result.failedScenarios,
+          // Only what this round actually looked at. A narrow round that judged
+          // one scenario must not mark the rest of the card passed by default.
+          verifiedScenarios: definitionOfDone.scenarios.map((scenario) => scenario.id),
+          ...(treeSha === "" ? {} : { verifiedTreeSha: treeSha }),
+          ...(result.evidenceDir ? { evidenceDir: result.evidenceDir } : {}),
+          ...(result.screenshots ? { screenshots: result.screenshots } : {}),
+        },
       });
       return result;
     } catch (cause) {
