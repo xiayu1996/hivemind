@@ -60,7 +60,7 @@ export function fixtureFor(scenarioId: string | null): VerifyFixture {
     case "approve":
       return "approve";
     case "choose":
-      return "choose";
+      return "empty";
     case "savefail":
       return "savefail";
     case "error":
