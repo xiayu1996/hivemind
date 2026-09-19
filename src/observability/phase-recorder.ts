@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { Client } from "@libsql/client";
 import type { PhaseTelemetryInput } from "../orchestrator/pi-phase-port.js";
@@ -25,6 +25,9 @@ export interface PhaseRecorderOptions {
   hostId?: string;
   promptVersion?: string;
 }
+
+/** What the pi extension appends provider requests to during a run. */
+const CAPTURE_FILE = "provider-requests.jsonl";
 
 function sameJson(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
@@ -112,6 +115,14 @@ export class LibsqlPhaseRecorder {
     if (!sameJson(rebuilt, input.providerPayloads.at(-1))) {
       throw new Error("canonical provider payload did not round-trip exactly");
     }
+    // The capture the extension wrote during the run is an intermediate: every
+    // payload in it is now in the canonical log, byte for byte, as the check
+    // above has just proved. Keeping it stored each phase's requests twice,
+    // and a request carries the whole conversation so far -- one round of one
+    // Story was 93MB of duplicate, and evidence reached 8.5GB for a single
+    // requirement. It is removed only on this path, so a run that died still
+    // leaves behind the only record of what it sent.
+    await rm(join(runDirectory, CAPTURE_FILE), { force: true });
 
     const time = this.now();
     const lossByTurn = new Map(cache.losses.map((loss) => [loss.turn, loss.lostTokens]));

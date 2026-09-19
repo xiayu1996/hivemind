@@ -1,5 +1,5 @@
 import { createClient } from "@libsql/client";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -72,6 +72,35 @@ describe("LibsqlPhaseRecorder", () => {
     expect(diagnostics.map((event) => event.data)).toEqual([
       { turn: 2, diagnostics: [{ kind: "provider_transport_failure" }] },
     ]);
+    client.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  it("drops the run's capture file once its payloads are in the canonical log", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "hivemind-phase-capture-"));
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const payloads = [{ model: "mock-1", messages: [{ role: "user", content: "only" }], tools: [] }];
+    const recorder = new LibsqlPhaseRecorder(client, { evidenceRoot: directory }, () => 100);
+    const capture = join(directory, "run-2", "provider-requests.jsonl");
+    await mkdir(join(directory, "run-2"), { recursive: true });
+    await writeFile(capture, `${payloads.map((payload) => JSON.stringify(payload)).join("\n")}\n`, "utf8");
+
+    await recorder.writeEvidence({
+      runId: "run-2",
+      cardId: "card-2",
+      phase: "CODE",
+      messages: [{ role: "assistant", content: "done", usage: { input: 10, cacheRead: 0, cacheWrite: 0, output: 1 } }],
+      providerPayloads: payloads,
+      spec: await testAgentSpec(),
+      result: { settled: true, failure: null, usage: { input: 3, output: 2, cacheRead: 0, cacheWrite: 0, reasoning: 0, costUsd: 0.01 }, events: [] },
+    });
+
+    // A provider request carries the whole conversation so far, so keeping the
+    // capture beside the log stored every round twice.
+    await expect(stat(capture)).rejects.toMatchObject({ code: "ENOENT" });
+    const canonical = parseCanonicalLog(await readFile(join(directory, "run-2", "run-events.jsonl"), "utf8"));
+    expect(rebuildProviderPayload(canonical)).toEqual(payloads[0]);
     client.close();
     await rm(directory, { recursive: true, force: true });
   });
