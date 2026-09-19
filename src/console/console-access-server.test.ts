@@ -164,4 +164,47 @@ describe("console access boundary", () => {
     expect((await app.inject({ method: "GET", url: "/overview", remoteAddress: "203.0.113.90" })).statusCode).toBe(403);
     expect(accessPolicy.authorize).toHaveBeenCalledTimes(2);
   });
+
+  it("@scenario S-R237511OV-02-deniedrequest refuses health, reads and writes before touching a port", async () => {
+    const source = dataSource();
+    const configWriter = writer();
+    const app = await server({ accessPolicy: deniedPolicy(), source, configWriter });
+    const requests = [
+      { method: "GET", url: "/health" },
+      { method: "GET", url: "/api/overview?timeZone=Asia%2FShanghai" },
+      { method: "GET", url: "/api/config" },
+      { method: "GET", url: "/api/config/schema" },
+      { method: "POST", url: "/api/config/value", payload: { key: "x", value: SECRET_CONFIG, updatedBy: "owner" } },
+    ] as const;
+
+    for (const request of requests) {
+      const response = await app.inject({ ...request, remoteAddress: "203.0.113.90" });
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toEqual({
+        error: "console_access_denied",
+        reason: "source_outside_allowed_networks",
+      });
+      expect(response.body).not.toContain(SECRET_RUN);
+      expect(response.body).not.toContain(SECRET_CONFIG);
+      expect(response.body).not.toContain("73.21");
+    }
+    expect(callsOf(source, configWriter)).toEqual([]);
+  });
+
+  it("@scenario S-R237511OV-02-deniedrequest denies unsupported and unknown requests before route handling", async () => {
+    const source = dataSource();
+    const app = await server({ accessPolicy: deniedPolicy(), source });
+
+    for (const request of [
+      { method: "DELETE", url: "/api/tasks" },
+      { method: "POST", url: "/unknown", payload: { value: SECRET_CONFIG } },
+      { method: "HEAD", url: "/health" },
+    ] as const) {
+      const response = await app.inject({ ...request, remoteAddress: "203.0.113.90" });
+      expect(response.statusCode).toBe(403);
+      expect(response.body).not.toContain(SECRET_RUN);
+      expect(response.body).not.toContain(SECRET_CONFIG);
+    }
+    expect(callsOf(source)).toEqual([]);
+  });
 });
