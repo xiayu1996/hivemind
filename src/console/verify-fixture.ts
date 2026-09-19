@@ -62,7 +62,7 @@ export function fixtureFor(scenarioId: string | null): VerifyFixture {
     case "choose":
       return "choose";
     case "savefail":
-      return "empty";
+      return "savefail";
     case "error":
       // A read that did not work is its own state, not the empty ledger: the
       // page says it could not read the todo and offers to try again, and the
