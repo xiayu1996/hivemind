@@ -1,7 +1,7 @@
 import { createClient } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { migrate } from "../persistence/migrate.js";
-import { attributeCard, attributionSequence } from "./attribution-runner.js";
+import { attributeCard, attributionSequence, reopenOwner } from "./attribution-runner.js";
 import { RegressionStore } from "./store.js";
 
 describe("attribution over a real integration sequence", () => {
@@ -216,5 +216,38 @@ describe("attribution over a real integration sequence", () => {
     expect(attribution).toMatchObject({ kind: "introduced", item: "S-M2-02" });
     expect((await client.execute("SELECT state FROM stories WHERE id = 'S-M2-02'")).rows[0]?.state).toBe("CODE");
     await expect(store.openCards()).resolves.toMatchObject([{ attributedStory: "S-M2-02" }]);
+  });
+
+  it("sends a delivered owner back for a card it did not close, with no bisect to run", async () => {
+    await expect(reopenOwner(
+      client,
+      { scenarioId: "S-M2-01-a", failureSignature: "sig" },
+      "S-M2-02",
+      "still_failing",
+      0,
+      () => 700,
+    )).resolves.toBe(true);
+
+    const story = (await client.execute("SELECT state, phase, priority FROM stories WHERE id = 'S-M2-02'")).rows[0];
+    expect(story).toMatchObject({ state: "SPECIFY", phase: "REGRESSION_FIX", priority: 0 });
+    const event = (await client.execute(
+      "SELECT card_id, data FROM event_log WHERE type = 'regression.attributed'",
+    )).rows[0];
+    expect(event?.card_id).toBe("S-M2-02");
+    expect(JSON.parse(String(event?.data))).toMatchObject({ origin: "still_failing" });
+  });
+
+  it("does not disturb an owner that is already working on it", async () => {
+    await client.execute("UPDATE stories SET state = 'VERIFY' WHERE id = 'S-M2-02'");
+
+    await expect(reopenOwner(
+      client,
+      { scenarioId: "S-M2-01-a", failureSignature: "sig" },
+      "S-M2-02",
+      "still_failing",
+      0,
+      () => 700,
+    )).resolves.toBe(false);
+    expect((await client.execute("SELECT state FROM stories WHERE id = 'S-M2-02'")).rows[0]?.state).toBe("VERIFY");
   });
 });
