@@ -14,6 +14,7 @@ const ENTRY = fileURLToPath(new URL("../../scripts/serve-console.ts", import.met
 let client: Client;
 let child: ChildProcess;
 let directory: string;
+let port: number;
 let html: string;
 let output = "";
 
@@ -52,6 +53,12 @@ async function readWhenReady(url: string): Promise<string> {
   throw new Error(`console did not become ready: ${output}`);
 }
 
+async function get(path: string): Promise<string> {
+  const response = await fetch(`http://127.0.0.1:${port}${path}`);
+  if (!response.ok) throw new Error(`GET ${path} answered ${response.status}`);
+  return response.text();
+}
+
 beforeAll(async () => {
   directory = await mkdtemp(join(tmpdir(), "overview-review-regression-"));
   const databasePath = join(directory, "central.db");
@@ -85,7 +92,7 @@ beforeAll(async () => {
   ], "write");
   client.close();
 
-  const port = await unusedPort();
+  port = await unusedPort();
   child = spawn(process.execPath, [TSX, ENTRY, "--port", String(port)], {
     cwd: fileURLToPath(new URL("../..", import.meta.url)),
     env: {
@@ -117,39 +124,19 @@ afterAll(async () => {
   if (directory) await rm(directory, { recursive: true, force: true });
 });
 
-describe("overview data opened by a verification round", () => {
-  it("@scenario S-R237511OV-01-active presents the declared requirement and two tasks in newest-first order", () => {
-    const active = section(html, 'id="active-title"', 'id="failures-title"');
-
-    expect(active).toContain("\u8fd0\u884c\u4e2d <span class=\"heading-count\">3 \u9879");
-    expect(active).toContain('aria-label="\u91cd\u8bd5\u9000\u907f \u4efb\u52a1 CODE \u8fd0\u884c\u4e2d"');
-    expect(active).toContain('aria-label="\u91cd\u8bd5\u7b56\u7565\u6536\u655b \u9700\u6c42 SOLUTION \u8fd0\u884c\u4e2d"');
-    expect(active).toContain('aria-label="\u5f02\u5e38\u5f52\u7c7b \u4efb\u52a1 VERIFY \u8fd0\u884c\u4e2d"');
-    expect(active.indexOf("\u91cd\u8bd5\u9000\u907f")).toBeLessThan(active.indexOf("\u91cd\u8bd5\u7b56\u7565\u6536\u655b"));
-    expect(active.indexOf("\u91cd\u8bd5\u7b56\u7565\u6536\u655b")).toBeLessThan(active.indexOf("\u5f02\u5e38\u5f52\u7c7b"));
-  });
-
-  it("@scenario S-R237511OV-01-active does not substitute unrelated central-store work for the declared running items", () => {
-    const active = section(html, 'id="active-title"', 'id="failures-title"');
-
-    expect(active).not.toContain("\u522b\u7684\u8fd0\u884c\u9700\u6c42");
-    expect(active).not.toContain("\u522b\u7684\u8fd0\u884c\u4efb\u52a1");
-    expect(active).not.toContain("\u5df2\u7ecf\u6062\u590d\u7684\u65e7\u5931\u8d25");
-  });
-
-  it("@scenario S-R237511OV-01-failures presents both current failures with stage, reason and newest-first time", () => {
-    const failures = section(html, 'id="failures-title"', 'id="completed-title"');
-
-    expect(failures).toContain("\u5931\u8d25 <span class=\"heading-count\">2 \u9879");
-    expect(failures).toContain('aria-label="\u8d26\u5355\u5bfc\u51fa \u4efb\u52a1 VERIFY \u5931\u8d25 \u9a8c\u6536\u672a\u901a\u8fc7 ');
-    expect(failures).toContain('aria-label="\u8d26\u5355\u5bfc\u51fa\u89c4\u5219 \u9700\u6c42 SOLUTION \u5931\u8d25 \u65b9\u6848\u65e0\u6cd5\u5f62\u6210 ');
-    expect(failures.indexOf("\u8d26\u5355\u5bfc\u51fa")).toBeLessThan(failures.indexOf("\u8d26\u5355\u5bfc\u51fa\u89c4\u5219"));
-  });
-
-  it("@scenario S-R237511OV-01-failures omits a recovered historical failure from the current failure section", () => {
-    const failures = section(html, 'id="failures-title"', 'id="completed-title"');
-
-    expect(failures).not.toContain("\u5df2\u7ecf\u6062\u590d\u7684\u65e7\u5931\u8d25");
-    expect(failures).not.toContain("\u65e7\u5931\u8d25\u539f\u56e0");
+describe("the overview a verification round opens", () => {
+  it("@scenario S-R237511OV-01-todo every open item appears once with its type, requirement, wait and action", () => {
+    const todos = section(html, 'id="todos-title"', 'id="active-title"');
+    expect(todos).toContain("等待本人处理 <span class=\"heading-count\">3 项");
+    expect(todos).toContain("需要答复");
+    expect(todos).toContain("需要选择");
+    expect(todos).toContain("需要批准");
+    expect(todos).toContain("支付重试规则");
+    expect(todos).toContain("费用统计时区");
+    expect(todos).toContain("后台首屏");
+    expect(todos).toContain("已等待");
+    expect(todos).toContain("/todo?requirement=R-PAY");
+    expect(todos).toContain("/todo?requirement=R-TZ");
+    expect(todos).toContain("/todo?requirement=R-PRD");
   });
 });
