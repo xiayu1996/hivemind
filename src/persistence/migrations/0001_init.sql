@@ -518,6 +518,10 @@ CREATE TABLE IF NOT EXISTS notion_outbox (
   -- cycle both reconcile), and a send that appends to a page is not idempotent
   -- by itself, so a row is claimed before it is sent and released after.
   claimed_until INTEGER,
+  -- Not before this instant: a send that failed on something that says nothing
+  -- about the payload (a timeout, a 5xx) waits rather than spending its
+  -- attempts, which are budgeted for a payload the API refuses outright.
+  next_attempt_at INTEGER,
   created_at    INTEGER NOT NULL,
   sent_at       INTEGER,
   UNIQUE (target, payload_hash)
@@ -763,3 +767,62 @@ CREATE TABLE IF NOT EXISTS notion_media_delivery (
          (status = 'pending' AND upload_id IS NULL AND failure IS NULL))
 );
 CREATE INDEX IF NOT EXISTS idx_notion_media_pending ON notion_media_delivery(status, created_at);
+
+-- Historical USD pricing, one immutable row per non-zero token category of one
+-- provider call. The official per-million price is resolved from the catalog
+-- effective at the instant the call happened, then frozen here together with
+-- the amount it produced, so a later official price change rewrites nothing and
+-- the ceiling's metered-only amount stays derivable from the same rows.
+--
+-- A category with no applicable historical quote is stored as an explicit
+-- unpriced row: it carries neither a zero amount nor a current-price fallback,
+-- and its presence is what keeps a requirement's total marked incomplete.
+CREATE TABLE IF NOT EXISTS requirement_cost_entries (
+  id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+  usage_event_id         TEXT NOT NULL,
+  requirement_id         TEXT NOT NULL REFERENCES requirements(id) ON DELETE CASCADE,
+  work_item_id           TEXT NOT NULL,
+  round_id               TEXT NOT NULL,
+  occurred_at_ms         INTEGER NOT NULL,
+  provider               TEXT NOT NULL,
+  model_id               TEXT NOT NULL,
+  billing_mode           TEXT NOT NULL CHECK (billing_mode IN ('metered','subscription')),
+  category               TEXT NOT NULL CHECK (category IN ('uncached_input','output','cache_read','cache_write')),
+  token_count            INTEGER NOT NULL CHECK (token_count > 0),
+  pricing_status         TEXT NOT NULL CHECK (pricing_status IN ('priced','unpriced')),
+  price_version_id       TEXT,
+  usd_per_million_tokens TEXT,
+  amount_usd             TEXT,
+  price_source_reference TEXT,
+  unpriced_reason        TEXT,
+  created_at             INTEGER NOT NULL,
+  -- One row per category per call: the uniqueness key that makes a retried or
+  -- concurrent recording return the persisted rows instead of repricing them.
+  UNIQUE (usage_event_id, category),
+  CHECK (
+    (pricing_status = 'priced'
+      AND price_version_id IS NOT NULL AND usd_per_million_tokens IS NOT NULL
+      AND amount_usd IS NOT NULL AND price_source_reference IS NOT NULL
+      AND unpriced_reason IS NULL)
+    OR
+    (pricing_status = 'unpriced'
+      AND price_version_id IS NULL AND usd_per_million_tokens IS NULL
+      AND amount_usd IS NULL AND price_source_reference IS NULL
+      AND unpriced_reason IS NOT NULL)
+  )
+);
+CREATE INDEX IF NOT EXISTS idx_requirement_cost_entries_requirement
+  ON requirement_cost_entries(requirement_id, occurred_at_ms, id);
+
+-- One cumulative ceiling per requirement, in exact cents. It is an alert line,
+-- not a stop: crossing it never pauses a Story or creates a human action, so no
+-- execution state is derived from this table. The version makes a save a
+-- compare-and-set, and the scope is one requirement, so two requirements never
+-- contend while two stale forms for the same one produce a single winner.
+CREATE TABLE IF NOT EXISTS requirement_cost_limits (
+  requirement_id  TEXT PRIMARY KEY REFERENCES requirements(id) ON DELETE CASCADE,
+  limit_usd_cents INTEGER NOT NULL CHECK (limit_usd_cents >= 0),
+  version         INTEGER NOT NULL CHECK (version > 0),
+  updated_by      TEXT NOT NULL,
+  updated_at      INTEGER NOT NULL
+);

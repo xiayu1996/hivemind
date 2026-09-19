@@ -72,7 +72,7 @@ import { EpicCompletion } from "../src/orchestrator/epic-completion.js";
 import { EpicMrDelivery } from "../src/vcs/epic-delivery.js";
 import { escalateParkedStories } from "../src/orchestrator/epic-escalation.js";
 import { enqueueEpicPages } from "../src/orchestrator/epic-page-projection.js";
-import { epicRegressionClean } from "../src/regression/epic-gate.js";
+import { epicRegressionClean, epicsAwaitingDelivery, unprovenScenarios } from "../src/regression/epic-gate.js";
 import { discoverMRPort } from "../src/vcs/mr/adapters.js";
 import { NotionStoryProjection } from "../src/notion/story-projection.js";
 import { NotionSyncCoordinator, type NotionSyncPoller } from "../src/notion/sync.js";
@@ -155,14 +155,21 @@ async function currentBranch(path: string): Promise<string> {
  * that talk to Notion or to the remote fail whenever the link blinks, and
  * they run before the steps that dispatch cards and land branches: letting
  * one of them abort the cycle stalls the whole pipeline until the link comes
- * back. Anything that is not a transport fault still stops the cycle.
+ * back. A fault that retrying can clear is skipped for this cycle; anything
+ * that needs a decision still stops it.
+ *
+ * The test is retryability rather than one class, because a link that blinks
+ * says so in more than one wording. A Notion request that hit its deadline
+ * reads as TIMEOUT, not TRANSPORT, and cost a whole cycle -- dispatch, Epic
+ * upkeep and the regression sweep -- plus a P0 about a request that would
+ * have succeeded on the next pass.
  */
 const step = async (name: string, run: () => Promise<void>): Promise<void> => {
   try {
     await run();
   } catch (error) {
     const message = (error as Error).message;
-    if (classifyError(message).class !== "TRANSPORT") throw error;
+    if (!classifyError(message).retryable) throw error;
     console.warn(`${name} was skipped this cycle after a transient network fault: ${message}`);
   }
 };
@@ -776,12 +783,20 @@ async function main(): Promise<void> {
           case "ignored":
             break;
           case "reenter":
+            // Same reason as a provider fault: the card keeps its budget and
+            // this host runs it again on its own. The warn line and the durable
+            // story.dispatch_failed event are the record, and the alert comes
+            // when the budget runs out below. A CODE exit that spends its
+            // rounds is an ordinary refusal, and it raised one P0 per attempt.
             console.warn(`Story ${cardId} will re-enter ${decision.state} (attempt ${decision.attempt}/${decision.budget})`);
-            break;
+            return;
           case "park":
             console.warn(`Story ${cardId} parked after ${decision.attempt} failed attempt(s) in ${decision.state}`);
+            // This is the alert for a parked card: one summary, to every sink.
+            // Raising P0 as well sent a second one carrying the subprocess
+            // command line, which says less and arrives after it.
             await announceStop(cardId);
-            break;
+            return;
         }
         throw error;
       }
@@ -946,18 +961,20 @@ async function main(): Promise<void> {
     // Scenarios an Epic's review request is waiting on. Without this the gate
     // asks for evidence that only an idle host would ever produce, and a
     // delivered Epic could sit behind another Epic's Story indefinitely.
-    const awaitedByDelivery = (await handle.client.execute(
-      `SELECT r.scenario_id FROM scenario_registry r
-         JOIN epics e ON e.id = r.epic_id
-        WHERE e.state = 'EXECUTING'
-          AND e.mr_url IS NULL
-          AND NOT EXISTS (SELECT 1 FROM stories s WHERE s.epic_id = e.id AND s.state <> 'DELIVERED')
-          AND NOT EXISTS (
-            SELECT 1 FROM regression_runs u
-             WHERE u.scenario_id = r.scenario_id AND u.outcome = 'passed'
-          )
-        ORDER BY r.scenario_id`,
-    )).rows.map((row) => String(row.scenario_id));
+    // Asked at the revision the request would propose, which is the question
+    // the gate itself asks: "has it ever passed" let every scenario whose Epic
+    // head had since moved drop out of this set and wait for an idle host.
+    const awaitedByDelivery: string[] = [];
+    for (const epicId of await epicsAwaitingDelivery(handle.client, slug)) {
+      // No branch means nothing was ever published for this Epic, so there is
+      // no revision to prove anything at; the idle sweep still covers it.
+      const head = await processGitCommand
+        .run(repositoryPath, ["rev-parse", `epic/${epicId}`])
+        .then((sha) => sha.trim())
+        .catch(() => "");
+      if (head === "") continue;
+      awaitedByDelivery.push(...await unprovenScenarios(handle.client, epicId, head));
+    }
 
     const plan = planRegressionSweep({
       now: Date.now(),
@@ -1016,6 +1033,22 @@ async function main(): Promise<void> {
     const model = modelOverride ?? (await modelPolicy.resolve("verify", provider)).id;
 
     const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+    // Same debt the Epic decomposition had: the provider is chosen from the
+    // breaker, so a fault it does not hear about leaves that provider "usable"
+    // and every cycle spawns the sweep into the same refusal. A sweep that
+    // cannot run is not background hygiene -- an Epic whose Stories have all
+    // landed cannot open its review request until its scenarios pass, so this
+    // is the thing standing between the requirement and delivery.
+    const reportProviderFault = async (cause: unknown): Promise<never> => {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      // Only what the error catalogue recognises says anything about the
+      // provider; a defect of ours is UNKNOWN and must not open a breaker.
+      if (classifyError(message).class !== "UNKNOWN") {
+        await providerHealth.recordFailure(provider, message, await breakerPolicy(config))
+          .catch(() => undefined);
+      }
+      throw cause;
+    };
     const result = await execFileAsync(npm, [
       "run", "regression:run", "--",
       "--pool", plan.pool,
@@ -1033,7 +1066,7 @@ async function main(): Promise<void> {
       shell: process.platform === "win32",
       maxBuffer: 10 * 1024 * 1024,
       env: { ...process.env, HIVEMIND_DB_URL: dbUrl, ...(await providerEnvFor(provider)) },
-    });
+    }).catch(reportProviderFault);
     if (result.stdout.trim()) console.log(`regression sweep (${plan.reason}): ${result.stdout.trim()}`);
     try {
       const summary = JSON.parse(result.stdout.trim()) as { attributionsSkipped?: string; attributions?: unknown[] };
@@ -1108,6 +1141,15 @@ async function main(): Promise<void> {
         try {
           await regressionSweep();
         } catch (error) {
+          const message = (error as Error).message;
+          // A provider that is busy is not a person's problem: the sweep is a
+          // safety net that runs again on the next idle cycle, and a rate limit
+          // clears on its own. Only a fault the classifier says needs somebody
+          // pages -- which includes anything it does not recognise.
+          if (!classifyError(message).needsHuman) {
+            console.warn(`regression sweep was skipped this cycle: ${message}`);
+            return;
+          }
           await reportP0("regression sweep failed", error);
         }
       });
@@ -1129,9 +1171,17 @@ async function main(): Promise<void> {
       // order within a batch that is already free of conflicts. Each repository
       // is planned against its own hotspot paths, because a hotspot is a path
       // in one repository's tree.
+      // Whoever holds a live lease is writing a worktree right now, on this
+      // host or another. Read from the lease table rather than this process's
+      // own in-flight map, for the same reason the dispatch filter below does:
+      // a restarted orchestrator has an empty map and a full table.
+      const dispatchQueue = new DispatchQueue(handle.client);
+      const heldNow = new Set((await dispatchQueue.held()).map((lease) => lease.cardId));
       const plan = planDispatchAcrossRepositories(await Promise.all(slugs.map(async (slug) => ({
         slug,
         hotspotPaths: (await configFor(slug)).get("schedule.hotspotPaths"),
+        running: rows.filter((row) => String(row.repo) === slug && heldNow.has(String(row.id)))
+          .map((row) => String(row.id)),
         // Read off the checkout, which the cycle refreshed to the default
         // branch: until a contract is on the branch, the first card is the one
         // that puts it there and the rest would each invent their own.
@@ -1216,7 +1266,7 @@ async function main(): Promise<void> {
       // A card a live lease already holds is not dispatchable, whoever holds
       // it. Asking the lease table rather than this process's own map is what
       // keeps a restart from forking a second subprocess onto a running card.
-      const free = await new DispatchQueue(handle.client).dispatchable(batch);
+      const free = await dispatchQueue.dispatchable(batch);
       for (const cardId of free) {
         if (inFlight.size >= limit) break;
         const row = byId.get(cardId);

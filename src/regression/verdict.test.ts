@@ -66,6 +66,23 @@ describe("judgeRegression", () => {
     expect(judgeRegression(observations, policy)).toMatchObject({ kind: "raise", signature: "sig-real" });
   });
 
+  // The three sweeps that failed while a Story's code was not yet on the
+  // branch stay in its window. Without this the first run that passed would
+  // have opened a card, blocked its Epic and reopened the Story.
+  it("raises nothing while the newest run passes", () => {
+    expect(judgeRegression(runs("PFFFF"), policy)).toMatchObject({ kind: "suspect", failures: 4 });
+  });
+
+  it("will not name a break other than the one in front of it", () => {
+    const observations: RegressionObservation[] = [
+      { outcome: "failed", failureSignature: "sig-new" },
+      ...runs("FFFF", "sig-old"),
+    ];
+    expect(judgeRegression(observations, policy)).toMatchObject({ kind: "suspect" });
+    expect(judgeRegression([...runs("FFF", "sig-new"), ...runs("FFFF", "sig-old")], policy))
+      .toMatchObject({ kind: "raise", signature: "sig-new" });
+  });
+
   it("looks only at the most recent window", () => {
     const observations = [...runs("PPPPPPPPPP"), ...runs("FFFFFFFFFF")];
     expect(judgeRegression(observations, policy)).toEqual({ kind: "stable" });

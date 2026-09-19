@@ -53,8 +53,11 @@ describe("LibsqlPhaseRecorder", () => {
     expect(() => validateCoordinates(canonical)).not.toThrow();
     const costs = await client.execute("SELECT provider, model_id, cost_usd FROM cost_entries");
     expect(costs.rows).toMatchObject([{ provider: "mock", model_id: "mock-1", cost_usd: 0.05 }]);
+    // The RPC stream belongs to the evidence file; event_log carries what the
+    // orchestrator decided, and Epic state is read back out of it.
+    expect(canonical.filter((event) => event.type === "rpc/event")).toHaveLength(1);
     const events = await client.execute("SELECT type FROM event_log WHERE run_id = 'run-1'");
-    expect(events.rows).toMatchObject([{ type: "rpc.agent_settled" }]);
+    expect(events.rows).toEqual([]);
 
     // The second turn was sent to a cold shard: its whole previous context is a loss.
     const turns = await client.execute("SELECT turn, cache_read_tokens, cache_loss_tokens FROM turn_usage ORDER BY turn");

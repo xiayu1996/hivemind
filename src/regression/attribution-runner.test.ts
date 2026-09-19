@@ -57,6 +57,13 @@ describe("attribution over a real integration sequence", () => {
     });
   });
 
+  // `git checkout --detach ''` is a fatal pathspec error that takes down the
+  // sweep for the whole Epic, so a sequence with a hole in it is no sequence.
+  it("reports no sequence when a captured revision is missing", async () => {
+    await integrate("S-M2-04", 4, "rev-base", "");
+    await expect(attributionSequence(client, "M2")).resolves.toEqual({ base: "", steps: [] });
+  });
+
   it("reopens the Story that introduced the break, ahead of everything else", async () => {
     const failing = new Set(["rev-2", "rev-3"]);
     const probe = vi.fn(async (revision: string) => failing.has(revision));
@@ -94,6 +101,25 @@ describe("attribution over a real integration sequence", () => {
     await expect(store.openCards()).resolves.toMatchObject([{ attributedStory: null }]);
     expect((await client.execute("SELECT state FROM stories WHERE id = 'S-M2-03'")).rows[0]?.state)
       .toBe("DELIVERED");
+  });
+
+  it("probes nothing on an Epic head nothing has landed on", async () => {
+    // The empty base is what "no Story has integrated yet" looks like. Handed
+    // to the probe it became `git checkout --detach ''`, a fatal pathspec
+    // error that took the whole Epic's sweep down with it.
+    let probes = 0;
+    const attribution = await attributeCard(
+      client,
+      store,
+      { scenarioId: "S-M2-01-a", failureSignature: "sig" },
+      { base: "", steps: [] },
+      async () => { probes += 1; return true; },
+      () => 500,
+    );
+
+    expect(attribution).toMatchObject({ kind: "pre_existing" });
+    expect(probes).toBe(0);
+    await expect(store.openCards()).resolves.toMatchObject([{ attributedStory: null }]);
   });
 
   it("does not reopen anything for a failure it cannot reproduce", async () => {

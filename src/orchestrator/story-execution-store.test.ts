@@ -160,7 +160,7 @@ describe("StoryExecutionStore merge recovery", () => {
   afterEach(() => client.close());
 
   it("S-M2-05-conflict returns an unresolved rebase conflict to CODE and records it without delivering", async () => {
-    await store.recordMergeConflict("S-M2-05-conflict", "merge-run", "CONFLICT (content): Merge conflict in src/vcs/merge-flow.ts");
+    await store.recordMergeConflict("S-M2-05-conflict", "merge-run", "CONFLICT (content): Merge conflict in src/vcs/merge-flow.ts", ["src/vcs/merge-flow.ts"]);
     await expect(store.getStory("S-M2-05-conflict")).resolves.toMatchObject({ state: "CODE", phase: "CODE", mrUrl: null });
     const events = (await client.execute("SELECT type, data FROM event_log WHERE run_id = 'merge-run' ORDER BY id")).rows;
     // A conflict is the Story's own to resolve, so the round is spent; the
@@ -169,6 +169,7 @@ describe("StoryExecutionStore merge recovery", () => {
     expect(events.map((row) => row.type)).toEqual(["merge.conflict", "story.transition"]);
     expect(JSON.parse(String(events[0]?.data))).toEqual({
       reason: "CONFLICT (content): Merge conflict in src/vcs/merge-flow.ts",
+      conflictedFiles: ["src/vcs/merge-flow.ts"],
       spent: true,
     });
   });

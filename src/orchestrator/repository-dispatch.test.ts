@@ -95,4 +95,18 @@ describe("planDispatchAcrossRepositories", () => {
     ]);
     expect(plan).toEqual({ batch: [], cycles: [], stranded: [] });
   });
+
+  it("does not send a card into a directory a running card is writing", async () => {
+    const plan = planDispatchAcrossRepositories([{
+      slug: "acme/widget",
+      hotspotPaths: [],
+      running: ["S-RUN-01"],
+      stories: [
+        { id: "S-NEW-01", state: "QUEUED", dependsOn: [], predictedFootprint: ["src/console"] },
+        { id: "S-RUN-01", state: "CODE", dependsOn: [], predictedFootprint: ["src/console"] },
+      ],
+    }]);
+
+    expect(plan.batch.map((entry) => entry.cardId)).toEqual(["S-RUN-01"]);
+  });
 });

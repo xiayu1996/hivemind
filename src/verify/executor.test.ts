@@ -241,6 +241,49 @@ describe("BlindVerifyExecutor", () => {
     });
   });
 
+  // The verifier is the only session standing in front of the page, so a
+  // missing page structure record is asked for there. Sent to CODE instead it
+  // is a finding nobody can act on, and the round repeats until the card parks.
+  it("asks the verifier for the page structure record it judged by, in its own session", async () => {
+    await mkdir(input().evidencePath, { recursive: true });
+    const claimed = { type: "test_result", scenarioId: "S-EPIC-01-unit", status: "passed" };
+    const replies = [
+      [claimed, assistant(JSON.stringify({ scenarios: [{ id: "S-EPIC-01-unit", status: "passed" }] }))],
+      [assistant(JSON.stringify({ scenarios: [
+        { id: "S-EPIC-01-unit", status: "passed", snapshots: ["page-late.yml"] },
+      ] }))],
+    ];
+    const asked: string[] = [];
+    const late = {
+      ...runner(),
+      prompt: vi.fn(async (message: string): Promise<PromptResult> => {
+        asked.push(message);
+        writeFileSync(join(input().evidencePath, "page-late.yml"), '- heading "运行控制台" [level=1] [ref=e1]');
+        return {
+          settled: true,
+          failure: null,
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, costUsd: 0 },
+          events: replies[Math.min(asked.length - 1, replies.length - 1)]!,
+        };
+      }),
+    };
+    const result = await new BlindVerifyExecutor(
+      { create: () => late },
+      { insert: async () => undefined },
+      pins(),
+      roundAround(),
+    ).run({
+      ...input(),
+      visibleRequirements: new Map([["S-EPIC-01-unit", [{ role: "heading", text: "运行控制台" }]]]),
+    });
+
+    expect(asked).toHaveLength(2);
+    expect(asked[1]).toContain("S-EPIC-01-unit");
+    expect(asked[1]).toContain("snapshots");
+    expect(result.record.verdict).toBe("accepted");
+    expect(result.record.failedScenarios).toEqual([]);
+  });
+
   it("leaves a scenario passing when its snapshot carries what it declared", async () => {
     await mkdir(input().evidencePath, { recursive: true });
     const events = [
@@ -286,15 +329,46 @@ describe("BlindVerifyExecutor", () => {
     expect(inserted).toHaveLength(0);
   });
 
-  it("fails closed on malformed model output", async () => {
+  it("fails closed when the verdict never parses, after asking for it again", async () => {
+    const instance = runner({ content: "not json" });
     const result = await new BlindVerifyExecutor(
-      { create: () => runner({ content: "not json" }) },
+      { create: () => instance },
       { insert: async () => undefined },
       pins(),
     ).run(input());
 
     expect(result.record.verdict).toBe("inconclusive");
-    expect(result.validationErrors.join(" ")).toMatch(/JSON|Unexpected token/i);
+    expect(result.validationErrors.join(" ")).toMatch(/malformed verdict/i);
+    expect(instance.prompts).toHaveLength(3);
+  });
+
+  it("takes the verdict a second ask produced instead of losing the round", async () => {
+    // Re-running the round showed the verifier nothing about what was wrong,
+    // so the next attempt repeated the last one and S-R237511TD-01 was parked
+    // on retry_limit_exceeded having been judged on nothing.
+    const verdict = JSON.stringify({ scenarios: [{ id: "S-EPIC-01-unit", status: "passed" }] });
+    const instance = runner({ content: "not json" });
+    let call = 0;
+    instance.prompt = vi.fn(async (message: string): Promise<PromptResult> => {
+      instance.prompts.push(message);
+      const content = call++ === 0 ? "I looked at everything and it works." : verdict;
+      return {
+        settled: true,
+        failure: null,
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, costUsd: 0 },
+        events: [{ type: "test_result", scenarioId: "S-EPIC-01-unit", status: "passed" }, assistant(content)],
+      };
+    });
+
+    const result = await new BlindVerifyExecutor(
+      { create: () => instance },
+      { insert: async () => undefined },
+      pins(),
+    ).run(input());
+
+    expect(result.record.verdict).toBe("accepted");
+    expect(instance.prompts).toHaveLength(2);
+    expect(instance.prompts[1]).toContain("no verdict this system can read");
   });
 
   it("extracts evidence from real pi toolResult messages without the echo protocol", async () => {
@@ -356,5 +430,28 @@ describe("BlindVerifyExecutor", () => {
       pins(),
     ).run(input());
     expect(result.record.verdict).toBe("accepted");
+  });
+
+  it("says why a scenario the trajectory failed is failed, when the verdict called it passed", async () => {
+    const instance = runner({
+      events: [
+        { type: "test_result", scenarioId: "S-EPIC-01-unit", status: "failed" },
+        assistant(JSON.stringify({ scenarios: [{ id: "S-EPIC-01-unit", status: "passed" }] })),
+      ],
+    });
+    const executor = new BlindVerifyExecutor(
+      { create: () => instance },
+      { insert: async () => undefined },
+      pins(),
+      (() => { let time = 100; return () => time++; })(),
+    );
+
+    const result = await executor.run(input());
+
+    expect(result.record.failedScenarios).toEqual(["S-EPIC-01-unit"]);
+    expect(result.reasons).toContainEqual({
+      scenarioId: "S-EPIC-01-unit",
+      reason: "这条场景在运行记录里判为未通过，但结论里写成通过",
+    });
   });
 });

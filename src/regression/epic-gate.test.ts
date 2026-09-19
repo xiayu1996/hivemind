@@ -1,7 +1,7 @@
 import { createClient, type Client } from "@libsql/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { migrate } from "../persistence/migrate.js";
-import { epicRegressionClean } from "./epic-gate.js";
+import { epicRegressionClean, epicsAwaitingDelivery, unprovenScenarios } from "./epic-gate.js";
 
 let client: Client;
 
@@ -90,5 +90,32 @@ describe("epicRegressionClean", () => {
 
   it("refuses to judge without a revision", async () => {
     await expect(epicRegressionClean(client, "M2", "  ")).rejects.toThrow("needs the revision");
+  });
+});
+
+describe("what the review request is waiting on", () => {
+  it("names a scenario that passed on an earlier head but not on this one", async () => {
+    await sweptClean(OLDER);
+    // The looser question -- has it ever passed -- answers "nothing to sweep"
+    // here, and the Epic then waits for an idle host it may never get.
+    await expect(unprovenScenarios(client, "M2", HEAD)).resolves.toEqual(["S-M2-01-a"]);
+    await sweptClean(HEAD);
+    await expect(unprovenScenarios(client, "M2", HEAD)).resolves.toEqual([]);
+  });
+
+  it("offers only the Epics whose remaining obstacle is evidence", async () => {
+    await client.batch([
+      { sql: "UPDATE epics SET repo = 'acme/widget'" },
+      { sql: "INSERT INTO epics (id, notion_page_id, title, state, repo, created_at, updated_at) VALUES ('M4', 'p-m4', 'Empty', 'EXECUTING', 'acme/widget', 1, 1)" },
+      { sql: "INSERT INTO stories (id, epic_id, notion_page_id, title, requirement, state, created_at, updated_at) VALUES ('S-M3-02', 'M3', 's-3', 'Three', 'r', 'CODE', 1, 1)" },
+    ], "write");
+
+    // M2: every Story delivered. M3: one still running. M4: no Stories at all,
+    // which is a decomposition question rather than a sweep.
+    await expect(epicsAwaitingDelivery(client, "acme/widget")).resolves.toEqual(["M2"]);
+    await expect(epicsAwaitingDelivery(client, "other/repo")).resolves.toEqual([]);
+
+    await client.execute("UPDATE epics SET mr_url = 'https://example.invalid/1' WHERE id = 'M2'");
+    await expect(epicsAwaitingDelivery(client, "acme/widget")).resolves.toEqual([]);
   });
 });
