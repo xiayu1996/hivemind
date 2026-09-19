@@ -13,7 +13,7 @@ import { CANONICAL_CAPTURE_ENV } from "../src/observability/capture-contract.js"
 import { finishLaneCapture, laneCapturePath } from "../src/observability/lane-capture.js";
 import { absoluteDbUrl, openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
-import { attributeCard, attributionSequence } from "../src/regression/attribution-runner.js";
+import { attributeCard, attributionSequence, reopenOwner } from "../src/regression/attribution-runner.js";
 import { BlindSweepPort } from "../src/regression/blind-sweep-port.js";
 import { ScenarioRegistry, type ScenarioPool } from "../src/regression/scenario-registry.js";
 import { sweepRepository } from "../src/regression/sweep-repository.js";
@@ -192,7 +192,29 @@ async function main(): Promise<void> {
         await execFileAsync("git", ["checkout", "--detach", branch], { cwd: probeWorktree, windowsHide: true });
       }
     }
-    console.log(JSON.stringify({ ...result, attributions, ...(attributionsSkipped ? { attributionsSkipped } : {}) }));
+    // A card whose owner is already known and already delivered needs no
+    // bisect -- the sweep just failed the scenario again at this revision, so
+    // the only thing missing is somebody running. Reopening is bounded by
+    // `retry.maxRegressionReopens`, and the worker stops the card for a person
+    // when that runs out, which is how this reaches a human instead of holding
+    // the Epic at the review gate in silence.
+    const reopened: string[] = [];
+    for (const card of await store.idleOwnedCards(result.failed)) {
+      if (card.attributedStory === null) continue;
+      const sent = await reopenOwner(
+        handle.client,
+        { scenarioId: card.scenarioId, failureSignature: card.failureSignature },
+        card.attributedStory,
+        "still_failing",
+        0,
+      );
+      if (sent) reopened.push(card.scenarioId);
+    }
+    console.log(JSON.stringify({
+      ...result, attributions,
+      ...(reopened.length > 0 ? { reopened } : {}),
+      ...(attributionsSkipped ? { attributionsSkipped } : {}),
+    }));
   } finally {
     await finishLaneCapture(capturePath);
     handle.close();

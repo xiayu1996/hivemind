@@ -121,6 +121,33 @@ describe("RegressionStore", () => {
     await expect(store.unattributedCards([card!.scenarioId])).resolves.toEqual([]);
   });
 
+  it("offers an owned card up again once its Story has delivered without closing it", async () => {
+    // The state nothing used to look at: the card names its owner, so the
+    // attribution path skips it, and the owner is delivered, so no round is
+    // running to carry it. S-R237511OV-01 held its Epic at the review gate for
+    // seven hours in exactly this shape.
+    await client.execute({
+      sql: `INSERT INTO stories (id, notion_page_id, title, requirement, state, created_at, updated_at)
+            VALUES ('S-M2-03', 'p-s1', 'Story', 'req', 'CODE', 1, 1)`,
+    });
+    for (let attempt = 0; attempt < 3; attempt++) await fail();
+    const [card] = await store.openCards();
+    await store.attribute(card!.scenarioId, card!.failureSignature, "S-M2-03");
+
+    // While the owner is working there is already somebody to carry it.
+    await expect(store.idleOwnedCards([card!.scenarioId])).resolves.toEqual([]);
+
+    await client.execute("UPDATE stories SET state = 'DELIVERED' WHERE id = 'S-M2-03'");
+    await expect(store.idleOwnedCards([card!.scenarioId]))
+      .resolves.toMatchObject([{ scenarioId: card!.scenarioId, attributedStory: "S-M2-03" }]);
+    await expect(store.idleOwnedCards(["S-M2-03-elsewhere"])).resolves.toEqual([]);
+    await expect(store.idleOwnedCards([])).resolves.toEqual([]);
+
+    // And a card the sweep closed is nobody's work any more.
+    await store.resolveCard(card!.scenarioId, card!.failureSignature, "S-M2-03", 5_000);
+    await expect(store.idleOwnedCards([card!.scenarioId])).resolves.toEqual([]);
+  });
+
   it("closes a card only for the Story it was attributed to, then lets the same break raise again", async () => {
     for (let attempt = 0; attempt < 3; attempt++) await fail();
     const [card] = await store.openCards();
