@@ -232,5 +232,6 @@ export async function sendConsoleAccessDenied(
     await reply.type("text/html; charset=utf-8").send(page.renderDocument({ state: "denied" }));
     return;
   }
-  await reply.type("application/json; charset=utf-8").send({ error: "console_access_denied" });
+  const payload: ConsoleAccessDeniedPayload = { error: "console_access_denied", reason: decision.reason };
+  await reply.type("application/json; charset=utf-8").send(payload);
 }
