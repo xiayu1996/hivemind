@@ -161,6 +161,10 @@ export interface StoryIntegrationPort {
     /** Why the re-verification refused it, which decides what it costs. */
     attribution?: MergeFailureAttribution | undefined;
     failures?: readonly string[] | undefined;
+    /** On a conflict: the branch it was landing on and the paths the rebase
+     * could not reconcile. */
+    integrationBranch?: string | undefined;
+    files?: readonly string[] | undefined;
   }>;
 }
 
@@ -562,6 +566,19 @@ export class SingleStoryWorker {
         // fix a missing binary.
         const attribution: MergeFailureAttribution | undefined =
           integrated.kind === "conflict" ? "story_regression" : integrated.attribution;
+        // Counted, not just recorded against the card. A rebase conflict is
+        // not a defect in the Story and not a judgement on it -- it says two
+        // Stories wanted the same ground -- so how often it happens is the
+        // number that decides whether the split, the schedule or the branch
+        // discipline needs changing.
+        if (integrated.kind === "conflict") {
+          await this.friction?.record({
+            cardId,
+            runId: mergeRunId,
+            kind: "merge_conflict",
+            detail: JSON.stringify({ branch: integrated.integrationBranch, files: integrated.files }),
+          });
+        }
         if (attribution === "environment") {
           throw new Error(`Story ${cardId} could not be re-verified at merge: ${integrated.reason ?? "the check did not run"}`);
         }

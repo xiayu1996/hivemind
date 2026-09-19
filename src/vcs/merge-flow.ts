@@ -65,7 +65,7 @@ export type StoryPublisher = (story: MergeStory) => Promise<{ mrUrl: string | nu
 
 export type MergeResult =
   | { kind: "merged"; integrationBranch: string; scenarioIds: readonly string[]; mrUrl: string | null }
-  | { kind: "conflict"; integrationBranch: string; reason: string }
+  | { kind: "conflict"; integrationBranch: string; reason: string; files: readonly string[] }
   | {
       kind: "verification_failed";
       integrationBranch: string;
@@ -119,7 +119,13 @@ export class EpicMergeFlow {
       const reason = cause instanceof Error ? cause.message : String(cause);
       try {
         const unresolved = await this.git.run(this.options.storyWorktree, ["diff", "--name-only", "--diff-filter=U"]);
-        if (unresolved.trim() !== "") return { kind: "conflict", integrationBranch: target, reason };
+        if (unresolved.trim() !== "") {
+          // The files, not just git's prose. They are what a count of these
+          // conflicts is worth reading by, and what tells a later round which
+          // ground two Stories are competing for.
+          const files = unresolved.split("\n").map((line) => line.trim()).filter((line) => line !== "").toSorted();
+          return { kind: "conflict", integrationBranch: target, reason, files };
+        }
       } catch (inspectionCause) {
         const inspectionReason = inspectionCause instanceof Error ? inspectionCause.message : String(inspectionCause);
         return { kind: "verification_failed", integrationBranch: target, scenarioIds: [], reason: `${reason}; unable to inspect rebase state: ${inspectionReason}` };

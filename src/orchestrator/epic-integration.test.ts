@@ -66,7 +66,7 @@ describe("EpicIntegrator", () => {
 
   it("returns a conflicted Story to CODE with the worktree left for the agent", async () => {
     await seedStory("S-M2-01", ["src/a"], "MERGE");
-    const flow = { merge: vi.fn(async () => ({ kind: "conflict" as const, integrationBranch: "epic/M2", reason: "CONFLICT in src/a/x.ts" })) };
+    const flow = { merge: vi.fn(async () => ({ kind: "conflict" as const, integrationBranch: "epic/M2", reason: "CONFLICT in src/a/x.ts", files: ["src/a/x.ts"] })) };
 
     await expect(new EpicIntegrator(client, store, flow).integrate("S-M2-01", "merge-run"))
       .resolves.toMatchObject({ kind: "conflict" });
