@@ -68,7 +68,7 @@ export function fixtureFor(scenarioId: string | null): VerifyFixture {
       // page says it could not read the todo and offers to try again, and the
       // entry point makes the read fail for it. Reading it as `empty` is what
       // made the failed-read scenario show "目前没有待办" instead.
-      return "empty";
+      return "error";
     case "existing":
     case "loading":
       return "empty";
