@@ -185,9 +185,12 @@ async function main(): Promise<void> {
     ? resolve(one("--integration-worktree"))
     : null;
   const piBinary = resolve(one("--pi", defaultPiBinary()));
-  // Absolute: this process starts the repository's application in the worktree
-  // under verification, and it inherits this address from here.
   const dbUrl = absoluteDbUrl(process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db");
+  // Everything this process starts reads the database this process resolved.
+  // The application a verification round starts runs in the worktree under
+  // verification, inherits this environment, and a relative address means a
+  // different file there -- or no file at all, which is what it got.
+  process.env.HIVEMIND_DB_URL = dbUrl;
   const safeCardId = safeSegment(cardId);
   const evidenceRoot = resolve(one("--evidence-root", join(homedir(), ".hivemind", "evidence", safeCardId)));
   const sessionRoot = resolve(one("--session-root", join(homedir(), ".hivemind", "sessions", safeCardId)));

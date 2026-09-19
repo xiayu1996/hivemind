@@ -53,9 +53,12 @@ async function main(): Promise<void> {
   const evidenceRoot = resolve(one("--evidence-root", join(homedir(), ".hivemind", "evidence", `regression-${pool}`)));
   const probeWorktree = process.argv.includes("--probe-worktree") ? resolve(one("--probe-worktree")) : null;
   const auditPath = join(evidenceRoot, "tool-audit.jsonl");
-  // Absolute: this process starts the repository's application in the worktree
-  // under verification, and it inherits this address from here.
   const dbUrl = absoluteDbUrl(process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db");
+  // Everything this process starts reads the database this process resolved.
+  // The application a verification round starts runs in the worktree under
+  // verification, inherits this environment, and a relative address means a
+  // different file there -- or no file at all, which is what it got.
+  process.env.HIVEMIND_DB_URL = dbUrl;
 
   const model = await resolveModel(defaultModelCatalog(piBinary, worktreePath), provider, modelId);
   const handle = openDb(dbUrl);
