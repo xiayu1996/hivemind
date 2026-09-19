@@ -152,4 +152,34 @@ describe("data-independent access page", () => {
     expect(attemptedInjection).not.toContain("RUN-SECRET-91");
     expect(attemptedInjection).not.toContain("CONFIG-SECRET-72");
   });
+
+  it("@scenario S-R237511OV-02-states renders the exact message for every indeterminate state", async () => {
+    const createPage = await pageContract();
+    const page = createPage();
+    const messages = {
+      not_found: "\u5c1a\u672a\u53d1\u73b0\u53ef\u8bbf\u95ee\u7684\u540e\u53f0",
+      checking: "\u6b63\u5728\u68c0\u67e5\u8bbf\u95ee\u6761\u4ef6",
+      error: "\u65e0\u6cd5\u5b8c\u6210\u8bbf\u95ee\u68c0\u67e5",
+      waiting: "\u6b63\u5728\u7b49\u5f85\u540e\u53f0\u54cd\u5e94",
+    } as const;
+
+    for (const [state, message] of Object.entries(messages)) {
+      const html = page.renderDocument({ state: state as keyof typeof messages });
+      expect(html).toContain(ACCESS_VERIFICATION);
+      expect(html).toContain(message);
+    }
+  });
+
+  it("@scenario S-R237511OV-02-states never renders navigation or console values in access-check states", async () => {
+    const createPage = await pageContract();
+    const page = createPage();
+
+    for (const state of ["not_found", "checking", "error", "waiting"] as const) {
+      const html = page.renderDocument({ state });
+      for (const text of [OVERVIEW, TODO, COST, CONFIG, RECORDS, "RUN-SECRET-91", "USD 73.21"]) {
+        expect(html).not.toContain(text);
+      }
+      expect(html).not.toMatch(/<(?:nav|aside)\b/i);
+    }
+  });
 });
