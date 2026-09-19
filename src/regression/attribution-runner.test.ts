@@ -117,7 +117,28 @@ describe("attribution over a real integration sequence", () => {
     // The log says which of the two ways the owner was found, because only one
     // of them survived a bisect.
     const event = (await client.execute("SELECT data FROM event_log WHERE card_id = 'S-M2-01'")).rows[0];
-    expect(JSON.parse(String(event?.data)) as { origin: string }).toMatchObject({ origin: "never_proven" });
+    expect(JSON.parse(String(event?.data)) as { origin: string }).toMatchObject({ origin: "pre_existing" });
+  });
+
+  it("hands a scenario to its owner when a revision could not be judged at all", async () => {
+    // The application does not start at a revision predating the code that
+    // starts it, so the probe there answers nothing. Read as a pass, the base
+    // looked green and a break that has never once worked came back as "does
+    // not reproduce" -- five of them did, on a live Epic.
+    await register("S-M2-01-a", "S-M2-01");
+
+    const attribution = await attributeCard(
+      client,
+      store,
+      { scenarioId: "S-M2-01-a", failureSignature: "sig" },
+      await attributionSequence(client, "M2"),
+      async (): Promise<"unknown"> => "unknown",
+      () => 500,
+    );
+
+    expect(attribution).toMatchObject({ kind: "unattributable", probes: 1 });
+    await expect(store.openCards()).resolves.toMatchObject([{ attributedStory: "S-M2-01" }]);
+    expect((await client.execute("SELECT state FROM stories WHERE id = 'S-M2-01'")).rows[0]?.state).toBe("SPECIFY");
   });
 
   it("blames nobody for a scenario no Story registered", async () => {

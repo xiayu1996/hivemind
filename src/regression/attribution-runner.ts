@@ -17,8 +17,10 @@ export interface AttributionSequence {
 }
 
 export interface RevisionProbe {
-  /** Whether the scenario fails at this revision. */
-  (revision: string, scenarioId: string): Promise<boolean>;
+  /** Whether the scenario fails at this revision, or "unknown" when the
+   * revision could not be judged at all -- an application that does not start
+   * there says nothing about the break. */
+  (revision: string, scenarioId: string): Promise<boolean | "unknown">;
 }
 
 /**
@@ -65,12 +67,14 @@ async function registeredOwner(client: Client, scenarioId: string): Promise<stri
  * Bisects a raised regression card down to the Story that introduced it and
  * reopens that Story, rather than reopening whatever merged last.
  *
- * A break that predates the sequence introduced nothing, so the bisect names
- * nobody -- but the scenario still has an owner: the Story that registered it
- * and has never made it pass. Leaving that card unattributed left it open with
- * no actor able to close it, which holds its Epic at the review gate forever
- * while every sweep pays to fail again. Reopening the registered owner is not
- * a guess, and `retry.maxRegressionReopens` bounds how often it may happen.
+ * A break that predates the sequence introduced nothing, and one the bisect
+ * could not follow -- because some revision could not be judged at all -- names
+ * nobody either. The scenario still has an owner in both cases: the Story that
+ * registered it and has never made it pass. Leaving those cards unattributed
+ * left them open with no actor able to close them, which holds their Epic at
+ * the review gate forever while every sweep pays to fail again. Reopening the
+ * registered owner is not a guess, and `retry.maxRegressionReopens` bounds how
+ * often it may happen.
  *
  * A failure that will not reproduce stays unattributed on purpose: there is
  * nothing to fix, and the card closes on its own the next time the scenario
@@ -128,7 +132,7 @@ export async function attributeCard(
         JSON.stringify({
           scenarioId: card.scenarioId,
           failureSignature: card.failureSignature,
-          origin: attribution.kind === "introduced" ? "introduced" : "never_proven",
+          origin: attribution.kind,
           probes: attribution.probes,
         }),
       ],
