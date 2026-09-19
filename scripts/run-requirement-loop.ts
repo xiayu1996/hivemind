@@ -11,6 +11,7 @@ import { NotionOutbox } from "../src/notion/outbox.js";
 import {
   NotionRequirementPageDelivery,
   REQUIREMENT_OUTBOX_OPERATIONS,
+  REQUIREMENT_WHOLE_STATE_OPERATIONS,
 } from "../src/notion/requirement-page-delivery.js";
 import { RequirementPageProjector } from "../src/notion/requirement-projection.js";
 import { approvalJudgeSetup, describeJudgeSetup, judgeConfigFrom, usabilityJudgeSetup } from "../src/judge/settings.js";
@@ -366,7 +367,13 @@ async function main(): Promise<void> {
     }
 
     // The orchestrator shares this outbox; each side replays only its own rows.
-    const replayed = await outbox.replay(delivery, { operations: REQUIREMENT_OUTBOX_OPERATIONS });
+    const replayed = await outbox.replay(delivery, {
+      operations: REQUIREMENT_OUTBOX_OPERATIONS,
+      wholeStateOperations: REQUIREMENT_WHOLE_STATE_OPERATIONS,
+    });
+    for (const row of replayed.superseded) {
+      console.log(`Notion outbox: dropped a stale ${row.operation} for ${row.cardId ?? "no card"} after ${row.attempts} attempts; the page already holds a newer one`);
+    }
     for (const failure of replayed.failures) {
       console.warn(`Notion outbox: ${failure.operation} for ${failure.cardId ?? "no card"} failed (attempt ${failure.attempts}): ${failure.error}`);
     }

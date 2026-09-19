@@ -60,6 +60,7 @@ import {
   NotionStoryDelivery,
   NotionStoryPropertyDelivery,
   STORY_OUTBOX_OPERATIONS,
+  STORY_WHOLE_STATE_OPERATIONS,
 } from "../src/notion/story-property-delivery.js";
 import { NotionEpicPlanDelivery } from "../src/notion/epic-plan-delivery.js";
 import { ingestEpicsForDecomposition } from "../src/notion/epic-intake.js";
@@ -433,7 +434,13 @@ async function main(): Promise<void> {
   /** Sends what is queued for the Story side. The requirement loop shares this
    * outbox; each side replays only its own rows. */
   const sendQueuedNotionWrites = async (): Promise<void> => {
-    const replayed = await outbox.replay(delivery, { operations: STORY_OUTBOX_OPERATIONS });
+    const replayed = await outbox.replay(delivery, {
+      operations: STORY_OUTBOX_OPERATIONS,
+      wholeStateOperations: STORY_WHOLE_STATE_OPERATIONS,
+    });
+    for (const row of replayed.superseded) {
+      console.log(`Notion outbox: dropped a stale ${row.operation} for ${row.cardId ?? "no card"} after ${row.attempts} attempts; the page already holds a newer one`);
+    }
     for (const failure of replayed.failures) {
       console.warn(`Notion outbox: ${failure.operation} for ${failure.cardId ?? "no card"} failed (attempt ${failure.attempts}): ${failure.error}`);
     }

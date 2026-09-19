@@ -237,6 +237,11 @@ function solutionSectionBlocks(solution: DesiredSolution): Block[] {
 /** Every outbox operation this delivery owns, for the replay filter. */
 export const REQUIREMENT_OUTBOX_OPERATIONS = ["sync_requirement_page", "create_epic_page"] as const;
 
+/** Creating an Epic page is its own piece of work; re-rendering the
+ * requirement page is the page's whole desired state and a later one replaces
+ * an earlier one outright. */
+export const REQUIREMENT_WHOLE_STATE_OPERATIONS = ["sync_requirement_page"] as const;
+
 /**
  * The requirement page is the whole human interface of the product manager
  * layer: what was asked, what was asked back, what was agreed, and what is
