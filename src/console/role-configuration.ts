@@ -422,6 +422,12 @@ function renderState(state: RoleConfigurationViewState): string {
       return `<section class="state-page" aria-live="polite"><div class="state-card">`
         + `<h2>正在读取角色版本</h2>`
         + `<p>正在加载当前版、上一版及 Prompt 差异，请稍候。</p></div></section>`;
+    case "error":
+      return renderRoleSelector(state.roles, state.selectedRoleId)
+        + `<section class="state-page"><div class="state-card">`
+        + `<h2>无法读取角色配置</h2>`
+        + `<p>当前版和上一版没有载入。检查内网连接后重新读取；已有配置不会改变。</p>`
+        + `<button type="button" class="retry">重新读取</button></div></section>`;
     default: return "";
   }
 }
