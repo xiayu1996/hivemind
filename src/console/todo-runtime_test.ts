@@ -4,6 +4,11 @@ import { type NotionOutboxDelivery, type NotionOutboxRecord } from "../notion/ou
 import { migrate } from "../persistence/migrate.js";
 import { type ConsoleDataSource } from "./server.js";
 import { todoDecisionPath, todoDetailPath, todoSaveCheckPath } from "./todo-contract.js";
+import {
+  TODO_COPY,
+  initialTodoView,
+  reduceTodoView,
+} from "../../console-ui/src/pages/todo/contracts.js";
 import { createTodoConsoleRuntime } from "./todo-runtime.js";
 
 const data: ConsoleDataSource = {
@@ -288,5 +293,48 @@ describe("the todo surface used by a running console", () => {
     expect(String((await client.execute("SELECT comments FROM todo_decisions WHERE todo_id = ?", [todoId])).rows[0]?.comments)).toBe(before);
     expect((await client.execute("SELECT COUNT(*) AS n FROM todo_decisions")).rows[0]?.n).toBe(1);
     await app.close();
+  });
+});
+
+describe("the states a todo read can end in", () => {
+  let client: Client;
+
+  const delivery = (): NotionOutboxDelivery => ({ isApplied: async () => false, send: async () => undefined });
+
+  beforeEach(async () => {
+    client = createClient({ url: ":memory:" });
+    await migrate(client);
+  });
+
+  afterEach(() => client.close());
+
+  it("@scenario S-R237511TD-01-existing an empty ledger answers with an empty list, not a failed read", async () => {
+    const app = await createTodoConsoleRuntime(data, { client, delivery: delivery(), now: () => 9000, server: { serveUi: false } });
+
+    const response = await app.inject({ method: "GET", url: "/api/todos" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ todos: [], openTodoId: null });
+    await app.close();
+  });
+
+  it("@scenario S-R237511TD-01-error a todo the ledger never held reads as not found", async () => {
+    const app = await createTodoConsoleRuntime(data, { client, delivery: delivery(), now: () => 9000, server: { serveUi: false } });
+
+    const response = await app.inject({ method: "GET", url: todoDetailPath("answer:no-such-story:q1") });
+
+    expect(response.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("@scenario S-R237511TD-01-loading a read still in flight is loading, never an empty ledger", () => {
+    const loading = reduceTodoView(initialTodoView("answer:S-RUNTIME-01:q1"), {
+      type: "load",
+      todoId: "answer:S-RUNTIME-01:q1",
+    });
+
+    expect(loading.status).toBe("loading");
+    expect(loading.todo).toBeNull();
+    expect(TODO_COPY.none).toBe("目前没有待办");
   });
 });
