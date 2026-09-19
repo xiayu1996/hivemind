@@ -1,12 +1,15 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  CANONICAL_LOG_SUFFIX,
   CanonicalLogWriter,
+  packCanonicalLog,
   parseCanonicalLog,
   rebuildModelRequest,
   rebuildProviderPayload,
+  readCanonicalLog,
   recoverInterruptedTurns,
   validateCoordinates,
 } from "./canonical-log.js";
@@ -68,5 +71,48 @@ describe("canonical log", () => {
     const recovered = parseCanonicalLog(`${JSON.stringify(original[0])}\n${await readFile(path, "utf8")}`);
     expect(recovered.at(-1)?.data).toEqual({ turn: 1, reason: "interrupted", synthetic: true });
     expect(() => validateCoordinates(recovered)).not.toThrow();
+  });
+});
+
+describe("packing a finished log", () => {
+  it("reads back exactly what was written, from the same path", async () => {
+    const path = join(await mkdtemp(join(tmpdir(), "hm-pack-")), "run-events.jsonl");
+    const writer = new CanonicalLogWriter(path, 0, () => 1_000);
+    await writer.append("turn_start", { turn: 1 });
+    await writer.append("request/provider-payload", { messages: [{ role: "user", content: "x".repeat(4_096) }] });
+    await writer.append("turn_end", { turn: 1, reason: "completed" });
+    await writer.flush();
+    const before = await readCanonicalLog(path);
+
+    await packCanonicalLog(path);
+
+    // The plain file is gone and the caller still names it.
+    await expect(stat(path)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(`${path}${CANONICAL_LOG_SUFFIX}`)).resolves.toBeTruthy();
+    expect(await readCanonicalLog(path)).toEqual(before);
+  });
+
+  it("takes a log that repeats one conversation down by two orders of magnitude", async () => {
+    // What a real log holds: every provider request carries the whole
+    // conversation before it, so the file is one text at growing lengths.
+    const path = join(await mkdtemp(join(tmpdir(), "hm-pack-ratio-")), "run-events.jsonl");
+    const writer = new CanonicalLogWriter(path, 0, () => 1_000);
+    const conversation: string[] = [];
+    for (let step = 0; step < 60; step++) {
+      conversation.push(`turn ${step}: ${"conversation ".repeat(512)}`);
+      await writer.append("request/provider-payload", { messages: [...conversation] });
+    }
+    await writer.flush();
+    const plain = (await stat(path)).size;
+
+    await packCanonicalLog(path);
+
+    const packed = (await stat(`${path}${CANONICAL_LOG_SUFFIX}`)).size;
+    expect(plain / packed).toBeGreaterThan(100);
+  });
+
+  it("still says the path was missing when neither form is there", async () => {
+    const path = join(await mkdtemp(join(tmpdir(), "hm-pack-absent-")), "run-events.jsonl");
+    await expect(readCanonicalLog(path)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

@@ -10,6 +10,7 @@ import {
 import { CostLedger, type CostRecordedEvent } from "./cost-ledger.js";
 import {
   CanonicalLogWriter,
+  packCanonicalLog,
   readCanonicalLog,
   rebuildProviderPayload,
 } from "./canonical-log.js";
@@ -123,6 +124,13 @@ export class LibsqlPhaseRecorder {
     // requirement. It is removed only on this path, so a run that died still
     // leaves behind the only record of what it sent.
     await rm(join(runDirectory, CAPTURE_FILE), { force: true });
+    // Packed only now: the log is complete and has just been proved to
+    // round-trip, and a packed file cannot be appended to. What it holds is
+    // one conversation repeated at growing lengths, so a window wide enough to
+    // reach the previous copy takes a 139MB log to under a megabyte. Every
+    // byte is kept -- the evidence a person reads is the same evidence, and
+    // `readCanonicalLog` opens either form from the same path.
+    await packCanonicalLog(logPath);
 
     const time = this.now();
     const lossByTurn = new Map(cache.losses.map((loss) => [loss.turn, loss.lostTokens]));
