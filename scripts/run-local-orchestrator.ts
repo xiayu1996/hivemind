@@ -1,5 +1,5 @@
 import type { Row } from "@libsql/client";
-import { execFile } from "node:child_process";
+import { execFile, type ChildProcess } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
 import { join, resolve } from "node:path";
@@ -710,6 +710,7 @@ async function main(): Promise<void> {
     });
 
   const inFlight = new Map<string, Promise<void>>();
+  const storyChildren = new Set<ChildProcess>();
   // Set the moment shutdown starts. The signal reaches the whole process group,
   // so a Story's pi dies of it too, and the error that surfaces here is
   // whatever pi was in the middle of -- no signal of our own to read. Without
@@ -790,7 +791,7 @@ async function main(): Promise<void> {
       const npm = process.platform === "win32" ? "npm.cmd" : "npm";
       let result;
       try {
-        result = await execFileAsync(npm, [
+        const pending = execFileAsync(npm, [
           "run", "story:run", "--",
           "--card-id", cardId,
           "--worktree", location.worktreePath,
@@ -808,6 +809,14 @@ async function main(): Promise<void> {
           maxBuffer: 10 * 1024 * 1024,
           env: { ...process.env, HIVEMIND_DB_URL: dbUrl },
         });
+        // Held so a shutdown can stop waiting for it. Without a handle the
+        // only way out of a drain was to wait for a whole inner loop.
+        storyChildren.add(pending.child);
+        try {
+          result = await pending;
+        } finally {
+          storyChildren.delete(pending.child);
+        }
       } catch (error) {
         // What a dead run costs the card is one decision, taken in
         // `decideDispatchFailure`: a run this process killed and a run a
@@ -1439,8 +1448,25 @@ async function main(): Promise<void> {
     await projections.stop();
     handle.close();
   };
-  process.once("SIGINT", () => void stop().then(() => process.exit(0)));
-  process.once("SIGTERM", () => void stop().then(() => process.exit(0)));
+  // A second signal stops waiting. The drain above is deliberately unbounded
+  // -- a round in flight has already been paid for -- but an operator with a
+  // fix to deploy cannot be made to wait out a whole inner loop, and guessing
+  // a deadline here would be guessing at their trade rather than letting them
+  // make it. The child handles SIGTERM: its run settles as cancelled and keeps
+  // every budget, so what a second signal costs is this round's tokens.
+  let draining = false;
+  const signalled = (): void => {
+    if (!draining) {
+      draining = true;
+      void stop().then(() => process.exit(0));
+      return;
+    }
+    if (storyChildren.size === 0) return;
+    console.log(`Stopping ${storyChildren.size} in-flight Story run(s) now; each keeps its budget`);
+    for (const child of storyChildren) child.kill("SIGTERM");
+  };
+  process.on("SIGINT", signalled);
+  process.on("SIGTERM", signalled);
 }
 
 main().catch((error: unknown) => {
