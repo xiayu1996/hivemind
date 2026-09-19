@@ -21,7 +21,7 @@ import { execFile } from "node:child_process";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, statfsSync, statSync } from "node:fs";
 import { createConsoleServer, listenConsole } from "../src/console/server.js";
 import { LibsqlConsoleDataSource } from "../src/console/libsql-data-source.js";
 import { openDb } from "../src/persistence/client.js";
@@ -96,8 +96,26 @@ function removeOrphanedSnapshots(): void {
 removeOrphanedSnapshots();
 const snapshotDir = url.startsWith("file:") ? mkdtempSync(join(tmpdir(), SNAPSHOT_PREFIX)) : null;
 
+// A snapshot is the size of the central database. Running out of disk halfway
+// through one leaves a truncated copy that reads like a database with less in
+// it, and the round would judge screens against it. Refusing outright makes the
+// round report that it had no application, which is a fact somebody can act on.
+function assertRoomFor(databaseFile: string, directory: string): void {
+  const wal = `${databaseFile}-wal`;
+  const needed = statSync(databaseFile).size + (existsSync(wal) ? statSync(wal).size : 0);
+  const stats = statfsSync(directory);
+  const free = stats.bavail * stats.bsize;
+  if (free > needed * 1.2) return;
+  throw new Error(
+    `not enough disk for a private copy of the database: it is ${Math.round(needed / 1e6)}MB `
+    + `and ${Math.round(free / 1e6)}MB is free. The console serves a copy so a round cannot write `
+    + `to the central database, so it does not start without room for one.`,
+  );
+}
+
 async function snapshotOf(source: string, directory: string): Promise<string> {
   const target = join(directory, "console.db");
+  assertRoomFor(file, directory);
   const origin = openDb(source);
   try {
     await origin.client.execute({ sql: "VACUUM INTO ?", args: [target] });
