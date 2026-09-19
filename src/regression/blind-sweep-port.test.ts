@@ -51,7 +51,56 @@ function port(result: BlindVerifyResult) {
 /** The sweep spawns like any other verification. */
 const SWEEP_GRANT = async () => ({ spec: await testAgentSpec({ purpose: "verify" }), release: async () => undefined });
 
+const LIVE_SERVER = [
+  process.execPath,
+  "-e",
+  [
+    "const http = require('node:http');",
+    "http.createServer((req, res) => res.end('ok')).listen(Number(process.env.APP_PORT));",
+    "setInterval(() => undefined, 1000);",
+  ].join(" "),
+];
+
 describe("BlindSweepPort", () => {
+  it("starts the repository's application for the sweep and stops it afterwards", async () => {
+    const appPort = 45_000 + Math.floor(Math.random() * 500);
+    const executor = { run: vi.fn(async () => verifyResult("accepted", [])) };
+    const sweep = new BlindSweepPort({
+      worktreeFor: async () => process.cwd(),
+      specificationFor: async (ids) => new Map(ids.map((id) => [id, `frozen text of ${id}`])),
+      executor,
+      git: { run: vi.fn(async () => "rev-abc\n") },
+      evidenceRoot: "D:/evidence",
+      auditPath: "D:/evidence/audit.jsonl",
+      resolveSpec: SWEEP_GRANT,
+      allowedHosts: ["localhost"],
+      app: {
+        command: LIVE_SERVER,
+        readyUrl: `http://127.0.0.1:${appPort}/`,
+        timeoutMs: 10_000,
+        env: { APP_PORT: String(appPort) },
+      },
+    });
+
+    await sweep.run({ pool: "epic", branch: "epic/M2", scenarioIds: ["S-M2-01-a"] });
+
+    expect(executor.run.mock.calls[0]![0]).toMatchObject({
+      app: { url: `http://127.0.0.1:${appPort}/` },
+      allowedHosts: ["localhost", "127.0.0.1"],
+    });
+    await expect(fetch(`http://127.0.0.1:${appPort}/`, { signal: AbortSignal.timeout(500) })).rejects.toThrow();
+  });
+
+  it("tells the sweep there is no application rather than leaving it to start one", async () => {
+    const { sweep, executor } = port(verifyResult("accepted", []));
+
+    await sweep.run({ pool: "epic", branch: "epic/M2", scenarioIds: ["S-M2-01-a"] });
+
+    expect(executor.run.mock.calls[0]![0].app).toEqual({
+      unavailable: expect.stringContaining("verify.appStartCommand is empty"),
+    });
+  });
+
   it("reports one outcome per scenario against the revision it swept", async () => {
     const { sweep, executor } = port(verifyResult("rejected", ["S-M2-01-b"]));
 
