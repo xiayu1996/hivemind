@@ -8,6 +8,13 @@ from the central store, so an open page is readable before any script runs; the
 small `/assets/overview.js` then refreshes the same block every thirty seconds
 while the page is visible.
 
+Each row of the waiting rail links to `/todo?requirement=<id>`, the item page
+behind that action: the item's own question, the requirement it belongs to and
+how long it has waited, with the handling controls the interface contract
+declares. A requirement with nothing waiting gets a named state instead of a
+missing page. The console stays read-only, so the page presents the item rather
+than keeping a reply.
+
 ## Running it
 
 ```sh
