@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { costsPageZones, renderCostsRoute } from "./costs-page.js";
 import { toOverviewCostAlertsView } from "./overview-cost-alerts.js";
-import { renderOverviewPage } from "./overview-page.js";
+import { renderOverviewCostAlertPage } from "./overview-cost-alert-page.js";
 import { saveRequirementCostLimit } from "./requirement-cost-limit.js";
 import {
   renderRequirementDetailPage,
@@ -169,7 +169,7 @@ export async function createConsoleServer(
   // and never translated into a paused state.
   app.get("/", async (_request, reply) => {
     const snapshots = data.overLimitRequirements ? await data.overLimitRequirements() : [];
-    return reply.type("text/html").send(renderOverviewPage({ alert: toOverviewCostAlertsView(snapshots) }));
+    return reply.type("text/html").send(renderOverviewCostAlertPage({ alert: toOverviewCostAlertsView(snapshots) }));
   });
 
   // Saving a requirement limit is scoped to the one requirement named in the
