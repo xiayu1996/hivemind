@@ -69,13 +69,6 @@ function pairWith(previousVersion: RoleConfigurationVersion | null): RoleVersion
   };
 }
 
-function readerWith(pair: RoleVersionPair): RoleConfigurationReadPort {
-  return {
-    readCatalog: async () => ({ status: "ready", roles }),
-    readVersionPair: async (roleId) => ({ status: "ready", pair: { ...pair, roleId } }),
-  };
-}
-
 async function serverWith(reader: RoleConfigurationReadPort) {
   return createConsoleServer(data, { serveUi: false, roleConfigurationReader: reader });
 }

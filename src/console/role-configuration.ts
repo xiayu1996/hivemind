@@ -84,7 +84,7 @@ interface PromptSegments {
 function diffPromptSentences(current: readonly string[], previous: readonly string[]): PromptSegments {
   const rows = current.length;
   const columns = previous.length;
-  const lengths: number[][] = Array.from({ length: rows + 1 }, () => new Array<number>(columns + 1).fill(0));
+  const lengths: number[][] = Array.from({ length: rows + 1 }, () => Array.from({ length: columns + 1 }, () => 0));
   for (let row = rows - 1; row >= 0; row -= 1) {
     for (let column = columns - 1; column >= 0; column -= 1) {
       lengths[row]![column] = current[row] === previous[column]
