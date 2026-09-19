@@ -90,9 +90,17 @@ export function judgeRegression(
   const signature = newest.failureSignature ?? "";
   const recurrences = signature === "" ? 0 : bySignature.get(signature) ?? 0;
 
+  // Nothing in the window passed, so the flaky-or-broken question the
+  // signatures exist to answer has already answered itself, and they need not
+  // agree. They routinely do not: a screen's failure is a sentence somebody
+  // wrote about what they saw, new wording every round, so a scenario that has
+  // never once worked would never accumulate a card -- and an Epic would wait
+  // at its review gate forever for a break with no owner.
+  const neverGreen = failures.length === window.length;
+
   const raise = failures.length >= policy.minFailures
     && rate >= policy.failureRateThreshold
-    && recurrences >= policy.minFailures;
+    && (neverGreen || recurrences >= policy.minFailures);
 
   return raise
     ? { kind: "raise", failures: failures.length, rate, signature }
