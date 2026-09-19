@@ -114,4 +114,32 @@ describe("the overview started by a verification round with its dynamic port", (
       expect(html).toContain('aria-label="总览摘要"');
     });
   });
+  it("@scenario S-R237511OV-01-states shows the empty state rather than a blank page", async () => {
+    await inspectOverview((html) => {
+      const body = section(html, 'id="overview-body"', "</main>");
+      expect(body).toContain("当前没有运行事项");
+      expect(body).toContain("查看工作记录");
+    }, "/?state=empty");
+  });
+  it("@scenario S-R237511OV-01-states shows the error state rather than a blank page", async () => {
+    await inspectOverview((html) => {
+      const body = section(html, 'id="overview-body"', "</main>");
+      expect(body).toContain("无法读取运行总览");
+      expect(body).toContain("重新读取");
+    }, "/?state=error");
+  });
+  it("@scenario S-R237511OV-01-states shows the loading state rather than a blank page", async () => {
+    await inspectOverview((html) => {
+      const body = section(html, 'id="overview-body"', "</main>");
+      expect(body).toContain("正在读取运行情况");
+      expect(body).toContain("正在读取等待本人处理、运行中、失败和最近完成");
+    }, "/?state=loading");
+  });
+  it("@scenario S-R237511OV-01-states shows the waiting state rather than a blank page", async () => {
+    await inspectOverview((html) => {
+      const body = section(html, 'id="overview-body"', "</main>");
+      expect(body).toContain("运行结果尚未产生");
+      expect(body).toContain("在 1 分钟内自动刷新");
+    }, "/?state=waiting");
+  });
 });
