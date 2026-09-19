@@ -1,0 +1,47 @@
+{
+  "ceilingUsd": 15,
+  "originalRequest": "看看后台首屏。",
+  "requirements": [
+    { "id": "R-ACTIVE", "title": "重试策略收敛", "state": "SOLUTION", "createdOffsetMs": -7200000, "updatedOffsetMs": -1800000 },
+    { "id": "R-PAY", "title": "支付重试规则", "state": "CLARIFY", "createdOffsetMs": -9000000, "updatedOffsetMs": -7200000 },
+    { "id": "R-TZ", "title": "费用统计时区", "state": "CLARIFY", "createdOffsetMs": -10800000, "updatedOffsetMs": -3600000 },
+    { "id": "R-PRD", "title": "后台首屏", "state": "PRD_CONFIRM", "createdOffsetMs": -12600000, "updatedOffsetMs": -1800000 },
+    { "id": "R-HANDLED", "title": "已经处理的需求", "state": "DONE", "createdOffsetMs": -14400000, "updatedOffsetMs": -777600000 },
+    { "id": "R-FAILED", "title": "账单导出规则", "state": "FAILED", "createdOffsetMs": -172800000, "updatedOffsetMs": -3600000 },
+    { "id": "R-BOUNDARY", "title": "候选词表更新", "state": "DONE", "createdOffsetMs": -691200000, "updatedOffsetMs": -604620000 },
+    { "id": "R-OLD", "title": "旧需求归档", "state": "DONE", "createdOffsetMs": -864000000, "updatedOffsetMs": -777600000 }
+  ],
+  "clarifyRounds": [
+    { "requirementId": "R-PAY", "round": 1, "questions": "[{\"question\":\"失败后重试多久？\",\"options\":[]}]", "askedOffsetMs": -7200000 },
+    { "requirementId": "R-TZ", "round": 1, "questions": "[{\"question\":\"使用哪个时区？\",\"options\":[{\"label\":\"上海\"},{\"label\":\"伦敦\"}]}]", "askedOffsetMs": -3600000 },
+    { "requirementId": "R-HANDLED", "round": 1, "questions": "[{\"question\":\"已经回答？\",\"options\":[]}]", "askedOffsetMs": -10800000, "answeredOffsetMs": -10000000, "answers": "[\"已经答复\"]" }
+  ],
+  "prds": [
+    { "requirementId": "R-PRD", "revision": 1, "body": "{}", "status": "draft", "createdOffsetMs": -1800000 }
+  ],
+  "stories": [
+    { "id": "S-CODE", "title": "重试退避", "state": "CODE", "phase": "CODE", "createdOffsetMs": -9000000, "updatedOffsetMs": -1200000 },
+    { "id": "S-VERIFY", "title": "异常归类", "state": "VERIFY", "phase": "VERIFY", "createdOffsetMs": -9000000, "updatedOffsetMs": -2400000 },
+    { "id": "S-FAILED", "title": "账单导出", "state": "FAILED", "phase": "VERIFY", "createdOffsetMs": -172800000, "updatedOffsetMs": -3600000 },
+    { "id": "S-RECOVERED", "title": "已经恢复的导出", "state": "DELIVERED", "phase": "MERGE", "createdOffsetMs": -777600000, "updatedOffsetMs": -691200000 },
+    { "id": "S-RECENT-DONE", "title": "状态投影核对", "state": "DELIVERED", "phase": "MERGE", "createdOffsetMs": -259200000, "updatedOffsetMs": -10800000 },
+    { "id": "S-OLD", "title": "旧任务", "state": "DELIVERED", "phase": "MERGE", "createdOffsetMs": -950400000, "updatedOffsetMs": -864000000 }
+  ],
+  "failureEvents": [
+    {
+      "runId": "demo-requirement-failure",
+      "cardId": "R-FAILED",
+      "offsetMs": -3600000,
+      "data": "{\"from\":\"SOLUTION\",\"to\":\"FAILED\",\"reason\":\"方案无法形成\"}"
+    }
+  ],
+  "phaseRuns": [
+    { "runId": "demo-story-failure", "cardId": "S-FAILED", "phase": "VERIFY", "round": 1, "status": "failed", "failure": "验收未通过", "startedOffsetMs": -3900000, "endedOffsetMs": -3600000 },
+    { "runId": "demo-old-failure", "cardId": "S-RECOVERED", "phase": "SPECIFY", "round": 1, "status": "failed", "failure": "旧失败", "startedOffsetMs": -691500000, "endedOffsetMs": -691200000 }
+  ],
+  "costs": [
+    { "runId": "demo-cost-1", "cardId": "R-ACTIVE", "provider": "demo", "modelId": "demo-1", "costUsd": 12.4, "offsetMs": -86400000 },
+    { "runId": "demo-cost-2", "cardId": "R-ACTIVE", "provider": "demo", "modelId": "demo-1", "costUsd": 7.6, "offsetMs": -604500000 },
+    { "runId": "demo-cost-old", "cardId": "R-ACTIVE", "provider": "demo", "modelId": "demo-1", "costUsd": 99, "offsetMs": -604800001 }
+  ]
+}

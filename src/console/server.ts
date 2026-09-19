@@ -1,8 +1,20 @@
 import fastifyStatic from "@fastify/static";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { OVERVIEW_ENDPOINT, type OverviewReadPort } from "./overview-contract.js";
+import type { ConsoleOverviewPage, OverviewPageState } from "./overview-page.js";
+
+/** The console's own time zone when the reader's browser sends none. */
+const DEFAULT_TIME_ZONE = "Asia/Shanghai";
+const FORCED_PAGE_STATES = new Set<OverviewPageState>(["loading", "empty", "error", "waiting"]);
+
+function forcedPageState(value: string | undefined): OverviewPageState | null {
+  return value !== undefined && FORCED_PAGE_STATES.has(value as OverviewPageState)
+    ? (value as OverviewPageState)
+    : null;
+}
 
 function isTimeZone(value: string): boolean {
   try {
@@ -40,6 +52,11 @@ export interface ConsoleServerOptions {
   serveUi?: boolean;
   /** The one write surface. Without it the console stays entirely read-only. */
   configWriter?: ConsoleConfigWritePort;
+  /** The overview is the console's first screen. When present, `/` and
+   * `/overview` render it from the central store and `/overview/sections`
+   * returns the block the open page refreshes; without it the console falls
+   * back to serving a static bundle from `uiRoot`. */
+  overviewPage?: ConsoleOverviewPage;
 }
 
 /** Builds the read-only intranet console. */
@@ -107,14 +124,61 @@ export async function createConsoleServer(
 
   if (options.serveUi !== false) {
     const uiRoot = resolve(options.uiRoot ?? "console-ui/dist");
-    await app.register(fastifyStatic, {
-      root: join(uiRoot, "assets"),
-      prefix: "/assets/",
-    });
-    const index = await readFile(join(uiRoot, "index.html"), "utf8");
-    app.get("/", async (_request, reply) => reply.type("text/html").send(index));
-    for (const route of ["/overview", "/nodes", "/tasks", "/costs", "/config", "/stats", "/providers", "/queue"]) {
-      app.get(route, async (_request, reply) => reply.type("text/html").send(index));
+    const overviewPage = options.overviewPage;
+    if (overviewPage) {
+      const timeZoneOf = (request: { query: unknown }): string => {
+        const value = (request.query as { timeZone?: string }).timeZone;
+        return typeof value === "string" && isTimeZone(value) ? value : DEFAULT_TIME_ZONE;
+      };
+      const renderPage = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+        const timeZone = timeZoneOf(request);
+        const forced = forcedPageState((request.query as { state?: string }).state);
+        const nowMs = Date.now();
+        let snapshot = null;
+        let state: OverviewPageState = forced ?? "ready";
+        if (forced === null) {
+          try {
+            snapshot = await data.readOverview({ nowMs, timeZone });
+            state = snapshot.contentState.kind === "empty" ? "empty" : "ready";
+          } catch {
+            // A read the console could not make is the page's own error state:
+            // the reader gets a page that says so instead of a blank 500.
+            state = "error";
+            snapshot = null;
+          }
+        }
+        await reply.type("text/html; charset=utf-8").send(
+          overviewPage.renderDocument({ state, snapshot, timeZone, nowMs }),
+        );
+      };
+      app.get("/", renderPage);
+      app.get("/overview", renderPage);
+      app.get("/overview/sections", async (request, reply) => {
+        const timeZone = timeZoneOf(request);
+        const nowMs = Date.now();
+        try {
+          const snapshot = await data.readOverview({ nowMs, timeZone });
+          const state: OverviewPageState = snapshot.contentState.kind === "empty" ? "empty" : "ready";
+          return {
+            body: overviewPage.renderBody({ state, snapshot, timeZone, nowMs }),
+            refreshed: overviewPage.renderRefreshedAt(nowMs, timeZone),
+            revision: snapshot.revision,
+          };
+        } catch {
+          return reply.code(503).send({ error: "overview unavailable" });
+        }
+      });
+    }
+    const assets = join(uiRoot, "assets");
+    if (existsSync(assets)) {
+      await app.register(fastifyStatic, { root: assets, prefix: "/assets/" });
+    }
+    if (!overviewPage) {
+      const index = await readFile(join(uiRoot, "index.html"), "utf8");
+      app.get("/", async (_request, reply) => reply.type("text/html").send(index));
+      for (const route of ["/overview", "/nodes", "/tasks", "/costs", "/config", "/stats", "/providers", "/queue"]) {
+        app.get(route, async (_request, reply) => reply.type("text/html").send(index));
+      }
     }
   }
   return app;

@@ -85,6 +85,7 @@ import { CostLedger } from "../src/observability/cost-ledger.js";
 import { CANONICAL_CAPTURE_ENV } from "../src/observability/capture-contract.js";
 import { createConsoleServer, listenConsole } from "../src/console/server.js";
 import { LibsqlConsoleDataSource } from "../src/console/libsql-data-source.js";
+import { createOverviewPage } from "../src/console/overview-page.js";
 import { ProjectionService } from "../src/observability/projections/service.js";
 import { ConsoleConfigWriter } from "../src/console/config-writer.js";
 import { resolveAgentSpec } from "../src/runner/agent-spec.js";
@@ -1199,7 +1200,7 @@ async function main(): Promise<void> {
   // public wildcard bind itself.
   let operationsConsole: Awaited<ReturnType<typeof createConsoleServer>> | undefined;
   if (config.get("console.enabled")) {
-    const uiRoot = join(ROOT, "console-ui", "dist");
+    const uiRoot = join(ROOT, "console-ui");
     operationsConsole = await createConsoleServer(
       new LibsqlConsoleDataSource(handle.client, async () => [{
         hostId: hostname(),
@@ -1213,7 +1214,7 @@ async function main(): Promise<void> {
       })),
       {
         uiRoot,
-        serveUi: await exists(join(uiRoot, "index.html")),
+        overviewPage: createOverviewPage(),
         configWriter: new ConsoleConfigWriter(config, handle.client),
       },
     );
