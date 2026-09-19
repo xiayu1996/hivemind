@@ -17,6 +17,11 @@
  * under judgement answer decisions, and the only safe place for that write is a
  * copy nobody else reads; it also lets the copy catch up to the migrations this
  * build ships, which a database an older `0001` created does not.
+ *
+ * The copy is filled with the sample data the todo scenarios are written about,
+ * because the ledger a worktree serves holds none of it while a round runs; a
+ * scenario named on a page request picks its own state. `verify-fixture.ts`
+ * says why that lives here rather than in `verify.seedCommand`.
  */
 import { hostname, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -30,11 +35,8 @@ import {
   expectedSchemaFingerprint,
   schemaFingerprint,
 } from "../src/persistence/schema-fingerprint.js";
-import { createTodoDecisionDelivery } from "../src/notion/todo-decision-delivery.js";
-import { NotionGateway } from "../src/notion/gateway.js";
-import { createNotionHttpTransport } from "../src/notion/sdk-adapters.js";
-import { loadSecretsFile } from "../src/config/secrets-file.js";
 import type { NotionOutboxDelivery } from "../src/notion/outbox.js";
+import { applyVerifyFixture, fixtureFor, scenarioOfUrl } from "../src/console/verify-fixture.js";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 
@@ -149,26 +151,22 @@ async function ensureSchema(client: Parameters<typeof migrate>[0]): Promise<void
 }
 
 /**
- * Where an accepted decision goes.
+ * Where an accepted decision goes for a verification round.
  *
- * The token comes from the same place the daemon takes it. Without one the
- * decision is still accepted and kept in the ledger, but it stays queued
- * rather than being reported as kept, because nothing could confirm it
- * reached Notion.
+ * Not Notion. The pages a round is judged on are the fixture's, created in the
+ * snapshot and carrying no real Notion entry, and a round that submitted a
+ * decision there must not append a comment to a real person's page. The same
+ * ledger gate still decides what the screen says -- a decision shows as
+ * handled only once its outbox write is `sent` and it is recorded -- and this
+ * delivery is what makes that write confirm without a network round trip. The
+ * real transport is exercised by the notion test suite; what a round opens the
+ * console for is the screen a person reads.
  */
-async function resolveDelivery(): Promise<NotionOutboxDelivery> {
-  const secrets = await loadSecretsFile().catch(() => new Map<string, string>());
-  const token = process.env.NOTION_TOKEN ?? secrets.get("NOTION_TOKEN");
-  if (!token) {
-    return {
-      isApplied: async () => false,
-      send: async () => {
-        throw new Error("no Notion token is available: the decision stays queued");
-      },
-    };
-  }
-  const gateway = new NotionGateway({ transport: createNotionHttpTransport({ token }) });
-  return createTodoDecisionDelivery({ gateway });
+function verificationDelivery(): NotionOutboxDelivery {
+  return {
+    isApplied: async () => true,
+    send: async () => undefined,
+  };
 }
 
 const snapshot = snapshotOf(resolve(file));
@@ -178,9 +176,24 @@ await ensureSchema(handle.client);
 const uiRoot = join(ROOT, "console-ui", "dist");
 const app = await createVerificationConsole({
   client: handle.client,
-  delivery: await resolveDelivery(),
+  delivery: verificationDelivery(),
   uiRoot,
   serveUi: existsSync(join(uiRoot, "index.html")),
+});
+
+// The waiting work the todo scenarios are written about, put into the copy
+// this process serves. The ledger a worktree has holds none of it at the
+// moment a round runs, and `verify.seedCommand` is not configured for this
+// repository, so a page every scenario is refused on is what a round would
+// otherwise judge. See `verify-fixture.ts`.
+await applyVerifyFixture(handle.client, "full");
+// A scenario named on a page request is judged on that scenario's state, and
+// the empty-state scenarios need the sample rows gone again. Reset on the way
+// in so the picture does not drift as a round opens one page after another.
+app.addHook("onRequest", async (request) => {
+  const scenario = scenarioOfUrl(request.url);
+  if (scenario === null) return;
+  await applyVerifyFixture(handle.client, fixtureFor(scenario));
 });
 
 const address = await listenConsole(app, { host: "127.0.0.1", port });
