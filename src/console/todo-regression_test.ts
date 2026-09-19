@@ -47,4 +47,10 @@ describe("the waiting state each todo scenario is judged on", () => {
     expect((await listPendingTodos(client)).map((todo) => todo.kind)).toContain("choose");
   });
 
+  it("@scenario S-R237511TD-01-savefail the save scenario is judged on a decision still waiting on Notion", async () => {
+    await applyVerifyFixture(client, fixtureFor("S-R237511TD-01-savefail"), 9000);
+
+    expect((await listPendingTodos(client))[0]?.decision?.status).toBe("awaiting_notion");
+  });
+
 });
