@@ -8,9 +8,10 @@ export interface EnqueueNotionOperation {
   target: string;
   payload: unknown;
   /**
-   * The same payload was delivered before, but the remote has since moved on
-   * and must receive it again. Dedup exists for crash replay; a desired state
-   * that recurs after an intermediate one is new work, not a replay.
+   * The remote moved without us -- a person edited it -- so the payload it
+   * last received is no longer what it holds, and it must receive it again
+   * even though nothing else was sent to the target since. A payload that
+   * recurs after a different one is resent without this flag.
    */
   resend?: boolean;
 }
@@ -155,12 +156,21 @@ export class NotionOutbox {
     }
 
     const existing = await this.client.execute({
-      sql: "SELECT id, state FROM notion_outbox WHERE target = ? AND payload_hash = ?",
-      args: [input.target, encoded.hash],
+      sql: `SELECT id, state, (SELECT MAX(id) FROM notion_outbox WHERE target = ?) AS newest
+            FROM notion_outbox WHERE target = ? AND payload_hash = ?`,
+      args: [input.target, input.target, encoded.hash],
     });
     const id = existing.rows[0]?.id;
     if (id === undefined) throw new Error("outbox conflict row disappeared");
-    if (input.resend && existing.rows[0]?.state === "sent") {
+    // Dedup exists for crash replay, so it may only collapse a payload that is
+    // still the newest thing this target was given. Once a different payload
+    // followed it, the remote holds that later one, and the recurrence is new
+    // work: dropping it leaves the remote on the intermediate state for good.
+    // A Story page that stopped and was then resumed by a person returns to
+    // exactly the payload it had before it stopped, and the stop callout sat
+    // on the page for the rest of the run.
+    const superseded = Number(existing.rows[0]?.newest ?? id) !== Number(id);
+    if ((input.resend || superseded) && existing.rows[0]?.state === "sent") {
       await this.client.execute({
         sql: `UPDATE notion_outbox
               SET state = 'pending', attempts = 0, last_error = NULL, sent_at = NULL, created_at = ?, priority = ?
@@ -181,10 +191,13 @@ export class NotionOutbox {
     const filter = operations.length > 0 ? ` AND operation IN (${operations.map(() => "?").join(", ")})` : "";
     const now = this.now();
     const rows = (await this.client.execute({
+      // Oldest desired state first, and a row revived by a recurring payload
+      // carries the instant it was revived, so it lands after whatever was
+      // queued for the same target in between.
       sql: `SELECT id, card_id, priority, operation, target, payload, payload_hash, attempts
             FROM notion_outbox
             WHERE state = 'pending' AND (claimed_until IS NULL OR claimed_until <= ?)${filter}
-            ORDER BY priority ASC, id ASC
+            ORDER BY priority ASC, created_at ASC, id ASC
             LIMIT ?`,
       args: [now, ...operations, limit],
     })).rows;
