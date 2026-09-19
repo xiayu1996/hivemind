@@ -40,7 +40,7 @@ const FIXTURE_STORY_IDS = [ANSWER_STORY, SAVE_STORY];
 const FIXTURE_REQUIREMENT_IDS = [APPROVE_REQUIREMENT, CHOICE_REQUIREMENT];
 const FIXTURE_PAGE_IDS = [...FIXTURE_STORY_IDS, ...FIXTURE_REQUIREMENT_IDS].map((id) => `page-${id}`);
 
-export type VerifyFixture = "full" | "answer" | "approve" | "choose" | "savefail" | "empty";
+export type VerifyFixture = "full" | "answer" | "approve" | "choose" | "savefail" | "empty" | "error";
 
 /** The word a scenario id ends in, which is the state that scenario is about. */
 function stateOf(scenarioId: string): string {
@@ -63,9 +63,14 @@ export function fixtureFor(scenarioId: string | null): VerifyFixture {
       return "choose";
     case "savefail":
       return "savefail";
+    case "error":
+      // A read that did not work is its own state, not the empty ledger: the
+      // page says it could not read the todo and offers to try again, and the
+      // entry point makes the read fail for it. Reading it as `empty` is what
+      // made the failed-read scenario show "目前没有待办" instead.
+      return "error";
     case "existing":
     case "loading":
-    case "error":
       return "empty";
     // An id whose state this table does not know is a scenario about something
     // else; the full sample set is the answer that keeps a waiting page on
@@ -210,7 +215,9 @@ async function seedSubmitted(client: Client, now: number): Promise<void> {
  */
 export async function applyVerifyFixture(client: Client, fixture: VerifyFixture, now = Date.now()): Promise<void> {
   await resetFixtureRows(client);
-  if (fixture === "empty") return;
+  // `error` is the same empty ledger the page fails to read: the failure is
+  // served by the entry point, not stored in a row.
+  if (fixture === "empty" || fixture === "error") return;
   if (fixture === "full" || fixture === "approve") await seedApproval(client, now);
   if (fixture === "full" || fixture === "answer") await seedAnswer(client, now);
   if (fixture === "full" || fixture === "choose") await seedChoice(client, now);

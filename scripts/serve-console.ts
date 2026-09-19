@@ -181,17 +181,26 @@ const app = await createVerificationConsole({
   serveUi: existsSync(join(uiRoot, "index.html")),
 });
 
-// The sample data the todo scenarios are written about. A page request that
-// names a scenario is judged on that scenario's state; a page request that
-// names none is the state the "nothing is waiting" scenarios are written
-// about, so it clears the sample rows rather than seeding them. Asset and API
-// requests are left alone: the page's own reads must see the state its page
-// request set, and the built shell fetches its scripts and data after the
-// document.
-app.addHook("onRequest", async (request) => {
+// The scenario named on a request decides two things: which sample rows the
+// ledger holds, and whether the todo reads are made to fail. A scenario about
+// a read that did not work (`...-error`) is judged on a page that could not
+// read its todo, so its state is an empty ledger whose reads answer 503 -- the
+// page then says it could not read the todo and offers to try again, which is
+// exactly what is under test. Asset and other API requests are left alone: the
+// page's own reads must see the state its page request set.
+let unreadable = false;
+app.addHook("onRequest", async (request, reply) => {
   const path = request.url.split("?")[0] ?? request.url;
-  if (path.startsWith("/api/") || path.startsWith("/assets/") || path === "/health") return;
-  await applyVerifyFixture(handle.client, fixtureFor(scenarioOfUrl(request.url)));
+  if (path.startsWith("/api/")) {
+    if (unreadable && (path === "/api/todos" || path.startsWith("/api/todos/"))) {
+      return reply.code(503).send({ error: "the todo could not be read" });
+    }
+    return;
+  }
+  if (path.startsWith("/assets/") || path === "/health") return;
+  const fixture = fixtureFor(scenarioOfUrl(request.url));
+  unreadable = fixture === "error";
+  await applyVerifyFixture(handle.client, fixture);
 });
 
 const address = await listenConsole(app, { host: "127.0.0.1", port });
