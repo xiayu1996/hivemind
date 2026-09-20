@@ -185,6 +185,41 @@ depends_on: []
     client.close();
   });
 
+  it("leaves the row alone when the page still says what the card already says", async () => {
+    const { client, store } = await story();
+    const requirement = String((await client.execute(
+      "SELECT requirement FROM stories WHERE id = 'S-EPIC1-01'",
+    )).rows[0]!.requirement);
+    await client.execute("UPDATE stories SET updated_at = 500 WHERE id = 'S-EPIC1-01'");
+    const api: NotionStoryApi = {
+      queryReady: emptyApi.queryReady,
+      listChildren: async () => ({
+        results: [
+          {
+            id: "requirement-heading",
+            type: "heading_2",
+            heading_2: { rich_text: [{ plain_text: "\u9700\u6c42\u63cf\u8ff0" }] },
+          },
+          { id: "requirement-body", type: "paragraph", paragraph: { rich_text: [{ plain_text: requirement }] } },
+        ],
+        hasMore: false,
+        nextCursor: null,
+      }),
+    };
+    const comments = new CommentIngestor(client, { listComments: async () => [] }, { now: () => 1_000 });
+    const gateway = new NotionGateway({
+      ratePerSecond: 1_000_000,
+      transport: async () => ({ status: 200, data: page(STORY_BOARD_STATUS.running) }),
+    });
+    const sync = new NotionStoryInputSync(client, gateway, api, comments, store, () => 9_000);
+
+    await sync.pollContent("page-1");
+
+    const after = (await client.execute("SELECT updated_at FROM stories WHERE id = 'S-EPIC1-01'")).rows[0]!;
+    expect(Number(after.updated_at)).toBe(500);
+    client.close();
+  });
+
   it("treats a page without an AI status as not yet projected instead of failing the poll", async () => {
     const { client, store } = await story();
     const gateway = new NotionGateway({
