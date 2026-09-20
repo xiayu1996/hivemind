@@ -259,7 +259,27 @@ export class NotionStoryProjection implements StoryProjectionPort {
     if (summary.dispatchFailures.length > 0) {
       lines.push(stopSummaryLine("dispatchFailed", { count: String(summary.dispatchFailures.length) }));
     }
-    if (summary.budget > 0) {
+    if (summary.inconclusive) {
+      lines.push(stopSummaryLine("inconclusive", {
+        attempts: String(summary.inconclusive.attempts),
+        scenarios: summary.inconclusive.scenarios.map(name).join("\u3001"),
+      }));
+      // The count names no decision; the reason does. A box that would not
+      // start is the operator's to repair, a situation no browser of ours can
+      // be put in is theirs to move out of the screen lane, and the two read
+      // identically as a number. The verifier already wrote which one it was,
+      // in a full Chinese sentence, and S-R237511MB-02 stopped twice without
+      // any of it reaching the page.
+      const latest = new Map<string, string>();
+      for (const round of summary.inconclusive.rounds) {
+        for (const entry of round.reasons) latest.set(entry.scenarioId, entry.reason);
+      }
+      for (const [scenarioId, reason] of [...latest]
+        .toSorted(([left], [right]) => left.localeCompare(right, "en"))) {
+        lines.push(stopSummaryLine("inconclusiveReason", { scenario: name(scenarioId), reason }));
+      }
+    }
+    if (summary.budget !== undefined && summary.budget > 0) {
       lines.push(stopSummaryLine("budget", { spent: String(summary.spent), budget: String(summary.budget) }));
     }
     if (summary.costUsd > 0) lines.push(stopSummaryLine("spend", { amount: summary.costUsd.toFixed(2) }));

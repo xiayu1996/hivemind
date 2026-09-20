@@ -111,6 +111,26 @@ describe("wordings pi's provider layer already knows", () => {
       expect(classifyError(wording).retryable).toBe(true);
     });
 
+  // Not a provider wording: this is what a Notion request that hit its own
+  // deadline says, and the orchestrator asks this classifier whether a failed
+  // cycle step may be skipped until the next pass. Read as anything but
+  // transient it cost a whole cycle -- dispatch, Epic upkeep, the regression
+  // sweep -- and raised a P0 about a request the next pass would have made.
+  it("reads a request that hit its own deadline as transient", () => {
+    expect(classifyError("The operation was aborted due to timeout").retryable).toBe(true);
+  });
+
+  // The same wording, asked the other question. A background step reports a
+  // failure as a P0 only when this says somebody is needed, so a link that
+  // blinked during Epic decomposition has to answer no -- it paged the operator
+  // about a request the next cycle made successfully -- while a spent account
+  // and anything unrecognised have to answer yes.
+  it("says who is needed, so a blink is not a page and a spent account is", () => {
+    expect(classifyError("The operation was aborted due to timeout").needsHuman).toBe(false);
+    expect(classifyError("Codex error: The usage limit has been reached").needsHuman).toBe(true);
+    expect(classifyError("DECOMPOSE returned no candidate matching the contract").needsHuman).toBe(true);
+  });
+
   // Published error tables, for wordings that cannot be provoked without paying
   // a provider to refuse us.
   const PUBLISHED: Array<[string, string, string]> = [

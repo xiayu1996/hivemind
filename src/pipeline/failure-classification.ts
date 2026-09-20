@@ -75,6 +75,21 @@ export function isEnvironmentFailure(reason: string): boolean {
 export interface ScenarioReason {
   scenarioId: string;
   reason: string;
+  /**
+   * Set by whoever produced the reason when the class is already settled.
+   *
+   * The table below reads prose a model wrote, and reading prose is the only
+   * reason it exists. A reason hivemind itself emits from a condition it
+   * checked -- a snapshot the verifier declared and did not leave, an
+   * application the box could not start -- is not prose to be recognised: the
+   * code that wrote it knows what it is. Putting such a reason to the table
+   * anyway made its class depend on the wording, and then on the judge's
+   * confidence in that wording: four scenarios whose only failure was
+   * `snapshot does not exist` were asked as four questions, two crossed the
+   * threshold and two did not, and S-R237511OV-02 spent its budget on the
+   * difference (2026-09-19).
+   */
+  environmental?: boolean;
 }
 
 /**
@@ -99,7 +114,8 @@ export function splitScenarioFailures(
     const own = reasons.filter((entry) => entry.scenarioId === scenarioId);
     // No reason at all is not evidence of a healthy environment.
     const environmental = own.length > 0
-      && own.every((entry) => isEnvironmentFailure(entry.reason) || alsoEnvironmental.has(entry.reason));
+      && own.every((entry) =>
+        entry.environmental === true || isEnvironmentFailure(entry.reason) || alsoEnvironmental.has(entry.reason));
     (environmental ? environment : code).push(scenarioId);
   }
   return { code, environment };

@@ -25,6 +25,37 @@ describe("decideDispatchFailure", () => {
     })).toMatchObject({ kind: "provider_fault" });
   });
 
+  it("charges nothing when the host could not run its own command", () => {
+    // The host's dependencies were emptied under a running orchestrator and
+    // S-R237511TD-02, ninety seconds old, spent all three attempts on this.
+    expect(decideDispatchFailure({
+      stopping: false,
+      message: "Command failed: npm run story:run -- --card-id S-X-01\nsh: tsx: command not found\n",
+      card: CARD,
+      budget: 3,
+    })).toMatchObject({ kind: "host_fault" });
+    expect(decideDispatchFailure({
+      stopping: false, message: "spawn npm ENOENT", card: CARD, budget: 3,
+    })).toMatchObject({ kind: "host_fault" });
+    expect(decideDispatchFailure({
+      stopping: false, message: "npm ERR! missing script: story:run", card: CARD, budget: 3,
+    })).toMatchObject({ kind: "host_fault" });
+  });
+
+  it("still charges the card for a failure that is its own to answer for", () => {
+    // Deliberately narrow: a missing module or a non-zero exit inside the
+    // card's own code says something about the card.
+    expect(decideDispatchFailure({
+      stopping: false,
+      message: "Command failed: npm run story:run\nError: Cannot find module './pages/todo.js'",
+      card: CARD,
+      budget: 3,
+    })).toMatchObject({ kind: "reenter" });
+    expect(decideDispatchFailure({
+      stopping: false, message: "Command failed with exit code 1", card: CARD, budget: 3,
+    })).toMatchObject({ kind: "reenter" });
+  });
+
   it("has nothing to charge when the card is gone or already delivered", () => {
     expect(decideDispatchFailure({ stopping: false, message: "exit 1", budget: 3 }))
       .toEqual({ kind: "ignored" });
@@ -110,6 +141,32 @@ describe("settleDispatchFailure", () => {
 
     expect(decision).toEqual({ kind: "cancelled" });
     await expect(store.getStory("S-EPIC1-01")).resolves.toMatchObject({ state: "SHAPE", phaseReentries: 0 });
+    client.close();
+  });
+});
+
+describe("settleDispatchFailure on a broken host", () => {
+  it("writes nothing against the card", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, () => 1_000);
+    await store.createStory({
+      id: "S-HOST-01", notionPageId: "page", title: "Card", requirement: "r", branch: "story/host-01",
+    });
+
+    const decision = await settleDispatchFailure({
+      store,
+      config: { reload: async () => {}, get: () => 3 },
+      cardId: "S-HOST-01",
+      error: new Error("Command failed: npm run story:run\nsh: tsx: command not found\n"),
+      stopping: false,
+    });
+
+    expect(decision).toMatchObject({ kind: "host_fault" });
+    const story = (await client.execute("SELECT state, phase_reentries FROM stories WHERE id = 'S-HOST-01'")).rows[0];
+    expect(story).toMatchObject({ state: "QUEUED", phase_reentries: 0 });
+    expect((await client.execute("SELECT COUNT(*) n FROM event_log WHERE type = 'story.dispatch_failed'")).rows[0]?.n)
+      .toBe(0);
     client.close();
   });
 });

@@ -42,7 +42,28 @@ export interface StopSummary {
   /** Which situation ended the loop, when a loop ended it. */
   convergence?: ConvergenceClassification;
   spent: number;
-  budget: number;
+  /**
+   * Absent when the stop did not come from a round budget. It used to default
+   * to 0, which reads as a budget of zero -- a number the code guarantees
+   * cannot exist, since `maxInnerLoopRounds` is validated above zero.
+   */
+  budget?: number;
+  /**
+   * Rounds that reached no verdict: the box would not stand up, or the
+   * situation a scenario is judged in could not be produced at all.
+   *
+   * Kept out of `rounds` because an inconclusive round judges no code and must
+   * not enter the convergence curve, and carried whatever ended the card
+   * rather than only when the inconclusive count did. S-R237511MB-02 stopped
+   * on its reopen budget with two of these behind it, each saying in a full
+   * sentence that no browser it could reach comes from outside the allowed
+   * networks, and the person it stopped for was shown none of it.
+   */
+  inconclusive?: {
+    attempts: number;
+    scenarios: readonly string[];
+    rounds: readonly StopSummaryRound[];
+  };
   rounds: readonly StopSummaryRound[];
   mergeBounces: readonly StopSummaryMergeBounce[];
   baselineFailures: readonly StopSummaryBaselineFailure[];
@@ -82,7 +103,27 @@ export function renderStopSummary(summary: StopSummary): string {
   } else {
     lines.push(`${summary.cardId} stopped: ${summary.reason}`);
   }
-  lines.push("", `Rounds spent: ${summary.spent} of ${summary.budget}`);
+  if (summary.inconclusive) {
+    lines.push(
+      "",
+      `No round reached a verdict, ${summary.inconclusive.attempts} in a row: `
+      + summary.inconclusive.scenarios.join(", "),
+    );
+    // The count names no decision. What a person has to decide on is the
+    // reason -- a box that would not start is theirs to repair, a situation no
+    // browser of ours can be in is theirs to move out of the screen lane --
+    // so the latest reason per scenario is printed beneath it.
+    const latest = new Map<string, string>();
+    for (const round of summary.inconclusive.rounds) {
+      for (const entry of round.reasons) latest.set(entry.scenarioId, entry.reason);
+    }
+    for (const [scenarioId, reason] of [...latest].toSorted(([left], [right]) => left.localeCompare(right))) {
+      lines.push(`  ${scenarioId}: ${reason}`);
+    }
+  }
+  lines.push("", summary.budget === undefined
+    ? `Rounds spent: ${summary.spent}`
+    : `Rounds spent: ${summary.spent} of ${summary.budget}`);
   for (const bounce of summary.mergeBounces) {
     lines.push(`Merge sent it back (${bounce.attribution}): ${bounce.failures.join(", ") || bounce.check || "no name recorded"}`);
   }

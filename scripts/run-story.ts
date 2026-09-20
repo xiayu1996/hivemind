@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { homedir, hostname } from "node:os";
 import { join, resolve } from "node:path";
@@ -27,7 +28,7 @@ import { quarantineWorktree, worktreeLayout } from "../src/vcs/worktree.js";
 import { LibsqlActualFootprintStore } from "../src/vcs/actual-footprint.js";
 import { NotionStoryProjection } from "../src/notion/story-projection.js";
 import { SingleStoryWorker } from "../src/orchestrator/story-worker.js";
-import { openDb } from "../src/persistence/client.js";
+import { absoluteDbUrl, openDb } from "../src/persistence/client.js";
 import { migrate } from "../src/persistence/migrate.js";
 import { POLICY_ENV_VAR, serializeGuardPolicy, type GuardPolicy } from "../src/guard/policy.js";
 import { probeProviderReadiness } from "../src/runner/auth-probe.js";
@@ -59,6 +60,7 @@ import { CostLedger } from "../src/observability/cost-ledger.js";
 import { costCeilingUsd } from "../src/pipeline/cost-ceiling.js";
 import { retryLimits } from "../src/pipeline/retry-limits.js";
 import { specifyGatePorts } from "../src/pipeline/specify-gate.js";
+import { describeGitFailure } from "../src/vcs/git-failure.js";
 import { ScenarioRegistry } from "../src/regression/scenario-registry.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
@@ -67,6 +69,8 @@ import { BlindVerifyExecutor, EVIDENCE_DIR_ENV } from "../src/verify/executor.js
 import { loadPromptLayers } from "../src/pipeline/prompt-loader.js";
 import { discoverMRPort } from "../src/vcs/mr/adapters.js";
 import { GitMrStoryDelivery, processGitCommand } from "../src/vcs/story-delivery.js";
+import { appLaneConfig, startAppLane } from "../src/verify/app-lane.js";
+import { probeScreens, type ScreenPage } from "../src/pipeline/screen-reachability.js";
 
 const execFileAsync = promisify(execFile);
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -147,12 +151,16 @@ function safeSegment(value: string): string {
 
 
 async function git(worktreePath: string, args: readonly string[]): Promise<string> {
-  const result = await execFileAsync("git", [...args], {
-    cwd: worktreePath,
-    windowsHide: true,
-    maxBuffer: 8 * 1024 * 1024,
-  });
-  return result.stdout;
+  try {
+    const result = await execFileAsync("git", [...args], {
+      cwd: worktreePath,
+      windowsHide: true,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    return result.stdout;
+  } catch (cause) {
+    throw describeGitFailure(cause);
+  }
 }
 
 /** The tree a verdict was reached on. A conclusion carried onto a tree that
@@ -184,7 +192,12 @@ async function main(): Promise<void> {
     ? resolve(one("--integration-worktree"))
     : null;
   const piBinary = resolve(one("--pi", defaultPiBinary()));
-  const dbUrl = process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db";
+  const dbUrl = absoluteDbUrl(process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db");
+  // Everything this process starts reads the database this process resolved.
+  // The application a verification round starts runs in the worktree under
+  // verification, inherits this environment, and a relative address means a
+  // different file there -- or no file at all, which is what it got.
+  process.env.HIVEMIND_DB_URL = dbUrl;
   const safeCardId = safeSegment(cardId);
   const evidenceRoot = resolve(one("--evidence-root", join(homedir(), ".hivemind", "evidence", safeCardId)));
   const sessionRoot = resolve(one("--session-root", join(homedir(), ".hivemind", "sessions", safeCardId)));
@@ -444,6 +457,10 @@ async function main(): Promise<void> {
       evidenceRoot,
       auditPath,
       allowedHosts,
+      // The same application the UI review opens, started for the functional
+      // lane too: telling the verifier to stand one up itself made the answer
+      // depend on what it stood up.
+      app: appLaneConfig(config),
       chromiumSandbox: config.get("verify.chromiumSandbox"),
       resolveSpec: () => grant("verify"),
       commitMessages: () => gitMessages(worktreePath, targetBranch),
@@ -550,7 +567,24 @@ async function main(): Promise<void> {
               { run: (check, cwd) => runProjectCheck(cwd, check) },
               config.get("codeExit.projectChecks"),
             ),
-            { storyWorktree: worktreePath, integrationWorktree, mainBranch: targetBranch },
+            {
+              storyWorktree: worktreePath,
+              integrationWorktree,
+              mainBranch: targetBranch,
+              // Counted, not refused. Until there are numbers, "a card may not
+              // work outside what it declared" is a rule nobody can size.
+              onFootprintOverreach: async (overreach) => {
+                await store.recordFriction({
+                  cardId: overreach.storyId,
+                  runId: `merge-${overreach.storyId}`,
+                  kind: "footprint_overreach",
+                  detail: JSON.stringify({
+                    unpredicted: overreach.unpredicted,
+                    predicted: overreach.predicted,
+                  }),
+                });
+              },
+            },
           ),
         )
       : undefined;
@@ -571,6 +605,34 @@ async function main(): Promise<void> {
         // changed on the branch between two of its own rounds. A half-written
         // one is left out rather than injected: a phase told to build against
         // a table that is missing half its colours invents the rest.
+        // Resolved inside the card's own worktree: a footprint is judged
+        // against the branch the card runs on, not against whatever this
+        // process happens to be checked out at.
+        repositoryHas: (path) => existsSync(join(worktreePath, path)),
+        // Asked of the application this repository starts, in this card's own
+        // worktree. Anything the lane could not start answers `null`: at this
+        // point a box that will not come up and code that broke the start are
+        // the same observation, and refusing on it would let a held port stop
+        // cards. VERIFY still reports that round inconclusive.
+        screensReachable: async (pages: readonly ScreenPage[]) => {
+          const lane = await startAppLane({ cwd: worktreePath, ...appLaneConfig(config) }, allowedHosts);
+          try {
+            if (!("url" in lane.app)) {
+              console.warn(`screen reachability not asked: ${lane.app.unavailable}`);
+              return null;
+            }
+            return await probeScreens(lane.app.url, pages, async (url) => {
+              try {
+                const response = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(15_000) });
+                return { status: response.status };
+              } catch (cause) {
+                return { failed: cause instanceof Error ? cause.message : String(cause) };
+              }
+            });
+          } finally {
+            await lane.stop();
+          }
+        },
         interfaceContract: async () => {
           const read = await readInterfaceContract(join(worktreePath, config.get("prototype.root")));
           if (read.kind === "incomplete") {

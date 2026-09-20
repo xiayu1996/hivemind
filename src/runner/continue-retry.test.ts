@@ -164,4 +164,45 @@ describe("clean runs", () => {
     expect(outcome).toMatchObject({ failure: null, continueRetries: 0 });
     expect(runner.prompts).toEqual(["work"]);
   });
+
+  it("keeps the events and usage an interrupted attempt already produced", async () => {
+    const usage = (costUsd: number) => ({ ...EMPTY_USAGE, output: 10, costUsd });
+    const runner = stubRunner([
+      {
+        settled: true,
+        failure: { errorMessage: "Connection error.", willRetry: true },
+        usage: usage(0.4),
+        events: [{ type: "test_result", scenarioId: "S-1-a", status: "passed" }],
+      },
+      {
+        settled: true,
+        failure: null,
+        usage: usage(0.1),
+        events: [{ type: "message_end", message: { role: "assistant", content: "done" } }],
+      },
+    ]);
+
+    const outcome = await promptWithContinueRetry(runner, "go", { maxContinueRetries: 2, sleep: async () => {} });
+
+    expect(outcome.events).toEqual([
+      { type: "test_result", scenarioId: "S-1-a", status: "passed" },
+      { type: "message_end", message: { role: "assistant", content: "done" } },
+    ]);
+    expect(outcome.usage).toMatchObject({ output: 20, costUsd: 0.5 });
+    expect(outcome.continueRetries).toBe(1);
+  });
+
+  it("keeps them when the failure is not retryable and the loop gives up", async () => {
+    const runner = stubRunner([{
+      settled: true,
+      failure: { errorMessage: "401 unauthorized", willRetry: false },
+      usage: { ...EMPTY_USAGE, costUsd: 0.2 },
+      events: [{ type: "test_result", scenarioId: "S-1-a", status: "failed" }],
+    }]);
+
+    const outcome = await promptWithContinueRetry(runner, "go", { maxContinueRetries: 2, sleep: async () => {} });
+
+    expect(outcome.events).toEqual([{ type: "test_result", scenarioId: "S-1-a", status: "failed" }]);
+    expect(outcome.usage).toMatchObject({ costUsd: 0.2 });
+  });
 });

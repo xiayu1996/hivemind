@@ -1,13 +1,15 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { testAgentSpec } from "../runner/agent-spec.testing.js";
 import type { PiRunner, PromptResult, RpcEvent } from "../runner/types.js";
 import { BlindVerifyExecutor, type TreePinPort } from "./executor.js";
 
 // The executor writes the browser config under the worktree, so the paths must be real and disposable.
 const scratch = mkdtempSync(join(tmpdir(), "hivemind-verify-"));
+// Left behind, one per run: 886 of them had collected in the host's temp directory.
+afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 function toolResult(text: string, isError = false): RpcEvent {
   return { type: "message_end", message: { role: "toolResult", isError, content: [{ type: "text", text }] } };
@@ -123,7 +125,7 @@ describe("verify telemetry", () => {
     const result = await verdictOf([]);
 
     expect(result.record.verdict).toBe("inconclusive");
-    expect(result.runnerFailure).toMatch(/no assistant verdict/);
+    expect(result.runnerFailure).toMatch(/malformed verdict/);
   });
 
   it("reports no failure for a settled session", async () => {

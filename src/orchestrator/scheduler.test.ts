@@ -240,3 +240,51 @@ describe("planStoryExecution with Stories already running", () => {
       .toEqual(planStoryExecution(stories, []));
   });
 });
+
+function onEpic(id: string, epicId: string, footprint: readonly string[]): SchedulableStory {
+  return { id, epicId, dependsOn: [], predictedFootprint: footprint };
+}
+
+describe("Stories whose work lands on different Epic branches", () => {
+  it("plans them together although their footprints overlap", () => {
+    // Nine cards across six Epics all declared src/console, and the plan held
+    // one batch of one. They never share a tree: separate worktrees, separate
+    // branches, and MERGE rebases each onto its own epic branch.
+    const plan = planStoryExecution([
+      onEpic("S-RC-01", "R-RC", ["src/console"]),
+      onEpic("S-TR-01", "R-TR", ["src/console", "src/observability"]),
+      onEpic("S-DT-03", "R-DT", ["src/console"]),
+    ], []);
+    expect(plan).toEqual({ kind: "planned", batches: [["S-RC-01", "S-TR-01", "S-DT-03"]] });
+  });
+
+  it("keeps two Stories of one Epic apart, because the second rebases onto the first", () => {
+    const plan = planStoryExecution([
+      onEpic("S-DT-03", "R-DT", ["src/console"]),
+      onEpic("S-DT-04", "R-DT", ["src/console/overview.ts"]),
+    ], []);
+    expect(plan).toEqual({ kind: "planned", batches: [["S-DT-03"], ["S-DT-04"]] });
+  });
+
+  it("still serialises a hotspot across Epics, which is what naming one is for", () => {
+    const plan = planStoryExecution([
+      onEpic("S-RC-01", "R-RC", ["src/console/role-configuration.ts", "src/console/server.ts"]),
+      onEpic("S-TR-01", "R-TR", ["src/console/work-records.ts", "src/console/server.ts"]),
+    ], ["src/console/server.ts"]);
+    expect(plan).toEqual({ kind: "planned", batches: [["S-RC-01"], ["S-TR-01"]] });
+  });
+
+  it("treats a Story with no Epic as sharing a branch with everything", () => {
+    const plan = planStoryExecution([
+      { id: "S-LOOSE-01", dependsOn: [], predictedFootprint: ["src/console"] },
+      onEpic("S-RC-01", "R-RC", ["src/console"]),
+    ], []);
+    expect(plan).toEqual({ kind: "planned", batches: [["S-LOOSE-01"], ["S-RC-01"]] });
+  });
+
+  it("carries the Epic through the dispatchable filter", () => {
+    expect(dispatchableStories([
+      { id: "S-RC-01", state: "CODE", epicId: "R-RC", dependsOn: [], predictedFootprint: ["src/console"] },
+    ])).toEqual([{ id: "S-RC-01", epicId: "R-RC", dependsOn: [], predictedFootprint: ["src/console"] }]);
+  });
+});

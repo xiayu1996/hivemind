@@ -127,10 +127,31 @@ export function parseDesignTokens(text: string): { tokens: DesignToken[] } | { r
   return { tokens: tokens.toSorted((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) };
 }
 
-/** Composite values (a shadow, a typography set) keep their shape as compact
- * JSON; a downstream phase needs the parts, not a summary of them. */
+/**
+ * The token's value as CSS writes it.
+ *
+ * A dimension arrives as `{value, unit}` under the W3C format, and every
+ * consumer compares it against a browser's computed style, which says `8px`.
+ * Stringified as JSON it matched nothing: the allowed-lengths set held only
+ * `0px`, so the contract layer reported every non-zero length on every screen
+ * as off-contract -- 206 findings on one round of S-R237511OV-02, not one of
+ * them a colour, because colours are plain strings and parsed all along.
+ *
+ * Composite values (a shadow, a typography set) keep their shape as compact
+ * JSON; a downstream phase needs the parts, not a summary of them.
+ */
 function literal(value: unknown): string {
-  return typeof value === "string" ? value : JSON.stringify(value);
+  if (typeof value === "string") return value;
+  if (isDimension(value)) return `${value.value}${value.unit}`;
+  return JSON.stringify(value);
+}
+
+/** A W3C dimension: exactly a number and a unit. No composite has that pair,
+ * so the shape identifies it without the group's `$type`. */
+function isDimension(value: unknown): value is { value: number; unit: string } {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as { value?: unknown; unit?: unknown };
+  return typeof candidate.value === "number" && typeof candidate.unit === "string";
 }
 
 const TITLE = /<title>([\s\S]*?)<\/title>/i;

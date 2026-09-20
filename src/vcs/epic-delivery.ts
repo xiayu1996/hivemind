@@ -117,13 +117,26 @@ export class EpicMrDelivery {
       ["log", "--format=%s", "--reverse", `${this.targetBranch}..${epic.integration_branch}`]))
       .split("\n").filter(Boolean);
     const body = renderDescription(epicId, String(epic.title), stories, subjects);
-    const result = await this.mr.create({
+    // A batch that came back from acceptance left its request open while the
+    // Epic lost the URL: a gap clears mr_url and sends the Epic to work, and
+    // the branch is the same one. Opening a second request between the same
+    // two branches is refused by the platform, which would leave the finished
+    // batch unable to ask for review at all. The Story lane has reused its own
+    // request since it was built; this one did not.
+    const existing = await this.mr.findOpen({
       repository: epic.repo,
       sourceBranch: epic.integration_branch,
       targetBranch: this.targetBranch,
-      title: `[${epicId}] ${String(epic.title)}`,
-      body,
     });
+    const result = existing !== null
+      ? { url: existing }
+      : await this.mr.create({
+        repository: epic.repo,
+        sourceBranch: epic.integration_branch,
+        targetBranch: this.targetBranch,
+        title: `[${epicId}] ${String(epic.title)}`,
+        body,
+      });
     const update = await this.client.execute({
       sql: "UPDATE epics SET mr_url = ?, updated_at = ? WHERE id = ? AND mr_url IS NULL",
       args: [result.url, this.now(), epicId],

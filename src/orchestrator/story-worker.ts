@@ -8,7 +8,7 @@ import {
 } from "../pipeline/convergence.js";
 import type { MergeFailureAttribution } from "../vcs/merge-flow.js";
 import { evaluateSpecExit, applyDowngrades, renderSpecExitFindings, type SpecExitPorts } from "../pipeline/spec-exit-gate.js";
-import { parseTestContract, type TestContract } from "../pipeline/test-contract.js";
+import { parseTestContract, TestContractValidationError, type TestContract } from "../pipeline/test-contract.js";
 import { costCeilingVerdict, renderCostCeilingReport, type CardSpend } from "../pipeline/cost-ceiling.js";
 import {
   DoDValidationError,
@@ -17,11 +17,21 @@ import {
   parseDoD,
   renderDoDLanguageFindings,
   renderMissingInterfaceContract,
+  renderMissingPage,
   renderMissingVisible,
+  footprintWithoutGround,
+  renderFootprintWithoutGround,
+  scenariosMissingPage,
   scenariosMissingVisible,
   type DefinitionOfDone,
 } from "../pipeline/dod.js";
 import { assemblePhasePrompt, type PhaseInput } from "../pipeline/phase-input.js";
+import {
+  renderUnreachableScreens,
+  screenPages,
+  type ScreenPage,
+  type UnreachableScreen,
+} from "../pipeline/screen-reachability.js";
 import type { InterfaceContract } from "../pipeline/interface-contract.js";
 import {
   StoryExecutionStore,
@@ -161,6 +171,10 @@ export interface StoryIntegrationPort {
     /** Why the re-verification refused it, which decides what it costs. */
     attribution?: MergeFailureAttribution | undefined;
     failures?: readonly string[] | undefined;
+    /** On a conflict: the branch it was landing on and the paths the rebase
+     * could not reconcile. */
+    integrationBranch?: string | undefined;
+    files?: readonly string[] | undefined;
   }>;
 }
 
@@ -194,6 +208,25 @@ export interface StoryWorkerOptions {
    * it is injected wherever it exists; a card in a repository with no screens
    * never sees the section. */
   interfaceContract?: () => Promise<InterfaceContract | null>;
+  /**
+   * Whether a path exists in the tree this card runs on, used to judge the
+   * footprint the DoD declares. Synchronous because the exit asks about a
+   * handful of paths at most and a predicate keeps the rule itself pure.
+   *
+   * Optional for the same reason the other tree ports are: a caller with no
+   * worktree records the footprint unchecked, which is all it can do.
+   */
+  repositoryHas?: (path: string) => boolean;
+  /**
+   * Opens each screen the DoD promises on the application this repository
+   * starts, and says which ones were not there.
+   *
+   * `null` when the repository declares no way to start one: there is no
+   * entry point to ask about, so nothing is asked. Optional for the same
+   * reason as the other tree ports -- a caller with no worktree cannot start
+   * anything.
+   */
+  screensReachable?: (pages: readonly ScreenPage[]) => Promise<UnreachableScreen[] | null>;
   runId?: (cardId: string, phase: StoryPhase, round: number) => string;
 }
 
@@ -267,6 +300,8 @@ export class SingleStoryWorker {
   private readonly convergenceOptions: ConvergenceOptions;
   private readonly treeSha: (() => Promise<string>) | undefined;
   private readonly interfaceContract: (() => Promise<InterfaceContract | null>) | undefined;
+  private readonly repositoryHas: ((path: string) => boolean) | undefined;
+  private readonly screensReachable: StoryWorkerOptions["screensReachable"];
 
   constructor(
     private readonly store: StoryExecutionStore,
@@ -283,6 +318,8 @@ export class SingleStoryWorker {
     this.convergenceOptions = options.convergence ?? {};
     this.treeSha = options.treeSha;
     this.interfaceContract = options.interfaceContract;
+    this.repositoryHas = options.repositoryHas;
+    this.screensReachable = options.screensReachable;
     this.maxInconclusiveRounds = options.maxInconclusiveRounds ?? 2;
     this.maxInnerLoopRounds = options.maxInnerLoopRounds ?? 3;
     this.specifyExitRounds = options.specifyExitRounds ?? 3;
@@ -430,7 +467,8 @@ export class SingleStoryWorker {
         if (overspent) return overspent;
         round += 1;
         const codeRunId = this.createRunId(cardId, "CODE", round);
-        const code = await this.runPhase(cardId, "CODE", round, codeRunId);
+        const screenGate = this.screenGate(cardId, codeRunId);
+        const code = await this.runPhase(cardId, "CODE", round, codeRunId, screenGate ? [screenGate] : undefined);
         artifact(code, "implementation");
         let verifyRunId = this.createRunId(cardId, "VERIFY", round);
         await this.store.transition(cardId, "CODE", "VERIFY", "system", verifyRunId);
@@ -461,7 +499,14 @@ export class SingleStoryWorker {
               kind: "verification_inconclusive",
               detail: `${inconclusiveStreak} consecutive attempts failed for environmental reasons: ${verification.failedScenarios.join(", ")}`,
             });
-            await this.store.stopForInput(cardId, "VERIFY", "retry_limit_exceeded", verifyRunId);
+            // Named, because this stop is not about the work: nothing was
+            // judged at all. Without the detail the card offered a person the
+            // words "retry limit exceeded" over an environment that never came
+            // up, and a fabricated budget of zero underneath them.
+            await this.store.stopForInput(cardId, "VERIFY", "retry_limit_exceeded", verifyRunId, {
+              inconclusive: inconclusiveStreak,
+              inconclusiveScenarios: verification.failedScenarios,
+            });
             await this.projection.enqueue(cardId);
             return { state: "NEEDS_INPUT", rounds: round, mrUrl: null, stopReason: "retry_limit_exceeded" };
           }
@@ -562,6 +607,19 @@ export class SingleStoryWorker {
         // fix a missing binary.
         const attribution: MergeFailureAttribution | undefined =
           integrated.kind === "conflict" ? "story_regression" : integrated.attribution;
+        // Counted, not just recorded against the card. A rebase conflict is
+        // not a defect in the Story and not a judgement on it -- it says two
+        // Stories wanted the same ground -- so how often it happens is the
+        // number that decides whether the split, the schedule or the branch
+        // discipline needs changing.
+        if (integrated.kind === "conflict") {
+          await this.friction?.record({
+            cardId,
+            runId: mergeRunId,
+            kind: "merge_conflict",
+            detail: JSON.stringify({ branch: integrated.integrationBranch, files: integrated.files }),
+          });
+        }
         if (attribution === "environment") {
           throw new Error(`Story ${cardId} could not be re-verified at merge: ${integrated.reason ?? "the check did not run"}`);
         }
@@ -624,7 +682,13 @@ export class SingleStoryWorker {
     }
     if (story.regressionReopens >= this.maxRegressionReopens) {
       const runId = this.createRunId(cardId, "REGRESSION_FIX", story.innerLoopRounds);
-      await this.store.stopForInput(cardId, "REGRESSION_FIX", "retry_limit_exceeded", runId);
+      // Carries its own numbers: the page showed "重试次数用尽" over a budget
+      // that belongs to the inner loop, which this stop is not about.
+      await this.store.stopForInput(cardId, "REGRESSION_FIX", "retry_limit_exceeded", runId, {
+        spent: story.regressionReopens,
+        budget: this.maxRegressionReopens,
+        reopened: cards.map((card) => card.scenarioId),
+      });
       await this.projection.enqueue(cardId);
       return {
         state: "NEEDS_INPUT",
@@ -654,20 +718,43 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
       if (overspent) return overspent;
       round += 1;
       const fixRunId = this.createRunId(cardId, "REGRESSION_FIX", round);
-      const fix = await this.runPhase(cardId, "REGRESSION_FIX", round, fixRunId);
+      const fixScreenGate = this.screenGate(cardId, fixRunId);
+      const fix = await this.runPhase(cardId, "REGRESSION_FIX", round, fixRunId,
+        fixScreenGate ? [fixScreenGate] : undefined);
       artifact(fix, "implementation");
-      const verifyRunId = this.createRunId(cardId, "VERIFY", round);
-      const verification = await this.runVerification(cardId, round, verifyRunId, fix.sessionId, definitionOfDone);
+      let verifyRunId = this.createRunId(cardId, "VERIFY", round);
+      let verification = await this.runVerification(cardId, round, verifyRunId, fix.sessionId, definitionOfDone);
       await this.projection.enqueue(cardId);
 
-      if (verification.verdict === "inconclusive") {
+      // Re-verified against the same fix, exactly as the inner loop does it.
+      // Going back around the for-loop would buy another REGRESSION_FIX turn
+      // to repair something the code never did: S-R237511MB-02 was reopened
+      // for a scenario judged from outside the allowed networks, which no
+      // browser we can reach comes from, and the turn it bought answered the
+      // unreachable premise by rendering the denial page to every caller.
+      // Standing the environment up again is the repair for what this reaches;
+      // rewriting the tree is not, and it moves the HEAD the next attempt
+      // would be compared against.
+      while (verification.verdict === "inconclusive") {
         inconclusiveStreak += 1;
         if (inconclusiveStreak >= this.maxInconclusiveRounds) {
-          await this.store.stopForInput(cardId, "REGRESSION_FIX", "verify_loop_exceeded", verifyRunId);
+          await this.friction?.record({
+            cardId,
+            runId: verifyRunId,
+            kind: "verification_inconclusive",
+            detail: `${inconclusiveStreak} consecutive attempts failed for environmental reasons: ${verification.failedScenarios.join(", ")}`,
+          });
+          await this.store.stopForInput(cardId, "REGRESSION_FIX", "verify_loop_exceeded", verifyRunId, {
+            inconclusive: inconclusiveStreak,
+            inconclusiveScenarios: verification.failedScenarios,
+          });
           await this.projection.enqueue(cardId);
           return { state: "NEEDS_INPUT", rounds: round, mrUrl: story.mrUrl, stopReason: "verify_loop_exceeded" };
         }
-        continue;
+        round += 1;
+        verifyRunId = this.createRunId(cardId, "VERIFY", round);
+        verification = await this.runVerification(cardId, round, verifyRunId, fix.sessionId, definitionOfDone);
+        await this.projection.enqueue(cardId);
       }
       inconclusiveStreak = 0;
       spent += 1;
@@ -877,6 +964,48 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
   }
 
   /**
+   * The screens this card promises, opened on the application the repository
+   * itself starts.
+   *
+   * A phase that wrote a page and never mounted it has green tests and a
+   * missing feature, and every layer after this one is too late or looking at
+   * the wrong server: VERIFY reads a browser, and until an application lane
+   * existed that browser could be pointed at something the verifier had
+   * assembled itself. Handed back inside the session that wrote the code, so
+   * it costs no round -- mounting what you just built is a work item, not a
+   * verdict on the Story.
+   *
+   * Counted, so the rule is judged on evidence rather than on how reasonable
+   * it sounds: a gate that never fires says the prompt was already enough.
+   */
+  private screenGate(cardId: string, runId: string): PhaseExitGate | null {
+    const reachable = this.screensReachable;
+    if (!reachable) return null;
+    return {
+      name: "screen-reachable",
+      maxRounds: 2,
+      exhausted: "fail",
+      evaluate: async () => {
+        const definitionOfDone = await this.store.getDefinitionOfDone(cardId);
+        const pages = screenPages(definitionOfDone);
+        if (pages.length === 0) return { passed: true };
+        const unreachable = await reachable(pages);
+        // No application to ask: this repository declares no way to start one,
+        // and a screen no entry point can be asked about is the browser's
+        // question again, not this gate's.
+        if (unreachable === null || unreachable.length === 0) return { passed: true };
+        await this.friction?.record({
+          cardId,
+          runId,
+          kind: "screen_not_mounted",
+          detail: unreachable.map((entry) => `${entry.scenarioId} ${entry.page}`).join(", "),
+        });
+        return { passed: false, findings: renderUnreachableScreens(unreachable) };
+      },
+    };
+  }
+
+  /**
    * The contract a person judges the card by: it has to parse, and it has to
    * be written in their language.
    *
@@ -898,11 +1027,37 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
         } catch (cause) {
           return { passed: false, findings: (cause as Error).message };
         }
-        // The structural layer's basis, asked for here because a judgement's
-        // basis cannot be written by the round it judges (08 section 6).
+        // The screen judgements' basis, asked for here because a judgement's
+        // basis cannot be written by the round it judges (08 section 6). Both
+        // in one pass: a DoD missing each would otherwise spend two of the
+        // three rounds saying two halves of the same sentence.
         const missingVisible = scenariosMissingVisible(definitionOfDone);
-        if (missingVisible.length > 0) {
-          return { passed: false, findings: renderMissingVisible(missingVisible) };
+        const missingPage = scenariosMissingPage(definitionOfDone);
+        if (missingVisible.length > 0 || missingPage.length > 0) {
+          return {
+            passed: false,
+            findings: [
+              ...(missingPage.length > 0 ? [renderMissingPage(missingPage)] : []),
+              ...(missingVisible.length > 0 ? [renderMissingVisible(missingVisible)] : []),
+            ].join("\n\n"),
+          };
+        }
+        // Before the language, because a footprint that names nothing is a
+        // fact about the tree rather than about the sentence, and the session
+        // should not be asked to rewrite prose in the same turn it is asked to
+        // look at directories.
+        const repositoryHas = this.repositoryHas;
+        if (repositoryHas) {
+          const ungrounded = footprintWithoutGround(definitionOfDone, repositoryHas);
+          if (ungrounded.length > 0) {
+            await this.friction?.record({
+              cardId,
+              runId,
+              kind: "footprint_without_ground",
+              detail: ungrounded.join(", "),
+            });
+            return { passed: false, findings: renderFootprintWithoutGround(ungrounded) };
+          }
         }
         const language = lintDoDLanguage(definitionOfDone);
         if (language.length === 0) return { passed: true };
@@ -950,8 +1105,32 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
       exhausted: "fail",
       maxRounds: this.specifyExitRounds,
       evaluate: async (artifacts) => {
-        const contractYaml = artifactOf(artifacts, "test-contract");
-        const contract = parseTestContract(contractYaml);
+        const contractYaml = artifacts.find((item) => item.kind === "test-contract")?.body;
+        if (contractYaml === undefined) {
+          return { passed: false, findings: "This phase produced no test contract. Write one." };
+        }
+        let contract: TestContract;
+        try {
+          contract = parseTestContract(contractYaml);
+        } catch (cause) {
+          // A contract that does not parse is a work item, not a verdict on
+          // the Story. Thrown, it escaped the gate entirely: out of the phase,
+          // out of the process, and back to the coordinator as an unknown
+          // crash that also spent a phase re-entry -- for a model that wrote
+          // one key the schema does not have and could have dropped it in one
+          // turn. S-R237511DT-03 and -04 each lost a run that way.
+          if (!(cause instanceof TestContractValidationError)) throw cause;
+          // Counted so the next reading of this rule has numbers: a contract
+          // the schema keeps refusing is either a prompt that does not say
+          // what the shape is or a schema that is stricter than it needs.
+          await this.friction?.record({
+            cardId, runId, kind: "specify_contract_unparsable", detail: cause.message,
+          });
+          return {
+            passed: false,
+            findings: `${cause.message}\nRewrite the contract with only the keys the schema defines.`,
+          };
+        }
         if (contract.mode !== expectedMode) {
           // A narrow rerun that writes a full contract would put every
           // scenario of a delivered card back under proof, and a full one
@@ -1090,25 +1269,30 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
         codeSessionId,
         definitionOfDone,
       });
-      await this.store.completePhase({
+      // Read before anything is committed: this reaches into the worktree, and
+      // a worktree that is gone answers with a failure. Completing the run
+      // first would have made that failure permanent, because a completed run
+      // is reused rather than started again and this round's slot would hold
+      // one that never reached a verdict.
+      const treeSha = this.treeSha ? await this.treeSha() : "";
+      await this.store.completeVerification({
         runId,
         sessionId: result.sessionId,
         artifacts: [{ kind: "verification", body: result.artifact }],
-      });
-      const treeSha = this.treeSha ? await this.treeSha() : "";
-      await this.store.recordVerification(runId, {
-        cardId,
-        round,
-        codeSessionId,
-        verifySessionId: result.sessionId,
-        verdict: result.verdict,
-        failedScenarios: result.failedScenarios,
-        // Only what this round actually looked at. A narrow round that judged
-        // one scenario must not mark the rest of the card passed by default.
-        verifiedScenarios: definitionOfDone.scenarios.map((scenario) => scenario.id),
-        ...(treeSha === "" ? {} : { verifiedTreeSha: treeSha }),
-        ...(result.evidenceDir ? { evidenceDir: result.evidenceDir } : {}),
-        ...(result.screenshots ? { screenshots: result.screenshots } : {}),
+        record: {
+          cardId,
+          round,
+          codeSessionId,
+          verifySessionId: result.sessionId,
+          verdict: result.verdict,
+          failedScenarios: result.failedScenarios,
+          // Only what this round actually looked at. A narrow round that judged
+          // one scenario must not mark the rest of the card passed by default.
+          verifiedScenarios: definitionOfDone.scenarios.map((scenario) => scenario.id),
+          ...(treeSha === "" ? {} : { verifiedTreeSha: treeSha }),
+          ...(result.evidenceDir ? { evidenceDir: result.evidenceDir } : {}),
+          ...(result.screenshots ? { screenshots: result.screenshots } : {}),
+        },
       });
       return result;
     } catch (cause) {
