@@ -340,9 +340,7 @@ function renderStateLinks(query: WorkRecordSearchQuery): string {
 }
 
 function renderMatchStatus(status: WorkRecordSummaryStatus): string {
-  return status.kind === "running"
-    ? `<span class="status running" role="status">运行中</span>`
-    : statusChip("stopped", status.outcome);
+  return statusChip(status.kind, status.kind === "stopped" ? status.outcome : undefined);
 }
 
 /** One status chip, used by both the list and the complete record so the same
