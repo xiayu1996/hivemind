@@ -585,6 +585,7 @@ export class BlindVerifyExecutor {
           verdict: document,
           declaredScenarioIds: input.declaredScenarioIds,
           ...(input.screenScenarioIds ? { screenScenarioIds: input.screenScenarioIds } : {}),
+          ...(input.app && "url" in input.app ? { appUrl: input.app.url } : {}),
           trajectory: observed,
           commitMessages: input.commitMessages,
           evidenceRoot: input.evidencePath,
