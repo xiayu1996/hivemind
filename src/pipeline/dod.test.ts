@@ -6,6 +6,8 @@ import {
   lintDoDLanguage,
   parseDoD,
   refusableStatements,
+  footprintWithoutGround,
+  renderFootprintWithoutGround,
   renderMissingVisible,
   renderDoDLanguageFindings,
   scanScenarioCoverage,
@@ -191,5 +193,32 @@ describe("what a screen scenario says a person will see", () => {
 
   it("names every scenario still missing them, so one round closes them all", () => {
     expect(renderMissingVisible(["S-A-01-a", "S-A-01-b"])).toContain("- S-A-01-a\n- S-A-01-b");
+  });
+});
+
+describe("a footprint the repository has no room for", () => {
+  const withFootprint = (entries: string[]) =>
+    parseDoD(yaml.replace("predicted_footprint: [src/cart]", `predicted_footprint: [${entries.join(", ")}]`));
+
+  // The tree S-R237511MB-02 actually ran on.
+  const tree = new Set(["src", "src/console", "src/config", "console-ui", "console-ui/src", "console-ui/src/pages", "scripts", "scripts/serve-console.ts"]);
+  const exists = (path: string) => tree.has(path);
+
+  it("refuses an entry whose only ancestor is the repository root", () => {
+    expect(footprintWithoutGround(withFootprint(["console/"]), exists)).toEqual(["console/"]);
+  });
+
+  it("accepts a directory the card is about to create under one that exists", () => {
+    expect(footprintWithoutGround(withFootprint(["console-ui/src/pages/records"]), exists)).toEqual([]);
+  });
+
+  it("accepts the spellings the scheduler widens, and a file", () => {
+    const dod = withFootprint(["src/console/**", "src/console/", "scripts/serve-console.ts"]);
+    expect(footprintWithoutGround(dod, exists)).toEqual([]);
+  });
+
+  it("names every entry it refused, in the words they were written in", () => {
+    expect(renderFootprintWithoutGround(["console/", "web"])).toContain("- console/");
+    expect(renderFootprintWithoutGround(["console/", "web"])).toContain("- web");
   });
 });
