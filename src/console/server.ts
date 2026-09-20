@@ -27,13 +27,31 @@ import type {
 } from "../persistence/requirement-cost-limit.js";
 import type {
   RoleConfigurationChoiceReadPort,
+  RoleConfigurationChoiceReadResult,
+  RoleConfigurationDraft,
+  RoleConfigurationEditingViewState,
+  RoleConfigurationProviderChoice,
   RoleConfigurationReadPort,
+  RoleConfigurationViewState,
   RoleConfigurationWritePort,
+  RoleReference,
+  RoleVersionPair,
 } from "./role-configuration.js";
+import type { RoleConfigurationMutationResult } from "../config/role-configuration-version.js";
 import {
+  FUTURE_AGENT_STARTS_SCOPE,
+  draftFromVersion,
+  draftFromWriteBody,
+  isFutureAgentStartsScope,
+  prepareRoleConfigurationSave,
+  readRoleConfigurationChoices,
   readRoleConfigurationView,
+  readRoleConfigurationWriteDraft,
   renderRoleConfigurationPage,
   resolveRoleConfigurationPageRequest,
+  roleConfigurationRestoredMessage,
+  roleConfigurationSavedMessage,
+  roleDisplayName,
 } from "./role-configuration.js";
 
 export interface ConsoleDataSource {
@@ -120,6 +138,39 @@ async function readOptional(path: string): Promise<string | null> {
   }
 }
 
+/** The HTTP status one mutation outcome is answered with. A rejection that
+ * names a missing role or a non-adjacent restore source is a client error the
+ * caller can act on, not a transient one to retry. */
+function roleMutationStatus(result: RoleConfigurationMutationResult): number {
+  switch (result.status) {
+    case "saved": return 200;
+    case "conflict": return 409;
+    case "unavailable": return 503;
+    case "rejected":
+      if (result.reason === "unknown-role") return 404;
+      if (result.reason === "source-is-not-previous") return 409;
+      return 400;
+  }
+}
+
+/** Reads the catalog and one role's pair for a page action, or null when the
+ * read fails. The page that follows an action is built from this read. */
+async function readRolePagePairFor(
+  reader: RoleConfigurationReadPort | undefined,
+  roleId: string,
+): Promise<{ roles: readonly RoleReference[]; pair: RoleVersionPair } | null> {
+  if (!reader || roleId === "") return null;
+  try {
+    const catalog = await reader.readCatalog();
+    const roles = catalog.status === "ready" ? catalog.roles : [];
+    const read = await reader.readVersionPair(roleId);
+    if (read.status !== "ready") return null;
+    return { roles, pair: read.pair };
+  } catch {
+    return null;
+  }
+}
+
 /** Builds the read-only intranet console. */
 export async function createConsoleServer(
   data: ConsoleDataSource,
@@ -136,6 +187,12 @@ export async function createConsoleServer(
     ? ["/api/config/value", "/api/config/rollback"]
     : []);
   if (costLimitStore) writable.add("/costs/requirement-limit");
+  // Role writes name the role in the path, so the gate matches the shape of
+  // the two routes rather than the two literal urls. The page's own form posts
+  // to one more path, which is writable only on the host that holds a writer.
+  const roleWriteRoute = /^\/api\/roles\/[^/]+\/(?:versions|restore)$/;
+  const roleWriter = options.roleConfigurationWriter;
+  if (roleWriter) writable.add("/roles/action");
   app.addContentTypeParser(
     "application/x-www-form-urlencoded",
     { parseAs: "string" },
@@ -149,9 +206,11 @@ export async function createConsoleServer(
   );
   app.addHook("onRequest", async (request, reply) => {
     if (request.method === "GET" || request.method === "HEAD") return;
+    const path = request.url.split("?")[0] ?? "";
     // Config is the only thing an operator may change from here, and only
     // through the two routes the registry validates.
-    if (request.method === "POST" && writable.has(request.url.split("?")[0] ?? "")) return;
+    if (request.method === "POST" && writable.has(path)) return;
+    if (request.method === "POST" && roleWriter !== undefined && roleWriteRoute.test(path)) return;
     await reply.code(405).send({ error: "console is read-only" });
   });
 
