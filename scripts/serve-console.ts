@@ -23,6 +23,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { existsSync, mkdtempSync, readdirSync, rmSync, statfsSync, statSync } from "node:fs";
 import { createConsoleServer, listenConsole } from "../src/console/server.js";
+import { createSampleRoleConfigurationReader } from "../src/console/role-configuration-sample.js";
 import { LibsqlConsoleDataSource } from "../src/console/libsql-data-source.js";
 import { openDb } from "../src/persistence/client.js";
 import { pinnedPiVersion } from "../src/runner/pi-binary.js";
@@ -133,7 +134,13 @@ const app = await createConsoleServer(
     node: process.version,
     pi: pinnedPiVersion(),
   }]),
-  { uiRoot, serveUi: existsSync(join(uiRoot, "index.html")) },
+  { uiRoot, serveUi: existsSync(join(uiRoot, "index.html")),
+    // The central store has no role history until the write side lands, and a
+    // screen with no reader at all comes back as a read failure rather than as
+    // the two versions the round is there to look at. The sample reader answers
+    // catalog and version-pair reads from the data the frozen definition of
+    // done names; a mount that holds the real reader passes its own.
+    roleConfigurationReader: createSampleRoleConfigurationReader() },
 );
 
 const address = await listenConsole(app, { host: "127.0.0.1", port });

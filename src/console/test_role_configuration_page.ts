@@ -11,6 +11,7 @@ import {
   type RoleVersionPair,
 } from "./role-configuration.js";
 import { createConsoleServer, type ConsoleDataSource } from "./server.js";
+import { createSampleRoleConfigurationReader } from "./role-configuration-sample.js";
 
 const data: ConsoleDataSource = {
   nodes: async () => [],
@@ -304,5 +305,95 @@ describe("role configuration responsive layout", () => {
     expect(html).toContain(".role-split{grid-template-columns:1fr;align-items:start}");
     expect(html).toContain("aria-label=\"手机导航\"");
     expect(html).not.toContain("仅显示当前版 v12");
+  });
+});
+
+describe("role configuration served without a central history", () => {
+  async function sampleServer() {
+    return createConsoleServer(data, {
+      serveUi: false,
+      roleConfigurationReader: createSampleRoleConfigurationReader(),
+    });
+  }
+
+  it("@scenario S-R237511RC-01-versions 样例数据只让所选角色显示当前版与紧邻上一版", async () => {
+    const app = await sampleServer();
+    const page = await app.inject({ method: "GET", url: "/roles" });
+
+    expect(page.statusCode).toBe(200);
+    expect(page.body).toContain("智能体角色配置");
+    expect(page.body).toContain("编辑当前配置");
+    expect(page.body).toContain("上一版配置");
+    expect(page.body).toContain("当前版 v12");
+    expect(page.body).toContain("上一版 v11");
+    expect(page.body).toContain("Claude Sonnet 4");
+    expect(page.body).toContain("GPT-5 Codex");
+    expect(page.body).not.toContain("v10");
+
+    const pair = await app.inject({ method: "GET", url: "/api/roles/prototype/versions" });
+    expect(pair.json().pair.current.roleId).toBe("prototype");
+    expect(pair.json().pair.previous.version).toBe(11);
+    await app.close();
+  });
+
+  it("@scenario S-R237511RC-01-diff 样例数据的新增、删除与变更都紧贴具体内容", async () => {
+    const app = await sampleServer();
+    const page = await app.inject({ method: "GET", url: "/roles" });
+
+    expect(page.body).toContain("新增：每页优先证明它承接了业务场景。");
+    expect(page.body).toContain("删除：先按页面清单逐页绘制。");
+    expect(page.body).toContain("上一版：OpenAI 已变更");
+    expect(page.body).toContain("上一版：GPT-5 Codex 已变更");
+    expect(page.body).toContain("Anthropic");
+    await app.close();
+  });
+
+  it("@scenario S-R237511RC-01-responsive 样例数据在宽屏并排、窄屏按当前版再上一版排列", async () => {
+    const app = await sampleServer();
+    const page = await app.inject({ method: "GET", url: "/roles" });
+
+    expect(page.body).toContain("data-layout=\"split\"");
+    expect(page.body).toContain(".role-split{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:stretch}");
+    expect(page.body).toContain(".role-split{grid-template-columns:1fr;align-items:start}");
+    await app.close();
+  });
+
+  it("@scenario S-R237511RC-01-empty 强制空状态不显示样例版本", async () => {
+    const app = await sampleServer();
+    const page = await app.inject({ method: "GET", url: "/roles?state=empty" });
+
+    expect(page.body).toContain("还没有角色配置");
+    expect(page.body).toContain("创建首个配置");
+    expect(page.body).not.toContain("当前版 v12");
+    await app.close();
+  });
+
+  it("@scenario S-R237511RC-01-loading 强制读取中不显示样例版本", async () => {
+    const app = await sampleServer();
+    const page = await app.inject({ method: "GET", url: "/roles?state=loading" });
+
+    expect(page.body).toContain("正在读取角色版本");
+    expect(page.body).not.toContain("当前版 v12");
+    await app.close();
+  });
+
+  it("@scenario S-R237511RC-01-error 强制读取失败时保留所选角色并给出重试", async () => {
+    const app = await sampleServer();
+    const page = await app.inject({ method: "GET", url: "/roles?state=error&role=prototype" });
+
+    expect(page.body).toContain("无法读取角色配置");
+    expect(page.body).toContain("重新读取");
+    expect(page.body).toContain("value=\"prototype\" selected");
+    await app.close();
+  });
+
+  it("@scenario S-R237511RC-01-waiting 强制等待保存时仍显示已确认的当前版", async () => {
+    const app = await sampleServer();
+    const page = await app.inject({ method: "GET", url: "/roles?state=waiting&role=prototype" });
+
+    expect(page.body).toContain("正在等待配置保存");
+    expect(page.body).toContain("检查保存结果");
+    expect(page.body).toContain("当前版 v12");
+    await app.close();
   });
 });
