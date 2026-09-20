@@ -14,6 +14,35 @@ export interface WorkRecordSearchRequest {
   query: WorkRecordSearchQuery;
 }
 
+export interface WorkRecordBrowseDefaults {
+  keyword: "";
+  role: "all";
+  range: "24h";
+}
+
+/** The landing criteria are a browse request, not a synthetic keyword search. */
+export declare const WORK_RECORD_BROWSE_DEFAULTS: Readonly<WorkRecordBrowseDefaults>;
+
+export interface WorkRecordLiveRefreshRequest {
+  /** Identifies the selection that scheduled this refresh. */
+  selectionRequestId: string;
+  runId: string;
+  /** The last sequence already rendered; only a continuation may be requested. */
+  afterSequence: number;
+}
+
+export type WorkRecordLiveRefreshState =
+  | { kind: "idle" }
+  | { kind: "scheduled"; request: WorkRecordLiveRefreshRequest; afterMs: number }
+  | { kind: "reading"; request: WorkRecordLiveRefreshRequest }
+  | {
+      kind: "retry_wait";
+      request: WorkRecordLiveRefreshRequest;
+      code: WorkRecordReadFailureCode;
+      afterMs: number;
+    }
+  | { kind: "stopped" };
+
 export type WorkRecordSearchState =
   | { kind: "idle"; draft: WorkRecordSearchQuery }
   | { kind: "loading"; request: WorkRecordSearchRequest }
@@ -41,7 +70,14 @@ export type WorkRecordSelectionState =
       code: WorkRecordReadFailureCode;
       retryable: boolean;
     }
-  | { kind: "ready"; runId: string; requestId: string; record: WorkRecordDetail };
+  | {
+      kind: "ready";
+      runId: string;
+      requestId: string;
+      record: WorkRecordDetail;
+      /** At most one refresh may read this selected run at a time. */
+      liveRefresh?: WorkRecordLiveRefreshState;
+    };
 
 export type WorkRecordScreenEvent =
   | { type: "search_started"; request: WorkRecordSearchRequest }

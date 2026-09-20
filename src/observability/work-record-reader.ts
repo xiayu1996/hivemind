@@ -1,10 +1,11 @@
 import { redactForExport } from "./redact.js";
 
 export interface WorkRecordSearchQuery {
-  /** A trimmed, case-sensitive substring matched only against display-safe event text. */
+  /** A trimmed, case-sensitive substring matched only against display-safe event text. Empty browses by activity. */
   keyword: string;
   /** Omitted means every agent role. */
   role?: string;
+  /** A run is eligible when at least one displayable step occurred in this half-open interval. */
   fromInclusive: number;
   toExclusive: number;
 }
@@ -24,17 +25,25 @@ export interface WorkRecordRequirementRef {
   title: string;
 }
 
+export type WorkRecordSummaryStatus =
+  | { kind: "running" }
+  | { kind: "stopped"; outcome: "completed" | "error" | "stopped"; stoppedAt: number };
+
 export interface WorkRecordMatch {
   runId: string;
   role: string;
   name: string;
+  /** Latest matching step, or latest in-range displayable step when keyword is empty. */
   occurredAt: number;
+  /** Authoritative run result; consumers must not infer failure from step text. */
+  status: WorkRecordSummaryStatus;
   requirement: WorkRecordRequirementRef;
-  /** Ordered parts preserve the source sentence while making every literal hit explicit. */
+  /** Empty while browsing; otherwise ordered parts preserve the source sentence and mark every literal hit. */
   hit: readonly HighlightedTextPart[];
 }
 
 export interface WorkRecordSearchResult {
+  /** Submitted criteria are returned unchanged except for keyword trimming, including an empty keyword. */
   query: WorkRecordSearchQuery;
   /** Newest occurrence first, with no more than one entry per runId. */
   matches: readonly WorkRecordMatch[];
@@ -86,6 +95,21 @@ export interface WorkRecordDetailResult {
   /** True only when steps is an append-only continuation requested with afterSequence. */
   incremental: boolean;
 }
+
+export type WorkRecordContinuationResult =
+  | { kind: "applied"; record: WorkRecordDetail }
+  | { kind: "stale"; record: WorkRecordDetail };
+
+/**
+ * Applies an append-only refresh only when runId and the requested cursor still
+ * identify the selected record. Stale or duplicate responses leave the current
+ * record untouched, so concurrent selection changes never cross run boundaries.
+ */
+export declare function mergeWorkRecordContinuation(
+  current: WorkRecordDetail,
+  requestedAfterSequence: number,
+  continuation: WorkRecordDetailResult,
+): WorkRecordContinuationResult;
 
 export type WorkRecordReadFailureCode = "unavailable" | "invalid_query" | "not_found";
 
