@@ -5,6 +5,24 @@ export interface SchedulableStory {
   id: string;
   dependsOn: readonly string[];
   predictedFootprint: readonly string[];
+  /**
+   * The Epic whose branch this Story's work lands on.
+   *
+   * Two Stories under one Epic share a branch: the second rebases onto what
+   * the first left there, so an overlapping footprint is a race for one tree
+   * and they may not run together. Two Stories under different Epics never
+   * touch the same tree -- separate worktrees, separate branches, and MERGE
+   * rebases each onto its own `epic/<id>` -- so their overlap is a conflict
+   * between two Epic branches, which git resolves once at the Epic merge
+   * rather than by never running the second card.
+   *
+   * Reading them as competitors cost this installation the whole requirement:
+   * nine cards across six Epics each declared `src/console`, the plan held one
+   * batch of one, and two of them had not started after four hours. Absent,
+   * the Story is treated as sharing a branch with everything, which is the
+   * conservative answer for a Story that has no Epic yet.
+   */
+  epicId?: string;
 }
 
 export interface PlannedStoryExecution {
@@ -81,8 +99,17 @@ export function storiesShareHotspot(left: SchedulableStory, right: SchedulableSt
   return hotspots.some((hotspot) => coversHotspot(left, hotspot) && coversHotspot(right, hotspot));
 }
 
+/** Whether the two Stories' work lands on the same branch. */
+function shareBranch(left: SchedulableStory, right: SchedulableStory): boolean {
+  return !left.epicId || !right.epicId || left.epicId === right.epicId;
+}
+
 function storiesConflict(left: SchedulableStory, right: SchedulableStory, hotspots: readonly string[]): boolean {
-  return footprintsIntersect(left, right) || storiesShareHotspot(left, right, hotspots);
+  // Hotspots are not scoped to a branch: they are the operator naming a path
+  // whose conflicts are not worth having at all, which is a statement about
+  // the Epic merge as much as about one tree.
+  if (storiesShareHotspot(left, right, hotspots)) return true;
+  return shareBranch(left, right) && footprintsIntersect(left, right);
 }
 
 export async function planRepositoryStoryExecution(
@@ -132,11 +159,15 @@ export function dispatchableStories(stories: readonly RepositoryStory[]): Schedu
   };
   return stories
     .filter((story) => open.has(story.id) && !isHeld(story.id, new Set()))
-    .map((story) => ({
-      id: story.id,
-      dependsOn: story.dependsOn.filter((dependency) => open.has(dependency)),
-      predictedFootprint: story.predictedFootprint,
-    }));
+    .map((story) => {
+      const planned: SchedulableStory = {
+        id: story.id,
+        dependsOn: story.dependsOn.filter((dependency) => open.has(dependency)),
+        predictedFootprint: story.predictedFootprint,
+      };
+      if (story.epicId) planned.epicId = story.epicId;
+      return planned;
+    });
 }
 
 export interface StoryExecutionOptions {
