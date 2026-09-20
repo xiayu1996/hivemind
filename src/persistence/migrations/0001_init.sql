@@ -837,3 +837,42 @@ CREATE TABLE IF NOT EXISTS requirement_cost_limits (
   updated_by      TEXT NOT NULL,
   updated_at      INTEGER NOT NULL
 );
+
+-- Immutable role configuration versions. A save or a restore appends one
+-- complete snapshot (prompt, provider, model) and then moves the head pointer,
+-- so every version a started agent could have bound to stays readable. A
+-- version is never edited in place: restoring an older one copies its content
+-- into a new version rather than making the old number current again.
+CREATE TABLE IF NOT EXISTS role_configuration_versions (
+  role_id      TEXT NOT NULL CHECK (role_id <> ''),
+  version      INTEGER NOT NULL CHECK (version > 0),
+  prompt       TEXT NOT NULL,
+  provider_id  TEXT NOT NULL CHECK (provider_id <> ''),
+  model_id     TEXT NOT NULL CHECK (model_id <> ''),
+  saved_at     INTEGER NOT NULL,
+  saved_by     TEXT NOT NULL CHECK (saved_by <> ''),
+  PRIMARY KEY (role_id, version)
+);
+
+-- One row per role: which immutable version the next started agent binds to.
+-- A write moves it only when it still names the version the caller expected,
+-- so two windows editing the same role have one winner and the loser appends
+-- nothing. The comparison is per role, so one role never contends with another.
+CREATE TABLE IF NOT EXISTS role_configuration_heads (
+  role_id         TEXT PRIMARY KEY CHECK (role_id <> ''),
+  current_version INTEGER NOT NULL CHECK (current_version > 0)
+);
+
+-- One row per started agent run. It copies the three role-owned values at the
+-- instant the agent starts, so a save afterwards cannot change what an agent
+-- already working keeps using. Repeating one agent run id returns the original
+-- binding; reusing it for another role is refused by the primary key check.
+CREATE TABLE IF NOT EXISTS role_agent_bindings (
+  agent_run_id TEXT PRIMARY KEY CHECK (agent_run_id <> ''),
+  role_id      TEXT NOT NULL CHECK (role_id <> ''),
+  role_version INTEGER NOT NULL CHECK (role_version > 0),
+  prompt       TEXT NOT NULL,
+  provider_id  TEXT NOT NULL CHECK (provider_id <> ''),
+  model_id     TEXT NOT NULL CHECK (model_id <> ''),
+  bound_at     INTEGER NOT NULL
+);

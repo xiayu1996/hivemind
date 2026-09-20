@@ -564,6 +564,31 @@ export const notionMediaDelivery = sqliteTable("notion_media_delivery", {
   updatedAt: ms("updated_at").notNull(),
 }, (t) => [index("idx_notion_media_pending").on(t.status, t.createdAt)]);
 
+export const roleConfigurationVersions = sqliteTable("role_configuration_versions", {
+  roleId: text("role_id").notNull(),
+  version: integer("version").notNull(),
+  prompt: text("prompt").notNull(),
+  providerId: text("provider_id").notNull(),
+  modelId: text("model_id").notNull(),
+  savedAt: ms("saved_at").notNull(),
+  savedBy: text("saved_by").notNull(),
+}, (t) => [primaryKey({ columns: [t.roleId, t.version] })]);
+
+export const roleConfigurationHeads = sqliteTable("role_configuration_heads", {
+  roleId: text("role_id").primaryKey(),
+  currentVersion: integer("current_version").notNull(),
+});
+
+export const roleAgentBindings = sqliteTable("role_agent_bindings", {
+  agentRunId: text("agent_run_id").primaryKey(),
+  roleId: text("role_id").notNull(),
+  roleVersion: integer("role_version").notNull(),
+  prompt: text("prompt").notNull(),
+  providerId: text("provider_id").notNull(),
+  modelId: text("model_id").notNull(),
+  boundAt: ms("bound_at").notNull(),
+});
+
 export const schemaMigrations = sqliteTable("schema_migrations", {
   name: text("name").primaryKey(),
   appliedAt: ms("applied_at").notNull(),

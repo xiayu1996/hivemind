@@ -23,7 +23,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { existsSync, mkdtempSync, readdirSync, rmSync, statfsSync, statSync } from "node:fs";
 import { createConsoleServer, listenConsole } from "../src/console/server.js";
-import { createSampleRoleConfigurationReader } from "../src/console/role-configuration-sample.js";
+import { createSampleRoleConfigurationStore } from "../src/console/role-configuration-sample.js";
 import { LibsqlConsoleDataSource } from "../src/console/libsql-data-source.js";
 import { openDb } from "../src/persistence/client.js";
 import { pinnedPiVersion } from "../src/runner/pi-binary.js";
@@ -127,6 +127,10 @@ async function snapshotOf(source: string, directory: string): Promise<string> {
 }
 
 const handle = openDb(snapshotDir === null ? url : await snapshotOf(url, snapshotDir));
+// The sample store serves the read, the choices and the writes from one
+// in-process history, so a walkthrough can actually confirm a save and see the
+// version change without touching the snapshot database.
+const roleConfiguration = createSampleRoleConfigurationStore();
 const app = await createConsoleServer(
   new LibsqlConsoleDataSource(handle.client, async () => [{
     hostId: hostname(),
@@ -137,10 +141,13 @@ const app = await createConsoleServer(
   { uiRoot, serveUi: existsSync(join(uiRoot, "index.html")),
     // The central store has no role history until the write side lands, and a
     // screen with no reader at all comes back as a read failure rather than as
-    // the two versions the round is there to look at. The sample reader answers
+    // the two versions the round is there to look at. The sample answers
     // catalog and version-pair reads from the data the frozen definition of
-    // done names; a mount that holds the real reader passes its own.
-    roleConfigurationReader: createSampleRoleConfigurationReader() },
+    // done names, and its in-process writer lets the save and restore scenarios
+    // be driven for real; a mount that holds the real ports passes its own.
+    roleConfigurationReader: roleConfiguration.reader,
+    roleConfigurationChoiceReader: roleConfiguration.choices,
+    roleConfigurationWriter: roleConfiguration.writer },
 );
 
 const address = await listenConsole(app, { host: "127.0.0.1", port });
