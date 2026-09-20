@@ -168,6 +168,13 @@ describe("UiReviewExecutor", () => {
     expect(prompt).toContain("/tasks 页面");
   });
 
+  it("tells the reviewer that a situation it cannot create is inconclusive, not a failure", () => {
+    const prompt = promptFor(input(), { images: [], names: [], skipped: [] });
+    expect(prompt).toContain("Put the application into that situation first");
+    expect(prompt).toContain("not yours to create");
+    expect(prompt).toContain("costs the card no round");
+  });
+
   it("tells the reviewer where the application runs and which sample data each scenario already has", () => {
     const given = input({ appUrl: "http://127.0.0.1:3000/" });
     const scenarios = given.scenarios.map((scenario) => ({ ...scenario, seed: "一个仓库下有 3 个 Story" }));
