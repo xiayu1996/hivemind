@@ -14,6 +14,9 @@ import {
   renderRequirementNotFoundPage,
   type RequirementSummaryRow,
 } from "./requirement-detail-page.js";
+import { registerWorkRecordRoutes, renderWorkRecordsRoute } from "./work-records.js";
+import { createSampleWorkRecordReader } from "./work-record-sample.js";
+import type { WorkRecordReader } from "../observability/work-record-reader.js";
 import type {
   DailyCostReadResult,
   DailyCostSelection,
@@ -71,6 +74,10 @@ export interface ConsoleServerOptions {
   /** The requirement-limit write surface. Without it the limit form has no
    * destination and the console stays read-only on this too. */
   costLimitStore?: RequirementCostLimitStore;
+  /** The read-only work-record port behind `/records`. Absent, the console
+   * serves its own sample records, so the screen exists on a host that holds
+   * no central store. */
+  workRecords?: WorkRecordReader;
 }
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
@@ -116,6 +123,7 @@ export async function createConsoleServer(
   // verification round to look at, passes no ports at all, and was serving a
   // form that writes a requirement's cost limit into it.
   const costLimitStore = options.costLimitStore;
+  const workRecords = options.workRecords ?? createSampleWorkRecordReader(Date.now());
   const writable = new Set(options.configWriter
     ? ["/api/config/value", "/api/config/rollback"]
     : []);
@@ -163,6 +171,20 @@ export async function createConsoleServer(
     return reply.type("text/html").send(html);
   };
   app.get("/costs", renderCosts);
+
+  // The work-records screen is the one place a person searches without first
+  // opening a requirement or a task, so it is served by the process that holds
+  // the records rather than behind `serveUi`. The JSON API below is the same
+  // read the page is built from, and neither endpoint mutates a work run.
+  app.get("/records", async (request, reply) => {
+    const params = (request.query ?? {}) as Record<string, string | undefined>;
+    const html = await renderWorkRecordsRoute(workRecords, params, Date.now());
+    return reply.type("text/html").send(html);
+  });
+  await registerWorkRecordRoutes(app, workRecords, {
+    maximumRangeMs: 31 * 24 * 60 * 60 * 1_000,
+    maximumResults: 200,
+  });
 
   // The overview is the first screen: what needs a person, what is running, and
   // which requirements are over their own limit. The alert is stated in words

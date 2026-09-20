@@ -117,6 +117,21 @@ export interface WorkRecordRouteOptions {
 }
 
 const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
+/** The sentence a person lands on before typing anything; the screens the
+ * definition of done names all search for it. */
+export const WORK_RECORD_DEFAULT_KEYWORD = "Notion 保存失败";
+
+/** The query string parameters `/records` reads, alongside the four states. */
+export interface WorkRecordsRouteParameters {
+  keyword?: string;
+  role?: string;
+  range?: string;
+  runId?: string;
+  /** One of empty | loading | error | waiting names a state on its own URL. */
+  state?: string;
+}
 
 function failureStatus(code: WorkRecordReadFailureCode): number {
   switch (code) {
@@ -219,6 +234,16 @@ function formatClock(at: number): string {
   return new Date(at).toISOString().slice(11, 19);
 }
 
+/** The URL a result links at: the same search with one run selected. */
+function recordsHref(query: WorkRecordSearchQuery, runId: string): string {
+  const params = new URLSearchParams();
+  params.set("keyword", query.keyword);
+  if (query.role !== undefined) params.set("role", query.role);
+  params.set("range", rangeValue(query));
+  params.set("runId", runId);
+  return `/records?${params.toString()}`;
+}
+
 function renderHit(hit: readonly { value: string; matched: boolean }[]): string {
   return hit
     .map((part) => (part.matched ? `<mark class="hit">${escapeHtml(part.value)}</mark>` : escapeHtml(part.value)))
@@ -244,8 +269,8 @@ function renderSearchForm(query: WorkRecordSearchQuery): string {
     + `<button type="submit">搜索记录</button></form>`;
 }
 
-function renderResultItem(match: WorkRecordSearchResult["matches"][number]): string {
-  return `<li><a href="/records.html#record"><strong>${escapeHtml(match.role)} · ${escapeHtml(match.name)}</strong><br>`
+function renderResultItem(match: WorkRecordSearchResult["matches"][number], query: WorkRecordSearchQuery): string {
+  return `<li><a href="${recordsHref(query, match.runId)}"><strong>${escapeHtml(match.role)} · ${escapeHtml(match.name)}</strong><br>`
     + `<span class="meta">${formatClock(match.occurredAt)} · ${escapeHtml(match.requirement.title)}</span><br>`
     + `<span>命中：${renderHit(match.hit)}</span></a></li>`;
 }
@@ -253,7 +278,7 @@ function renderResultItem(match: WorkRecordSearchResult["matches"][number]): str
 function renderResults(result: WorkRecordSearchResult): string {
   return `<section class="panel flush" aria-labelledby="results-title"><div class="section-head">`
     + `<div><h2 id="results-title">匹配记录</h2><p>找到 ${result.matches.length} 条完整记录</p></div></div>`
-    + `<ol class="result-list">${result.matches.map(renderResultItem).join("")}</ol></section>`;
+    + `<ol class="result-list">${result.matches.map((match) => renderResultItem(match, result.query)).join("")}</ol></section>`;
 }
 
 const STOPPED_STATUS: Readonly<Record<"completed" | "error" | "stopped", { text: string; className: string }>> = {
@@ -394,5 +419,121 @@ export function renderWorkRecordsPage(state: WorkRecordSearchState): string {
     + `<a class="mobile-link" href="/costs">费用</a>`
     + `<a class="mobile-link" href="/roles">配置</a>`
     + `<a class="mobile-link" aria-current="page" href="/records">记录</a></nav>`
+    + `<script>document.querySelectorAll("button.secondary").forEach((button)=>{button.addEventListener("click",()=>{const input=document.getElementById("log-query");if(input){input.focus();}});});</script>`
     + `</body></html>`;
+}
+
+/**
+ * The half-open window a person's range choice means at this instant.
+ *
+ * The choice is a label, never an absolute pair of instants: the same page
+ * describes a different window an hour later, which is what keeps 最近 24 小时
+ * meaning the last 24 hours rather than the ones it was opened in.
+ */
+export function workRecordRange(
+  range: string | undefined,
+  now: number,
+): { fromInclusive: number; toExclusive: number } {
+  switch (range) {
+    case "7d": return { fromInclusive: now - 7 * DAY_MS, toExclusive: now };
+    case "all": return { fromInclusive: 0, toExclusive: now };
+    default: return { fromInclusive: now - DAY_MS, toExclusive: now };
+  }
+}
+
+function failureState(
+  request: WorkRecordSearchRequest,
+  cause: unknown,
+): Extract<WorkRecordSearchState, { kind: "failed" }> {
+  const body = failureBody(cause);
+  return { kind: "failed", request, code: body.code, retryable: body.retryable };
+}
+
+async function readOrNull(reader: WorkRecordReader, runId: string): Promise<WorkRecordDetail | null> {
+  try {
+    return (await reader.read({ runId })).record;
+  } catch {
+    // A record that cannot be read leaves the list standing; the list is still
+    // the answer to the search that was asked.
+    return null;
+  }
+}
+
+/** The selected run: what the person asked for, else the newest match. */
+function selectedRunId(matches: readonly WorkRecordSearchResult["matches"][number][], wanted?: string): string | undefined {
+  if (wanted !== undefined && matches.some((match) => match.runId === wanted)) return wanted;
+  return matches[0]?.runId;
+}
+
+/** The runId of the first match whose work has not stopped, or null. */
+async function firstRunning(
+  reader: WorkRecordReader,
+  matches: readonly WorkRecordSearchResult["matches"][number][],
+): Promise<string | null> {
+  for (const match of matches) {
+    const record = await readOrNull(reader, match.runId);
+    if (record !== null && record.status.kind === "running") return record.runId;
+  }
+  return null;
+}
+
+/**
+ * Builds the screen state for one `/records` request.
+ *
+ * `state=empty|loading|error|waiting` names a state on its own URL, which is
+ * how the interface contract makes all four reachable without inventing data.
+ * Without it the page is the search itself: newest match first, one run
+ * selected so the record is on screen beside the list.
+ */
+export async function loadWorkRecordScreen(
+  reader: WorkRecordReader,
+  raw: WorkRecordsRouteParameters,
+  now: number,
+): Promise<WorkRecordSearchState> {
+  const keyword = raw.keyword === undefined || raw.keyword === "" ? WORK_RECORD_DEFAULT_KEYWORD : raw.keyword;
+  const role = raw.role === undefined || raw.role === "" ? undefined : raw.role;
+  const query: WorkRecordSearchQuery = {
+    keyword,
+    ...(role === undefined ? {} : { role }),
+    ...workRecordRange(raw.range, now),
+  };
+  const request: WorkRecordSearchRequest = { requestId: "records", query };
+  if (raw.state === "loading") return { kind: "loading", request };
+  if (raw.state === "empty") return { kind: "empty", request };
+  if (raw.state === "error") return { kind: "failed", request, code: "unavailable", retryable: true };
+
+  let result: WorkRecordSearchResult;
+  try {
+    result = await reader.search(query);
+  } catch (cause) {
+    return failureState(request, cause);
+  }
+  if (result.matches.length === 0) return { kind: "empty", request };
+
+  const wanted = raw.state === "waiting" ? undefined : raw.runId;
+  let runId = selectedRunId(result.matches, wanted);
+  if (raw.state === "waiting") {
+    // The waiting state has to point at a work that has not stopped. Reading
+    // the matches in order costs nothing here and keeps the notice honest: a
+    // stopped record shows no wait.
+    const running = await firstRunning(reader, result.matches);
+    if (running !== null) runId = running;
+  }
+  const record = runId === undefined ? null : await readOrNull(reader, runId);
+  if (record === null) return { kind: "ready", request, result, selection: { kind: "none" } };
+  return {
+    kind: "ready",
+    request,
+    result,
+    selection: { kind: "ready", runId: record.runId, requestId: request.requestId, record },
+  };
+}
+
+/** The complete `/records` document for one request. */
+export async function renderWorkRecordsRoute(
+  reader: WorkRecordReader,
+  raw: WorkRecordsRouteParameters,
+  now: number,
+): Promise<string> {
+  return renderWorkRecordsPage(await loadWorkRecordScreen(reader, raw, now));
 }
