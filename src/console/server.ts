@@ -123,9 +123,7 @@ export async function createConsoleServer(
   // verification round to look at, passes no ports at all, and was serving a
   // form that writes a requirement's cost limit into it.
   const costLimitStore = options.costLimitStore;
-  // A live clock: the sample source has no writer, so a running work advances
-  // while its detail is being watched, and a round has to be able to see that.
-  const workRecords = options.workRecords ?? createSampleWorkRecordReader(() => Date.now());
+  const workRecords = options.workRecords ?? createSampleWorkRecordReader(Date.now());
   const writable = new Set(options.configWriter
     ? ["/api/config/value", "/api/config/rollback"]
     : []);

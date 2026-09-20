@@ -69,8 +69,7 @@ import { BlindVerifyExecutor, EVIDENCE_DIR_ENV } from "../src/verify/executor.js
 import { loadPromptLayers } from "../src/pipeline/prompt-loader.js";
 import { discoverMRPort } from "../src/vcs/mr/adapters.js";
 import { GitMrStoryDelivery, processGitCommand } from "../src/vcs/story-delivery.js";
-import { appLaneConfig, startAppLane } from "../src/verify/app-lane.js";
-import { probeScreens, type ScreenPage } from "../src/pipeline/screen-reachability.js";
+import { appLaneConfig } from "../src/verify/app-lane.js";
 
 const execFileAsync = promisify(execFile);
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -609,30 +608,6 @@ async function main(): Promise<void> {
         // against the branch the card runs on, not against whatever this
         // process happens to be checked out at.
         repositoryHas: (path) => existsSync(join(worktreePath, path)),
-        // Asked of the application this repository starts, in this card's own
-        // worktree. Anything the lane could not start answers `null`: at this
-        // point a box that will not come up and code that broke the start are
-        // the same observation, and refusing on it would let a held port stop
-        // cards. VERIFY still reports that round inconclusive.
-        screensReachable: async (pages: readonly ScreenPage[]) => {
-          const lane = await startAppLane({ cwd: worktreePath, ...appLaneConfig(config) }, allowedHosts);
-          try {
-            if (!("url" in lane.app)) {
-              console.warn(`screen reachability not asked: ${lane.app.unavailable}`);
-              return null;
-            }
-            return await probeScreens(lane.app.url, pages, async (url) => {
-              try {
-                const response = await fetch(url, { redirect: "manual", signal: AbortSignal.timeout(15_000) });
-                return { status: response.status };
-              } catch (cause) {
-                return { failed: cause instanceof Error ? cause.message : String(cause) };
-              }
-            });
-          } finally {
-            await lane.stop();
-          }
-        },
         interfaceContract: async () => {
           const read = await readInterfaceContract(join(worktreePath, config.get("prototype.root")));
           if (read.kind === "incomplete") {

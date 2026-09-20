@@ -17,13 +17,6 @@ export interface FailoverDeps {
   health: ProviderHealthPort;
   policy: BreakerPolicy;
   now: () => number;
-  /**
-   * Whether a failure says anything about the provider. A defect of ours is
-   * not a provider fault: re-running the whole unit on the rest of the chain
-   * only reproduces it, and recording it opens breakers on providers that
-   * never refused anything. Left out, every failure counts as the provider's.
-   */
-  isProviderFault?: (errorMessage: string) => boolean;
 }
 
 /** The window is short enough to wait out; the card should be re-dispatched
@@ -69,7 +62,6 @@ export async function runWithFailover<T>(
       return result;
     } catch (cause) {
       const errorMessage = cause instanceof Error ? cause.message : String(cause);
-      if (deps.isProviderFault?.(errorMessage) === false) throw cause;
       const health = await deps.health.recordFailure(provider, errorMessage, deps.policy);
       // The window belongs to the event, so it is read from the message at the
       // moment the failure happened, never from the clock at the moment we

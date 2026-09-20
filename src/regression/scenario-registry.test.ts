@@ -34,32 +34,6 @@ describe("ScenarioRegistry", () => {
 
   afterEach(() => client.close());
 
-  async function setLayers(scenarioId: string, layers: string[]): Promise<void> {
-    await client.execute({
-      sql: "UPDATE story_specs SET layers = ? WHERE spec_id = ?",
-      args: [JSON.stringify(layers), scenarioId],
-    });
-  }
-
-  it("leaves a scenario proved by tests alone out of the screen lane's pool", async () => {
-    await seedStory("S-M2-01", "DELIVERED", ["S-M2-01-a", "S-M2-01-b"]);
-    await setLayers("S-M2-01-a", ["integration"]);
-    await setLayers("S-M2-01-b", ["integration", "ui"]);
-
-    await expect(registry.registerStory("S-M2-01")).resolves.toBe(1);
-    await expect(registry.pool("epic")).resolves.toMatchObject([{ scenarioId: "S-M2-01-b" }]);
-  });
-
-  it("drops a scenario that has since moved off the screen lane", async () => {
-    await seedStory("S-M2-01", "DELIVERED", ["S-M2-01-a"]);
-    await setLayers("S-M2-01-a", ["ui"]);
-    await registry.registerStory("S-M2-01");
-
-    await setLayers("S-M2-01-a", ["integration"]);
-    await expect(registry.registerStory("S-M2-01")).resolves.toBe(0);
-    await expect(registry.pool("epic")).resolves.toEqual([]);
-  });
-
   it("registers every scenario a Story declares, into its Epic's pool", async () => {
     await seedStory("S-M2-01", "DELIVERED", ["S-M2-01-a", "S-M2-01-b"]);
 

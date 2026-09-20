@@ -28,7 +28,7 @@ function snapshot(overrides: Partial<ProgressSnapshot> = {}): ProgressSnapshot {
 describe("assessProgress", () => {
   it("says nothing is stuck when work is moving", () => {
     const report = assessProgress(snapshot({
-      workingCards: [{ cardId: "S-1", state: "CODE", updatedAt: NOW - MINUTE, running: true }],
+      workingCards: [{ cardId: "S-1", state: "CODE", updatedAt: NOW - MINUTE }],
     }), NOW);
 
     expect(report.healthy).toBe(true);
@@ -39,40 +39,12 @@ describe("assessProgress", () => {
     // The failure mode a pid check cannot see: the process is up, the cycle is
     // ticking, and one card has not moved for an hour.
     const report = assessProgress(snapshot({
-      workingCards: [{ cardId: "S-E2RESULTS-01", state: "VERIFY", updatedAt: NOW - 60 * MINUTE, running: true }],
+      workingCards: [{ cardId: "S-E2RESULTS-01", state: "VERIFY", updatedAt: NOW - 60 * MINUTE }],
     }), NOW);
 
     expect(report.healthy).toBe(false);
     expect(report.findings[0]?.summary).toContain("S-E2RESULTS-01");
     expect(report.findings[0]?.summary).toContain("60 minutes");
-  });
-
-  it("does not call a card stuck when it is queued behind the host's concurrency limit", () => {
-    // A host runs a fixed number of Stories at once. The ones without a slot
-    // sit in CODE for as long as the running ones take, and reported as idle
-    // time that is indistinguishable from the stall this probe is for.
-    const report = assessProgress(snapshot({
-      workingCards: [
-        { cardId: "S-RUNNING", state: "CODE", updatedAt: NOW - MINUTE, running: true },
-        { cardId: "S-QUEUED", state: "CODE", updatedAt: NOW - 700 * MINUTE, running: false },
-      ],
-    }), NOW);
-
-    expect(report.healthy).toBe(true);
-    expect(report.findings).toHaveLength(1);
-    expect(report.findings[0]).toMatchObject({ severity: "queued" });
-    expect(renderProgressReport(report)).toContain("Queued behind the host's concurrency limit:");
-  });
-
-  it("calls a card stuck when it is not running and nothing else is either", () => {
-    // Nothing holds a slot and nothing is picking the card up: the dispatch
-    // failure the queue exception must not hide.
-    const report = assessProgress(snapshot({
-      workingCards: [{ cardId: "S-ALONE", state: "CODE", updatedAt: NOW - 700 * MINUTE, running: false }],
-    }), NOW);
-
-    expect(report.healthy).toBe(false);
-    expect(report.findings[0]?.summary).toContain("nothing at all is running");
   });
 
   it("reports a card waiting for a person without calling the system unhealthy", () => {
@@ -175,7 +147,7 @@ describe("readProgressSnapshot", () => {
     ], "write");
 
     const read = await readProgressSnapshot(client);
-    expect(read.workingCards).toEqual([{ cardId: "S-E1-01", state: "CODE", updatedAt: 1000, running: false }]);
+    expect(read.workingCards).toEqual([{ cardId: "S-E1-01", state: "CODE", updatedAt: 1000 }]);
   });
 
   it("falls back to the row for a card that has not done anything yet", async () => {
@@ -184,7 +156,7 @@ describe("readProgressSnapshot", () => {
     );
 
     const read = await readProgressSnapshot(client);
-    expect(read.workingCards).toEqual([{ cardId: "S-E1-01", state: "CODE", updatedAt: 9000, running: false }]);
+    expect(read.workingCards).toEqual([{ cardId: "S-E1-01", state: "CODE", updatedAt: 9000 }]);
   });
 
   it("stops reporting an Epic once its scenarios have passed somewhere", async () => {

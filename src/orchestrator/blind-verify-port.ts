@@ -1,6 +1,6 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { screenScenarios, structuralRequirements } from "../pipeline/dod.js";
+import { screenScenarios } from "../pipeline/dod.js";
 import { splitScenarioFailures } from "../pipeline/failure-classification.js";
 import type { BlindVerifyExecutor, BlindVerifyResult } from "../verify/executor.js";
 import type { PhaseCostRow, PhaseTelemetryInput } from "./pi-phase-port.js";
@@ -108,7 +108,11 @@ export class BlindVerifyStoryPort implements StoryVerifyPort {
       // From the frozen DoD, the same place the declared ids come from: the
       // structural layer is only worth anything if what it compares against
       // was written before the round it is judging.
-      visibleRequirements: structuralRequirements(input.definitionOfDone),
+      visibleRequirements: new Map(
+        input.definitionOfDone.scenarios
+          .filter((scenario) => scenario.visible !== undefined)
+          .map((scenario) => [scenario.id, scenario.visible!]),
+      ),
       allowedHosts: lane.allowedHosts,
       app: lane.app,
       ...(this.options.chromiumSandbox === undefined ? {} : { chromiumSandbox: this.options.chromiumSandbox }),

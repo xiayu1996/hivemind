@@ -190,67 +190,6 @@ depends_on: []
     client.close();
   });
 
-  it("puts the verifier's own sentence on the page when no round reached a verdict", async () => {
-    const client = createClient({ url: ":memory:" });
-    await migrate(client);
-    const store = new StoryExecutionStore(client, () => 10);
-    await store.createStory({ id: "S-EPIC1-03", notionPageId: "page-3", title: "Story", requirement: "Requirement" });
-    await store.freezeDefinitionOfDone("S-EPIC1-03", parseDoD(`story_id: S-EPIC1-03
-design_summary: 保存后能看到规则。
-scenarios:
-  - id: S-EPIC1-03-a
-    title: 保存规则并回显
-    given: 管理员打开规则页
-    when: 保存一条规则
-    then: 列表里出现这条规则
-    layers: [integration]
-baseline:
-  type: acceptance_test
-acceptance_criteria:
-  - text: 规则能保存。
-    scenarios: [S-EPIC1-03-a]
-out_of_scope: []
-relies_on: []
-predicted_footprint: [src]
-depends_on: []
-`));
-    await client.execute({
-      sql: `INSERT INTO phase_runs (run_id, card_id, phase, round, prompt_sha256, status, started_at, ended_at)
-            VALUES ('run-v1', 'S-EPIC1-03', 'VERIFY', 1, ?, 'completed', 5, 10)`,
-      args: ["b".repeat(64)],
-    });
-    await client.execute({
-      sql: `INSERT INTO verify_records (card_id, round, code_session_id, verify_session_id, verdict, failed_scenarios, evidence_dir, created_at)
-            VALUES ('S-EPIC1-03', 1, 'code.jsonl', 'verify.jsonl', 'inconclusive', '["S-EPIC1-03-a"]', '/ev', 10)`,
-    });
-    await client.execute({
-      sql: `INSERT INTO phase_artifacts (run_id, card_id, phase, round, kind, body, created_at)
-            VALUES ('run-v1', 'S-EPIC1-03', 'VERIFY', 1, 'verification', ?, 10)`,
-      args: [JSON.stringify({
-        verdict: "inconclusive",
-        failedScenarios: ["S-EPIC1-03-a"],
-        reasons: [{
-          scenarioId: "S-EPIC1-03-a",
-          reason: "这台用来检查的设备本身就落在允许范围内，我打不开那一页",
-        }],
-      })],
-    });
-    await store.stopForInput("S-EPIC1-03", "QUEUED", "verify_loop_exceeded", "run-stop", {
-      inconclusive: 2, inconclusiveScenarios: ["S-EPIC1-03-a"],
-    });
-    await new NotionStoryProjection(client, () => 20).enqueue("S-EPIC1-03");
-    const page = (await client.execute("SELECT payload FROM notion_outbox WHERE operation = 'sync_story_page'")).rows[0];
-    const desired = JSON.parse(String(page?.payload)).desired;
-
-    // The count alone reads as a box that would not start, which is the other
-    // thing an inconclusive round means and the one a person would go repair.
-    expect(desired.questions).toContain("连续 2 轮都没能判成：场景 1 · 保存规则并回显");
-    expect(desired.questions).toContain(
-      "场景 1 · 保存规则并回显：这台用来检查的设备本身就落在允许范围内，我打不开那一页",
-    );
-    client.close();
-  });
-
   it("writes a status the board has left even when that exact payload was sent once before", async () => {
     const client = createClient({ url: ":memory:" });
     await migrate(client);

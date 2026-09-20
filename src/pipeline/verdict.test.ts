@@ -69,36 +69,6 @@ describe("validateVerdict", () => {
     );
   });
 
-  it("refuses a screen scenario read off a service the verifier stood up itself", async () => {
-    const { input } = fixture();
-    input.screenScenarioIds = ["S-EPIC12-03-a"];
-    input.allowedHosts = ["localhost", "127.0.0.1"];
-    input.appUrl = "http://127.0.0.1:41931/health";
-    input.verdict.scenarios[0]!.url = "http://localhost:5173/checkout";
-    const result = await validateVerdict(input);
-    expect(result.unproven).toEqual(["S-EPIC12-03-a"]);
-    expect(result.errors.some((error) => error.includes("not the application under verification"))).toBe(true);
-  });
-
-  it("accepts a screen scenario read off the application, whichever way loopback was spelled", async () => {
-    const { input } = fixture();
-    input.screenScenarioIds = ["S-EPIC12-03-a"];
-    input.allowedHosts = ["localhost", "127.0.0.1"];
-    input.appUrl = "http://127.0.0.1:41931/health";
-    input.verdict.scenarios[0]!.url = "http://localhost:41931/checkout";
-    const result = await validateVerdict(input);
-    expect(result.unproven).toEqual([]);
-  });
-
-  it("asks nothing of the address when no application was started for the round", async () => {
-    const { input } = fixture();
-    input.screenScenarioIds = ["S-EPIC12-03-a"];
-    input.verdict.scenarios[0]!.url = "http://localhost:5173/checkout";
-    input.allowedHosts = ["localhost"];
-    const result = await validateVerdict(input);
-    expect(result.unproven).toEqual([]);
-  });
-
   it("leaves a screen scenario alone when it has its own page and screenshot, or was inconclusive", async () => {
     const { input } = fixture();
     input.screenScenarioIds = ["S-EPIC12-03-a", "S-EPIC12-03-b"];

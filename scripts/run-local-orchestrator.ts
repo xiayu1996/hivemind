@@ -14,11 +14,6 @@ import { planRegressionSweep } from "../src/regression/scheduler.js";
 import { defaultSecretsPath, loadSecretsFile, upsertSecretFile } from "../src/config/secrets-file.js";
 import { ConfigStore } from "../src/config/store.js";
 import { breakerPolicy, intakeHalted, usableProviders } from "../src/runner/circuit-breaker.js";
-import {
-  AllProvidersUnavailableError,
-  ProviderDeferredError,
-  runWithFailover,
-} from "../src/runner/failover.js";
 import { classifyError } from "../src/runner/classify.js";
 import { settleDispatchFailure } from "../src/orchestrator/dispatch-failure.js";
 import { renderStopSummary } from "../src/orchestrator/stop-summary.js";
@@ -172,13 +167,6 @@ async function currentBranch(path: string): Promise<string> {
  * upkeep and the regression sweep -- plus a P0 about a request that would
  * have succeeded on the next pass.
  */
-/** The JSON the regression sweep prints as its last line. */
-interface SweepSummary {
-  failed?: readonly string[];
-  attributions?: readonly { scenarioId: string; attribution?: { kind?: string } }[];
-  attributionsSkipped?: string;
-}
-
 const step = async (name: string, run: () => Promise<void>): Promise<void> => {
   try {
     await run();
@@ -1146,102 +1134,54 @@ async function main(): Promise<void> {
       probeWorktree = probeTree.worktreePath;
     }
 
-    // How much else this host was driving when the sweep started, read before
-    // the spawn because dispatch moves on while the sweep runs.
-    const foreground = inFlight.size;
+    const chain = providerOverride ? [providerOverride] : await modelPolicy.providersFor("verify");
+    const provider = usableProviders(chain, await providerHealth.snapshot(), Date.now())[0];
+    if (!provider) return false;
+    const model = modelOverride ?? (await modelPolicy.resolve("verify", provider)).id;
+
     const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-    // A sweep is one whole unit of work, and it walks the chain like every
-    // other unit: the provider that refused it is stepped over rather than
-    // ending the sweep for the cycle. It used to be pinned to the first healthy
-    // provider, which is the one arrangement in the system with no failover at
-    // all -- measured on 2026-09-19/20, seventeen cycles across three Epics were
-    // skipped on one transient "upstream model provider is temporarily
-    // unavailable" from the first provider, which kept serving cards and so kept
-    // its breaker closed and was chosen again the next cycle. A sweep that
+    // Same debt the Epic decomposition had: the provider is chosen from the
+    // breaker, so a fault it does not hear about leaves that provider "usable"
+    // and every cycle spawns the sweep into the same refusal. A sweep that
     // cannot run is not background hygiene -- an Epic whose Stories have all
     // landed cannot open its review request until its scenarios pass, so this
     // is the thing standing between the requirement and delivery.
-    let result;
-    try {
-      result = await runWithFailover("verify", async (model) => execFileAsync(npm, [
-        "run", "regression:run", "--",
-        "--pool", plan.pool,
-        "--branch", branch,
-        "--worktree", sweepTree.worktreePath,
-        "--scenarios", plan.scenarioIds.join(","),
-        "--repository", slug,
-        "--evidence-root", join(workRoot, "evidence", repositoryId, sweepCard),
-        "--provider", model.provider,
-        "--model", modelOverride ?? model.id,
-        ...(epicId ? ["--epic", epicId] : []),
-        ...(probeWorktree ? ["--probe-worktree", probeWorktree] : []),
-      ], {
-        cwd: ROOT,
-        windowsHide: true,
-        shell: process.platform === "win32",
-        maxBuffer: 10 * 1024 * 1024,
-        env: { ...process.env, HIVEMIND_DB_URL: dbUrl, ...(await providerEnvFor(model.provider)) },
-      }), {
-        providers: async () => providerOverride ? [providerOverride] : await modelPolicy.providersFor("verify"),
-        modelFor: (provider, purpose) => modelPolicy.resolve(purpose, provider),
-        health: providerHealth,
-        policy: await breakerPolicy(config),
-        now: Date.now,
-        // Only what the error catalogue recognises says anything about the
-        // provider; a defect of ours is UNKNOWN, and re-running the whole sweep
-        // on the rest of the chain would only reproduce it.
-        isProviderFault: (message) => classifyError(message).class !== "UNKNOWN",
-      });
-    } catch (cause) {
-      // Nothing in the chain can sweep right now, or the one provider that
-      // could is inside a window short enough to wait out. Either way no sweep
-      // ran, which is what the caller is told; the next cycle asks again.
-      if (cause instanceof AllProvidersUnavailableError || cause instanceof ProviderDeferredError) {
-        console.warn(`regression sweep for ${slug} did not run: ${cause.message}`);
-        return false;
+    const reportProviderFault = async (cause: unknown): Promise<never> => {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      // Only what the error catalogue recognises says anything about the
+      // provider; a defect of ours is UNKNOWN and must not open a breaker.
+      if (classifyError(message).class !== "UNKNOWN") {
+        await providerHealth.recordFailure(provider, message, await breakerPolicy(config))
+          .catch(() => undefined);
       }
       throw cause;
-    }
+    };
+    const result = await execFileAsync(npm, [
+      "run", "regression:run", "--",
+      "--pool", plan.pool,
+      "--branch", branch,
+      "--worktree", sweepTree.worktreePath,
+      "--scenarios", plan.scenarioIds.join(","),
+      "--repository", slug,
+      "--evidence-root", join(workRoot, "evidence", repositoryId, sweepCard),
+      "--provider", provider,
+      "--model", model,
+      ...(epicId ? ["--epic", epicId] : []),
+      ...(probeWorktree ? ["--probe-worktree", probeWorktree] : []),
+    ], {
+      cwd: ROOT,
+      windowsHide: true,
+      shell: process.platform === "win32",
+      maxBuffer: 10 * 1024 * 1024,
+      env: { ...process.env, HIVEMIND_DB_URL: dbUrl, ...(await providerEnvFor(provider)) },
+    }).catch(reportProviderFault);
     if (result.stdout.trim()) console.log(`regression sweep (${plan.reason}): ${result.stdout.trim()}`);
-    // The summary is the last line, not the whole of stdout: npm prints its own
-    // banner ahead of the child, so parsing everything never once succeeded and
-    // the warning below has never reached anybody.
-    const summaryLine = result.stdout.trimEnd().split("\n")
-      .toReversed().find((line) => line.trimStart().startsWith("{"));
-    let summary: SweepSummary | undefined;
     try {
-      if (summaryLine) summary = JSON.parse(summaryLine) as SweepSummary;
+      const summary = JSON.parse(result.stdout.trim()) as { attributionsSkipped?: string; attributions?: unknown[] };
+      if (summary.attributionsSkipped) console.warn(`regression cards raised without attribution: ${summary.attributionsSkipped}`);
     } catch {
       // The sweep printed something other than its JSON summary; the raw line
       // above is the record, and there is nothing further to read from it.
-    }
-    if (summary?.attributionsSkipped) {
-      console.warn(`regression cards raised without attribution: ${summary.attributionsSkipped}`);
-    }
-    // A scenario the sweep failed and the bisect could then not reproduce at
-    // either end is either a flaky break or a flaky run, and the two are told
-    // apart by what else this host was driving at the time: an event sweep does
-    // not wait for the foreground to go quiet, so its browser can be one of
-    // several. Nothing recorded that, so the question was only ever answerable
-    // by guessing. S-R237511MB-02 sat on it for a day: five scenarios failed at
-    // once and two probes on the same revision passed.
-    const unreproduced = (summary?.attributions ?? [])
-      .filter((entry) => entry.attribution?.kind === "not_reproduced")
-      .map((entry) => entry.scenarioId);
-    if (unreproduced.length > 0) {
-      await store.recordFriction({
-        cardId: sweepCard,
-        runId: `regression:${sweepCard}`,
-        kind: "sweep_unreproduced",
-        detail: JSON.stringify({
-          pool: plan.pool,
-          reason: plan.reason,
-          scenarios: unreproduced,
-          failed: summary?.failed?.length ?? 0,
-          swept: plan.scenarioIds.length,
-          storiesInFlight: foreground,
-        }),
-      });
     }
     return true;
   };
