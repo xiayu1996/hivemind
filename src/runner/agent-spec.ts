@@ -1,3 +1,4 @@
+import type { AgentRoleConfigurationBinding } from "../config/role-configuration-version.js";
 import type { ConfigStore } from "../config/store.js";
 import { MODEL_PURPOSES, type ModelPurpose, type ModelTier } from "../pipeline/phase.js";
 import type { ModelCatalog, ResolvedModel } from "./model-resolver.js";
@@ -90,6 +91,32 @@ export interface AgentSpecSources {
   catalog?: ModelCatalog;
   policy?: AgentModelPolicy;
 }
+
+export interface ResolvedRoleAgentSpec {
+  binding: AgentRoleConfigurationBinding;
+  spec: ResolvedAgentSpec;
+}
+
+export type RoleAgentSpecResolutionResult =
+  | { status: "resolved"; value: ResolvedRoleAgentSpec }
+  | {
+    status: "unavailable";
+    reason: "provider-unavailable" | "model-unavailable";
+    retryable: boolean;
+    detail?: string;
+  };
+
+/**
+ * Resolves one agent run from its immutable binding. The binding supplies the
+ * exact prompt, provider and model; reloading shared tool, guard and limit
+ * settings must not replace those three values. A continuation passes the same
+ * binding again, while a newly started agent receives a newly created binding.
+ */
+export declare function resolveRoleAgentSpec(
+  sources: AgentSpecSources,
+  purpose: ModelPurpose,
+  binding: AgentRoleConfigurationBinding,
+): Promise<RoleAgentSpecResolutionResult>;
 
 function policyOf(sources: AgentSpecSources): AgentModelPolicy {
   if (sources.policy) return sources.policy;

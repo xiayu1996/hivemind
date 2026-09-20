@@ -1,3 +1,10 @@
+import type {
+  RestorePreviousRoleConfigurationCommand,
+  RoleConfigurationMutationPort,
+  RoleConfigurationMutationResult,
+  SaveRoleConfigurationCommand,
+} from "../config/role-configuration-version.js";
+
 export type RoleId = string;
 
 export interface RoleReference {
@@ -171,6 +178,69 @@ export type RoleVersionPairReadResult =
 export interface RoleConfigurationReadPort {
   readCatalog(): Promise<RoleCatalogReadResult>;
   readVersionPair(roleId: RoleId): Promise<RoleVersionPairReadResult>;
+}
+
+export interface RoleConfigurationProviderChoice extends RoleModelReference {
+  models: readonly RoleModelReference[];
+}
+
+export type RoleConfigurationChoiceReadResult =
+  | { status: "ready"; providers: readonly RoleConfigurationProviderChoice[] }
+  | { status: "unavailable"; retryable: true; detail?: string };
+
+/** Reads only choices valid for a new version of the selected role. */
+export interface RoleConfigurationChoiceReadPort {
+  readChoices(roleId: RoleId): Promise<RoleConfigurationChoiceReadResult>;
+}
+
+export interface RoleConfigurationDraft {
+  roleId: RoleId;
+  roleLabel: string;
+  baseVersion: number;
+  prompt: string;
+  provider: RoleModelReference;
+  model: RoleModelReference;
+  futureAgentsOnlyConfirmed: boolean;
+}
+
+export type RoleConfigurationSavePreparation =
+  | { status: "scope-required"; draft: RoleConfigurationDraft }
+  | {
+    status: "confirmation-required";
+    draft: RoleConfigurationDraft;
+    current: RoleConfigurationVersion;
+  };
+
+/**
+ * Purely prepares the confirmation dialog. It performs no write, and the page
+ * remains the owner of the draft until a final mutation result is accepted.
+ */
+export declare function prepareRoleConfigurationSave(
+  draft: RoleConfigurationDraft,
+  current: RoleConfigurationVersion,
+): RoleConfigurationSavePreparation;
+
+export interface RoleConfigurationRestorePreparation {
+  status: "confirmation-required";
+  roleLabel: string;
+  current: RoleConfigurationVersion;
+  source: RoleConfigurationVersion;
+}
+
+/** Prepares an exact-copy restore confirmation without changing either version. */
+export declare function prepareRoleConfigurationRestore(
+  roleLabel: string,
+  current: RoleConfigurationVersion,
+  previous: RoleConfigurationVersion,
+): RoleConfigurationRestorePreparation;
+
+/**
+ * The console adapts this port to HTTP. Conflict and rejection results leave
+ * the caller-owned draft unchanged; only `saved` replaces the displayed pair.
+ */
+export interface RoleConfigurationWritePort extends RoleConfigurationMutationPort {
+  saveNewVersion(command: SaveRoleConfigurationCommand): Promise<RoleConfigurationMutationResult>;
+  restorePrevious(command: RestorePreviousRoleConfigurationCommand): Promise<RoleConfigurationMutationResult>;
 }
 
 /** The page owns selection and rejects responses for a superseded role id. */

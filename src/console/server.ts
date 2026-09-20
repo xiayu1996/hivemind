@@ -25,7 +25,11 @@ import type {
   RequirementCostLimitStore,
   RequirementCostWithLimitSnapshot,
 } from "../persistence/requirement-cost-limit.js";
-import type { RoleConfigurationReadPort } from "./role-configuration.js";
+import type {
+  RoleConfigurationChoiceReadPort,
+  RoleConfigurationReadPort,
+  RoleConfigurationWritePort,
+} from "./role-configuration.js";
 import {
   readRoleConfigurationView,
   renderRoleConfigurationPage,
@@ -74,6 +78,10 @@ export interface ConsoleServerOptions {
   serveUi?: boolean;
   /** Reads immutable role-version pairs without owning page selection state. */
   roleConfigurationReader?: RoleConfigurationReadPort;
+  /** Lists provider/model pairs that may be selected for the chosen role. */
+  roleConfigurationChoiceReader?: RoleConfigurationChoiceReadPort;
+  /** Appends role-scoped versions through an optimistic current-version check. */
+  roleConfigurationWriter?: RoleConfigurationWritePort;
   /** The one write surface. Without it the console stays entirely read-only. */
   configWriter?: ConsoleConfigWritePort;
   /** The requirement-limit write surface. Without it the limit form has no
