@@ -136,12 +136,12 @@ describe("notifyStoryStopped", () => {
 });
 
 describe("a card stopped because nothing could be judged", () => {
-  it("says the environment never came up, and claims no budget it was not given", () => {
+  it("names the scenarios, and claims no budget it was not given", () => {
     const rendered = renderStopSummary({
       cardId: "S-EPIC-01",
       reason: "retry_limit_exceeded",
       spent: 2,
-      inconclusive: { attempts: 3, scenarios: ["S-EPIC-01-open", "S-EPIC-01-save"] },
+      inconclusive: { attempts: 3, scenarios: ["S-EPIC-01-open", "S-EPIC-01-save"], rounds: [] },
       rounds: [],
       mergeBounces: [],
       baselineFailures: [],
@@ -150,10 +150,37 @@ describe("a card stopped because nothing could be judged", () => {
       costUsd: 0,
     });
 
-    expect(rendered).toContain("The environment would not stand up 3 rounds running");
+    expect(rendered).toContain("No round reached a verdict, 3 in a row");
     expect(rendered).toContain("S-EPIC-01-open, S-EPIC-01-save");
     // "of 0" read as a budget of zero, which the code does not allow to exist.
     expect(rendered).toContain("Rounds spent: 2");
     expect(rendered).not.toContain("of 0");
+  });
+
+  it("prints why, because the count alone names no decision a person can make", () => {
+    const rendered = renderStopSummary({
+      cardId: "S-EPIC-01",
+      reason: "retry_limit_exceeded",
+      spent: 2,
+      inconclusive: {
+        attempts: 2,
+        scenarios: ["S-EPIC-01-access"],
+        rounds: [
+          { round: 7, failed: ["S-EPIC-01-access"], reasons: [{ scenarioId: "S-EPIC-01-access", reason: "旧的说法" }] },
+          { round: 8, failed: ["S-EPIC-01-access"], reasons: [{ scenarioId: "S-EPIC-01-access", reason: "浏览器只能从本机打开，造不出不在允许网络里的设备。" }] },
+        ],
+      },
+      rounds: [],
+      mergeBounces: [],
+      baselineFailures: [],
+      refusals: [],
+      dispatchFailures: [],
+      costUsd: 0,
+    });
+
+    expect(rendered).toContain("S-EPIC-01-access: 浏览器只能从本机打开，造不出不在允许网络里的设备。");
+    // The latest round's words, not every round's: the same obstacle restated
+    // three times reads as three obstacles.
+    expect(rendered).not.toContain("旧的说法");
   });
 });
