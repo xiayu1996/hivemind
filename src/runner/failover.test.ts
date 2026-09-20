@@ -111,6 +111,18 @@ describe("runWithFailover", () => {
     expect(attempt).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps a failure that says nothing about the provider on the provider that ran it", async () => {
+    const context = deps({ isProviderFault: () => false });
+    const defect = new Error("Cannot read properties of undefined (reading 'scenarioIds')");
+    const attempt = vi.fn(async () => {
+      throw defect;
+    });
+
+    await expect(runWithFailover("verify", attempt, context)).rejects.toBe(defect);
+    expect(attempt).toHaveBeenCalledTimes(1);
+    await expect(context.health.snapshot()).resolves.toEqual(new Map());
+  });
+
   it("reports the whole chain as unavailable rather than retrying silently", async () => {
     const context = deps();
     const attempt = vi.fn(async () => {
