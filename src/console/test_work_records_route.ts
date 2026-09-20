@@ -42,7 +42,7 @@ describe("work records route", () => {
     expect(body).toContain("engineer · 同步任务");
     expect(body).toContain("Hivemind 的 web 管理后台");
     expect(body).toContain("命中：");
-    expect(body).toContain('<mark class="hit">Notion 保存失败</mark>');
+    expect(body).toContain('命中：待办处理结果在 <mark class="hit">Notion 保存失败</mark> 后保持未处理');
     expect(body).not.toContain("每日费用汇总完成");
     expect(body).not.toContain("周期性优化");
   });
