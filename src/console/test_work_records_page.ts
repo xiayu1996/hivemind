@@ -155,6 +155,14 @@ describe("work records page", () => {
     expect(html).toContain("正在搜索完整工作记录");
     expect(html).toContain("正在查找最近 24 小时内包含“Notion 保存失败”的记录，请稍候。");
     expect(html).not.toContain("周期性优化");
+    // A search is an in-place change: the browser swaps the view to the loading
+    // notice the moment the form is submitted, before the read comes back, so
+    // the previous result is gone from the first frame rather than after a
+    // navigation. The document a scripting-off browser gets is unchanged.
+    expect(html).toContain('id="records-view"');
+    expect(html).toContain('class="toolbar record-search"');
+    expect(html).toContain("getElementById('records-view')");
+    expect(html).toContain("'<h2>正在搜索完整工作记录</h2>'");
   });
 
   it("@scenario S-R237511TR-01-error 读取失败后保留三个条件并可重新搜索且不显示旧结果", () => {
