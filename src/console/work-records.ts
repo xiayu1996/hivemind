@@ -257,7 +257,7 @@ function renderSearchForm(query: WorkRecordSearchQuery): string {
     `<option value="${value}"${role === value ? " selected" : ""}>${label}</option>`;
   const rangeOption = (value: string, label: string): string =>
     `<option value="${value}"${range === value ? " selected" : ""}>${label}</option>`;
-  return `<form class="toolbar" method="get" action="/records" role="search">`
+  return `<form class="toolbar record-search" method="get" action="/records" role="search">`
     + `<div><label for="log-query">搜索工作记录</label>`
     + `<input id="log-query" name="keyword" type="search" value="${escapeHtml(query.keyword)}" placeholder="输入错误、动作或关键词"></div>`
     + `<div><label for="log-role">智能体角色</label><select id="log-role" name="role">`
@@ -336,7 +336,7 @@ function renderEmpty(): string {
 
 function renderFailed(request: WorkRecordSearchRequest): string {
   const query = request.query;
-  return `<section class="state-page"><form class="state-card" method="get" action="/records">`
+  return `<section class="state-page"><form class="state-card record-search" method="get" action="/records">`
     + `<input type="hidden" name="keyword" value="${escapeHtml(query.keyword)}">`
     + `<input type="hidden" name="role" value="${escapeHtml(query.role ?? "")}">`
     + `<input type="hidden" name="range" value="${rangeValue(query)}">`
@@ -397,6 +397,110 @@ const RECORDS_PAGE_STYLE = [
  * only place a result ever appears: a loading, empty or failed read shows no
  * leftover list or record.
  */
+/**
+ * The browser half of the search. The server still renders the first document
+ * and every state, so a page with scripting off is the same screen; this only
+ * makes the search an in-place change: the previous result and record are
+ * replaced by what is being searched for the moment the form is submitted, and
+ * the request leaves from that frame. The frame is held for a moment because a
+ * read over a local connection returns faster than a person can read anything,
+ * and a notice that flashes for one frame is a notice nobody saw. A requestId
+ * drops a response that arrived after a newer search, so a slow read cannot
+ * restore stale content.
+ */
+const RECORDS_CLIENT_SCRIPT = [
+  "(function () {",
+  "  var view = document.getElementById('records-view');",
+  "  if (!view) return;",
+  "  var MIN_LOADING_MS = 150;",
+  "  var requestId = 0;",
+  "  function rangeLabel(value) {",
+  "    if (value === '7d') return '最近 7 天';",
+  "    if (value === 'all') return '全部时间';",
+  "    return '最近 24 小时';",
+  "  }",
+  "  function escapeHtml(text) {",
+  "    return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;');",
+  "  }",
+  "  function criteria(form) {",
+  "    var data = new FormData(form);",
+  "    return { keyword: String(data.get('keyword') || ''), role: String(data.get('role') || ''), range: String(data.get('range') || '24h') };",
+  "  }",
+  "  function params(c) {",
+  "    var search = new URLSearchParams();",
+  "    search.set('keyword', c.keyword);",
+  "    if (c.role) search.set('role', c.role);",
+  "    search.set('range', c.range);",
+  "    return search;",
+  "  }",
+  "  function loadingHtml(c) {",
+  "    return '<section class=\"state-page\" aria-live=\"polite\"><div class=\"state-card\">'",
+  "      + '<h2>正在搜索完整工作记录</h2>'",
+  "      + '<p>正在查找' + rangeLabel(c.range) + '内包含“' + escapeHtml(c.keyword) + '”的记录，请稍候。</p>'",
+  "      + '</div></section>';",
+  "  }",
+  "  function failedHtml(c) {",
+  "    return '<section class=\"state-page\"><form class=\"state-card record-search\" method=\"get\" action=\"/records\">'",
+  "      + '<input type=\"hidden\" name=\"keyword\" value=\"' + escapeHtml(c.keyword) + '\">'",
+  "      + '<input type=\"hidden\" name=\"role\" value=\"' + escapeHtml(c.role) + '\">'",
+  "      + '<input type=\"hidden\" name=\"range\" value=\"' + escapeHtml(c.range) + '\">'",
+  "      + '<h2>无法搜索工作记录</h2>'",
+  "      + '<p>完整记录没有载入。当前搜索条件已保留，检查内网连接后可以直接重新搜索。</p>'",
+  "      + '<button type=\"submit\">重新搜索</button></form></section>';",
+  "  }",
+  "  function later(html, started) {",
+  "    return { html: html, wait: Math.max(0, MIN_LOADING_MS - (Date.now() - started)) };",
+  "  }",
+  "  function run(event) {",
+  "    var form = event.target;",
+  "    if (!form || !form.classList || !form.classList.contains('record-search')) return;",
+  "    event.preventDefault();",
+  "    var id = ++requestId;",
+  "    var c = criteria(form);",
+  "    var search = params(c);",
+  "    var started = Date.now();",
+  "    view.innerHTML = loadingHtml(c);",
+  "    try { history.replaceState(null, '', '/records?' + search.toString()); } catch { /* history is optional; the search still runs */ }",
+  "    fetch('/records?' + search.toString(), { headers: { 'X-Records-View': 'fragment' } })",
+  "      .then(function (response) {",
+  "        if (!response.ok) throw new Error('the work records could not be read');",
+  "        return response.text();",
+  "      })",
+  "      .then(function (html) {",
+  "        var next = new DOMParser().parseFromString(html, 'text/html').getElementById('records-view');",
+  "        if (!next) throw new Error('the next view is missing');",
+  "        return later(next.innerHTML, started);",
+  "      })",
+  "      .catch(function () { return later(failedHtml(c), started); })",
+  "      .then(function (outcome) {",
+  "        if (id !== requestId) return;",
+  "        setTimeout(function () {",
+  "          if (id !== requestId) return;",
+  "          view.innerHTML = outcome.html;",
+  "        }, outcome.wait);",
+  "      });",
+  "  }",
+  "  function searchOf(control) {",
+  "    var form = control && control.form;",
+  "    return form && form.classList && form.classList.contains('record-search') ? form : null;",
+  "  }",
+  "  document.addEventListener('submit', run);",
+  "  // A filter that changed narrows the search the way the button does, so the",
+  "  // three controls do not each need their own submit.",
+  "  document.addEventListener('change', function (event) {",
+  "    var form = searchOf(event.target);",
+  "    if (form) run({ target: form, preventDefault: function () {} });",
+  "  });",
+  "  document.addEventListener('click', function (event) {",
+  "    var target = event.target;",
+  "    if (!target || !target.classList || !target.classList.contains('secondary')) return;",
+  "    var input = document.getElementById('log-query');",
+  "    if (input) input.focus();",
+  "  });",
+  "})();",
+].join("\n");
+
+/** The complete work-records document. */
 export function renderWorkRecordsPage(state: WorkRecordSearchState): string {
   const query = currentQuery(state);
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">`
@@ -412,14 +516,14 @@ export function renderWorkRecordsPage(state: WorkRecordSearchState): string {
     + `<main><header class="page-head"><div><h1>工作记录排查</h1>`
     + `<p>无需进入需求详情，直接搜索完整智能体记录并查看问题前后文。</p></div></header>`
     + renderSearchForm(query)
-    + renderState(state)
+    + `<div id="records-view">${renderState(state)}</div>`
     + `</main></div>`
     + `<nav class="mobile-nav" aria-label="手机导航">`
     + `<a class="mobile-link" href="/">总览</a>`
     + `<a class="mobile-link" href="/costs">费用</a>`
     + `<a class="mobile-link" href="/roles">配置</a>`
     + `<a class="mobile-link" aria-current="page" href="/records">记录</a></nav>`
-    + `<script>document.querySelectorAll("button.secondary").forEach((button)=>{button.addEventListener("click",()=>{const input=document.getElementById("log-query");if(input){input.focus();}});});</script>`
+    + `<script>${RECORDS_CLIENT_SCRIPT}</script>`
     + `</body></html>`;
 }
 
@@ -459,12 +563,6 @@ async function readOrNull(reader: WorkRecordReader, runId: string): Promise<Work
   }
 }
 
-/** The selected run: what the person asked for, else the newest match. */
-function selectedRunId(matches: readonly WorkRecordSearchResult["matches"][number][], wanted?: string): string | undefined {
-  if (wanted !== undefined && matches.some((match) => match.runId === wanted)) return wanted;
-  return matches[0]?.runId;
-}
-
 /** The runId of the first match whose work has not stopped, or null. */
 async function firstRunning(
   reader: WorkRecordReader,
@@ -475,6 +573,20 @@ async function firstRunning(
     if (record !== null && record.status.kind === "running") return record.runId;
   }
   return null;
+}
+
+/** The runId the page opens on: the one asked for, else work still going, else newest. */
+async function initialRunId(
+  reader: WorkRecordReader,
+  matches: readonly WorkRecordSearchResult["matches"][number][],
+  wanted?: string,
+): Promise<string | undefined> {
+  if (wanted !== undefined && matches.some((match) => match.runId === wanted)) return wanted;
+  // A work that has not stopped is the one a person can still act on, and it is
+  // what the waiting state describes; which match happens to be newest moves
+  // with the clock, so leaving it to the sort would show the wait only at some
+  // hours of the day.
+  return (await firstRunning(reader, matches)) ?? matches[0]?.runId;
 }
 
 /**
@@ -510,15 +622,7 @@ export async function loadWorkRecordScreen(
   }
   if (result.matches.length === 0) return { kind: "empty", request };
 
-  const wanted = raw.state === "waiting" ? undefined : raw.runId;
-  let runId = selectedRunId(result.matches, wanted);
-  if (raw.state === "waiting") {
-    // The waiting state has to point at a work that has not stopped. Reading
-    // the matches in order costs nothing here and keeps the notice honest: a
-    // stopped record shows no wait.
-    const running = await firstRunning(reader, result.matches);
-    if (running !== null) runId = running;
-  }
+  const runId = await initialRunId(reader, result.matches, raw.runId);
   const record = runId === undefined ? null : await readOrNull(reader, runId);
   if (record === null) return { kind: "ready", request, result, selection: { kind: "none" } };
   return {
