@@ -30,6 +30,14 @@ export interface WorkingCard {
   cardId: string;
   state: string;
   updatedAt: number;
+  /**
+   * Whether this card holds a live lease, which is what it means for it to be
+   * running rather than queued. A host runs `schedule.maxConcurrentStories` at
+   * a time, so a card can sit in CODE for half a day with nothing wrong: the
+   * slots are taken. Reported as idle time, that is indistinguishable from the
+   * stall this probe exists to find.
+   */
+  running: boolean;
 }
 
 export interface StoppedCard {
@@ -64,7 +72,7 @@ export interface ProgressSnapshot {
   lastPassingRegressionAt: number | null;
 }
 
-export type FindingSeverity = "stalled" | "waiting";
+export type FindingSeverity = "stalled" | "waiting" | "queued";
 
 export interface ProgressFinding {
   severity: FindingSeverity;
@@ -74,7 +82,10 @@ export interface ProgressFinding {
 
 export interface ProgressReport {
   findings: readonly ProgressFinding[];
-  /** Nothing is stuck. Cards waiting on a person are reported, not counted. */
+  /**
+   * Nothing is stuck. Cards waiting on a person, and cards queued behind the
+   * host's concurrency limit, are reported but not counted.
+   */
   healthy: boolean;
 }
 
@@ -96,14 +107,32 @@ export function assessProgress(
   // A card in a working phase that has not moved. The phase itself can be long
   // - a model turn takes minutes - so this is about a card that stopped
   // changing, not about one that is slow.
+  //
+  // Holding a slot is what makes idle time a fault. A card without a live
+  // lease while another card has one is queued behind the host's concurrency
+  // limit, which is the configured behaviour and not a stall; a card without
+  // one while nothing at all is running is the dispatch failure this probe is
+  // for, and it is named as that rather than as slowness.
+  const anyRunning = snapshot.workingCards.some((card) => card.running);
   for (const card of snapshot.workingCards) {
     const age = now - card.updatedAt;
-    if (age >= thresholds.idleWorkingMs) {
+    if (age < thresholds.idleWorkingMs) continue;
+    if (card.running) {
       findings.push({
         severity: "stalled",
-        summary: `${card.cardId} has been in ${card.state} for ${minutes(age)} minutes without changing. The host is running but this card is not moving.`,
+        summary: `${card.cardId} has held a slot in ${card.state} for ${minutes(age)} minutes without changing. The host is running but this card is not moving.`,
       });
+      continue;
     }
+    findings.push(anyRunning
+      ? {
+        severity: "queued",
+        summary: `${card.cardId} has waited ${minutes(age)} minutes in ${card.state} for a free slot on this host.`,
+      }
+      : {
+        severity: "stalled",
+        summary: `${card.cardId} has been in ${card.state} for ${minutes(age)} minutes and nothing at all is running on this host. Nothing is picking it up.`,
+      });
   }
 
   // Waiting on a person is a designed stop, not a fault. It is still reported,
@@ -184,7 +213,15 @@ const MOVED_AT = `COALESCE(
       s.updated_at
     ) AS moved_at`;
 
-export async function readProgressSnapshot(client: Client): Promise<ProgressSnapshot> {
+export async function readProgressSnapshot(client: Client, now: number = Date.now()): Promise<ProgressSnapshot> {
+  // A lease that has not expired is what "running" means here. Released
+  // leases keep their row with an expiry in the past, so the comparison is
+  // against the clock rather than against the row existing.
+  const leased = new Set((await client.execute({
+    sql: "SELECT card_id FROM leases WHERE expires_at > ?",
+    args: [now],
+  })).rows.map((row) => String(row.card_id)));
+
   const working = (await client.execute(
     `SELECT s.id, s.state, ${MOVED_AT} FROM stories s
       WHERE s.state IN ('DESIGN','CODE','VERIFY','MERGE','REGRESSION_FIX') ORDER BY moved_at`,
@@ -192,6 +229,7 @@ export async function readProgressSnapshot(client: Client): Promise<ProgressSnap
     cardId: String(row.id),
     state: String(row.state),
     updatedAt: Number(row.moved_at),
+    running: leased.has(String(row.id)),
   }));
 
   const stopped = (await client.execute(
@@ -276,9 +314,13 @@ export function renderProgressReport(report: ProgressReport): string {
   if (report.findings.length === 0) return "Everything is moving: no card, Epic or board write is stuck.";
   const stalled = report.findings.filter((finding) => finding.severity === "stalled");
   const waiting = report.findings.filter((finding) => finding.severity === "waiting");
+  const queued = report.findings.filter((finding) => finding.severity === "queued");
   const lines: string[] = [];
   if (stalled.length > 0) {
     lines.push("Stuck:", ...stalled.map((finding) => `  ${finding.summary}`));
+  }
+  if (queued.length > 0) {
+    lines.push("Queued behind the host's concurrency limit:", ...queued.map((finding) => `  ${finding.summary}`));
   }
   if (waiting.length > 0) {
     lines.push("Waiting on a person or on evidence:", ...waiting.map((finding) => `  ${finding.summary}`));
