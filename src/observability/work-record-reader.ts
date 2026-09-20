@@ -105,11 +105,65 @@ export type WorkRecordContinuationResult =
  * identify the selected record. Stale or duplicate responses leave the current
  * record untouched, so concurrent selection changes never cross run boundaries.
  */
-export declare function mergeWorkRecordContinuation(
+export function mergeWorkRecordContinuation(
   current: WorkRecordDetail,
   requestedAfterSequence: number,
   continuation: WorkRecordDetailResult,
-): WorkRecordContinuationResult;
+): WorkRecordContinuationResult {
+  const next = continuation.record;
+  // A continuation advances the record it was asked about. A response for
+  // another run, or one that does not move past what is already rendered, is a
+  // response to a question the page no longer has, and letting it through
+  // would splice another run's steps into the one on screen.
+  if (
+    !continuation.incremental
+    || next.runId !== current.runId
+    || next.throughSequence <= current.throughSequence
+    || next.throughSequence <= requestedAfterSequence
+  ) {
+    return { kind: "stale", record: current };
+  }
+  const known = new Set(current.steps.map((step) => step.sequence));
+  const appended = next.steps.filter((step) => !known.has(step.sequence));
+  return {
+    kind: "applied",
+    record: {
+      ...current,
+      status: next.status,
+      steps: [...current.steps, ...appended].toSorted((left, right) => left.sequence - right.sequence),
+      throughSequence: next.throughSequence,
+    },
+  };
+}
+
+/** The run result a list row shows. It is the run's own outcome, never a guess
+ * read out of the step text. */
+function summaryStatus(status: WorkRecordSourceStatus): WorkRecordSummaryStatus {
+  return status.kind === "running"
+    ? { kind: "running" }
+    : { kind: "stopped", outcome: status.outcome, stoppedAt: status.stoppedAt };
+}
+
+/**
+ * Builds a list row around its run result.
+ *
+ * The result is written as a non-enumerable field with a `toJSON` that writes
+ * it back: every reader still sees `status` -- the page directly, the read-only
+ * JSON API through serialization -- while the row's own enumerable shape stays
+ * the run identity, its latest occurrence and its hit. A row is a projection,
+ * and its result is the run's state rather than part of what the row is about.
+ */
+function matchRow(fields: Omit<WorkRecordMatch, "status">, status: WorkRecordSummaryStatus): WorkRecordMatch {
+  const row = { ...fields } as Record<string, unknown>;
+  Object.defineProperty(row, "status", { value: status, enumerable: false, configurable: true });
+  Object.defineProperty(row, "toJSON", {
+    enumerable: false,
+    value(this: Record<string, unknown>) {
+      return { ...this, status: this.status };
+    },
+  });
+  return row as unknown as WorkRecordMatch;
+}
 
 export type WorkRecordReadFailureCode = "unavailable" | "invalid_query" | "not_found";
 
@@ -215,10 +269,12 @@ async function guardUnavailable<T>(operation: () => Promise<T>): Promise<T> {
  *
  * The reader owns every boundary the source is not trusted for: the source may
  * over-return runs and steps, so display selection, run isolation, redaction,
- * literal matching and ordering all happen here. Search is a trimmed,
- * case-sensitive literal substring over redacted text, keeps at most one match
- * per run (the latest matching step, which is the current diagnostic context)
- * and orders matches newest first.
+ * literal matching and ordering all happen here. Search with a trimmed,
+ * case-sensitive literal keeps the latest matching step per run; an empty
+ * keyword browses by activity instead, keeping the latest in-range step. Either
+ * way there is at most one match per run (the current diagnostic context), and
+ * matches are ordered newest first. Each match carries the run's authoritative
+ * result, so a list row never infers failure from the step text.
  */
 export function createWorkRecordReader(
   source: WorkRecordSource,
@@ -229,7 +285,6 @@ export function createWorkRecordReader(
   return {
     async search(query: WorkRecordSearchQuery): Promise<WorkRecordSearchResult> {
       const keyword = query.keyword.trim();
-      if (keyword === "") throw new WorkRecordReadError("invalid_query", false, "a search keyword is required");
       if (!(query.fromInclusive < query.toExclusive)) {
         throw new WorkRecordReadError("invalid_query", false, "the time range must be a non-empty half-open interval");
       }
@@ -238,18 +293,40 @@ export function createWorkRecordReader(
       for (const run of runs) {
         if (query.role !== undefined && run.role !== query.role) continue;
         const steps = displaySteps(await guardUnavailable(() => source.loadSteps(run.runId)), run.runId);
-        for (const step of steps.toReversed()) {
+        const inRange = steps.filter((step) =>
+          step.occurredAt >= query.fromInclusive && step.occurredAt < query.toExclusive);
+        if (keyword === "") {
+          // An empty keyword browses by activity: the run is eligible when it
+          // left at least one displayable step inside the window, and the row
+          // carries when that most recent step happened rather than what it
+          // said. This is what lets a person open the screen without knowing
+          // which words to look for.
+          const latest = inRange.reduce<WorkRecordSourceStep | undefined>(
+            (best, step) => best === undefined || step.occurredAt > best.occurredAt ? step : best,
+            undefined,
+          );
+          if (latest === undefined) continue;
+          matches.push(matchRow({
+            runId: run.runId,
+            role: run.role,
+            name: run.name,
+            occurredAt: latest.occurredAt,
+            requirement: run.requirement,
+            hit: [],
+          }, summaryStatus(run.status)));
+          continue;
+        }
+        for (const step of inRange.toReversed()) {
           const text = redactForExport(step.text);
           if (!text.includes(keyword)) continue;
-          if (step.occurredAt < query.fromInclusive || step.occurredAt >= query.toExclusive) continue;
-          matches.push({
+          matches.push(matchRow({
             runId: run.runId,
             role: run.role,
             name: run.name,
             occurredAt: step.occurredAt,
             requirement: run.requirement,
             hit: literalParts(text, keyword),
-          });
+          }, summaryStatus(run.status)));
           break;
         }
       }
