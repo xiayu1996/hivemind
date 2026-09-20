@@ -183,6 +183,23 @@ describe("UiReviewExecutor", () => {
     expect(prompt).toContain("sample data in place: 一个仓库下有 3 个 Story");
   });
 
+  it("says when the sample data a scenario names was never put into the application", () => {
+    // S-R237511TR-01 declared sample records on all seven scenarios, the
+    // repository configured no seed command, and the prompt told the reviewer
+    // the records were in place anyway. It then reported, correctly and
+    // differently each round, that the page did not hold them.
+    const given = input({ appUrl: "http://127.0.0.1:3000/" });
+    const scenarios = given.scenarios.map((scenario) => ({
+      ...scenario,
+      unstagedSeed: "最近 24 小时内有两次记录含「Notion 保存失败」",
+    }));
+    const prompt = promptFor({ ...given, scenarios }, { images: [], names: [], skipped: [] });
+    expect(prompt).toContain("which nothing put into the application: 最近 24 小时内有两次记录含「Notion 保存失败」");
+    expect(prompt).not.toContain("sample data in place");
+    // And what to do about it: the same branch a situation it cannot create takes.
+    expect(prompt).toContain("the scenario is `inconclusive` with the reason naming the data nobody staged");
+  });
+
   it("sends the screenshots as images with the first prompt", async () => {
     const fake = runner(PASSED);
     const result = await new UiReviewExecutor({ create: () => fake }).run(input());
