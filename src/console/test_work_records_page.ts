@@ -153,7 +153,8 @@ describe("work records page", () => {
 
     expect(loading.kind).toBe("loading");
     const html = renderWorkRecordsPage(loading);
-    expect(html).toContain("正在读取最近 24 小时内包含“Notion 保存失败”的工作记录");
+    expect(html).toContain("<h2 role=\"status\">正在搜索完整工作记录</h2>");
+    expect(html).toContain("正在查找最近 24 小时内包含“Notion 保存失败”的记录，请稍候。");
     expect(html).not.toContain("周期性优化");
     // A search is an in-place change: the browser swaps the view to the loading
     // notice the moment the form is submitted, before the read comes back, so
@@ -162,7 +163,8 @@ describe("work records page", () => {
     expect(html).toContain('id="records-view"');
     expect(html).toContain('class="toolbar record-search"');
     expect(html).toContain("getElementById('records-view')");
-    expect(html).toContain("'<h2 role=\"status\">正在读取' + scope(c) + '</h2>'");
+    expect(html).toContain("'<h2 role=\"status\">正在搜索完整工作记录</h2>'");
+    expect(html).toContain("'正在查找' + rangeLabel(c.range) + '内包含“' + escapeHtml(c.keyword) + '”的记录，请稍候。'");
   });
 
   it("@scenario S-R237511TR-02-loading 空关键词读取时说明正在读取最近二十四小时内全部角色的工作记录", () => {
@@ -192,12 +194,14 @@ describe("work records page", () => {
 
     expect(failed.kind).toBe("failed");
     const html = renderWorkRecordsPage(failed);
-    expect(html).toContain("无法读取工作记录");
-    expect(html).toContain("重新读取");
+    expect(html).toContain("<h2>无法搜索工作记录</h2>");
+    expect(html).toContain("<button type=\"submit\">重新搜索</button>");
     expect(html).toContain("value=\"Notion 保存失败\"");
     expect(html).toContain("value=\"prototype\" selected");
     expect(html).toContain("value=\"24h\" selected");
     expect(html).not.toContain("同步任务");
+    expect(html).toContain("'<h2>无法搜索工作记录</h2>'");
+    expect(html).toContain("'<button type=\"submit\">重新搜索</button></form></section>'");
     // The failed state is reachable on its own URL with the criteria it was
     // reached with, which is what lets a read failure be looked at rather than
     // only described.

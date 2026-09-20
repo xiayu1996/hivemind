@@ -73,7 +73,8 @@ describe("work records route", () => {
 
   it("@scenario S-R237511TR-01-loading serves what is being searched and no previous result", async () => {
     const body = await records("/records?keyword=Notion%20%E4%BF%9D%E5%AD%98%E5%A4%B1%E8%B4%A5&role=prototype&range=24h&state=loading");
-    expect(body).toContain("正在读取最近 24 小时内包含“Notion 保存失败”的工作记录");
+    expect(body).toContain("<h2 role=\"status\">正在搜索完整工作记录</h2>");
+    expect(body).toContain("正在查找最近 24 小时内包含“Notion 保存失败”的记录，请稍候。");
     expect(body).not.toContain("周期性优化");
   });
 
@@ -86,10 +87,11 @@ describe("work records route", () => {
     try {
       const response = await app.inject({ method: "GET", url: "/records?keyword=Notion%20%E4%BF%9D%E5%AD%98%E5%A4%B1%E8%B4%A5&role=prototype&range=24h" });
       expect(response.statusCode).toBe(200);
-      expect(response.body).toContain("无法读取工作记录");
-      expect(response.body).toContain("重新读取");
+      expect(response.body).toContain("<h2>无法搜索工作记录</h2>");
+      expect(response.body).toContain("<button type=\"submit\">重新搜索</button>");
       expect(response.body).toContain('value="Notion 保存失败"');
       expect(response.body).toContain('value="prototype" selected');
+      expect(response.body).toContain('value="24h" selected');
       expect(response.body).not.toContain("同步任务");
     } finally {
       await app.close();
@@ -98,8 +100,8 @@ describe("work records route", () => {
 
   it("@scenario S-R237511TR-01-error keeps the three conditions, offers a retry and hides the old result", async () => {
     const body = await records("/records?keyword=Notion%20%E4%BF%9D%E5%AD%98%E5%A4%B1%E8%B4%A5&role=prototype&range=24h&state=error");
-    expect(body).toContain("无法读取工作记录");
-    expect(body).toContain("重新读取");
+    expect(body).toContain("<h2>无法搜索工作记录</h2>");
+    expect(body).toContain("<button type=\"submit\">重新搜索</button>");
     expect(body).toContain('value="Notion 保存失败"');
     expect(body).toContain('value="prototype" selected');
     expect(body).toContain('value="24h" selected');
@@ -112,8 +114,8 @@ describe("work records route", () => {
     expect(body).toContain('href="/records?keyword=Notion+%E4%BF%9D%E5%AD%98%E5%A4%B1%E8%B4%A5&role=prototype&range=24h&state=error"');
     expect(body).toContain('href="/records?keyword=Notion+%E4%BF%9D%E5%AD%98%E5%A4%B1%E8%B4%A5&role=prototype&range=24h&state=loading"');
     const failed = await records("/records?keyword=Notion%20%E4%BF%9D%E5%AD%98%E5%A4%B1%E8%B4%A5&role=prototype&range=24h&state=error");
-    expect(failed).toContain("无法读取工作记录");
-    expect(failed).toContain("重新读取");
+    expect(failed).toContain("<h2>无法搜索工作记录</h2>");
+    expect(failed).toContain("<button type=\"submit\">重新搜索</button>");
     expect(failed).not.toContain("同步任务");
   });
 
