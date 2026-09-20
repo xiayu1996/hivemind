@@ -485,7 +485,12 @@ CREATE TABLE IF NOT EXISTS event_log (
   seq        INTEGER NOT NULL,
   card_id    TEXT,
   phase      TEXT,
-  type       TEXT NOT NULL,
+  -- The RPC stream belongs in the run's own events file and nowhere else.
+  -- Mirroring it here copied that file into the table every orchestration read
+  -- goes through: 2.4 million rows, a database past a gigabyte, and nothing
+  -- that ever read them back. The writer is gone; this is what keeps it gone,
+  -- by making the mirror a failed insert instead of a database nobody can open.
+  type       TEXT NOT NULL CHECK (type NOT LIKE 'rpc.%'),
   ts         INTEGER NOT NULL,
   data       TEXT NOT NULL,
   UNIQUE (run_id, seq)
