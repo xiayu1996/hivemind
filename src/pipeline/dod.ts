@@ -1,4 +1,5 @@
 import { parse } from "yaml";
+import { directoryOf } from "../util/repository-path.js";
 import { z } from "zod";
 import { lintHumanSentence } from "../report/business-language.js";
 
@@ -261,6 +262,52 @@ export function renderMissingInterfaceContract(scenarioIds: readonly string[]): 
     `这张卡有要看的界面（${ids}），但目标分支上还没有界面契约。`,
     "没有契约的话，这张卡只能自己发明一套样子，下一张卡会发明另一套。",
     "先在需求的方案关确认一份界面契约（token 表、组件清单、可运行的页面原型），再把这张卡放回去。",
+  ].join("\n");
+}
+
+/**
+ * Footprint entries that name a place the repository has no room for.
+ *
+ * The footprint is a prediction, so an entry may name something the card is
+ * about to create: `console-ui/src/pages/records` is a fair thing to write
+ * before that directory exists. What is not fair is an entry with no existing
+ * ancestor above the repository root, because a card almost never starts a new
+ * top-level directory and a near-miss on an existing one costs the scheduler
+ * everything it has. `S-R237511MB-02` declared `console/` and worked in
+ * `src/console`: the scheduler widens an entry to the directory it names, read
+ * `console` as intersecting nothing, and planned the card beside one that
+ * shares `src/console` with it -- which is the merge conflict the footprint
+ * exists to prevent, arranged by the mechanism meant to prevent it.
+ *
+ * `exists` is asked rather than the filesystem, so the rule is testable
+ * without a tree and identical on every host.
+ */
+export function footprintWithoutGround(
+  definition: DefinitionOfDone,
+  exists: (path: string) => boolean,
+): string[] {
+  const grounded = (raw: string): boolean => {
+    let path = directoryOf(raw);
+    if (exists(path)) return true;
+    for (;;) {
+      const cut = path.lastIndexOf("/");
+      // The root is not an ancestor that grounds anything: every entry has it.
+      if (cut <= 0) return false;
+      path = path.slice(0, cut);
+      if (exists(path)) return true;
+    }
+  };
+  return definition.predicted_footprint.filter((entry) => !grounded(entry));
+}
+
+/** What the session is asked to correct, with the tree in front of it. */
+export function renderFootprintWithoutGround(entries: readonly string[]): string {
+  return [
+    "`predicted_footprint` 里这几条在仓库里找不到落点：它们本身不存在，往上也没有任何一层存在的目录。",
+    "调度器按这些路径决定哪些卡不能同时动，一条落不到地的路径等于告诉它这张卡谁也不碰，",
+    "于是另一张真正改同一处的卡会被安排在旁边跑，合流时撞在一起。",
+    "请对着树把它们改成这张卡真正会动的路径（新建的目录可以写，只要它的上层已经存在）。",
+    ...entries.map((entry) => `- ${entry}`),
   ].join("\n");
 }
 
