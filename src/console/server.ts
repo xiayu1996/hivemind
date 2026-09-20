@@ -340,8 +340,225 @@ export async function createConsoleServer(
   });
   app.get("/roles", async (request, reply) => {
     const query = (request.query ?? {}) as Record<string, string | undefined>;
-    const state = await readRoleConfigurationView(resolveRoleConfigurationPageRequest(query), roleReader);
+    const state = await readRoleConfigurationView(
+      resolveRoleConfigurationPageRequest(query),
+      roleReader,
+      options.roleConfigurationChoiceReader,
+    );
     return reply.type("text/html").send(renderRoleConfigurationPage(state));
+  });
+
+  // The page's own save and restore flow. The JSON routes above serve clients
+  // that speak JSON; a browser posts its form here and every answer is the page
+  // for the state the action produced. Nothing is written before the
+  // confirmation step, and the draft travels in the form rather than on the
+  // server, so a window that opened an older version submits what it showed and
+  // loses its edits to nobody.
+  app.post("/roles/action", async (request, reply) => {
+    if (!roleWriter) return reply.code(404).send({ error: "role configuration is not writable" });
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const action = typeof body.action === "string" ? body.action : "";
+    const roleId = typeof body.roleId === "string" ? body.roleId : "";
+    const page = async (state: RoleConfigurationViewState) => reply.type("text/html").send(renderRoleConfigurationPage(state));
+    const editing = (
+      roles: readonly RoleReference[],
+      pair: RoleVersionPair,
+      draft: RoleConfigurationDraft,
+      choices: readonly RoleConfigurationProviderChoice[] | null,
+      status: RoleConfigurationEditingViewState["status"] = "editing",
+      failure?: string,
+    ): RoleConfigurationEditingViewState => ({
+      status,
+      roles,
+      selectedRoleId: roleId,
+      current: pair.current,
+      previous: pair.previous,
+      draft,
+      ...(choices === null ? {} : { choices }),
+      ...(failure === undefined ? {} : { failure }),
+    });
+
+    const read = await readRolePagePairFor(roleReader, roleId);
+    if (read === null) {
+      return page({ status: "error", roles: [], selectedRoleId: roleId === "" ? null : roleId, retryable: true });
+    }
+    const { roles, pair } = read;
+    const roleLabel = roles.find((role) => role.id === roleId)?.label ?? roleDisplayName(roleId);
+    const choices = await readRoleConfigurationChoices(options.roleConfigurationChoiceReader, roleId);
+    const draft = draftFromWriteBody(draftFromVersion(pair.current, roleLabel), body, choices ?? undefined);
+    const rawExpected = Number(body.expectedCurrentVersion);
+    // The version the window showed, not the one the store holds now: a stale
+    // window that sent the newer number would be allowed to overwrite.
+    const expectedCurrentVersion = Number.isFinite(rawExpected) ? rawExpected : pair.current.version;
+    const requestedBy = typeof body.requestedBy === "string" && body.requestedBy !== "" ? body.requestedBy : "owner";
+
+    if (action === "cancel") return page(editing(roles, pair, draft, choices));
+    if (action === "prepare-save") {
+      const preparation = prepareRoleConfigurationSave(draft, pair.current);
+      if (preparation.status === "scope-required") {
+        return page(editing(roles, pair, draft, choices, "scope-required"));
+      }
+      return page({
+        status: "save-confirmation",
+        roles,
+        selectedRoleId: roleId,
+        current: pair.current,
+        previous: pair.previous,
+        draft,
+        ...(choices === null ? {} : { choices }),
+      });
+    }
+    if (action === "prepare-restore") {
+      if (pair.previous === null) {
+        return page(editing(roles, pair, draft, choices, "save-failed", "这个角色还没有上一版配置，不能恢复。"));
+      }
+      return page({
+        status: "restore-confirmation",
+        roles,
+        selectedRoleId: roleId,
+        current: pair.current,
+        previous: pair.previous,
+      });
+    }
+    if (action === "confirm-save" || action === "confirm-restore") {
+      const restoring = action === "confirm-restore";
+      const sourceVersion = Number(body.sourceVersion);
+      const result = restoring
+        ? await roleWriter.restorePrevious({
+          roleId,
+          expectedCurrentVersion,
+          sourceVersion: Number.isFinite(sourceVersion) ? sourceVersion : 0,
+          effectScope: FUTURE_AGENT_STARTS_SCOPE,
+          requestedBy,
+        })
+        : await roleWriter.saveNewVersion({
+          roleId,
+          expectedCurrentVersion,
+          effectScope: FUTURE_AGENT_STARTS_SCOPE,
+          content: { prompt: draft.prompt, providerId: draft.provider.id, modelId: draft.model.id },
+          requestedBy,
+        });
+      // Read back rather than trusting the mutation's own snapshot: the screen a
+      // person sees next is the store's account of the result, and the two can
+      // only disagree when something else wrote in between.
+      const after = await readRolePagePairFor(roleReader, roleId);
+      const afterRoles = after?.roles ?? roles;
+      if (result.status === "saved" && after !== null) {
+        return page({
+          status: restoring ? "restored" : "saved",
+          roles: afterRoles,
+          selectedRoleId: roleId,
+          current: after.pair.current,
+          previous: after.pair.previous,
+          message: restoring
+            ? roleConfigurationRestoredMessage(roleLabel, after.pair.current.version, sourceVersion)
+            : roleConfigurationSavedMessage(roleLabel, after.pair.current.version),
+        });
+      }
+      if (result.status === "conflict") {
+        return page(editing(afterRoles, after?.pair ?? pair, draft, choices, "conflict"));
+      }
+      return page(editing(
+        afterRoles,
+        after?.pair ?? pair,
+        draft,
+        choices,
+        "save-failed",
+        result.status === "unavailable"
+          ? (result.detail ?? "暂时无法保存，请稍后重试。")
+          : "这次保存没有被接受，请检查配置后重试。",
+      ));
+    }
+    return page(editing(roles, pair, draft, choices));
+  });
+
+  // The choices a role may pick from are read per role, so a model that only
+  // exists for another role never appears here. An unreadable catalogue is a
+  // retryable answer and never an invented option list.
+  app.get("/api/roles/:id/choices", async (request, reply) => {
+    const choices = options.roleConfigurationChoiceReader;
+    if (!choices) return reply.code(404).send({ error: "role configuration choices are not available" });
+    const roleId = (request.params as { id: string }).id;
+    let result: RoleConfigurationChoiceReadResult;
+    try {
+      result = await choices.readChoices(roleId);
+    } catch (cause) {
+      return reply.code(503).send({ status: "unavailable", retryable: true, detail: (cause as Error).message });
+    }
+    if (result.status === "unavailable") return reply.code(503).send(result);
+    return result;
+  });
+
+  // A confirmed save or restore is the only role write here. The scope is
+  // checked from the literal value, so a body that does not say the change is
+  // only for later agents is refused before anything is appended.
+  app.post("/api/roles/:id/versions", async (request, reply) => {
+    if (!roleWriter) return reply.code(404).send({ error: "role configuration is not writable" });
+    const roleId = (request.params as { id: string }).id;
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const draft = readRoleConfigurationWriteDraft(roleId, body);
+    if (!isFutureAgentStartsScope(body.effectScope)) {
+      return reply.code(400).send({ status: "scope-required", draft });
+    }
+    const result = await roleWriter.saveNewVersion({
+      roleId,
+      expectedCurrentVersion: draft.expectedCurrentVersion,
+      effectScope: FUTURE_AGENT_STARTS_SCOPE,
+      content: { prompt: draft.prompt, providerId: draft.providerId, modelId: draft.modelId },
+      requestedBy: typeof body.requestedBy === "string" ? body.requestedBy : "",
+    });
+    if (result.status === "saved") {
+      return reply.code(200).send({
+        status: "saved",
+        message: roleConfigurationSavedMessage(draft.roleLabel, result.current.version),
+        current: result.current,
+        previousVersion: result.previousVersion,
+      });
+    }
+    if (result.status === "conflict") {
+      return reply.code(409).send({
+        status: "conflict",
+        message: `当前版已更新为 v${result.current.version}。你的修改尚未保存，请检查后再保存。`,
+        draft,
+        current: result.current,
+      });
+    }
+    return reply.code(roleMutationStatus(result)).send({ ...result, draft });
+  });
+
+  app.post("/api/roles/:id/restore", async (request, reply) => {
+    if (!roleWriter) return reply.code(404).send({ error: "role configuration is not writable" });
+    const roleId = (request.params as { id: string }).id;
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const draft = readRoleConfigurationWriteDraft(roleId, body);
+    if (!isFutureAgentStartsScope(body.effectScope)) {
+      return reply.code(400).send({ status: "scope-required", draft });
+    }
+    const sourceVersion = Number(body.sourceVersion);
+    const result = await roleWriter.restorePrevious({
+      roleId,
+      expectedCurrentVersion: draft.expectedCurrentVersion,
+      sourceVersion: Number.isFinite(sourceVersion) ? sourceVersion : 0,
+      effectScope: FUTURE_AGENT_STARTS_SCOPE,
+      requestedBy: typeof body.requestedBy === "string" ? body.requestedBy : "",
+    });
+    if (result.status === "saved") {
+      return reply.code(200).send({
+        status: "saved",
+        message: roleConfigurationRestoredMessage(roleDisplayName(roleId), result.current.version, sourceVersion),
+        current: result.current,
+        previousVersion: result.previousVersion,
+      });
+    }
+    if (result.status === "conflict") {
+      return reply.code(409).send({
+        status: "conflict",
+        message: `当前版已更新为 v${result.current.version}。你的修改尚未保存，请检查后再保存。`,
+        draft,
+        current: result.current,
+      });
+    }
+    return reply.code(roleMutationStatus(result)).send({ ...result, draft });
   });
 
   const writer = options.configWriter;
