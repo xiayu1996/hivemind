@@ -316,6 +316,26 @@ describe("UiReviewedVerifyPort", () => {
       expect(calls.stopped).toBe(1);
     });
 
+    it("tells the reviewer the data was never staged when the repository seeds nothing", async () => {
+      // S-R237511TR-01's repository configured no seed command. Every scenario
+      // still declared sample records, and the reviewer was told they were in
+      // place, so it judged the screen against records nobody had put there.
+      const { handle } = fakeApp();
+      let seen: { scenarios: Array<{ seed?: string; unstagedSeed?: string }> } | undefined;
+      const { instance } = port({
+        functional: functionalResult(),
+        onReview: (input) => { seen = input as typeof seen; },
+        app: { ...app, seedCommand: [] },
+        appUnderReview: () => handle,
+      });
+
+      await instance.run(verifyInput(withSeed(dod([["ui"], ["ui"]]))));
+
+      expect(seen?.scenarios.map((scenario) => scenario.seed)).toEqual([undefined, undefined]);
+      expect(seen?.scenarios.map((scenario) => scenario.unstagedSeed))
+        .toEqual(["一个仓库下有 3 个 Story", undefined]);
+    });
+
     it("gives the application a port of its own, as the blind lane does", async () => {
       const { calls, handle } = fakeApp();
       let seen: { appUrl?: string } | undefined;
