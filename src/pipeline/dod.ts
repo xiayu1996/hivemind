@@ -285,6 +285,23 @@ export function renderMissingPage(ids: readonly string[]): string {
   ].join("\n");
 }
 
+/**
+ * What the structural layer compares each screen against.
+ *
+ * Only the scenarios a browser settles, even though `visible[]` may outlive a
+ * screen layer: a scenario moved to the code layers because its given could
+ * not be built in a browser still carries what it once promised to show, and
+ * asking a lane that never ran for a page structure record refuses it every
+ * round for something no round could have produced.
+ */
+export function structuralRequirements(definition: DefinitionOfDone): Map<string, DoDScenario["visible"] & {}> {
+  return new Map(
+    screenScenarios(definition)
+      .filter((entry) => entry.visible !== undefined)
+      .map((entry) => [entry.id, entry.visible!]),
+  );
+}
+
 /** What the session is asked to add, in the words it wrote the DoD in. */
 /**
  * What a person is told when a card has screens and its repository has no
