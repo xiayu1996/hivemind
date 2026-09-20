@@ -172,6 +172,13 @@ async function currentBranch(path: string): Promise<string> {
  * upkeep and the regression sweep -- plus a P0 about a request that would
  * have succeeded on the next pass.
  */
+/** The JSON the regression sweep prints as its last line. */
+interface SweepSummary {
+  failed?: readonly string[];
+  attributions?: readonly { scenarioId: string; attribution?: { kind?: string } }[];
+  attributionsSkipped?: string;
+}
+
 const step = async (name: string, run: () => Promise<void>): Promise<void> => {
   try {
     await run();
@@ -1139,6 +1146,9 @@ async function main(): Promise<void> {
       probeWorktree = probeTree.worktreePath;
     }
 
+    // How much else this host was driving when the sweep started, read before
+    // the spawn because dispatch moves on while the sweep runs.
+    const foreground = inFlight.size;
     const npm = process.platform === "win32" ? "npm.cmd" : "npm";
     // A sweep is one whole unit of work, and it walks the chain like every
     // other unit: the provider that refused it is stepped over rather than
@@ -1193,12 +1203,45 @@ async function main(): Promise<void> {
       throw cause;
     }
     if (result.stdout.trim()) console.log(`regression sweep (${plan.reason}): ${result.stdout.trim()}`);
+    // The summary is the last line, not the whole of stdout: npm prints its own
+    // banner ahead of the child, so parsing everything never once succeeded and
+    // the warning below has never reached anybody.
+    const summaryLine = result.stdout.trimEnd().split("\n")
+      .toReversed().find((line) => line.trimStart().startsWith("{"));
+    let summary: SweepSummary | undefined;
     try {
-      const summary = JSON.parse(result.stdout.trim()) as { attributionsSkipped?: string; attributions?: unknown[] };
-      if (summary.attributionsSkipped) console.warn(`regression cards raised without attribution: ${summary.attributionsSkipped}`);
+      if (summaryLine) summary = JSON.parse(summaryLine) as SweepSummary;
     } catch {
       // The sweep printed something other than its JSON summary; the raw line
       // above is the record, and there is nothing further to read from it.
+    }
+    if (summary?.attributionsSkipped) {
+      console.warn(`regression cards raised without attribution: ${summary.attributionsSkipped}`);
+    }
+    // A scenario the sweep failed and the bisect could then not reproduce at
+    // either end is either a flaky break or a flaky run, and the two are told
+    // apart by what else this host was driving at the time: an event sweep does
+    // not wait for the foreground to go quiet, so its browser can be one of
+    // several. Nothing recorded that, so the question was only ever answerable
+    // by guessing. S-R237511MB-02 sat on it for a day: five scenarios failed at
+    // once and two probes on the same revision passed.
+    const unreproduced = (summary?.attributions ?? [])
+      .filter((entry) => entry.attribution?.kind === "not_reproduced")
+      .map((entry) => entry.scenarioId);
+    if (unreproduced.length > 0) {
+      await store.recordFriction({
+        cardId: sweepCard,
+        runId: `regression:${sweepCard}`,
+        kind: "sweep_unreproduced",
+        detail: JSON.stringify({
+          pool: plan.pool,
+          reason: plan.reason,
+          scenarios: unreproduced,
+          failed: summary?.failed?.length ?? 0,
+          swept: plan.scenarioIds.length,
+          storiesInFlight: foreground,
+        }),
+      });
     }
     return true;
   };
