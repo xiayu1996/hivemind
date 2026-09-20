@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createConsoleServer, type ConsoleDataSource } from "./server.js";
 import { createSampleWorkRecordReader } from "./work-record-sample.js";
 import { loadWorkRecordScreen } from "./work-records.js";
+import { WorkRecordReadError, type WorkRecordReader } from "../observability/work-record-reader.js";
 
 const NOW = Date.parse("2026-09-20T12:00:00.000Z");
 
@@ -76,6 +77,25 @@ describe("work records route", () => {
     expect(body).not.toContain("周期性优化");
   });
 
+  it("@scenario S-R237511TR-01-error renders the failed search when the reader itself fails", async () => {
+    const failing: WorkRecordReader = {
+      search: async () => { throw new WorkRecordReadError("unavailable", true, "the store did not answer"); },
+      read: async () => { throw new WorkRecordReadError("not_found", false, "no work record"); },
+    };
+    const app = await createConsoleServer(data, { serveUi: false, workRecords: failing });
+    try {
+      const response = await app.inject({ method: "GET", url: "/records?keyword=Notion%20%E4%BF%9D%E5%AD%98%E5%A4%B1%E8%B4%A5&role=prototype&range=24h" });
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toContain("无法搜索工作记录");
+      expect(response.body).toContain("重新搜索");
+      expect(response.body).toContain('value="Notion 保存失败"');
+      expect(response.body).toContain('value="prototype" selected');
+      expect(response.body).not.toContain("同步任务");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("@scenario S-R237511TR-01-error keeps the three conditions, offers a retry and hides the old result", async () => {
     const body = await records("/records?keyword=Notion%20%E4%BF%9D%E5%AD%98%E5%A4%B1%E8%B4%A5&role=prototype&range=24h&state=error");
     expect(body).toContain("无法搜索工作记录");
@@ -84,6 +104,17 @@ describe("work records route", () => {
     expect(body).toContain('value="prototype" selected');
     expect(body).toContain('value="24h" selected');
     expect(body).not.toContain("同步任务");
+  });
+
+  it("@scenario S-R237511TR-01-error serves every state's own URL with the criteria on the page", async () => {
+    const body = await records("/records?keyword=Notion%20%E4%BF%9D%E5%AD%98%E5%A4%B1%E8%B4%A5&role=prototype&range=24h");
+    expect(body).toContain("页面状态");
+    expect(body).toContain('href="/records?keyword=Notion+%E4%BF%9D%E5%AD%98%E5%A4%B1%E8%B4%A5&role=prototype&range=24h&state=error"');
+    expect(body).toContain('href="/records?keyword=Notion+%E4%BF%9D%E5%AD%98%E5%A4%B1%E8%B4%A5&role=prototype&range=24h&state=loading"');
+    const failed = await records("/records?keyword=Notion%20%E4%BF%9D%E5%AD%98%E5%A4%B1%E8%B4%A5&role=prototype&range=24h&state=error");
+    expect(failed).toContain("无法搜索工作记录");
+    expect(failed).toContain("重新搜索");
+    expect(failed).not.toContain("同步任务");
   });
 
   it("@scenario S-R237511TR-01-waiting serves the still-running work with its existing steps", async () => {

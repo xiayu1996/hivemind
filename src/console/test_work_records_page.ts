@@ -182,6 +182,14 @@ describe("work records page", () => {
     expect(html).toContain("value=\"prototype\" selected");
     expect(html).toContain("value=\"24h\" selected");
     expect(html).not.toContain("同步任务");
+    // The failed state is reachable on its own URL with the criteria it was
+    // reached with, which is what lets a read failure be looked at rather than
+    // only described.
+    const reachable = renderWorkRecordsPage(readyState(query({ role: "prototype" }), [match()]));
+    expect(reachable).toContain("页面状态");
+    expect(reachable).toContain(`href="/records?keyword=Notion+%E4%BF%9D%E5%AD%98%E5%A4%B1%E8%B4%A5&role=prototype&range=24h&state=error"`);
+    expect(reachable).toContain("state=loading");
+    expect(reachable).toContain("state=waiting");
   });
 
   it("@scenario S-R237511TR-01-waiting 工作未结束时显示等待写入并保留已出现的行为", () => {
