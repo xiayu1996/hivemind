@@ -407,6 +407,15 @@ export async function createConsoleServer(
 
     if (action === "cancel") return page(editing(roles, pair, draft, choices));
     if (action === "prepare-save") {
+      // The window submits the version it opened. When the store has moved on,
+      // the confirmation dialog must not open: the dialog carries the store's
+      // current version as the one the save is based on, so a stale window
+      // would confirm into a version that silently replaces what somebody else
+      // just saved. The draft stays on screen and the page says the current
+      // version moved, which is what lets it be checked before saving again.
+      if (expectedCurrentVersion !== pair.current.version) {
+        return page(editing(roles, pair, draft, choices, "conflict"));
+      }
       const preparation = prepareRoleConfigurationSave(draft, pair.current);
       if (preparation.status === "scope-required") {
         return page(editing(roles, pair, draft, choices, "scope-required"));

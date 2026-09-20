@@ -816,13 +816,21 @@ function dialogDraftFields(
  * The dialog restates the role, all three changes and the scope, because that
  * is the one moment before an irreversible new version exists. It offers only
  * the final action and cancel; nothing is written while it is open.
+ *
+ * The dialog names itself with `aria-label` rather than `aria-labelledby`. A
+ * container whose accessible name is derived from a rendered descendant is
+ * written nameless in the accessibility snapshot (Playwright drops the name
+ * the visible heading already carries), and that snapshot is what the screen
+ * lane reads to confirm the dialog is on the page. An author-owned label is
+ * not derived from content and survives.
  */
 function renderSaveConfirmation(state: RoleConfigurationEditingViewState): string {
   const draft = state.draft;
   const roleLabel = escapeHtml(draft.roleLabel);
+  const title = `保存${roleLabel}角色的新配置？`;
   return renderRoleSelector(state.roles, state.selectedRoleId)
-    + `<div class="dialog-backdrop"><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="save-dialog-title">`
-    + `<h2 id="save-dialog-title">保存${roleLabel}角色的新配置？</h2>`
+    + `<div class="dialog-backdrop"><div class="dialog" role="dialog" aria-modal="true" aria-label="${title}">`
+    + `<h2>${title}</h2>`
     + `<div class="section"><span class="field-label">角色</span><p>${roleLabel}</p></div>`
     + `<div class="section"><span class="field-label">角色说明</span><div class="prompt-box">${escapeHtml(draft.prompt)}</div></div>`
     + `<div class="section"><span class="field-label">模型供应商</span><p>${escapeHtml(draft.provider.label)}</p></div>`
@@ -838,8 +846,8 @@ function renderSaveConfirmation(state: RoleConfigurationEditingViewState): strin
 function renderRestoreConfirmation(state: RoleConfigurationRestoreConfirmationViewState): string {
   const roleLabel = state.roles.find((role) => role.id === state.selectedRoleId)?.label ?? state.selectedRoleId;
   return renderRoleSelector(state.roles, state.selectedRoleId)
-    + `<div class="dialog-backdrop"><div class="dialog" role="dialog" aria-modal="true" aria-labelledby="restore-dialog-title">`
-    + `<h2 id="restore-dialog-title">恢复${escapeHtml(roleLabel)}角色的上一版？</h2>`
+    + `<div class="dialog-backdrop"><div class="dialog" role="dialog" aria-modal="true" aria-label="${escapeHtml(`恢复${roleLabel}角色的上一版？`)}">`
+    + `<h2>恢复${escapeHtml(roleLabel)}角色的上一版？</h2>`
     + `<p>将复制 v${state.previous.version} 的完整配置并生成新版本。</p>`
     + `<p>只影响之后新开始的${escapeHtml(roleLabel)}智能体，已经开始工作的智能体不变。</p>`
     + `<form method="post" action="/roles/action">`
