@@ -52,6 +52,15 @@ export interface VerdictInput {
    * under four scenarios is one look, not four (03 section 9).
    */
   screenScenarioIds?: readonly string[];
+  /**
+   * Where the application under verification answered this round, when the
+   * repository says how to start one. A screen scenario has to be read off
+   * that address: a verifier that serves the pages itself assembles them from
+   * the code it can find, so a route the product never mounts is on its
+   * server and nowhere else. Left out, only the prompt asks for this, and the
+   * prompt is the weakest of the three layers.
+   */
+  appUrl?: string;
 }
 
 export interface VerdictValidation {
@@ -105,6 +114,26 @@ function commitEvidence(messages: readonly string[], kind: "red" | "green"): Set
     if (match?.[1]) ids.add(match[1]);
   }
   return ids;
+}
+
+/** Loopback spellings that name the same machine. */
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "0.0.0.0"]);
+
+/**
+ * The address a URL answers at, with the loopback spellings folded together:
+ * a verifier that retyped `127.0.0.1` as `localhost` did not look at another
+ * service. The port carries the meaning here -- the application lane holds a
+ * freshly reserved one, so whatever a verifier started for itself answers on
+ * a different port.
+ */
+function addressOf(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    return `${parsed.protocol}//${LOOPBACK_HOSTS.has(host) ? "loopback" : host}:${parsed.port}`;
+  } catch {
+    return null;
+  }
 }
 
 export async function validateVerdict(input: VerdictInput): Promise<VerdictValidation> {
@@ -178,6 +207,7 @@ export async function validateVerdict(input: VerdictInput): Promise<VerdictValid
 
   const unproven: string[] = [];
   const screen = new Set(input.screenScenarioIds ?? []);
+  const application = input.appUrl ? addressOf(input.appUrl) : null;
   const claimedBy = new Map<string, Set<string>>();
   for (const scenario of input.verdict.scenarios) {
     for (const shot of scenario.screenshots ?? []) {
@@ -190,6 +220,9 @@ export async function validateVerdict(input: VerdictInput): Promise<VerdictValid
     const missing = [
       ...(scenario.url ? [] : ["no page was reported"]),
       ...(own.length > 0 ? [] : ["no screenshot belongs to it alone"]),
+      ...(application !== null && scenario.url && addressOf(scenario.url) !== application
+        ? [`the page is not the application under verification (${scenario.url}, which answers at ${input.appUrl})`]
+        : []),
     ];
     if (missing.length === 0) continue;
     unproven.push(scenario.id);
