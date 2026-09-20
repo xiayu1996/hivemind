@@ -833,3 +833,56 @@ describe("StoryExecutionStore regression lane across a stop", () => {
     client.close();
   });
 });
+
+describe("StoryExecutionStore stop summary over rounds that reached no verdict", () => {
+  it("carries the reasons even when something else ended the card", async () => {
+    // S-R237511MB-02 stopped on its reopen budget with two inconclusive rounds
+    // behind it. The summary read `rounds: []` and said nothing, so the person
+    // it stopped for saw a retry count and no reason for it.
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    let time = 1_000;
+    const store = new StoryExecutionStore(client, () => time++);
+    await store.createStory({
+      id: "S-EPIC1-01",
+      notionPageId: "page-1",
+      title: "Nothing could be judged",
+      requirement: "A scenario nobody could put the application into.",
+      branch: "story/epic1-01",
+    });
+    await store.transition("S-EPIC1-01", "QUEUED", "SHAPE", "system", "run-shape");
+    await client.execute(
+      "INSERT INTO story_specs (spec_id, story_id, seq, text, status) VALUES ('S-EPIC1-01-access','S-EPIC1-01',1,'a','pending')",
+    );
+    await store.transition("S-EPIC1-01", "SHAPE", "DESIGN", "system", "run-0");
+    await designToCode(store, "S-EPIC1-01", "run-0");
+    await store.transition("S-EPIC1-01", "CODE", "VERIFY", "system", "run-verify-1");
+    await store.beginPhase({ runId: "run-verify-1", cardId: "S-EPIC1-01", phase: "VERIFY", round: 1, prompt: "verify" });
+    await store.completePhase({
+      runId: "run-verify-1",
+      sessionId: "s-verify-1",
+      artifacts: [{
+        kind: "verification",
+        body: JSON.stringify({
+          reasons: [{ scenarioId: "S-EPIC1-01-access", reason: "浏览器只能从本机打开，造不出不在允许网络里的设备。" }],
+        }),
+      }],
+    });
+    await store.recordVerification("run-verify-1", {
+      cardId: "S-EPIC1-01", round: 1, codeSessionId: "s-code-1", verifySessionId: "s-verify-1",
+      verdict: "inconclusive", failedScenarios: [],
+    });
+
+    await store.stopForInput("S-EPIC1-01", "VERIFY", "retry_limit_exceeded", "run-stop");
+
+    const summary = await store.stopSummary("S-EPIC1-01");
+    expect(summary?.inconclusive).toMatchObject({
+      attempts: 1,
+      rounds: [{
+        round: 1,
+        reasons: [{ scenarioId: "S-EPIC1-01-access", reason: "浏览器只能从本机打开，造不出不在允许网络里的设备。" }],
+      }],
+    });
+    client.close();
+  });
+});
