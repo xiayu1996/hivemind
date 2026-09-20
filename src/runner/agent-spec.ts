@@ -111,12 +111,67 @@ export type RoleAgentSpecResolutionResult =
  * exact prompt, provider and model; reloading shared tool, guard and limit
  * settings must not replace those three values. A continuation passes the same
  * binding again, while a newly started agent receives a newly created binding.
+ *
+ * The bound provider and model are a promise about which model the run uses,
+ * so a catalogue that now answers with a different model for the same provider
+ * is refused instead of substituted: the run would otherwise carry the bound
+ * prompt beside a model nobody bound, and the mismatch would surface only as an
+ * unexplained price. The other dimensions are shared settings and keep being
+ * read from the configuration as usual.
  */
-export declare function resolveRoleAgentSpec(
+export async function resolveRoleAgentSpec(
   sources: AgentSpecSources,
   purpose: ModelPurpose,
   binding: AgentRoleConfigurationBinding,
-): Promise<RoleAgentSpecResolutionResult>;
+): Promise<RoleAgentSpecResolutionResult> {
+  const { prompt, providerId, modelId } = binding.content;
+  const policy = policyOf(sources);
+
+  let providers: readonly string[];
+  try {
+    providers = await policy.providersFor(purpose);
+  } catch (cause) {
+    return {
+      status: "unavailable",
+      reason: "provider-unavailable",
+      retryable: true,
+      detail: `${providerId}: ${(cause as Error).message}`,
+    };
+  }
+  if (!providers.includes(providerId)) {
+    return {
+      status: "unavailable",
+      reason: "provider-unavailable",
+      retryable: false,
+      detail: `provider ${providerId} does not serve ${purpose}`,
+    };
+  }
+
+  let resolved: ResolvedAgentSpec;
+  try {
+    resolved = await resolveAgentSpec({ ...sources, policy }, purpose, providerId);
+  } catch (cause) {
+    return {
+      status: "unavailable",
+      reason: "provider-unavailable",
+      retryable: true,
+      detail: `${providerId}: ${(cause as Error).message}`,
+    };
+  }
+  if (resolved.model.provider !== providerId || resolved.model.id !== modelId) {
+    return {
+      status: "unavailable",
+      reason: "model-unavailable",
+      retryable: false,
+      detail: `binding ${providerId}/${modelId} no longer resolves to the same model`,
+    };
+  }
+
+  return {
+    status: "resolved",
+    value: { binding, spec: { ...resolved, prompt: { text: prompt } } },
+  };
+}
 
 function policyOf(sources: AgentSpecSources): AgentModelPolicy {
   if (sources.policy) return sources.policy;
