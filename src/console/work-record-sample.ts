@@ -5,10 +5,11 @@
  * verification round opens the screen before any such store exists on that
  * machine. Serving nothing would render every scenario as the empty state, and
  * the four states it has to tell apart would be indistinguishable. The records
- * below are the ones the frozen definition of done names: a failed work with a
- * redacted-away token, a finished work, one still running, and one that does
- * not match the keyword. They are data, not a fixture of the reader: the
- * reader still does every query, ordering, run-isolation and redaction itself.
+ * below are the ones the frozen definition of done names: two works the keyword
+ * matches (one stopped with an error and a redacted-away token, one still
+ * running) and works it does not, so a search proves both what it returns and
+ * what it leaves out. They are data, not a fixture of the reader: the reader
+ * still does every query, ordering, run-isolation and redaction itself.
  */
 import {
   createWorkRecordReader,
@@ -100,11 +101,11 @@ const RUN_SPECS: readonly RunSpec[] = [
     name: "同步任务",
     requirement: ENGINEER_REQUIREMENT,
     start: [9, 18, 0],
-    outcome: { kind: "stopped", outcome: "completed" },
+    outcome: { kind: "running", refreshAfterMs: 5_000 },
     steps: [
       { kind: "start", clock: [9, 18, 0], text: "开始同步待办处理结果" },
       { kind: "action", clock: [9, 18, 45], text: `检测到 ${SAMPLE_KEYWORD}，准备重试` },
-      { kind: "stop", clock: [9, 19, 30], text: "重试成功，待办结果保持未处理" },
+      { kind: "action", clock: [9, 19, 30], text: "等待下一步结果" },
     ],
   },
   {
@@ -116,7 +117,7 @@ const RUN_SPECS: readonly RunSpec[] = [
     outcome: { kind: "running", refreshAfterMs: 5_000 },
     steps: [
       { kind: "start", clock: [16, 6, 0], text: "开始检查控制台可用性" },
-      { kind: "action", clock: [16, 6, 30], text: `补充 ${SAMPLE_KEYWORD} 的操作提示` },
+      { kind: "action", clock: [16, 6, 30], text: "补充控制台的操作提示" },
       { kind: "action", clock: [16, 7, 0], text: "等待下一步结果" },
       {
         kind: "action",
