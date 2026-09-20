@@ -286,6 +286,11 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
     let contract: ContractCheck = { violations: [], inaccessible: [], failures: [] };
     let appFailure: string | null = null;
     const seedFailures: string[] = [];
+    // Scenarios whose declared sample data actually reached the application.
+    // The rest are told to the reviewer as data nobody staged, because a
+    // prompt that claims otherwise has it judge the screen against records
+    // that are not there.
+    const staged = new Set<string>();
     try {
       let appUrl: string | undefined;
       if (handle && app) {
@@ -319,7 +324,8 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
                   scenarioId: scenario.id,
                   seed,
                 });
-                if (!seeded.ok) seedFailures.push(`${scenario.id}: ${seeded.output}`);
+                if (seeded.ok) staged.add(scenario.id);
+                else seedFailures.push(`${scenario.id}: ${seeded.output}`);
               }
             }
           } else {
@@ -347,7 +353,10 @@ export class UiReviewedVerifyPort implements StoryVerifyPort {
               refusable: refusableStatements(scenario),
             };
             const seed = seedOf(scenario);
-            if (seed !== undefined) item.seed = seed;
+            if (seed !== undefined) {
+              if (staged.has(scenario.id)) item.seed = seed;
+              else item.unstagedSeed = seed;
+            }
             return item;
           }),
           outOfScope: input.definitionOfDone.out_of_scope,
