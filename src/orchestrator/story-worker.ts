@@ -699,18 +699,39 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
       const fixRunId = this.createRunId(cardId, "REGRESSION_FIX", round);
       const fix = await this.runPhase(cardId, "REGRESSION_FIX", round, fixRunId);
       artifact(fix, "implementation");
-      const verifyRunId = this.createRunId(cardId, "VERIFY", round);
-      const verification = await this.runVerification(cardId, round, verifyRunId, fix.sessionId, definitionOfDone);
+      let verifyRunId = this.createRunId(cardId, "VERIFY", round);
+      let verification = await this.runVerification(cardId, round, verifyRunId, fix.sessionId, definitionOfDone);
       await this.projection.enqueue(cardId);
 
-      if (verification.verdict === "inconclusive") {
+      // Re-verified against the same fix, exactly as the inner loop does it.
+      // Going back around the for-loop would buy another REGRESSION_FIX turn
+      // to repair something the code never did: S-R237511MB-02 was reopened
+      // for a scenario judged from outside the allowed networks, which no
+      // browser we can reach comes from, and the turn it bought answered the
+      // unreachable premise by rendering the denial page to every caller.
+      // Standing the environment up again is the repair for what this reaches;
+      // rewriting the tree is not, and it moves the HEAD the next attempt
+      // would be compared against.
+      while (verification.verdict === "inconclusive") {
         inconclusiveStreak += 1;
         if (inconclusiveStreak >= this.maxInconclusiveRounds) {
-          await this.store.stopForInput(cardId, "REGRESSION_FIX", "verify_loop_exceeded", verifyRunId);
+          await this.friction?.record({
+            cardId,
+            runId: verifyRunId,
+            kind: "verification_inconclusive",
+            detail: `${inconclusiveStreak} consecutive attempts failed for environmental reasons: ${verification.failedScenarios.join(", ")}`,
+          });
+          await this.store.stopForInput(cardId, "REGRESSION_FIX", "verify_loop_exceeded", verifyRunId, {
+            inconclusive: inconclusiveStreak,
+            inconclusiveScenarios: verification.failedScenarios,
+          });
           await this.projection.enqueue(cardId);
           return { state: "NEEDS_INPUT", rounds: round, mrUrl: story.mrUrl, stopReason: "verify_loop_exceeded" };
         }
-        continue;
+        round += 1;
+        verifyRunId = this.createRunId(cardId, "VERIFY", round);
+        verification = await this.runVerification(cardId, round, verifyRunId, fix.sessionId, definitionOfDone);
+        await this.projection.enqueue(cardId);
       }
       inconclusiveStreak = 0;
       spent += 1;

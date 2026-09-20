@@ -1245,6 +1245,61 @@ describe("SingleStoryWorker regression fix", () => {
     expect(phases).not.toHaveBeenCalled();
   });
 
+  it("re-verifies a reopened scenario the environment could not judge, buying no second fix", async () => {
+    // S-R237511MB-02 was reopened for a scenario judged from outside the
+    // allowed networks. Going back around the loop bought a REGRESSION_FIX
+    // turn, and that turn answered the unreachable premise by rendering the
+    // denial page to every caller.
+    await openCard();
+    const outcomes = [
+      { verdict: "inconclusive" as const, failedScenarios: ["S-EPIC1-01-a"] },
+      { verdict: "accepted" as const, failedScenarios: [] },
+    ];
+    let attempt = 0;
+    const { phases, integration, delivery, projection } = regressionPorts(true);
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => {
+        const outcome = outcomes[attempt++]!;
+        return { sessionId: `session-verify-${input.round}`, artifact: JSON.stringify(outcome), ...outcome };
+      }),
+    };
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier, delivery, projection, { integration });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
+    expect(phases.mock.calls.map(([input]) => input.phase)).toEqual(["SPECIFY", "REGRESSION_FIX"]);
+    expect(verifier.run).toHaveBeenCalledTimes(2);
+    // Both attempts judged the same fix, so the tree the retry is compared
+    // against is the tree that was already there.
+    const sessions = new Set((verifier.run as ReturnType<typeof vi.fn>).mock.calls
+      .map(([input]) => (input as { codeSessionId: string }).codeSessionId));
+    expect(sessions.size).toBe(1);
+  });
+
+  it("stops for a person when the environment loses the reopened scenario twice, and says which", async () => {
+    await openCard();
+    const { phases, integration, delivery, projection } = regressionPorts(true);
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => ({
+        sessionId: `session-verify-${input.round}`,
+        artifact: "{}",
+        verdict: "inconclusive" as const,
+        failedScenarios: ["S-EPIC1-01-a"],
+      })),
+    };
+    const friction = { record: vi.fn(async () => undefined) };
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier, delivery, projection, { integration, friction });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({
+      state: "NEEDS_INPUT", stopReason: "verify_loop_exceeded",
+    });
+    expect(phases.mock.calls.map(([input]) => input.phase)).toEqual(["SPECIFY", "REGRESSION_FIX"]);
+    expect(friction.record).toHaveBeenCalledWith(expect.objectContaining({ kind: "verification_inconclusive" }));
+    const summary = JSON.parse(String((await client.execute(
+      "SELECT stop_summary FROM stories WHERE id = 'S-EPIC1-01'",
+    )).rows[0]?.stop_summary));
+    expect(summary.inconclusive).toMatchObject({ attempts: 2, scenarios: ["S-EPIC1-01-a"] });
+  });
+
   it("keeps trying when the Epic head refuses the fix, with the refusal as the next round's task", async () => {
     await openCard();
     const { phases, verifier, delivery, projection } = regressionPorts(true);
