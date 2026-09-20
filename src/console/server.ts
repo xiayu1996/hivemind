@@ -100,6 +100,16 @@ export interface ConsoleServerOptions {
   roleConfigurationChoiceReader?: RoleConfigurationChoiceReadPort;
   /** Appends role-scoped versions through an optimistic current-version check. */
   roleConfigurationWriter?: RoleConfigurationWritePort;
+  /**
+   * Runs when the role page is opened, before it reads the versions to show.
+   *
+   * A host serving a fixed sample uses it to return to the versions its screens
+   * are described in, so each scenario that opens the page starts from the
+   * state its DoD names rather than from whatever a previous scenario saved. A
+   * host holding the real history passes nothing and reads it unchanged; the
+   * hook is only ever about the sample, never about hiding a saved version.
+   */
+  roleConfigurationPageOpened?: () => void | Promise<void>;
   /** The one write surface. Without it the console stays entirely read-only. */
   configWriter?: ConsoleConfigWritePort;
   /** The requirement-limit write surface. Without it the limit form has no
@@ -340,6 +350,9 @@ export async function createConsoleServer(
   });
   app.get("/roles", async (request, reply) => {
     const query = (request.query ?? {}) as Record<string, string | undefined>;
+    // Before anything is read: a sample host returns to its seeded versions
+    // here, so the page a scenario opens shows the state that scenario names.
+    await options.roleConfigurationPageOpened?.();
     const state = await readRoleConfigurationView(
       resolveRoleConfigurationPageRequest(query),
       roleReader,

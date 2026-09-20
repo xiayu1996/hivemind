@@ -129,7 +129,10 @@ async function snapshotOf(source: string, directory: string): Promise<string> {
 const handle = openDb(snapshotDir === null ? url : await snapshotOf(url, snapshotDir));
 // The sample store serves the read, the choices and the writes from one
 // in-process history, so a walkthrough can actually confirm a save and see the
-// version change without touching the snapshot database.
+// version change without touching the snapshot database. Each page open starts
+// that history over: a round drives all its scenarios in one browser session,
+// and a version saved for one of them must not be the current version the next
+// one is judged in.
 const roleConfiguration = createSampleRoleConfigurationStore();
 const app = await createConsoleServer(
   new LibsqlConsoleDataSource(handle.client, async () => [{
@@ -147,7 +150,8 @@ const app = await createConsoleServer(
     // be driven for real; a mount that holds the real ports passes its own.
     roleConfigurationReader: roleConfiguration.reader,
     roleConfigurationChoiceReader: roleConfiguration.choices,
-    roleConfigurationWriter: roleConfiguration.writer },
+    roleConfigurationWriter: roleConfiguration.writer,
+    roleConfigurationPageOpened: () => roleConfiguration.resetToSeed() },
 );
 
 const address = await listenConsole(app, { host: "127.0.0.1", port });

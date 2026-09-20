@@ -129,11 +129,30 @@ function referenceFor(providerId: string, modelId: string): { provider: RoleMode
  * restore, or every scenario about confirming a change is judged against a
  * page that cannot produce the change. The state lives in this process only,
  * so a browser session that saves a version changes nothing anywhere else.
+ *
+ * One browser session does not equal one scenario, though: a round drives
+ * every scenario in a single session, and a version saved for one scenario
+ * would be the current version when the next one opens the page. The restore
+ * scenario names v12 with v11 before it and would instead find v13 and copy
+ * v12, so the sample offers `resetToSeed` and the console calls it whenever
+ * the page is opened. Each scenario then starts from the versions the DoD
+ * names, which is the situation every one of them is written in.
  */
 export interface SampleRoleConfigurationPorts {
   reader: RoleConfigurationReadPort;
   choices: RoleConfigurationChoiceReadPort;
   writer: RoleConfigurationWritePort;
+  /** Returns the history to the seeded versions, discarding walkthrough saves. */
+  resetToSeed: () => void;
+}
+
+/** The versions the definition of done names, as a fresh history per role. */
+function seedHistory(): Map<string, RoleConfigurationVersion[]> {
+  const history = new Map<string, RoleConfigurationVersion[]>();
+  for (const role of ROLES) {
+    history.set(role.id, role.id === "prototype" ? [PROTOTYPE_PREVIOUS, PROTOTYPE_CURRENT] : [firstVersion(role)]);
+  }
+  return history;
 }
 
 function snapshotOf(version: RoleConfigurationVersion, savedBy: string): RoleConfigurationVersionSnapshot {
@@ -147,10 +166,7 @@ function snapshotOf(version: RoleConfigurationVersion, savedBy: string): RoleCon
 }
 
 export function createSampleRoleConfigurationStore(now: () => number = Date.now): SampleRoleConfigurationPorts {
-  const history = new Map<string, RoleConfigurationVersion[]>();
-  for (const role of ROLES) {
-    history.set(role.id, role.id === "prototype" ? [PROTOTYPE_PREVIOUS, PROTOTYPE_CURRENT] : [firstVersion(role)]);
-  }
+  let history = seedHistory();
 
   const saveNewVersion: RoleConfigurationMutationPort["saveNewVersion"] = async (command) => {
     const list = history.get(command.roleId);
@@ -173,6 +189,7 @@ export function createSampleRoleConfigurationStore(now: () => number = Date.now)
   };
 
   return {
+    resetToSeed: () => { history = seedHistory(); },
     reader: {
       readCatalog: async () => ({ status: "ready", roles: ROLES }),
       readVersionPair: async (roleId) => {
