@@ -167,23 +167,40 @@ export function assessProgress(
   return { findings, healthy: !findings.some((finding) => finding.severity === "stalled") };
 }
 
+/**
+ * When a card last did something, as distinct from when its row was last
+ * written.
+ *
+ * `stories.updated_at` answers the second question. The board poller reads
+ * every active page each cycle and writes the requirement text back whether or
+ * not it changed, so every card's row is touched every couple of minutes and
+ * the idle check below could never fire: S-R237511TD-02 sat in CODE for four
+ * hours and forty-five minutes without a single run while this probe reported
+ * nothing. The event log holds what the card actually did, indexed by
+ * (card_id, ts), and a card with no events yet falls back to its row.
+ */
+const MOVED_AT = `COALESCE(
+      (SELECT MAX(e.ts) FROM event_log e WHERE e.card_id = s.id),
+      s.updated_at
+    ) AS moved_at`;
+
 export async function readProgressSnapshot(client: Client): Promise<ProgressSnapshot> {
   const working = (await client.execute(
-    `SELECT id, state, updated_at FROM stories
-      WHERE state IN ('DESIGN','CODE','VERIFY','MERGE','REGRESSION_FIX') ORDER BY updated_at`,
+    `SELECT s.id, s.state, ${MOVED_AT} FROM stories s
+      WHERE s.state IN ('DESIGN','CODE','VERIFY','MERGE','REGRESSION_FIX') ORDER BY moved_at`,
   )).rows.map((row) => ({
     cardId: String(row.id),
     state: String(row.state),
-    updatedAt: Number(row.updated_at),
+    updatedAt: Number(row.moved_at),
   }));
 
   const stopped = (await client.execute(
-    `SELECT id, stop_reason, updated_at FROM stories
-      WHERE state IN ('NEEDS_INPUT','HUMAN_PARKED') AND stop_reason IS NOT NULL ORDER BY updated_at`,
+    `SELECT s.id, s.stop_reason, ${MOVED_AT} FROM stories s
+      WHERE s.state IN ('NEEDS_INPUT','HUMAN_PARKED') AND s.stop_reason IS NOT NULL ORDER BY moved_at`,
   )).rows.map((row) => ({
     cardId: String(row.id),
     stopReason: String(row.stop_reason),
-    updatedAt: Number(row.updated_at),
+    updatedAt: Number(row.moved_at),
   }));
 
   // An Epic every Story has delivered is one whose review request is due; the
