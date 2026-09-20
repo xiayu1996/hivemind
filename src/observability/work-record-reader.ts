@@ -193,7 +193,8 @@ async function guardUnavailable<T>(operation: () => Promise<T>): Promise<T> {
  * over-return runs and steps, so display selection, run isolation, redaction,
  * literal matching and ordering all happen here. Search is a trimmed,
  * case-sensitive literal substring over redacted text, keeps at most one match
- * per run (the earliest step that hits) and orders matches newest first.
+ * per run (the latest matching step, which is the current diagnostic context)
+ * and orders matches newest first.
  */
 export function createWorkRecordReader(
   source: WorkRecordSource,
@@ -213,7 +214,7 @@ export function createWorkRecordReader(
       for (const run of runs) {
         if (query.role !== undefined && run.role !== query.role) continue;
         const steps = displaySteps(await guardUnavailable(() => source.loadSteps(run.runId)), run.runId);
-        for (const step of steps) {
+        for (const step of steps.toReversed()) {
           const text = redactForExport(step.text);
           if (!text.includes(keyword)) continue;
           if (step.occurredAt < query.fromInclusive || step.occurredAt >= query.toExclusive) continue;
