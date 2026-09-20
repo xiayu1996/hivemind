@@ -658,6 +658,31 @@ export class RequirementStore {
     return this.feedbackFrom(id, "requirement.prd_revision_requested");
   }
 
+  /**
+   * What the anti-pattern detector found on the drawings already made, so the
+   * next one is not handed the same page and asked to invent the same mistakes
+   * again. Deduplicated and sorted, because it goes into a prompt: the same
+   * state has to produce the same bytes.
+   *
+   * These never gate anything. The detector runs after the exit has passed and
+   * files friction; this reads that friction back as a hint, which is the only
+   * way a taste finding is allowed to travel (design 08 section 6).
+   */
+  async designLintFindings(id: string): Promise<string[]> {
+    const rows = (await this.client.execute({
+      sql: `SELECT data FROM event_log
+             WHERE card_id = ? AND type = 'friction.recorded'
+               AND json_extract(data, '$.kind') = 'design_lint_finding'
+             ORDER BY ts, id`,
+      args: [id],
+    })).rows;
+    const details = rows.map((row) => {
+      const parsed: unknown = JSON.parse(stringValue(row.data, "event data"));
+      return String((parsed as { detail?: unknown }).detail ?? "");
+    });
+    return [...new Set(details.filter((detail) => detail !== ""))].toSorted();
+  }
+
   private async feedbackFrom(id: string, eventType: string): Promise<string[]> {
     const rows = (await this.client.execute({
       sql: "SELECT data FROM event_log WHERE card_id = ? AND type = ? ORDER BY ts, id",

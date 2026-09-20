@@ -192,12 +192,14 @@ export const regressionRuns = sqliteTable("regression_runs", {
   revision: text("revision").notNull(),
   outcome: text("outcome").notNull(),
   failureSignature: text("failure_signature"),
+  failureText: text("failure_text"),
   ts: ms("ts").notNull(),
 }, (t) => [index("idx_regression_runs_scenario").on(t.scenarioId, t.ts)]);
 
 export const regressionCards = sqliteTable("regression_cards", {
   scenarioId: text("scenario_id").notNull(),
   failureSignature: text("failure_signature").notNull(),
+  failureText: text("failure_text"),
   attributedStory: text("attributed_story"),
   createdAt: ms("created_at").notNull(),
   resolvedAt: ms("resolved_at"),
@@ -350,6 +352,7 @@ export const notionOutbox = sqliteTable("notion_outbox", {
   attempts: integer("attempts").notNull().default(0),
   lastError: text("last_error"),
   claimedUntil: ms("claimed_until"),
+  nextAttemptAt: ms("next_attempt_at"),
   createdAt: ms("created_at").notNull(),
   sentAt: ms("sent_at"),
 }, (t) => [
@@ -392,6 +395,38 @@ export const turnUsage = sqliteTable("turn_usage", {
   cacheLossTokens: integer("cache_loss_tokens").notNull().default(0),
   ts: ms("ts").notNull(),
 }, (t) => [primaryKey({ columns: [t.runId, t.turn] }), index("idx_turn_usage_card").on(t.cardId, t.ts)]);
+
+export const requirementCostEntries = sqliteTable("requirement_cost_entries", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  usageEventId: text("usage_event_id").notNull(),
+  requirementId: text("requirement_id").notNull(),
+  workItemId: text("work_item_id").notNull(),
+  roundId: text("round_id").notNull(),
+  occurredAtMs: ms("occurred_at_ms").notNull(),
+  provider: text("provider").notNull(),
+  modelId: text("model_id").notNull(),
+  billingMode: text("billing_mode").notNull(),
+  category: text("category").notNull(),
+  tokenCount: integer("token_count").notNull(),
+  pricingStatus: text("pricing_status").notNull(),
+  priceVersionId: text("price_version_id"),
+  usdPerMillionTokens: text("usd_per_million_tokens"),
+  amountUsd: text("amount_usd"),
+  priceSourceReference: text("price_source_reference"),
+  unpricedReason: text("unpriced_reason"),
+  createdAt: ms("created_at").notNull(),
+}, (t) => [
+  uniqueIndex("requirement_cost_entries_usage_event_category_unique").on(t.usageEventId, t.category),
+  index("idx_requirement_cost_entries_requirement").on(t.requirementId, t.occurredAtMs, t.id),
+]);
+
+export const requirementCostLimits = sqliteTable("requirement_cost_limits", {
+  requirementId: text("requirement_id").primaryKey(),
+  limitUsdCents: integer("limit_usd_cents").notNull(),
+  version: integer("version").notNull(),
+  updatedBy: text("updated_by").notNull(),
+  updatedAt: ms("updated_at").notNull(),
+});
 
 export const configEntries = sqliteTable("config_entries", {
   scopeId: text("scope_id").notNull().default("global"),

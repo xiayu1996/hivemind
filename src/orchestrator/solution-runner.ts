@@ -56,6 +56,12 @@ export interface SolutionRunnerOptions {
     /** Where the repository keeps its interface contract. */
     contractRoot: (repository: string) => Promise<string>;
   };
+  /**
+   * Puts the approved interface contract on the branch the work will be built
+   * from. Absent on an installation with no review CLI, which leaves the
+   * request open for a person, as it was before this existed.
+   */
+  landContract?: (requirementId: string) => Promise<void>;
 }
 
 export class SolutionRunner {
@@ -110,6 +116,8 @@ export class SolutionRunner {
 
     const current = await this.store.getSolution(requirementId);
     if (current?.status === "confirmed") {
+      const landed = await this.landApprovedContract(requirementId);
+      if (landed) return landed;
       await this.store.transition(requirementId, "SOLUTION", "DECOMPOSING", "system", runId(requirementId));
       await this.publisher.publish(requirementId);
       return { kind: "confirmed", revision: current.revision, source: "human" };
@@ -206,8 +214,40 @@ export class SolutionRunner {
       "auto",
       runId(requirementId),
     );
+    const landed = await this.landApprovedContract(requirementId);
+    if (landed) return landed;
     await this.store.transition(requirementId, "SOLUTION", "DECOMPOSING", "system", runId(requirementId));
     await this.publisher.publish(requirementId);
     return { kind: "confirmed", revision, source: "auto" };
+  }
+
+  /**
+   * Puts the approved contract on the target branch before the requirement is
+   * split.
+   *
+   * Every later card reads the contract off its own worktree, which is cut
+   * from the target branch, so a contract still sitting on its own branch is
+   * one no card can see: each Story with a screen stops in SHAPE asking for
+   * the token table nobody handed it. Approving the solution is approving the
+   * contract -- they were drawn and read together -- so nothing further is
+   * asked of a person here. What a person is asked for is the failure: a
+   * contract that would not land needs somebody to look at the request, and
+   * splitting the requirement first would only queue up that stop once per
+   * Story.
+   */
+  private async landApprovedContract(
+    requirementId: string,
+  ): Promise<{ kind: "stopped"; reason: string } | undefined> {
+    const land = this.options.landContract;
+    if (!land) return undefined;
+    try {
+      await land(requirementId);
+      return undefined;
+    } catch (cause) {
+      const reason = `界面契约没能进入主干：${(cause as Error).message}`;
+      await this.store.stopForHumanInput(requirementId, "SOLUTION", runId(requirementId), reason);
+      await this.publisher.publish(requirementId);
+      return { kind: "stopped", reason };
+    }
   }
 }

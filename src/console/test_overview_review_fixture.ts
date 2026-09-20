@@ -7,6 +7,11 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { migrate } from "../persistence/migrate.js";
+import { seedOverviewDemo } from "./overview-demo.js";
+
+// A round opens the store it was pointed at. These scenarios describe a dataset
+// of their own, so they name it with `--db`; the decoy store below is exported
+// the way a worker exports the central one, and none of it may reach the page.
 
 const TSX = fileURLToPath(new URL("../../node_modules/tsx/dist/cli.mjs", import.meta.url));
 const ENTRY = fileURLToPath(new URL("../../scripts/serve-console.ts", import.meta.url));
@@ -61,6 +66,14 @@ async function get(path: string): Promise<string> {
 
 beforeAll(async () => {
   directory = await mkdtemp(join(tmpdir(), "overview-review-regression-"));
+  const reviewPath = join(directory, "review.db");
+  const review = createClient({ url: `file:${reviewPath}` });
+  try {
+    await migrate(review);
+    await seedOverviewDemo(review, Date.now());
+  } finally {
+    review.close();
+  }
   const databasePath = join(directory, "central.db");
   client = createClient({ url: `file:${databasePath}` });
   await migrate(client);
@@ -93,7 +106,7 @@ beforeAll(async () => {
   client.close();
 
   port = await unusedPort();
-  child = spawn(process.execPath, [TSX, ENTRY, "--port", String(port)], {
+  child = spawn(process.execPath, [TSX, ENTRY, "--port", String(port), "--db", `file:${reviewPath}`], {
     cwd: fileURLToPath(new URL("../..", import.meta.url)),
     env: {
       PATH: process.env.PATH,
@@ -230,7 +243,7 @@ describe("the overview a verification round opens", () => {
     expect(refreshed.body).not.toContain('aria-label="重试退避 任务 VERIFY 运行中"');
     expect(refreshed.body).toContain('aria-label="异常归类 任务 VERIFY 运行中"');
   });
-  it("@scenario S-R237511OV-01-responsive never leaks the central store into the sections", () => {
+  it("@scenario S-R237511OV-01-responsive serves the named store rather than the exported central one", () => {
     expect(html).not.toContain("别的运行需求");
     expect(html).not.toContain("别的运行任务");
   });

@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { Client } from "@libsql/client";
 import type { PhaseTelemetryInput } from "../orchestrator/pi-phase-port.js";
@@ -13,6 +13,7 @@ import {
   readCanonicalLog,
   rebuildProviderPayload,
 } from "./canonical-log.js";
+import { packFile } from "./packed-file.js";
 
 /** A phase's telemetry plus the cost row the delivery path already wrote, so
  * the canonical log can carry it without writing it a second time. */
@@ -24,6 +25,18 @@ export interface PhaseRecorderOptions {
   evidenceRoot: string;
   hostId?: string;
   promptVersion?: string;
+}
+
+/** What the pi extension appends provider requests to during a run. */
+const CAPTURE_FILE = "provider-requests.jsonl";
+
+/** Packs every capture a run left behind except the one already folded in. */
+async function packLeftoverCaptures(runDirectory: string): Promise<void> {
+  const entries = await readdir(runDirectory).catch(() => [] as string[]);
+  for (const name of entries) {
+    if (!name.endsWith("-requests.jsonl") || name === CAPTURE_FILE) continue;
+    await packFile(join(runDirectory, name)).catch(() => undefined);
+  }
 }
 
 function sameJson(left: unknown, right: unknown): boolean {
@@ -87,6 +100,12 @@ export class LibsqlPhaseRecorder {
       await writer.append("request/provider-payload", payload);
       await writer.append("step_end", { turn: 1, step });
     }
+    // The RPC stream lives here and only here. event_log is the orchestration
+    // decision stream that Epic and requirement state are derived from (04
+    // section 3); mirroring every token delta into it duplicated this file into
+    // the table those reads go through, and 2.4 million message_update rows had
+    // grown the central database past a gigabyte. Nothing reads them there --
+    // inspect-round excludes rpc.% explicitly.
     for (const event of input.result.events) {
       await writer.append("rpc/event", event, { ignorable: true });
     }
@@ -106,6 +125,26 @@ export class LibsqlPhaseRecorder {
     if (!sameJson(rebuilt, input.providerPayloads.at(-1))) {
       throw new Error("canonical provider payload did not round-trip exactly");
     }
+    // The capture the extension wrote during the run is an intermediate: every
+    // payload in it is now in the canonical log, byte for byte, as the check
+    // above has just proved. Keeping it stored each phase's requests twice,
+    // and a request carries the whole conversation so far -- one round of one
+    // Story was 93MB of duplicate, and evidence reached 8.5GB for a single
+    // requirement. It is removed only on this path, so a run that died still
+    // leaves behind the only record of what it sent.
+    await rm(join(runDirectory, CAPTURE_FILE), { force: true });
+    // Packed only now: the log is complete and has just been proved to
+    // round-trip, and a packed file cannot be appended to. What it holds is
+    // one conversation repeated at growing lengths, so a window wide enough to
+    // reach the previous copy takes a 139MB log to under a megabyte. Every
+    // byte is kept -- the evidence a person reads is the same evidence, and
+    // `readCanonicalLog` opens either form from the same path.
+    await packFile(logPath);
+    // Captures this run's log does not fold in: the UI review lane spawns its
+    // own pi beside the verifier and builds no canonical log, so its requests
+    // have nowhere else to go. They are finished when the run is, and flat
+    // they were 56MB of the same conversation repeated.
+    await packLeftoverCaptures(runDirectory);
 
     const time = this.now();
     const lossByTurn = new Map(cache.losses.map((loss) => [loss.turn, loss.lostTokens]));
@@ -129,20 +168,5 @@ export class LibsqlPhaseRecorder {
       ],
     }));
     if (turnStatements.length > 0) await this.client.batch(turnStatements, "write");
-    const statements = input.result.events.map((event) => ({
-      sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
-            VALUES (?, (SELECT COALESCE(MAX(seq), -1) + 1 FROM event_log WHERE run_id = ?),
-                    ?, ?, ?, ?, ?)`,
-      args: [
-        input.runId,
-        input.runId,
-        input.cardId,
-        input.phase,
-        `rpc.${event.type}`,
-        time,
-        JSON.stringify(event),
-      ],
-    }));
-    if (statements.length > 0) await this.client.batch(statements, "write");
   }
 }

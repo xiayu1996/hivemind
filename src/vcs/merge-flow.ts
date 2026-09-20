@@ -1,4 +1,5 @@
 import { normalizeActualFootprint, type ActualFootprintRecorder } from "./actual-footprint.js";
+import { unpredictedDirectories } from "../orchestrator/footprint-deviation.js";
 
 export interface MergeGitPort {
   run(cwd: string, args: string[]): Promise<string>;
@@ -53,6 +54,23 @@ export interface EpicMergeFlowOptions {
   integrationWorktree: string;
   mainBranch?: string;
   actualFootprints?: ActualFootprintRecorder;
+  /**
+   * Called when the diff reached outside the Story's predicted footprint.
+   *
+   * Not a refusal: a prediction made before the work is a prediction, and the
+   * connected change a card has to make next door is ordinary. But nothing at
+   * all was said about it before -- the deviation was computed, stored, and
+   * read by no production code -- so a card that rewrote the verifier judging
+   * it and the build configuration every other card shares passed through
+   * every gate in silence, and those changes are still on its Epic branch.
+   * Recording it is what makes the size of the problem answerable.
+   */
+  onFootprintOverreach?: (overreach: {
+    storyId: string;
+    predicted: readonly string[];
+    actual: readonly string[];
+    unpredicted: readonly string[];
+  }) => Promise<void>;
 }
 
 /**
@@ -65,7 +83,7 @@ export type StoryPublisher = (story: MergeStory) => Promise<{ mrUrl: string | nu
 
 export type MergeResult =
   | { kind: "merged"; integrationBranch: string; scenarioIds: readonly string[]; mrUrl: string | null }
-  | { kind: "conflict"; integrationBranch: string; reason: string }
+  | { kind: "conflict"; integrationBranch: string; reason: string; files: readonly string[] }
   | {
       kind: "verification_failed";
       integrationBranch: string;
@@ -117,14 +135,36 @@ export class EpicMergeFlow {
       await this.git.run(this.options.storyWorktree, ["rebase", target]);
     } catch (cause) {
       const reason = cause instanceof Error ? cause.message : String(cause);
+      let files: readonly string[] | undefined;
+      let inspectionReason: string | undefined;
       try {
         const unresolved = await this.git.run(this.options.storyWorktree, ["diff", "--name-only", "--diff-filter=U"]);
-        if (unresolved.trim() !== "") return { kind: "conflict", integrationBranch: target, reason };
+        if (unresolved.trim() !== "") {
+          // The files, not just git's prose. They are what a count of these
+          // conflicts is worth reading by, and what tells a later round which
+          // ground two Stories are competing for.
+          files = unresolved.split("\n").map((line) => line.trim()).filter((line) => line !== "").toSorted();
+        }
       } catch (inspectionCause) {
-        const inspectionReason = inspectionCause instanceof Error ? inspectionCause.message : String(inspectionCause);
-        return { kind: "verification_failed", integrationBranch: target, scenarioIds: [], reason: `${reason}; unable to inspect rebase state: ${inspectionReason}` };
+        inspectionReason = inspectionCause instanceof Error ? inspectionCause.message : String(inspectionCause);
       }
-      return { kind: "verification_failed", integrationBranch: target, scenarioIds: [], reason };
+      // Read the conflict first, then put the worktree back. A rebase left
+      // standing owns that worktree: it sits detached with the conflict in the
+      // tree, and every later dispatch of this card refuses to start because
+      // the worktree is not on the Story branch. The conflict is something to
+      // report, not something to keep.
+      const abandoned = await this.abandonRebase();
+      const detail = abandoned === undefined ? reason : `${reason}; ${abandoned}`;
+      if (inspectionReason !== undefined) {
+        return {
+          kind: "verification_failed",
+          integrationBranch: target,
+          scenarioIds: [],
+          reason: `${detail}; unable to inspect rebase state: ${inspectionReason}`,
+        };
+      }
+      if (files !== undefined) return { kind: "conflict", integrationBranch: target, reason: detail, files };
+      return { kind: "verification_failed", integrationBranch: target, scenarioIds: [], reason: detail };
     }
     // Published while the branch is rebased and still ahead of the Epic head.
     // A later refusal leaves the request open as a draft, and the next attempt
@@ -195,15 +235,28 @@ export class EpicMergeFlow {
         candidateRevision: verifiedRevision,
       };
     }
-    if (this.options.actualFootprints) {
+    if (this.options.actualFootprints || this.options.onFootprintOverreach) {
       const nameStatus = await this.git.run(this.options.integrationWorktree, ["diff", "--name-status", "-z", "--find-renames", baseRevision, verifiedRevision]);
-      await this.options.actualFootprints.capture({
+      const actualFootprint = normalizeActualFootprint(nameStatus);
+      await this.options.actualFootprints?.capture({
         storyId: input.story.id,
         integrationBranch: target,
         baseRevision,
         storyRevision: verifiedRevision,
-        actualFootprint: normalizeActualFootprint(nameStatus),
+        actualFootprint,
       });
+      const unpredicted = unpredictedDirectories(input.story.predictedFootprint, actualFootprint);
+      // Reported, never refused, and never able to fail the merge: the record
+      // exists to be counted, and a sink that throws would turn a bookkeeping
+      // problem into a Story that cannot land.
+      if (unpredicted.length > 0) {
+        await this.options.onFootprintOverreach?.({
+          storyId: input.story.id,
+          predicted: input.story.predictedFootprint,
+          actual: actualFootprint,
+          unpredicted,
+        }).catch(() => undefined);
+      }
     }
     await this.git.run(this.options.integrationWorktree, ["merge", "--ff-only", input.story.branch]);
     // The Story's draft MR stacks onto this branch on origin, so origin has to
@@ -227,6 +280,19 @@ export class EpicMergeFlow {
   private async requireCleanIntegrationBranch(): Promise<void> {
     const status = await this.git.run(this.options.integrationWorktree, ["status", "--porcelain"]);
     if (status.trim() !== "") throw new Error("integration worktree has uncommitted changes at integration");
+  }
+
+  /** Puts the Story worktree back on its branch after a rebase stopped in it.
+   * Returns what went wrong when even that fails, so the reason a person reads
+   * says the tree still needs a hand rather than only naming the conflict. */
+  private async abandonRebase(): Promise<string | undefined> {
+    try {
+      await this.git.run(this.options.storyWorktree, ["rebase", "--abort"]);
+      return undefined;
+    } catch (cause) {
+      const detail = cause instanceof Error ? cause.message : String(cause);
+      return `the Story worktree is still mid-rebase: ${detail}`;
+    }
   }
 
   private async requireCleanStoryBranch(branch: string): Promise<void> {

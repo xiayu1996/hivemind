@@ -1,8 +1,9 @@
 // oxlint-disable unicorn/no-thenable -- the scenario grammar names a "then" field
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { parseGuardPolicy, POLICY_ENV_VAR } from "../guard/policy.js";
 import { checkFilePath } from "../guard/danger-rules.js";
 import { testAgentSpec } from "../runner/agent-spec.testing.js";
@@ -30,6 +31,7 @@ const request: PrototypeRequest = {
   direction: DIRECTION,
   contractRoot: CONTRACT_ROOT,
   revisionFeedback: [],
+  designHints: [],
 };
 
 function runner(replies: string[]): PiRunner & { prompts: string[] } {
@@ -56,10 +58,16 @@ function runner(replies: string[]): PiRunner & { prompts: string[] } {
   };
 }
 
+// One root per file, removed when the file is done: these were left behind,
+// one directory per case, and thousands of them had collected in the host's
+// temp directory.
+const scratch = mkdtempSync(join(tmpdir(), "hivemind-prototype-"));
+afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+
 /** A contract on disk that the checks are happy with, so a test only has to
  * break the one thing it is about. */
 async function contract(pages: Record<string, string> = {}): Promise<string> {
-  const worktree = await mkdtemp(join(tmpdir(), "hivemind-prototype-"));
+  const worktree = await mkdtemp(join(scratch, "case-"));
   const root = join(worktree, CONTRACT_ROOT);
   await mkdir(join(root, "pages"), { recursive: true });
   await writeFile(join(root, "tokens.json"), JSON.stringify({
@@ -226,6 +234,16 @@ describe("PiPrototypePort", () => {
     expect(drawing.instance.prompts[0]).toContain(DIRECTION.alternatives[0]!.option);
   });
 
+  it("names last version's detector findings as something to fix, not as a gate", async () => {
+    const worktree = await contract();
+    const drawing = drawingPort({ worktree, replies: [GOOD] });
+
+    await drawing.port.run({ ...request, designHints: ["side-tab pages/board.html Side-tab accent border"] });
+
+    expect(drawing.instance.prompts[0]).toContain("side-tab pages/board.html Side-tab accent border");
+    expect(drawing.instance.prompts[0]).toContain("不否决");
+  });
+
   it("hands the findings back to the same session instead of starting another", async () => {
     const worktree = await contract();
     const missing = JSON.stringify({
@@ -289,7 +307,7 @@ describe("PiPrototypePort", () => {
   });
 
   it("says the contract is not there when nothing was written", async () => {
-    const worktree = await mkdtemp(join(tmpdir(), "hivemind-prototype-"));
+    const worktree = await mkdtemp(join(scratch, "case-"));
     const drawing = drawingPort({ worktree, replies: [GOOD], maxRounds: 1 });
 
     await expect(drawing.port.run(request)).rejects.toThrow(/docs\/prototype 下什么都没有/);

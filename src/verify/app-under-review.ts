@@ -42,6 +42,34 @@ export interface AppSeedResult {
   output: string;
 }
 
+/**
+ * What the application under review is allowed to see of the environment it was
+ * started from.
+ *
+ * It is code this round wrote and this round judges, with no person in the
+ * loop, and the process that starts it is a daemon whose environment carries
+ * every credential in `secrets.env` -- a deployed host loads that file into the
+ * unit. Handing all of it over was never intended and is not needed: what an
+ * application legitimately needs is a shell to run in and the address of the
+ * data it serves. Anything else a repository needs it declares, and gets
+ * through `env`.
+ */
+const INHERITED = [
+  "PATH", "HOME", "TMPDIR", "SHELL", "USER", "LOGNAME", "LANG", "LC_ALL", "TZ",
+  // Where the data it serves lives. The application is expected to work on a
+  // copy of it; handing over the address is not handing over permission.
+  "HIVEMIND_DB_URL",
+] as const;
+
+function inheritedEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const name of INHERITED) {
+    const value = process.env[name];
+    if (value !== undefined) env[name] = value;
+  }
+  return env;
+}
+
 const OUTPUT_LIMIT = 8 * 1024;
 const READY_POLL_MS = 500;
 const STOP_GRACE_MS = 2_000;
@@ -127,7 +155,7 @@ export class AppUnderReview {
     try {
       child = spawn(file!, args, {
         cwd: input.cwd,
-        env: { ...process.env, ...input.env },
+        env: { ...inheritedEnv(), ...input.env },
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -194,7 +222,7 @@ export class AppUnderReview {
         child = spawn(file!, args, {
           cwd: input.cwd,
           env: {
-            ...process.env,
+            ...inheritedEnv(),
             ...input.env,
             HIVEMIND_SEED: input.seed,
             HIVEMIND_SCENARIO: input.scenarioId,

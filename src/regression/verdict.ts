@@ -69,21 +69,40 @@ export function judgeRegression(
   if (failures.length === 0) return { kind: "stable" };
   const rate = failures.length / window.length;
 
+  // A card names a break that is happening now: it blocks its Epic from
+  // landing and reopens a Story to reproduce it. With the newest run green
+  // there is nothing to reproduce, and history alone would raise one anyway --
+  // three sweeps of a Story whose code was not yet on the branch stayed in the
+  // window and would have opened a card on the first run that passed.
+  const newest = window[0];
+  if (!newest || newest.outcome !== "failed") {
+    return { kind: "suspect", failures: failures.length, rate };
+  }
+
   const bySignature = new Map<string, number>();
   for (const failure of failures) {
     const signature = failure.failureSignature ?? "";
     if (signature) bySignature.set(signature, (bySignature.get(signature) ?? 0) + 1);
   }
-  const dominant = [...bySignature.entries()].toSorted((left, right) =>
-    right[1] - left[1] || left[0].localeCompare(right[0]))[0];
+  // The card names the break in front of us, so that break has to be the one
+  // recurring. A different signature that happens to dominate the window
+  // describes something else, and the Story would be reopened to fix it.
+  const signature = newest.failureSignature ?? "";
+  const recurrences = signature === "" ? 0 : bySignature.get(signature) ?? 0;
 
-  // The card names one break, so the same break has to be the one recurring.
+  // Nothing in the window passed, so the flaky-or-broken question the
+  // signatures exist to answer has already answered itself, and they need not
+  // agree. They routinely do not: a screen's failure is a sentence somebody
+  // wrote about what they saw, new wording every round, so a scenario that has
+  // never once worked would never accumulate a card -- and an Epic would wait
+  // at its review gate forever for a break with no owner.
+  const neverGreen = failures.length === window.length;
+
   const raise = failures.length >= policy.minFailures
     && rate >= policy.failureRateThreshold
-    && dominant !== undefined
-    && dominant[1] >= policy.minFailures;
+    && (neverGreen || recurrences >= policy.minFailures);
 
   return raise
-    ? { kind: "raise", failures: failures.length, rate, signature: dominant[0] }
+    ? { kind: "raise", failures: failures.length, rate, signature }
     : { kind: "suspect", failures: failures.length, rate };
 }

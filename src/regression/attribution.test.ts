@@ -44,6 +44,17 @@ describe("attributeRegression", () => {
     expect(probe.mock.calls.length).toBeLessThanOrEqual(2 + 6);
   });
 
+  it("stops rather than guessing when a revision cannot be judged", async () => {
+    // "unknown" is not "passed". Reading it as one made the base look green and
+    // turned a break that has never worked into "does not reproduce".
+    await expect(attributeRegression(SEQUENCE, async () => "unknown"))
+      .resolves.toMatchObject({ kind: "unattributable", probes: 1 });
+    await expect(attributeRegression(SEQUENCE, async (index) => (index === 0 ? false : "unknown")))
+      .resolves.toMatchObject({ kind: "unattributable", probes: 2 });
+    await expect(attributeRegression([], async () => "unknown"))
+      .resolves.toMatchObject({ kind: "unattributable" });
+  });
+
   it("handles an empty sequence without pretending to attribute anything", async () => {
     await expect(attributeRegression([], async () => true)).resolves.toMatchObject({ kind: "pre_existing" });
     await expect(attributeRegression([], async () => false)).resolves.toMatchObject({ kind: "not_reproduced" });

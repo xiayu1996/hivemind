@@ -168,4 +168,16 @@ describe("event log ordering", () => {
     await expect(insert(1)).rejects.toThrow(/UNIQUE/i);
     client.close();
   });
+
+  it("refuses to hold the RPC stream", async () => {
+    const client = await freshDb();
+    const insert = (type: string) =>
+      client.execute({
+        sql: "INSERT INTO event_log (run_id, seq, type, ts, data) VALUES ('run-1', 1, ?, ?, '{}')",
+        args: [type, now()],
+      });
+    await expect(insert("rpc.message_update")).rejects.toThrow(/CHECK/i);
+    await expect(insert("phase.enter")).resolves.toBeDefined();
+    client.close();
+  });
 });

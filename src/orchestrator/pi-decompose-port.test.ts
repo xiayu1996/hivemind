@@ -4,7 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import { POLICY_ENV_VAR, parseGuardPolicy } from "../guard/policy.js";
 import { testAgentSpec } from "../runner/agent-spec.testing.js";
 import type { RpcRunnerConfig } from "../runner/rpc-runner.js";
-import type { PiRunner, PromptResult } from "../runner/types.js";
+import { RunnerTimeoutError, type PiRunner, type PromptResult } from "../runner/types.js";
+import { DecompositionContractError } from "./decompose-runner.js";
 import { PiDecomposePort } from "./pi-decompose-port.js";
 
 const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, reasoning: 0, costUsd: 0 };
@@ -136,10 +137,29 @@ describe("PiDecomposePort", () => {
       .resolves.toMatchObject({ epicId: "M2" });
   });
 
-  it("fails closed when the reply carries no usable candidate", async () => {
+  it("resumes a turn whose stream broke instead of losing the whole window", async () => {
+    // This lane's turns run for minutes; replaying one costs a whole prompt
+    // timeout and buys nothing, because the session is still there.
+    const instance = runner(JSON.stringify(CANDIDATE));
+    let call = 0;
+    instance.prompt = vi.fn(async (message: string) => {
+      instance.prompts.push(message);
+      if (call++ === 0) throw new RunnerTimeoutError("timed out waiting for agent_settled");
+      return { settled: true, failure: null, usage, events: [] } satisfies PromptResult;
+    });
+
+    await expect(port(instance).run({ epicId: "M2", title: "t", requirement: "r", previousRejections: [], maxStories: 4 }))
+      .resolves.toMatchObject({ epicId: "M2" });
+    expect(instance.prompts.at(-1)).toBe("continue");
+    expect(instance.abort).toHaveBeenCalled();
+  });
+
+  it("reports an unusable reply as a refusal the loop can tell the model about", async () => {
+    // Typed, because the loop counts this one and feeds it back, while a
+    // provider failure goes past it to the breaker.
     const instance = runner("我需要更多信息才能回答。");
     await expect(port(instance).run({ epicId: "M2", title: "t", requirement: "r", previousRejections: [], maxStories: 4 }))
-      .rejects.toThrow(/DECOMPOSE/);
+      .rejects.toThrow(DecompositionContractError);
   });
 
   it("stops the session even when the reply was unusable", async () => {

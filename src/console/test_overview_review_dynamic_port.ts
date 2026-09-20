@@ -1,10 +1,51 @@
+import { createClient } from "@libsql/client";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { migrate } from "../persistence/migrate.js";
 import { AppUnderReview } from "../verify/app-under-review.js";
+import { seedOverviewDemo } from "./overview-demo.js";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const TSX = fileURLToPath(new URL("../../node_modules/tsx/dist/cli.mjs", import.meta.url));
 const ENTRY = fileURLToPath(new URL("../../scripts/serve-console.ts", import.meta.url));
+
+// The dataset these scenarios describe is the test's own, named to the console
+// on the command line. The entry otherwise serves a snapshot of the central
+// store, which is the right screen for a round to judge and the wrong one for
+// a scenario that states how many items are waiting.
+let directory: string;
+let app: AppUnderReview;
+let started: Awaited<ReturnType<AppUnderReview["start"]>>;
+
+// Starting the console builds its shell, so the application is started once for
+// the whole file rather than once per scenario; every scenario reads the same
+// screen, which is what a round does too.
+beforeAll(async () => {
+  directory = await mkdtemp(join(tmpdir(), "hivemind-overview-review-"));
+  const databaseUrl = `file:${join(directory, "console.db")}`;
+  const client = createClient({ url: databaseUrl });
+  try {
+    await migrate(client);
+    await seedOverviewDemo(client, Date.now());
+  } finally {
+    client.close();
+  }
+  app = new AppUnderReview();
+  started = await app.start({
+    cwd: ROOT,
+    command: [process.execPath, TSX, ENTRY, "--port", "{port}", "--db", databaseUrl],
+    readyUrl: "http://127.0.0.1:{port}/",
+    timeoutMs: 120_000,
+  });
+}, 180_000);
+
+afterAll(async () => {
+  if (app) await app.stop();
+  if (directory) await rm(directory, { recursive: true, force: true });
+});
 
 function section(document: string, startMarker: string, endMarker: string): string {
   const start = document.indexOf(startMarker);
@@ -16,25 +57,13 @@ function section(document: string, startMarker: string, endMarker: string): stri
 // with {port} where the port goes. Without the substitution the application
 // exits before it answers, which is exactly what the red commits recorded.
 async function inspectOverview(inspect: (html: string) => void, path = "/"): Promise<void> {
-  const app = new AppUnderReview();
-  const started = await app.start({
-    cwd: ROOT,
-    command: [process.execPath, TSX, ENTRY, "--port", "{port}"],
-    readyUrl: "http://127.0.0.1:{port}/",
-    timeoutMs: 20_000,
-  });
-
-  try {
-    expect(started.started, started.started ? undefined : started.reason).toBe(true);
-    if (!started.started) return;
-    expect(started.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/u);
-    expect(started.url).not.toContain("{port}");
-    const response = await fetch(new URL(path, started.url));
-    expect(response.status).toBe(200);
-    inspect(await response.text());
-  } finally {
-    await app.stop();
-  }
+  expect(started.started, started.started ? undefined : started.reason).toBe(true);
+  if (!started.started) return;
+  expect(started.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/u);
+  expect(started.url).not.toContain("{port}");
+  const response = await fetch(new URL(path, started.url));
+  expect(response.status).toBe(200);
+  inspect(await response.text());
 }
 
 describe("the overview started by a verification round with its dynamic port", () => {

@@ -1,9 +1,28 @@
 import type { ConfigStore } from "../config/store.js";
+import { directoryOf } from "../util/repository-path.js";
 
 export interface SchedulableStory {
   id: string;
   dependsOn: readonly string[];
   predictedFootprint: readonly string[];
+  /**
+   * The Epic whose branch this Story's work lands on.
+   *
+   * Two Stories under one Epic share a branch: the second rebases onto what
+   * the first left there, so an overlapping footprint is a race for one tree
+   * and they may not run together. Two Stories under different Epics never
+   * touch the same tree -- separate worktrees, separate branches, and MERGE
+   * rebases each onto its own `epic/<id>` -- so their overlap is a conflict
+   * between two Epic branches, which git resolves once at the Epic merge
+   * rather than by never running the second card.
+   *
+   * Reading them as competitors cost this installation the whole requirement:
+   * nine cards across six Epics each declared `src/console`, the plan held one
+   * batch of one, and two of them had not started after four hours. Absent,
+   * the Story is treated as sharing a branch with everything, which is the
+   * conservative answer for a Story that has no Epic yet.
+   */
+  epicId?: string;
 }
 
 export interface PlannedStoryExecution {
@@ -62,7 +81,9 @@ function findDependencyCycle(stories: readonly SchedulableStory[]): readonly str
   return undefined;
 }
 
-function pathsIntersect(left: string, right: string): boolean {
+function pathsIntersect(rawLeft: string, rawRight: string): boolean {
+  const left = directoryOf(rawLeft);
+  const right = directoryOf(rawRight);
   return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
 }
 
@@ -78,8 +99,17 @@ export function storiesShareHotspot(left: SchedulableStory, right: SchedulableSt
   return hotspots.some((hotspot) => coversHotspot(left, hotspot) && coversHotspot(right, hotspot));
 }
 
+/** Whether the two Stories' work lands on the same branch. */
+function shareBranch(left: SchedulableStory, right: SchedulableStory): boolean {
+  return !left.epicId || !right.epicId || left.epicId === right.epicId;
+}
+
 function storiesConflict(left: SchedulableStory, right: SchedulableStory, hotspots: readonly string[]): boolean {
-  return footprintsIntersect(left, right) || storiesShareHotspot(left, right, hotspots);
+  // Hotspots are not scoped to a branch: they are the operator naming a path
+  // whose conflicts are not worth having at all, which is a statement about
+  // the Epic merge as much as about one tree.
+  if (storiesShareHotspot(left, right, hotspots)) return true;
+  return shareBranch(left, right) && footprintsIntersect(left, right);
 }
 
 export async function planRepositoryStoryExecution(
@@ -129,11 +159,15 @@ export function dispatchableStories(stories: readonly RepositoryStory[]): Schedu
   };
   return stories
     .filter((story) => open.has(story.id) && !isHeld(story.id, new Set()))
-    .map((story) => ({
-      id: story.id,
-      dependsOn: story.dependsOn.filter((dependency) => open.has(dependency)),
-      predictedFootprint: story.predictedFootprint,
-    }));
+    .map((story) => {
+      const planned: SchedulableStory = {
+        id: story.id,
+        dependsOn: story.dependsOn.filter((dependency) => open.has(dependency)),
+        predictedFootprint: story.predictedFootprint,
+      };
+      if (story.epicId) planned.epicId = story.epicId;
+      return planned;
+    });
 }
 
 export interface StoryExecutionOptions {
@@ -147,6 +181,15 @@ export interface StoryExecutionOptions {
    * front-end directory that did not exist looked like from inside.
    */
   maxPerBatch?: number;
+  /**
+   * Stories already executing on this installation, by id.
+   *
+   * They hold their footprint for as long as they run, so they seed the first
+   * batch and nothing that conflicts with them joins it. Without this the plan
+   * describes a machine on which nothing has started yet, and the caller then
+   * dispatches into a directory a live worktree is already writing.
+   */
+  running?: readonly string[];
 }
 
 export function planStoryExecution(
@@ -159,10 +202,23 @@ export function planStoryExecution(
 
   const remaining = [...stories];
   const completed = new Set<string>();
+  const running = new Set(options.running ?? []);
   const batches: string[][] = [];
   while (remaining.length > 0) {
     const batch: SchedulableStory[] = [];
+    // A Story that is already executing holds its footprint until it finishes,
+    // so the first batch is whatever is running plus whatever may run beside
+    // it. Planning from scratch every cycle put a card into batch one while a
+    // card sharing its directories sat in batch six and was already in a
+    // worktree: S-R237511CO-03 and S-R237511MB-01 both took src/console on
+    // 2026-09-19, which is the conflict at merge that footprints exist to
+    // prevent. A running Story's dependencies are satisfied by the fact that it
+    // is running, so it is seeded before the dependency check rather than
+    // through it.
+    const seeding = batches.length === 0 && running.size > 0;
+    if (seeding) for (const story of remaining) if (running.has(story.id)) batch.push(story);
     for (const story of remaining) {
+      if (seeding && running.has(story.id)) continue;
       if (!story.dependsOn.every((dependency) => completed.has(dependency))) continue;
       if (batch.some((candidate) => storiesConflict(story, candidate, hotspots))) continue;
       if (options.maxPerBatch !== undefined && batch.length >= options.maxPerBatch) break;

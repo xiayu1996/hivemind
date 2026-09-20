@@ -146,3 +146,145 @@ describe("S-M2-03-dispatchable narrowing a repository to what can run now", () =
     ])).toEqual([]);
   });
 });
+
+describe("footprints written two ways", () => {
+  it("treats a directory and the same directory with a trailing slash as one", async () => {
+    // The DoD rewrites the footprint the decomposition validated and checks
+    // only that the strings are non-empty, so both spellings reach the
+    // comparison. `src/console/` used to contain neither `src/console/tabs`
+    // nor anything under it, which is how two Stories ended up in one subtree.
+    const plan = planStoryExecution([
+      { id: "S-A-01", dependsOn: [], predictedFootprint: ["src/console/"] },
+      { id: "S-B-01", dependsOn: [], predictedFootprint: ["src/console/tabs"] },
+    ], []);
+
+    expect(plan.batches).toEqual([["S-A-01"], ["S-B-01"]]);
+  });
+
+  it("still keeps two directories that only share a prefix apart", async () => {
+    const plan = planStoryExecution([
+      { id: "S-A-01", dependsOn: [], predictedFootprint: ["src/console/"] },
+      { id: "S-B-01", dependsOn: [], predictedFootprint: ["src/consoles"] },
+    ], []);
+
+    expect(plan.batches).toEqual([["S-A-01", "S-B-01"]]);
+  });
+
+  it("treats a trailing glob as the subtree it walks", async () => {
+    // `src/console/**` came off a real DoD and contained nothing under
+    // src/console, so a card declaring a directory inside it looked independent.
+    const plan = planStoryExecution([
+      { id: "S-A-01", dependsOn: [], predictedFootprint: ["src/console/**"] },
+      { id: "S-B-01", dependsOn: [], predictedFootprint: ["src/console/panels"] },
+      { id: "S-C-01", dependsOn: [], predictedFootprint: ["src/notion/*"] },
+    ], []);
+
+    expect(plan.batches).toEqual([["S-A-01", "S-C-01"], ["S-B-01"]]);
+  });
+
+  it("keeps a name that only looks like a glob", async () => {
+    const plan = planStoryExecution([
+      { id: "S-A-01", dependsOn: [], predictedFootprint: ["src/consoles"] },
+      { id: "S-B-01", dependsOn: [], predictedFootprint: ["src/console/**"] },
+    ], []);
+
+    expect(plan.batches).toEqual([["S-A-01", "S-B-01"]]);
+  });
+
+  it("reads a hotspot written with a trailing slash as the directory it names", async () => {
+    const plan = planStoryExecution([
+      { id: "S-A-01", dependsOn: [], predictedFootprint: ["src/config"] },
+      { id: "S-B-01", dependsOn: [], predictedFootprint: ["src/config/registry"] },
+    ], ["src/config/"]);
+
+    expect(plan.batches).toEqual([["S-A-01"], ["S-B-01"]]);
+  });
+});
+
+describe("planStoryExecution with Stories already running", () => {
+  it("keeps a card out of the batch while a running card holds its directories", async () => {
+    // Planned from scratch every cycle, the running card landed in a later
+    // batch and said nothing about the first one: S-R237511CO-03 was sent into
+    // src/console on 2026-09-19 while S-R237511MB-01 was already writing it.
+    const plan = planStoryExecution([
+      { id: "S-NEW-01", dependsOn: [], predictedFootprint: ["src/console", "src/orchestrator"] },
+      { id: "S-ELSEWHERE-01", dependsOn: [], predictedFootprint: ["src/notion"] },
+      { id: "S-RUNNING-01", dependsOn: [], predictedFootprint: ["src/console/"] },
+    ], [], { running: ["S-RUNNING-01"] });
+
+    expect(plan.kind).toBe("planned");
+    expect(plan.batches[0]).toEqual(["S-RUNNING-01", "S-ELSEWHERE-01"]);
+    expect(plan.batches[1]).toEqual(["S-NEW-01"]);
+  });
+
+  it("plans a running card whose dependency has not been delivered", async () => {
+    // It is running; nothing about the graph can make that untrue, and dropping
+    // it from the batch would free the footprint it is holding.
+    const plan = planStoryExecution([
+      { id: "S-FIRST-01", dependsOn: [], predictedFootprint: ["src/config"] },
+      { id: "S-SECOND-02", dependsOn: ["S-FIRST-01"], predictedFootprint: ["src/config"] },
+    ], [], { running: ["S-SECOND-02"] });
+
+    expect(plan.kind).toBe("planned");
+    expect(plan.batches[0]).toEqual(["S-SECOND-02"]);
+    expect(plan.batches[1]).toEqual(["S-FIRST-01"]);
+  });
+
+  it("plans exactly as before when nothing is running", async () => {
+    const stories = [
+      { id: "S-A-01", dependsOn: [], predictedFootprint: ["src/console"] },
+      { id: "S-B-01", dependsOn: [], predictedFootprint: ["src/notion"] },
+    ];
+
+    expect(planStoryExecution(stories, [], { running: [] }))
+      .toEqual(planStoryExecution(stories, []));
+  });
+});
+
+function onEpic(id: string, epicId: string, footprint: readonly string[]): SchedulableStory {
+  return { id, epicId, dependsOn: [], predictedFootprint: footprint };
+}
+
+describe("Stories whose work lands on different Epic branches", () => {
+  it("plans them together although their footprints overlap", () => {
+    // Nine cards across six Epics all declared src/console, and the plan held
+    // one batch of one. They never share a tree: separate worktrees, separate
+    // branches, and MERGE rebases each onto its own epic branch.
+    const plan = planStoryExecution([
+      onEpic("S-RC-01", "R-RC", ["src/console"]),
+      onEpic("S-TR-01", "R-TR", ["src/console", "src/observability"]),
+      onEpic("S-DT-03", "R-DT", ["src/console"]),
+    ], []);
+    expect(plan).toEqual({ kind: "planned", batches: [["S-RC-01", "S-TR-01", "S-DT-03"]] });
+  });
+
+  it("keeps two Stories of one Epic apart, because the second rebases onto the first", () => {
+    const plan = planStoryExecution([
+      onEpic("S-DT-03", "R-DT", ["src/console"]),
+      onEpic("S-DT-04", "R-DT", ["src/console/overview.ts"]),
+    ], []);
+    expect(plan).toEqual({ kind: "planned", batches: [["S-DT-03"], ["S-DT-04"]] });
+  });
+
+  it("still serialises a hotspot across Epics, which is what naming one is for", () => {
+    const plan = planStoryExecution([
+      onEpic("S-RC-01", "R-RC", ["src/console/role-configuration.ts", "src/console/server.ts"]),
+      onEpic("S-TR-01", "R-TR", ["src/console/work-records.ts", "src/console/server.ts"]),
+    ], ["src/console/server.ts"]);
+    expect(plan).toEqual({ kind: "planned", batches: [["S-RC-01"], ["S-TR-01"]] });
+  });
+
+  it("treats a Story with no Epic as sharing a branch with everything", () => {
+    const plan = planStoryExecution([
+      { id: "S-LOOSE-01", dependsOn: [], predictedFootprint: ["src/console"] },
+      onEpic("S-RC-01", "R-RC", ["src/console"]),
+    ], []);
+    expect(plan).toEqual({ kind: "planned", batches: [["S-LOOSE-01"], ["S-RC-01"]] });
+  });
+
+  it("carries the Epic through the dispatchable filter", () => {
+    expect(dispatchableStories([
+      { id: "S-RC-01", state: "CODE", epicId: "R-RC", dependsOn: [], predictedFootprint: ["src/console"] },
+    ])).toEqual([{ id: "S-RC-01", epicId: "R-RC", dependsOn: [], predictedFootprint: ["src/console"] }]);
+  });
+});

@@ -160,15 +160,22 @@ export class NotionStoryInputSync {
   async pollContent(pageId: string): Promise<void> {
     const content = await readStoryContent(this.storyApi, pageId);
     const story = (await this.client.execute({
-      sql: "SELECT id FROM stories WHERE notion_page_id = ?",
+      sql: "SELECT id, requirement FROM stories WHERE notion_page_id = ?",
       args: [pageId],
     })).rows[0];
     if (!story) throw new Error(`Notion page is not an ingested Story: ${pageId}`);
     const cardId = String(story.id);
-    const statements: InStatement[] = [{
-      sql: "UPDATE stories SET requirement = ?, updated_at = ? WHERE id = ?",
-      args: [content.requirement, this.now(), cardId],
-    }];
+    const statements: InStatement[] = [];
+    // Only when the page says something different. Writing the same text back
+    // every poll moved `updated_at` on every active card every cycle, which is
+    // the column the progress probe reads to decide whether a card is still
+    // moving: it could never report one that had stopped.
+    if (content.requirement !== String(story.requirement ?? "")) {
+      statements.push({
+        sql: "UPDATE stories SET requirement = ?, updated_at = ? WHERE id = ?",
+        args: [content.requirement, this.now(), cardId],
+      });
+    }
     for (const [section, anchor] of Object.entries(content.sections)) {
       if (!anchor) continue;
       statements.push({
@@ -178,7 +185,7 @@ export class NotionStoryInputSync {
         args: [cardId, section, anchor],
       });
     }
-    await this.client.batch(statements, "write");
+    if (statements.length > 0) await this.client.batch(statements, "write");
   }
 
   async pollComments(pageId: string): Promise<StoryCommentPollResult> {

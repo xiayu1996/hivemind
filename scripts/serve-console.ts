@@ -1,92 +1,161 @@
-import { createClient } from "@libsql/client";
-import { mkdtempSync } from "node:fs";
-import { rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
+/**
+ * The console, on its own, for a verification round to open pages against.
+ *
+ * A scenario declared `ui` or `e2e` is judged on a screen, and a screen needs
+ * something serving it. Until this existed the repository had no way to start
+ * its own application, so `verify.appStartCommand` stayed empty and every such
+ * scenario came back inconclusive -- or worse, came back passed from a session
+ * that had stood up something of its own and judged that instead.
+ *
+ * It serves a private snapshot of the central database, taken when it starts
+ * and deleted when it stops. Real data, because the screens under judgement are
+ * screens of real rounds, real costs and real blockers -- a freshly migrated
+ * database renders every page as its empty state, which is exactly one of the
+ * things the scenarios need to tell apart. A snapshot rather than the database
+ * itself, because a round that submits a decision on a screen must not submit a
+ * real one: the writing surfaces are what the scenarios are there to exercise,
+ * and the only safe place for that write is a copy nobody reads afterwards.
+ * It also means two rounds judging the same screen start from the same picture.
+ */
+import { execFile } from "node:child_process";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
-import { LibsqlConsoleDataSource } from "../src/console/libsql-data-source.js";
+import { promisify } from "node:util";
+import { existsSync, mkdtempSync, readdirSync, rmSync, statfsSync, statSync } from "node:fs";
 import { createConsoleAccessPage, createConsoleAccessPolicy } from "../src/console/access-control.js";
 import { createOverviewPage } from "../src/console/overview-page.js";
-import { seedOverviewDemo } from "../src/console/overview-demo.js";
 import { createConsoleServer, listenConsole } from "../src/console/server.js";
-import { ConfigStore } from "../src/config/store.js";
-import { migrate } from "../src/persistence/migrate.js";
+import { LibsqlConsoleDataSource } from "../src/console/libsql-data-source.js";
+import { openDb } from "../src/persistence/client.js";
+import { pinnedPiVersion } from "../src/runner/pi-binary.js";
 
-/**
- * The console as a standalone process, on its own data.
- *
- * The orchestrator mounts the same server in-process and that is the console a
- * person reads: it serves the central store. This entry exists so a round can
- * open the screen and judge it -- and a round must judge the sample data its
- * scenarios declare, not whatever the worktree happened to inherit. The
- * orchestrator exports `HIVEMIND_DB_URL` to every child it starts, so a review
- * that honored it would serve a real deployment's running work and every
- * scenario written about its own sample would be refused for the work it could
- * not see. The review therefore always opens a temporary store and fills it
- * with the declared dataset; only an explicit `--db` reads a database somebody
- * named on purpose.
- *
- * The store is a temporary file rather than `:memory:` because a read runs in
- * its own transaction, and an in-memory database does not survive the
- * connection that transaction closes.
- */
+const execFileAsync = promisify(execFile);
 
-const ROOT = fileURLToPath(new URL("..", import.meta.url));
+const ROOT = new URL("..", import.meta.url).pathname;
 
-function option(name: string): string | undefined {
-  const index = process.argv.indexOf(name);
-  return index >= 0 ? process.argv[index + 1] : undefined;
+function flag(name: string): string | undefined {
+  const index = process.argv.indexOf(`--${name}`);
+  return index === -1 ? undefined : process.argv[index + 1];
 }
 
-const port = Number(option("--port") ?? process.env.HIVEMIND_CONSOLE_PORT ?? "3210");
-const host = option("--host") ?? process.env.HIVEMIND_CONSOLE_HOST ?? "127.0.0.1";
-
-let demoDirectory: string | undefined;
-function demoDatabaseUrl(): string {
-  demoDirectory = mkdtempSync(join(tmpdir(), "hivemind-console-demo-"));
-  return `file:${join(demoDirectory, "console.db")}`;
+const port = Number(flag("port") ?? process.env.HIVEMIND_CONSOLE_PORT ?? 4319);
+if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+  throw new Error(`--port must be a port number, got ${flag("port")}`);
+}
+// The worktree under verification has no data directory of its own -- data/ is
+// ignored -- so the central database is named by the environment the worker
+// already runs in, and only fallen back to relative for a direct invocation.
+const url = flag("db") ?? process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db";
+// libsql creates a missing file, so an unset HIVEMIND_DB_URL would serve every
+// page as its empty state and look like a working application. Refusing is
+// what lets the round report that it had no application rather than judge the
+// screens of a database nobody wrote to.
+const file = url.startsWith("file:") ? url.slice("file:".length).split("?")[0]! : "";
+if (file !== "" && !existsSync(file)) {
+  throw new Error(`no database at ${file}: set HIVEMIND_DB_URL or pass --db`);
 }
 
-const explicitDb = option("--db");
-const dbUrl = explicitDb ?? demoDatabaseUrl();
+const uiRoot = join(ROOT, "console-ui", "dist");
+// The console's screens are a built shell, and the build output is ignored by
+// git, so it survives in a worktree from one round to the next. Serving what
+// happens to be there would show a verification round the interface of an
+// earlier round rather than of the tree it is judging, so starting the console
+// means building it. It takes well under a second, and a repository with no
+// shell to build keeps its server-rendered pages.
+if (existsSync(join(ROOT, "vite.config.ts"))) {
+  try {
+    await execFileAsync(join(ROOT, "node_modules", ".bin", "vite"), ["build"], { cwd: ROOT });
+  } catch (cause) {
+    const output = cause instanceof Error && "stderr" in cause ? String(cause.stderr) : String(cause);
+    throw new Error(`the console's screens could not be built, so there is nothing to serve: ${output.trim()}`, { cause });
+  }
+}
 
-const client = createClient({ url: dbUrl });
-await migrate(client);
-if (demoDirectory !== undefined) await seedOverviewDemo(client, Date.now());
+// The snapshot is taken through the database rather than off the filesystem:
+// a file copy would miss whatever is still in the write-ahead log, and what is
+// newest is exactly what a round is judging.
+// A console killed outright never reaches its own cleanup, and a snapshot is
+// the size of the central database, so the leak is measured in gigabytes. One
+// round lasts minutes; anything of ours still here after an hour was orphaned.
+const SNAPSHOT_PREFIX = "hivemind-console-";
+const ORPHAN_AGE_MS = 60 * 60 * 1000;
 
-// The access range is configuration, not a flag: a range passed on the command
-// line would be a second place to widen the console. A store that was named
-// explicitly keeps exactly the ranges it was configured with, including none,
-// which denies every peer.
-const config = await ConfigStore.load(client);
+function removeOrphanedSnapshots(): void {
+  const now = Date.now();
+  for (const entry of readdirSync(tmpdir())) {
+    if (!entry.startsWith(SNAPSHOT_PREFIX)) continue;
+    const path = join(tmpdir(), entry);
+    try {
+      if (now - statSync(path).mtimeMs < ORPHAN_AGE_MS) continue;
+      rmSync(path, { recursive: true, force: true });
+    } catch {
+      // Another console owns it, or it went away between the two calls. Either
+      // way it is not ours to clean up and the next start will look again.
+    }
+  }
+}
 
-// The review store is opened on this machine and filled with demonstration
-// data so the console screen can be looked at; denying the loopback would make
-// that screen impossible to open. Only the temporary demonstration store is
-// widened, and only to the machine it is already private to, so the real
-// deployment keeps whatever `console.allowedNetworks` says.
-const DEMO_ALLOWED_NETWORKS = ["127.0.0.1/32", "::1/128"];
-const configuredNetworks = config.get("console.allowedNetworks");
-const allowedNetworks = demoDirectory !== undefined && configuredNetworks.length === 0
-  ? DEMO_ALLOWED_NETWORKS
-  : configuredNetworks;
+removeOrphanedSnapshots();
+const snapshotDir = url.startsWith("file:") ? mkdtempSync(join(tmpdir(), SNAPSHOT_PREFIX)) : null;
 
+// A snapshot is the size of the central database. Running out of disk halfway
+// through one leaves a truncated copy that reads like a database with less in
+// it, and the round would judge screens against it. Refusing outright makes the
+// round report that it had no application, which is a fact somebody can act on.
+function assertRoomFor(databaseFile: string, directory: string): void {
+  const wal = `${databaseFile}-wal`;
+  const needed = statSync(databaseFile).size + (existsSync(wal) ? statSync(wal).size : 0);
+  const stats = statfsSync(directory);
+  const free = stats.bavail * stats.bsize;
+  if (free > needed * 1.2) return;
+  throw new Error(
+    `not enough disk for a private copy of the database: it is ${Math.round(needed / 1e6)}MB `
+    + `and ${Math.round(free / 1e6)}MB is free. The console serves a copy so a round cannot write `
+    + `to the central database, so it does not start without room for one.`,
+  );
+}
+
+async function snapshotOf(source: string, directory: string): Promise<string> {
+  const target = join(directory, "console.db");
+  assertRoomFor(file, directory);
+  const origin = openDb(source);
+  try {
+    await origin.client.execute({ sql: "VACUUM INTO ?", args: [target] });
+  } finally {
+    origin.close();
+  }
+  return `file:${target}`;
+}
+
+const handle = openDb(snapshotDir === null ? url : await snapshotOf(url, snapshotDir));
 const app = await createConsoleServer(
-  new LibsqlConsoleDataSource(client, async () => []),
+  new LibsqlConsoleDataSource(handle.client, async () => [{
+    hostId: hostname(),
+    status: "healthy",
+    node: process.version,
+    pi: pinnedPiVersion(),
+  }]),
   {
-    accessPolicy: createConsoleAccessPolicy({ allowedNetworks }),
-    accessPage: createConsoleAccessPage(),
-    uiRoot: join(ROOT, "console-ui"),
+    // The overview is the console's first screen and is server-rendered from
+    // the store, so it is served whether or not a shell was built.
     overviewPage: createOverviewPage(),
+    // This entry only ever binds loopback, so a configured range could only
+    // lock the reader out of the machine the console is private to. The page
+    // is still mounted, which is what makes its `?state=` previews openable.
+    accessPolicy: createConsoleAccessPolicy({ allowedNetworks: ["127.0.0.1/32", "::1/128"] }),
+    accessPage: createConsoleAccessPage(),
+    uiRoot,
+    serveUi: existsSync(join(uiRoot, "index.html")),
   },
 );
-const address = await listenConsole(app, { host, port });
-console.log(`Console at ${address}`);
 
-await new Promise<void>((resolve) => {
-  process.once("SIGINT", resolve);
-  process.once("SIGTERM", resolve);
-});
-await app.close();
-client.close();
-if (demoDirectory !== undefined) await rm(demoDirectory, { recursive: true, force: true });
+const address = await listenConsole(app, { host: "127.0.0.1", port });
+console.log(`console ready at ${address}`);
+
+const close = async (): Promise<void> => {
+  await app.close().catch(() => undefined);
+  handle.close();
+  if (snapshotDir !== null) rmSync(snapshotDir, { recursive: true, force: true });
+};
+process.once("SIGINT", () => void close().then(() => process.exit(0)));
+process.once("SIGTERM", () => void close().then(() => process.exit(0)));

@@ -85,8 +85,22 @@ export class PiModelCatalog implements ModelCatalog {
       windowsHide: true,
       maxBuffer: 4 * 1024 * 1024,
     });
-    return parseModelTable(result.stdout);
+    return keepOwnProvider(parseModelTable(result.stdout), provider);
   }
+}
+
+/**
+ * Drops rows another provider owns.
+ *
+ * `pi --offline --list-models <provider>` filters model ids by substring, not
+ * by provider: on a host where command-code serves `deepseek/deepseek-v4.1-flash`,
+ * asking for `deepseek` prints that foreign row. A caller then reads it as the
+ * deepseek catalogue -- the drift test against the recorded snapshot fails on
+ * that host for a reason that has nothing to do with deepseek, and a model id
+ * can be validated against a provider that does not serve it.
+ */
+export function keepOwnProvider(models: readonly ModelDescriptor[], provider: string): ModelDescriptor[] {
+  return models.filter((model) => model.provider === provider);
 }
 
 /** `1M` / `384K` / `128000` as printed in the table's context and max-out columns. */

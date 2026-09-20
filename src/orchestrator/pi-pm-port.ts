@@ -1,5 +1,8 @@
 import { z } from "zod";
+import { CANONICAL_CAPTURE_ENV } from "../observability/capture-contract.js";
+import { finishLaneCapture, laneCapturePath } from "../observability/lane-capture.js";
 import { loadPmPromptLayers, type PmPhase } from "../pipeline/prompt-loader.js";
+import { promptWithContinueRetry } from "../runner/continue-retry.js";
 import { lastAssistantText } from "../runner/assistant-text.js";
 import type { ResolvedAgentSpec } from "../runner/agent-spec.js";
 import { RpcPiRunner, type RpcRunnerConfig } from "../runner/rpc-runner.js";
@@ -84,6 +87,11 @@ export interface PiPmPortOptions {
   extensions?: string[];
   /** Extra variables for the pi spawn; an API-key provider needs its key here. */
   env?: Record<string, string>;
+  /** Where to keep the exact requests each session sent. One file per session,
+   * packed when that session ends: this lane builds no canonical log to fold a
+   * capture into, so a single shared file was appended to for the daemon's
+   * whole life and nothing ever finished it. */
+  captureRoot?: string;
   createRunner?: (config: RpcRunnerConfig) => PiRunner;
   /** What one session cost, reported per session. The requirement lane spends
    * real money and used to record none of it, so a card's total was the
@@ -124,6 +132,9 @@ export class PiPmPort implements ClarifyPort, PrdPort, SolutionPort, Requirement
 
   private async session<T>(phase: PmPhase, prompt: string, schema: z.ZodType<T>): Promise<T> {
     const layers = await loadPmPromptLayers(this.options.promptRoot, phase);
+    const capturePath = this.options.captureRoot === undefined
+      ? null
+      : laneCapturePath(this.options.captureRoot, `pm-${phase}`, Date.now());
     const runner = (this.options.createRunner ?? ((config) => new RpcPiRunner(config)))({
       binary: this.options.binary,
       provider: this.options.spec.model.provider,
@@ -134,14 +145,23 @@ export class PiPmPort implements ClarifyPort, PrdPort, SolutionPort, Requirement
       skills: [...this.options.spec.skills],
       contextFiles: "explicit",
       ...(this.options.extensions ? { extensions: this.options.extensions } : {}),
-      ...(this.options.env ? { env: this.options.env } : {}),
+      ...(this.options.env || capturePath ? {
+        env: {
+          ...this.options.env,
+          ...(capturePath ? { [CANONICAL_CAPTURE_ENV]: capturePath } : {}),
+        },
+      } : {}),
       systemPrompt: { mode: "replace", text: layers.combined },
     });
 
     try {
       await runner.start();
       await runner.setAutoRetry(false);
-      const result = await runner.prompt(prompt);
+      // Resumed rather than replayed, like every other lane that drives a
+      // model: the pi process and its in-memory session survive a broken
+      // stream, and this lane's turns are long enough that throwing one
+      // away costs a whole fifteen-minute window and buys nothing.
+      const result = await promptWithContinueRetry(runner, prompt, { maxContinueRetries: 8 });
       if (result.failure) throw new Error(result.failure.errorMessage);
       // Reported before the contract is checked: the tokens were spent whether
       // or not the answer turns out to be usable.
@@ -154,6 +174,7 @@ export class PiPmPort implements ClarifyPort, PrdPort, SolutionPort, Requirement
       throw new Error(`${phase} returned nothing matching the product manager contract`);
     } finally {
       await runner.stop().catch(() => undefined);
+      if (capturePath) await finishLaneCapture(capturePath);
     }
   }
 }

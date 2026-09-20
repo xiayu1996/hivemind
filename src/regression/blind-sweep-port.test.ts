@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { testAgentSpec } from "../runner/agent-spec.testing.js";
 import { BlindSweepPort } from "./blind-sweep-port.js";
-import type { BlindVerifyResult } from "../verify/executor.js";
+import type { BlindVerifyInput, BlindVerifyResult } from "../verify/executor.js";
 
 function verifyResult(
   verdict: BlindVerifyResult["record"]["verdict"],
@@ -33,7 +33,7 @@ function verifyResult(
 }
 
 function port(result: BlindVerifyResult) {
-  const executor = { run: vi.fn(async () => result) };
+  const executor = { run: vi.fn(async (_input: BlindVerifyInput) => result) };
   const git = { run: vi.fn(async () => "rev-abc\n") };
   const sweep = new BlindSweepPort({
     worktreeFor: async () => "D:/pool",
@@ -51,7 +51,93 @@ function port(result: BlindVerifyResult) {
 /** The sweep spawns like any other verification. */
 const SWEEP_GRANT = async () => ({ spec: await testAgentSpec({ purpose: "verify" }), release: async () => undefined });
 
+const LIVE_SERVER = [
+  process.execPath,
+  "-e",
+  [
+    "const http = require('node:http');",
+    "http.createServer((req, res) => res.end('ok')).listen(Number(process.env.APP_PORT));",
+    "setInterval(() => undefined, 1000);",
+  ].join(" "),
+];
+
 describe("BlindSweepPort", () => {
+  it("starts the repository's application for the sweep and stops it afterwards", async () => {
+    const appPort = 45_000 + Math.floor(Math.random() * 500);
+    const executor = { run: vi.fn(async (_input: BlindVerifyInput) => verifyResult("accepted", [])) };
+    const sweep = new BlindSweepPort({
+      worktreeFor: async () => process.cwd(),
+      specificationFor: async (ids) => new Map(ids.map((id) => [id, `frozen text of ${id}`])),
+      executor,
+      git: { run: vi.fn(async () => "rev-abc\n") },
+      evidenceRoot: "D:/evidence",
+      auditPath: "D:/evidence/audit.jsonl",
+      resolveSpec: SWEEP_GRANT,
+      allowedHosts: ["localhost"],
+      app: {
+        command: LIVE_SERVER,
+        readyUrl: `http://127.0.0.1:${appPort}/`,
+        timeoutMs: 10_000,
+        env: { APP_PORT: String(appPort) },
+      },
+    });
+
+    await sweep.run({ pool: "epic", branch: "epic/M2", scenarioIds: ["S-M2-01-a"] });
+
+    expect(executor.run.mock.calls[0]![0]).toMatchObject({
+      app: { url: `http://127.0.0.1:${appPort}/` },
+      allowedHosts: ["localhost", "127.0.0.1"],
+    });
+    await expect(fetch(`http://127.0.0.1:${appPort}/`, { signal: AbortSignal.timeout(500) })).rejects.toThrow();
+  });
+
+  it("gives each failed scenario the verifier's own reason for it", async () => {
+    const { sweep } = port(verifyResult("rejected", ["S-M2-01-a", "S-M2-01-b"], {
+      reasons: [
+        { scenarioId: "S-M2-01-a", reason: "保存后列表没有刷新" },
+        { scenarioId: "S-M2-01-b", reason: "费用金额显示为零" },
+      ],
+    }));
+
+    const result = await sweep.run({ pool: "epic", branch: "epic/M2", scenarioIds: ["S-M2-01-a", "S-M2-01-b"] });
+
+    expect(result.outcomes).toEqual([
+      { scenarioId: "S-M2-01-a", outcome: "failed", output: "保存后列表没有刷新" },
+      { scenarioId: "S-M2-01-b", outcome: "failed", output: "费用金额显示为零" },
+    ]);
+  });
+
+  it("keeps two unreasoned failures apart instead of hashing them to one break", async () => {
+    const { sweep } = port(verifyResult("rejected", ["S-M2-01-a", "S-M2-01-b"]));
+
+    const result = await sweep.run({ pool: "epic", branch: "epic/M2", scenarioIds: ["S-M2-01-a", "S-M2-01-b"] });
+
+    const outputs = result.outcomes.map((outcome) => (outcome.outcome === "failed" ? outcome.output : ""));
+    expect(outputs[0]).toContain("S-M2-01-a");
+    expect(outputs[1]).toContain("S-M2-01-b");
+    expect(outputs[0]).not.toEqual(outputs[1]);
+  });
+
+  it("falls back to the verifier's own failure when it reported one", async () => {
+    const { sweep } = port(verifyResult("rejected", ["S-M2-01-a"], { runnerFailure: "the verifier lost its stream" }));
+
+    const result = await sweep.run({ pool: "epic", branch: "epic/M2", scenarioIds: ["S-M2-01-a"] });
+
+    expect(result.outcomes).toEqual([
+      { scenarioId: "S-M2-01-a", outcome: "failed", output: "the verifier lost its stream" },
+    ]);
+  });
+
+  it("tells the sweep there is no application rather than leaving it to start one", async () => {
+    const { sweep, executor } = port(verifyResult("accepted", []));
+
+    await sweep.run({ pool: "epic", branch: "epic/M2", scenarioIds: ["S-M2-01-a"] });
+
+    expect(executor.run.mock.calls[0]![0].app).toEqual({
+      unavailable: expect.stringContaining("verify.appStartCommand is empty"),
+    });
+  });
+
   it("reports one outcome per scenario against the revision it swept", async () => {
     const { sweep, executor } = port(verifyResult("rejected", ["S-M2-01-b"]));
 
@@ -92,7 +178,7 @@ describe("BlindSweepPort", () => {
   });
 
   it("refuses to sweep a scenario whose frozen text it cannot find", async () => {
-    const executor = { run: vi.fn(async () => verifyResult("accepted", [])) };
+    const executor = { run: vi.fn(async (_input: BlindVerifyInput) => verifyResult("accepted", [])) };
     const sweep = new BlindSweepPort({
       worktreeFor: async () => "D:/pool",
       specificationFor: async () => new Map(),

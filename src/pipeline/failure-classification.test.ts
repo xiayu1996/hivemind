@@ -145,6 +145,25 @@ describe("splitScenarioFailures with reasons judged elsewhere", () => {
     expect(split).toEqual({ code: ["S-1-b"], environment: ["S-1-a"] });
   });
 
+  it("takes the class from whoever produced the reason instead of reading the words", () => {
+    const split = splitScenarioFailures(
+      ["a"],
+      [{ scenarioId: "a", reason: "\u8fd9\u4e2a\u573a\u666f\u8981\u770b\u89c1\u7684\u5185\u5bb9\u65e0\u4ece\u67e5\u8bc1", environmental: true }],
+    );
+    expect(split).toEqual({ code: [], environment: ["a"] });
+  });
+
+  it("keeps a scenario code-level when a declared class sits beside a code reason", () => {
+    const split = splitScenarioFailures(
+      ["a"],
+      [
+        { scenarioId: "a", reason: "snapshot does not exist (page.yml)", environmental: true },
+        { scenarioId: "a", reason: "expected 2 to be 3" },
+      ],
+    );
+    expect(split).toEqual({ code: ["a"], environment: [] });
+  });
+
   it("still counts a scenario whose other reason is about the code", () => {
     // One environmental reason does not excuse a real failure reported beside
     // it, whoever decided the reason was environmental.

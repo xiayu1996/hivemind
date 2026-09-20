@@ -74,11 +74,21 @@ function sectionMap(prompt: string): PromptSection[] {
   const sections: PromptSection[] = [];
   let heading = "(before the first heading)";
   let chars = 0;
+  let sawTitle = false;
   for (const line of prompt.split("\n")) {
-    if (line.startsWith("#")) {
+    // `assemblePhasePrompt` writes exactly one `# ` -- the task title -- and
+    // everything else at `## ` or `### `. Any other line starting with a hash
+    // is injected content: a components document's own headings, or a YAML
+    // comment at the top of a test contract. Counting those as sections read
+    // the contract's 7.5KB against the model's comment and left
+    // "### SPECIFY / test-contract" showing 0.0KB, which is the tool lying in
+    // the direction that costs the most.
+    const title: boolean = !sawTitle && line.startsWith("# ");
+    if (title || line.startsWith("## ") || line.startsWith("### ")) {
       sections.push({ heading, chars });
       heading = line;
       chars = 0;
+      if (title) sawTitle = true;
       continue;
     }
     chars += line.length + 1;
@@ -120,17 +130,30 @@ function finalText(path: string): string | null {
   return last;
 }
 
-function sessionFile(sessionRoot: string, runId: string): string | null {
+/**
+ * The session this round left behind, from the layout `sessionFilePath`
+ * writes: card, phase, round and attempt are all in the path. The last attempt
+ * is the one worth reading -- an earlier one was abandoned to a failover or a
+ * crash, and the round's outcome came from the last.
+ */
+function sessionFile(sessionRoot: string, cardId: string, phase: string, round: number): string | null {
   try {
-    const directory = join(sessionRoot, runId);
-    const files = readdirSync(directory).filter((name) => name.endsWith(".jsonl")).toSorted();
-    const latest = files.at(-1);
+    const directory = join(sessionRoot, cardId, phase);
+    const prefix = `r${round}-a`;
+    const attempts = readdirSync(directory)
+      .filter((name) => name.startsWith(prefix) && name.endsWith(".jsonl"))
+      .toSorted((a, b) => attemptOf(a, prefix) - attemptOf(b, prefix));
+    const latest = attempts.at(-1);
     return latest ? join(directory, latest) : null;
   } catch {
     // A phase that never spawned pi (a guard refusal, a dispatch that died
     // before the handshake) has no session directory at all.
     return null;
   }
+}
+
+function attemptOf(name: string, prefix: string): number {
+  return Number.parseInt(name.slice(prefix.length), 10);
 }
 
 /**
@@ -234,10 +257,10 @@ async function main(): Promise<void> {
         console.log(`event ${String(event.type)}: ${String(event.data ?? "").slice(0, 400)}`);
       }
 
-      const path = sessionFile(sessionRoot, runId);
+      const path = sessionFile(sessionRoot, cardId, String(run.phase), round);
       if (!path) {
         if (String(run.phase) !== "VERIFY") {
-          console.log(`no session file under ${join(sessionRoot, runId)}`);
+          console.log(`no session file under ${join(sessionRoot, cardId, String(run.phase))}`);
           continue;
         }
         const startedAt = Number(run.started_at);

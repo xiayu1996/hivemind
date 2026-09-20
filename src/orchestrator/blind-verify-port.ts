@@ -1,12 +1,13 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { screenScenarios } from "../pipeline/dod.js";
+import { screenScenarios, structuralRequirements } from "../pipeline/dod.js";
 import { splitScenarioFailures } from "../pipeline/failure-classification.js";
 import type { BlindVerifyExecutor, BlindVerifyResult } from "../verify/executor.js";
 import type { PhaseCostRow, PhaseTelemetryInput } from "./pi-phase-port.js";
 import type { ResolvedAgentSpec } from "../runner/agent-spec.js";
 import type { AgentSpawnGrant } from "../runner/spawn-broker.js";
 import { emitSafely } from "../observability/emit-safely.js";
+import { startAppLane, type AppLaneConfig } from "../verify/app-lane.js";
 import type {
   ManagedVerifyInput,
   ManagedVerifyResult,
@@ -26,6 +27,12 @@ export interface BlindVerifyStoryPortOptions {
   evidenceRoot: string;
   auditPath: string;
   allowedHosts: string[];
+  /**
+   * How this repository starts its application, so the verifier is handed a
+   * running page instead of being told to invent one. Omitted, or with an
+   * empty command, the round says so and screen scenarios are inconclusive.
+   */
+  app?: Omit<AppLaneConfig, "cwd">;
   chromiumSandbox?: boolean;
   commitMessages: () => Promise<string[]>;
   /** Execution state; see the phase port. */
@@ -67,6 +74,26 @@ export class BlindVerifyStoryPort implements StoryVerifyPort {
     evidencePath: string,
     spec: ResolvedAgentSpec,
   ): Promise<ManagedVerifyResult> {
+    // The application runs for exactly this round and is stopped whatever the
+    // round does: a dev server that outlives the card holds the port the next
+    // round wants and answers it with the tree it was started from.
+    const lane = await startAppLane(
+      this.options.app ? { ...this.options.app, cwd: this.options.worktreePath } : undefined,
+      this.options.allowedHosts,
+    );
+    try {
+      return await this.verifyAgainst(input, evidencePath, spec, lane);
+    } finally {
+      await lane.stop().catch(() => undefined);
+    }
+  }
+
+  private async verifyAgainst(
+    input: ManagedVerifyInput,
+    evidencePath: string,
+    spec: ResolvedAgentSpec,
+    lane: Awaited<ReturnType<typeof startAppLane>>,
+  ): Promise<ManagedVerifyResult> {
     const result = await this.options.executor.run({
       spec,
       cardId: input.context.cardId,
@@ -81,12 +108,9 @@ export class BlindVerifyStoryPort implements StoryVerifyPort {
       // From the frozen DoD, the same place the declared ids come from: the
       // structural layer is only worth anything if what it compares against
       // was written before the round it is judging.
-      visibleRequirements: new Map(
-        input.definitionOfDone.scenarios
-          .filter((scenario) => scenario.visible !== undefined)
-          .map((scenario) => [scenario.id, scenario.visible!]),
-      ),
-      allowedHosts: this.options.allowedHosts,
+      visibleRequirements: structuralRequirements(input.definitionOfDone),
+      allowedHosts: lane.allowedHosts,
+      app: lane.app,
       ...(this.options.chromiumSandbox === undefined ? {} : { chromiumSandbox: this.options.chromiumSandbox }),
       commitMessages: await this.options.commitMessages(),
     });

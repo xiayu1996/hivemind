@@ -1,7 +1,7 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import type { GuardPolicy } from "../guard/policy.js";
 import type { PiRunner, PromptImage, PromptResult, RpcEvent } from "../runner/types.js";
 import {
@@ -16,6 +16,8 @@ import {
 } from "./ui-review.js";
 
 const scratch = mkdtempSync(join(tmpdir(), "hivemind-ui-review-"));
+// Left behind, one per run, until they were counted in the thousands.
+afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 function png(name: string, bytes = 64): string {
   const path = join(scratch, name);
@@ -166,12 +168,36 @@ describe("UiReviewExecutor", () => {
     expect(prompt).toContain("/tasks 页面");
   });
 
+  it("tells the reviewer that a situation it cannot create is inconclusive, not a failure", () => {
+    const prompt = promptFor(input(), { images: [], names: [], skipped: [] });
+    expect(prompt).toContain("Put the application into that situation first");
+    expect(prompt).toContain("not yours to create");
+    expect(prompt).toContain("costs the card no round");
+  });
+
   it("tells the reviewer where the application runs and which sample data each scenario already has", () => {
     const given = input({ appUrl: "http://127.0.0.1:3000/" });
     const scenarios = given.scenarios.map((scenario) => ({ ...scenario, seed: "一个仓库下有 3 个 Story" }));
     const prompt = promptFor({ ...given, scenarios }, { images: [], names: [], skipped: [] });
     expect(prompt).toContain("running at http://127.0.0.1:3000/");
     expect(prompt).toContain("sample data in place: 一个仓库下有 3 个 Story");
+  });
+
+  it("says when the sample data a scenario names was never put into the application", () => {
+    // S-R237511TR-01 declared sample records on all seven scenarios, the
+    // repository configured no seed command, and the prompt told the reviewer
+    // the records were in place anyway. It then reported, correctly and
+    // differently each round, that the page did not hold them.
+    const given = input({ appUrl: "http://127.0.0.1:3000/" });
+    const scenarios = given.scenarios.map((scenario) => ({
+      ...scenario,
+      unstagedSeed: "最近 24 小时内有两次记录含「Notion 保存失败」",
+    }));
+    const prompt = promptFor({ ...given, scenarios }, { images: [], names: [], skipped: [] });
+    expect(prompt).toContain("which nothing put into the application: 最近 24 小时内有两次记录含「Notion 保存失败」");
+    expect(prompt).not.toContain("sample data in place");
+    // And what to do about it: the same branch a situation it cannot create takes.
+    expect(prompt).toContain("the scenario is `inconclusive` with the reason naming the data nobody staged");
   });
 
   it("sends the screenshots as images with the first prompt", async () => {
