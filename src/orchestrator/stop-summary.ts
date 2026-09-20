@@ -48,9 +48,22 @@ export interface StopSummary {
    * cannot exist, since `maxInnerLoopRounds` is validated above zero.
    */
   budget?: number;
-  /** Rounds that could not be judged at all because the environment would not
-   * stand up, when that is what ended the card. */
-  inconclusive?: { attempts: number; scenarios: readonly string[] };
+  /**
+   * Rounds that reached no verdict: the box would not stand up, or the
+   * situation a scenario is judged in could not be produced at all.
+   *
+   * Kept out of `rounds` because an inconclusive round judges no code and must
+   * not enter the convergence curve, and carried whatever ended the card
+   * rather than only when the inconclusive count did. S-R237511MB-02 stopped
+   * on its reopen budget with two of these behind it, each saying in a full
+   * sentence that no browser it could reach comes from outside the allowed
+   * networks, and the person it stopped for was shown none of it.
+   */
+  inconclusive?: {
+    attempts: number;
+    scenarios: readonly string[];
+    rounds: readonly StopSummaryRound[];
+  };
   rounds: readonly StopSummaryRound[];
   mergeBounces: readonly StopSummaryMergeBounce[];
   baselineFailures: readonly StopSummaryBaselineFailure[];
@@ -93,9 +106,20 @@ export function renderStopSummary(summary: StopSummary): string {
   if (summary.inconclusive) {
     lines.push(
       "",
-      `The environment would not stand up ${summary.inconclusive.attempts} rounds running, `
-      + `so nothing could be judged: ${summary.inconclusive.scenarios.join(", ")}`,
+      `No round reached a verdict, ${summary.inconclusive.attempts} in a row: `
+      + summary.inconclusive.scenarios.join(", "),
     );
+    // The count names no decision. What a person has to decide on is the
+    // reason -- a box that would not start is theirs to repair, a situation no
+    // browser of ours can be in is theirs to move out of the screen lane --
+    // so the latest reason per scenario is printed beneath it.
+    const latest = new Map<string, string>();
+    for (const round of summary.inconclusive.rounds) {
+      for (const entry of round.reasons) latest.set(entry.scenarioId, entry.reason);
+    }
+    for (const [scenarioId, reason] of [...latest].toSorted(([left], [right]) => left.localeCompare(right))) {
+      lines.push(`  ${scenarioId}: ${reason}`);
+    }
   }
   lines.push("", summary.budget === undefined
     ? `Rounds spent: ${summary.spent}`
