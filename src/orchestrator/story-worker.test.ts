@@ -846,6 +846,68 @@ describe("SingleStoryWorker SHAPE re-entry after a crash", () => {
     expect(frozen.predicted_footprint).toEqual(["src/orchestrator"]);
   });
 
+  it("sends a screen the application does not serve back to the session that wrote it", async () => {
+    let mounted = false;
+    const reachable = vi.fn(async (pages: readonly { scenarioId: string; page: string }[]) =>
+      mounted ? [] : pages.map((entry) => ({ ...entry, reason: "应用回了「找不到页面」（HTTP 404）" })));
+    const phases = vi.fn(async (input: ManagedPhaseInput) => {
+      if (input.phase === "SHAPE") return frontPhase(input, withScreens(DOD))!;
+      const front = frontPhase(input);
+      if (front) return front;
+      if (input.phase === "CODE") {
+        const gate = input.exitGates!.find((candidate) => candidate.name === "screen-reachable")!;
+        const refused = await gate.evaluate([{ kind: "implementation", body: "done" }], 1);
+        expect(refused).toMatchObject({ passed: false, findings: expect.stringContaining("/tasks") });
+        // The same session mounts it and is asked again.
+        mounted = true;
+        expect(await gate.evaluate([{ kind: "implementation", body: "done" }], 2)).toEqual({ passed: true });
+        return {
+          sessionId: `session-code-${input.round}`,
+          artifacts: [{ kind: "implementation", body: "done" }],
+          exitGateRounds: { "screen-reachable": 2 },
+        };
+      }
+      return { sessionId: "session-merge", artifacts: [{ kind: "delivery-report", body: "两个场景都通过了。" }] };
+    });
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => ({ sessionId: `session-verify-${input.round}`, verdict: "accepted" as const, failedScenarios: [], artifact: "{}" })),
+    };
+    const friction = { record: vi.fn(async () => undefined) };
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier,
+      { deliver: vi.fn(async () => ({ mrUrl: null })) }, { enqueue: vi.fn(async () => undefined) },
+      { friction, screensReachable: reachable });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
+    // One CODE run: the handback happened inside it and cost no round.
+    expect(phases.mock.calls.filter(([input]) => input.phase === "CODE")).toHaveLength(1);
+    expect(reachable).toHaveBeenCalledWith([{ scenarioId: "S-EPIC1-01-a", page: "/tasks" }]);
+    expect(friction.record).toHaveBeenCalledWith(expect.objectContaining({ kind: "screen_not_mounted" }));
+  });
+
+  it("asks nothing of a repository that declares no way to start an application", async () => {
+    const reachable = vi.fn(async () => null);
+    const phases = vi.fn(async (input: ManagedPhaseInput) => {
+      if (input.phase === "SHAPE") return frontPhase(input, withScreens(DOD))!;
+      const front = frontPhase(input);
+      if (front) return front;
+      if (input.phase === "CODE") {
+        const gate = input.exitGates!.find((candidate) => candidate.name === "screen-reachable")!;
+        expect(await gate.evaluate([{ kind: "implementation", body: "done" }], 1)).toEqual({ passed: true });
+        return { sessionId: `session-code-${input.round}`, artifacts: [{ kind: "implementation", body: "done" }] };
+      }
+      return { sessionId: "session-merge", artifacts: [{ kind: "delivery-report", body: "两个场景都通过了。" }] };
+    });
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => ({ sessionId: `session-verify-${input.round}`, verdict: "accepted" as const, failedScenarios: [], artifact: "{}" })),
+    };
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier,
+      { deliver: vi.fn(async () => ({ mrUrl: null })) }, { enqueue: vi.fn(async () => undefined) },
+      { screensReachable: reachable });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
+    expect(reachable).toHaveBeenCalledTimes(1);
+  });
+
   it("hands back a contract that does not parse instead of throwing out of the phase", async () => {
     const phases = vi.fn(async (input: ManagedPhaseInput) => {
       if (input.phase === "SPECIFY") {
