@@ -433,7 +433,11 @@ function renderState(state: RoleConfigurationViewState): string {
         + `<section class="state-page"><div class="state-card">`
         + `<h2>正在等待配置保存</h2>`
         + `<p>新版本尚未确认保存；确认前仍使用原当前版，已经开始工作的智能体不会改变。</p>`
-        + `<button type="button" class="retry">检查保存结果</button></div></section>`;
+        + `<button type="button" class="retry">检查保存结果</button></div></section>`
+        + `<div class="role-split" data-layout="split">`
+        + renderCurrentPanel(state.confirmedPair)
+        + renderPreviousPanel(state.confirmedPair)
+        + `</div>`;
     default: return "";
   }
 }
