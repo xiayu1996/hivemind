@@ -17,9 +17,11 @@ import {
   parseDoD,
   renderDoDLanguageFindings,
   renderMissingInterfaceContract,
+  renderMissingPage,
   renderMissingVisible,
   footprintWithoutGround,
   renderFootprintWithoutGround,
+  scenariosMissingPage,
   scenariosMissingVisible,
   type DefinitionOfDone,
 } from "../pipeline/dod.js";
@@ -962,11 +964,20 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
         } catch (cause) {
           return { passed: false, findings: (cause as Error).message };
         }
-        // The structural layer's basis, asked for here because a judgement's
-        // basis cannot be written by the round it judges (08 section 6).
+        // The screen judgements' basis, asked for here because a judgement's
+        // basis cannot be written by the round it judges (08 section 6). Both
+        // in one pass: a DoD missing each would otherwise spend two of the
+        // three rounds saying two halves of the same sentence.
         const missingVisible = scenariosMissingVisible(definitionOfDone);
-        if (missingVisible.length > 0) {
-          return { passed: false, findings: renderMissingVisible(missingVisible) };
+        const missingPage = scenariosMissingPage(definitionOfDone);
+        if (missingVisible.length > 0 || missingPage.length > 0) {
+          return {
+            passed: false,
+            findings: [
+              ...(missingPage.length > 0 ? [renderMissingPage(missingPage)] : []),
+              ...(missingVisible.length > 0 ? [renderMissingVisible(missingVisible)] : []),
+            ].join("\n\n"),
+          };
         }
         // Before the language, because a footprint that names nothing is a
         // fact about the tree rather than about the sentence, and the session
