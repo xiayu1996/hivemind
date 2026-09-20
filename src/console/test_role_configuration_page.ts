@@ -255,6 +255,10 @@ describe("role configuration waiting state", () => {
     expect(html).toContain("确认前仍使用原当前版");
     expect(html).toContain("已经开始工作的智能体不会改变");
     expect(html).toContain("当前版 v12");
+    expect(html).toContain("编辑当前配置");
+    expect(html).toContain("上一版配置");
+    expect(html).toContain(current.prompt);
+    expect(html).toContain(previous.prompt);
     expect(html).not.toContain("已保存");
   });
 
