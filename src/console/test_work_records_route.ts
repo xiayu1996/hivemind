@@ -37,13 +37,14 @@ describe("work records route", () => {
     expect(body).toContain("搜索工作记录");
     expect(body).toContain("搜索记录");
     expect(body).toContain("匹配记录");
-    expect(body).toContain("找到 3 条完整记录");
+    expect(body).toContain("找到 2 条完整记录");
     expect(body).toContain("prototype · 原型出口修正");
     expect(body).toContain("engineer · 同步任务");
     expect(body).toContain("Hivemind 的 web 管理后台");
     expect(body).toContain("命中：");
     expect(body).toContain('<mark class="hit">Notion 保存失败</mark>');
     expect(body).not.toContain("每日费用汇总完成");
+    expect(body).not.toContain("周期性优化");
   });
 
   it("@scenario S-R237511TR-01-full serves the selected work from start to stop with the error line marked", async () => {
@@ -118,7 +119,7 @@ describe("work records route", () => {
   });
 
   it("@scenario S-R237511TR-01-waiting serves the still-running work with its existing steps", async () => {
-    const body = await records("/records?keyword=Notion%20%E4%BF%9D%E5%AD%98%E5%A4%B1%E8%B4%A5&role=prototype&range=24h&state=waiting");
+    const body = await records("/records?keyword=Notion%20%E4%BF%9D%E5%AD%98%E5%A4%B1%E8%B4%A5&role=engineer&range=24h&state=waiting");
     expect(body).toContain("正在等待最新记录写入");
     expect(body).toContain("页面会自动刷新，已有片段不会丢失");
     expect(body).toContain("等待下一步结果");
@@ -145,7 +146,6 @@ describe("work records route", () => {
       });
       expect(search.statusCode).toBe(200);
       expect(search.json().matches.map((match: { runId: string }) => match.runId).toSorted()).toEqual([
-        "run-console-usability",
         "run-prototype-exit",
         "run-todo-sync",
       ]);
@@ -163,7 +163,6 @@ describe("work records route", () => {
     const reader = createSampleWorkRecordReader(NOW);
     const result = await reader.search({ keyword: "Notion 保存失败", fromInclusive: NOW - 86_400_000, toExclusive: NOW });
     expect(result.matches.map((match) => match.runId).toSorted()).toEqual([
-      "run-console-usability",
       "run-prototype-exit",
       "run-todo-sync",
     ]);
