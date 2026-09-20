@@ -301,9 +301,19 @@ export async function collectCodeExitFacts(input: CodeExitCollectInput): Promise
   }
 
   const testPatterns = input.testPathPatterns ?? [];
+  // A frozen test counts as rewritten only when it differs from the commit
+  // SPECIFY froze it in AND is among what this branch changed since it forked
+  // from the target. The second half is what keeps somebody else's work out of
+  // the accusation: a card that takes an Epic or main update mid-flight sees
+  // every test file the update moved differ from its frozen commit, though it
+  // never touched one. S-R237511TR-01 was told it had rewritten 66 test files
+  // across the repository the round after its branch merged its Epic head, and
+  // the CODE exit refused the round for it.
+  const changedSinceFork = new Set(changed);
   const changedFrozenTestPaths = input.frozenTestCommit
     ? lines(await git.run(["diff", "--name-only", input.frozenTestCommit, "HEAD"]))
       .filter((path) => matchesAnyGlob(path, testPatterns))
+      .filter((path) => changedSinceFork.has(path))
     : [];
   const changedProtectedPaths = changed.filter((path) => matchesAnyGlob(path, input.protectedPaths ?? []));
   const changedDependencyPaths = changed.filter((path) => matchesAnyGlob(path, input.dependencyManifests ?? []));

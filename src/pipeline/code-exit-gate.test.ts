@@ -186,7 +186,24 @@ const trespassing = async (args: readonly string[]): Promise<string> => {
   if (command.startsWith("merge-base")) return "abc123\n";
   if (command.startsWith("log")) return "feat(S-DEMO-01-listing): green\n";
   if (command.startsWith("diff --name-only specify9")) return "src/console/data.test.ts\nsrc/console/data.ts\n";
-  if (command.startsWith("diff --name-only")) return "src/console/data.ts\nsrc/generated/api.ts\n";
+  // The frozen test this phase rewrote is on the branch too: a file the card
+  // changed shows in both diffs, and only a file somebody else moved shows in
+  // the first alone.
+  if (command.startsWith("diff --name-only")) return "src/console/data.test.ts\nsrc/console/data.ts\nsrc/generated/api.ts\n";
+  if (command.startsWith("diff --check")) return "";
+  throw new Error(`unexpected git command: ${command}`);
+};
+
+/** A worktree whose branch merged an Epic head that carried newer tests. */
+const merged = async (args: readonly string[]): Promise<string> => {
+  const command = args.join(" ");
+  if (command === "status --porcelain") return "";
+  if (command.startsWith("merge-base")) return "epichead\n";
+  if (command.startsWith("log")) return "feat(S-DEMO-01-listing): green\n";
+  if (command.startsWith("diff --name-only specify9")) {
+    return "src/console/data.ts\nsrc/runner/classify.test.ts\nsrc/notion/gateway.test.ts\n";
+  }
+  if (command.startsWith("diff --name-only")) return "src/console/data.ts\n";
   if (command.startsWith("diff --check")) return "";
   throw new Error(`unexpected git command: ${command}`);
 };
@@ -209,6 +226,23 @@ describe("the repository's own checks", () => {
     const verdict = evaluateCodeExit(facts({ changedFrozenTestPaths: ["src/console/data.test.ts"] }));
     expect(verdict.passed).toBe(false);
     expect(verdict.findings[0]).toContain("src/console/data.test.ts");
+  });
+
+  it("does not accuse a card of the tests an Epic update moved under it", async () => {
+    // S-R237511TR-01's branch merged its Epic head, which carried main. Every
+    // test file main had moved since SPECIFY then differed from the frozen
+    // commit, and the card was told it had rewritten 66 of them.
+    const collected = await collectCodeExitFacts({
+      git: { run: merged },
+      readWorktreeFile: async () => "",
+      runCheck: async () => ({ passed: true, detail: "" }),
+      baseRef: "epic/DEMO",
+      dodScenarioIds: [],
+      projectChecks: [],
+      testPathPatterns: TEST_PATTERNS,
+      frozenTestCommit: "specify9",
+    });
+    expect(collected.changedFrozenTestPaths).toEqual([]);
   });
 
   it("leaves the frozen-test check out entirely when no SPECIFY commit exists", async () => {
