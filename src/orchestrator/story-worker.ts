@@ -18,6 +18,8 @@ import {
   renderDoDLanguageFindings,
   renderMissingInterfaceContract,
   renderMissingVisible,
+  footprintWithoutGround,
+  renderFootprintWithoutGround,
   scenariosMissingVisible,
   type DefinitionOfDone,
 } from "../pipeline/dod.js";
@@ -198,6 +200,15 @@ export interface StoryWorkerOptions {
    * it is injected wherever it exists; a card in a repository with no screens
    * never sees the section. */
   interfaceContract?: () => Promise<InterfaceContract | null>;
+  /**
+   * Whether a path exists in the tree this card runs on, used to judge the
+   * footprint the DoD declares. Synchronous because the exit asks about a
+   * handful of paths at most and a predicate keeps the rule itself pure.
+   *
+   * Optional for the same reason the other tree ports are: a caller with no
+   * worktree records the footprint unchecked, which is all it can do.
+   */
+  repositoryHas?: (path: string) => boolean;
   runId?: (cardId: string, phase: StoryPhase, round: number) => string;
 }
 
@@ -271,6 +282,7 @@ export class SingleStoryWorker {
   private readonly convergenceOptions: ConvergenceOptions;
   private readonly treeSha: (() => Promise<string>) | undefined;
   private readonly interfaceContract: (() => Promise<InterfaceContract | null>) | undefined;
+  private readonly repositoryHas: ((path: string) => boolean) | undefined;
 
   constructor(
     private readonly store: StoryExecutionStore,
@@ -287,6 +299,7 @@ export class SingleStoryWorker {
     this.convergenceOptions = options.convergence ?? {};
     this.treeSha = options.treeSha;
     this.interfaceContract = options.interfaceContract;
+    this.repositoryHas = options.repositoryHas;
     this.maxInconclusiveRounds = options.maxInconclusiveRounds ?? 2;
     this.maxInnerLoopRounds = options.maxInnerLoopRounds ?? 3;
     this.specifyExitRounds = options.specifyExitRounds ?? 3;
@@ -933,6 +946,23 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
         const missingVisible = scenariosMissingVisible(definitionOfDone);
         if (missingVisible.length > 0) {
           return { passed: false, findings: renderMissingVisible(missingVisible) };
+        }
+        // Before the language, because a footprint that names nothing is a
+        // fact about the tree rather than about the sentence, and the session
+        // should not be asked to rewrite prose in the same turn it is asked to
+        // look at directories.
+        const repositoryHas = this.repositoryHas;
+        if (repositoryHas) {
+          const ungrounded = footprintWithoutGround(definitionOfDone, repositoryHas);
+          if (ungrounded.length > 0) {
+            await this.friction?.record({
+              cardId,
+              runId,
+              kind: "footprint_without_ground",
+              detail: ungrounded.join(", "),
+            });
+            return { passed: false, findings: renderFootprintWithoutGround(ungrounded) };
+          }
         }
         const language = lintDoDLanguage(definitionOfDone);
         if (language.length === 0) return { passed: true };

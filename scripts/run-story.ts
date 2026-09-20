@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { homedir, hostname } from "node:os";
 import { join, resolve } from "node:path";
@@ -603,6 +604,10 @@ async function main(): Promise<void> {
         // changed on the branch between two of its own rounds. A half-written
         // one is left out rather than injected: a phase told to build against
         // a table that is missing half its colours invents the rest.
+        // Resolved inside the card's own worktree: a footprint is judged
+        // against the branch the card runs on, not against whatever this
+        // process happens to be checked out at.
+        repositoryHas: (path) => existsSync(join(worktreePath, path)),
         interfaceContract: async () => {
           const read = await readInterfaceContract(join(worktreePath, config.get("prototype.root")));
           if (read.kind === "incomplete") {

@@ -785,6 +785,38 @@ describe("SingleStoryWorker SHAPE re-entry after a crash", () => {
     expect(titles.rows.map((row) => row.title)).toEqual(["上一阶段的产出还在", "打回后问题变少"]);
   });
 
+  it("hands a footprint the repository has no room for back to the session that wrote it", async () => {
+    await store.transition("S-EPIC1-01", "QUEUED", "SHAPE", "system", "run-shape");
+    const ungrounded = DOD.replace("predicted_footprint: [src/orchestrator]", "predicted_footprint: [orchestrator/]");
+    let shaped = 0;
+    const phases = vi.fn(async (input: ManagedPhaseInput) => {
+      if (input.phase === "SHAPE") {
+        shaped++;
+        return frontPhase(input, shaped === 1 ? ungrounded : DOD)!;
+      }
+      const front = frontPhase(input);
+      if (front) return front;
+      if (input.phase === "CODE") return { sessionId: `session-code-${input.round}`, artifacts: [{ kind: "implementation", body: "done" }] };
+      return { sessionId: "session-merge", artifacts: [{ kind: "delivery-report", body: "两个场景都通过了。" }] };
+    });
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => ({ sessionId: `session-verify-${input.round}`, verdict: "accepted" as const, failedScenarios: [], artifact: "{}" })),
+    };
+    const friction = { record: vi.fn(async () => undefined) };
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier,
+      { deliver: vi.fn(async () => ({ mrUrl: null })) }, { enqueue: vi.fn(async () => undefined) },
+      { friction, repositoryHas: (path) => path === "src" || path === "src/orchestrator" });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
+    expect(shaped).toBe(2);
+    expect(friction.record).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "footprint_without_ground",
+      detail: "orchestrator/",
+    }));
+    const frozen = await store.getDefinitionOfDone("S-EPIC1-01");
+    expect(frozen.predicted_footprint).toEqual(["src/orchestrator"]);
+  });
+
   it("hands back a contract that does not parse instead of throwing out of the phase", async () => {
     const phases = vi.fn(async (input: ManagedPhaseInput) => {
       if (input.phase === "SPECIFY") {
