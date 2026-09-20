@@ -269,6 +269,37 @@ function renderSearchForm(query: WorkRecordSearchQuery): string {
     + `<button type="submit">搜索记录</button></form>`;
 }
 
+/** The four states the interface contract names, and the way back to a search. */
+const STATE_LINKS: readonly { value: string; label: string }[] = [
+  { value: "", label: "默认" },
+  { value: "loading", label: "加载中" },
+  { value: "empty", label: "没有匹配" },
+  { value: "error", label: "读取失败" },
+  { value: "waiting", label: "等待写入" },
+];
+
+/** The same search criteria carried onto one of the four states' own URL. */
+function stateHref(query: WorkRecordSearchQuery, state: string): string {
+  const params = new URLSearchParams();
+  params.set("keyword", query.keyword);
+  if (query.role !== undefined) params.set("role", query.role);
+  params.set("range", rangeValue(query));
+  if (state !== "") params.set("state", state);
+  return `/records?${params.toString()}`;
+}
+
+/**
+ * The four complete states are part of the interface contract, and a forced
+ * state is only reachable if its URL is on the page rather than in somebody's
+ * head. Each entry keeps the criteria the person already typed, so switching
+ * to a state never throws away what the search was about.
+ */
+function renderStateLinks(query: WorkRecordSearchQuery): string {
+  return `<p class="state-links"><span>页面状态</span>`
+    + STATE_LINKS.map((link) => `<a href="${stateHref(query, link.value)}">${link.label}</a>`).join("")
+    + `</p>`;
+}
+
 function renderResultItem(match: WorkRecordSearchResult["matches"][number], query: WorkRecordSearchQuery): string {
   return `<li><a href="${recordsHref(query, match.runId)}"><strong>${escapeHtml(match.role)} · ${escapeHtml(match.name)}</strong><br>`
     + `<span class="meta">${formatClock(match.occurredAt)} · ${escapeHtml(match.requirement.title)}</span><br>`
@@ -384,6 +415,8 @@ const RECORDS_PAGE_STYLE = [
   ".log{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}.log time{font-family:var(--font-numeric);color:var(--color-text-muted)}",
   ".log .step.error{background:var(--color-surface-danger);border-left:3px solid var(--color-danger);padding:6px 8px}",
   ".notice{border-radius:var(--radius-panel);padding:12px;background:var(--color-surface-attention)}.notice h2{font-size:18px;margin:0 0 6px}.notice p{margin:0}",
+  ".state-links{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin:0 0 12px;color:var(--color-text-muted);font-size:12px}",
+  ".state-links a{display:inline-flex;align-items:center;min-height:44px;padding:0 8px;color:var(--color-action);border-radius:var(--radius-control)}",
   ".state-page{display:flex;justify-content:center;padding:40px 0}.state-card{background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-panel);padding:24px;max-width:520px}",
   ".state-card h2{font-size:18px;margin:0 0 8px}.mobile-nav{display:none}",
   "@media (max-width:760px){.shell{grid-template-columns:1fr}.sidebar{display:none}main{padding:16px}.record-split{grid-template-columns:1fr}",
@@ -391,12 +424,6 @@ const RECORDS_PAGE_STYLE = [
   ".mobile-link{padding:8px 12px;text-decoration:none;color:var(--color-text)}.mobile-link[aria-current=page]{color:var(--color-action);font-weight:550}}",
 ].join("");
 
-/**
- * The complete work-records document. Every state renders the same search
- * criteria so a person never loses what they typed, and the state card is the
- * only place a result ever appears: a loading, empty or failed read shows no
- * leftover list or record.
- */
 /**
  * The browser half of the search. The server still renders the first document
  * and every state, so a page with scripting off is the same screen; this only
@@ -500,7 +527,12 @@ const RECORDS_CLIENT_SCRIPT = [
   "})();",
 ].join("\n");
 
-/** The complete work-records document. */
+/**
+ * The complete work-records document. Every state renders the same search
+ * criteria so a person never loses what they typed, and the state card is the
+ * only place a result ever appears: a loading, empty or failed read shows no
+ * leftover list or record.
+ */
 export function renderWorkRecordsPage(state: WorkRecordSearchState): string {
   const query = currentQuery(state);
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">`
@@ -515,6 +547,7 @@ export function renderWorkRecordsPage(state: WorkRecordSearchState): string {
     + `</nav><div class="network-note">家庭网络 · 已连接</div></aside>`
     + `<main><header class="page-head"><div><h1>工作记录排查</h1>`
     + `<p>无需进入需求详情，直接搜索完整智能体记录并查看问题前后文。</p></div></header>`
+    + renderStateLinks(query)
     + renderSearchForm(query)
     + `<div id="records-view">${renderState(state)}</div>`
     + `</main></div>`
