@@ -122,7 +122,10 @@ describe("work records route", () => {
     expect(body).toContain("正在等待最新记录写入");
     expect(body).toContain("页面会自动刷新，已有片段不会丢失");
     expect(body).toContain("等待下一步结果");
-    expect(body).not.toContain("已完成");
+    // The waiting record itself never says the work finished. The refresh
+    // script names the finished result it will write when it arrives, and a
+    // script is not part of the screen the assertion is about.
+    expect(body.slice(0, body.indexOf("<script>"))).not.toContain("已完成");
   });
 
   it("@scenario S-R237511TR-01-mobile serves a single column with the current navigation item named", async () => {
@@ -156,6 +159,28 @@ describe("work records route", () => {
     } finally {
       await app.close();
     }
+  });
+
+  it("@scenario S-R237511TR-02-live 样例源在注视下写完收尾步骤并把这次工作结束掉", async () => {
+    let clock = NOW;
+    const reader = createSampleWorkRecordReader(() => clock);
+
+    const opened = await reader.read({ runId: "run-engineer-optimization" });
+    expect(opened.record.status).toEqual({ kind: "running", refreshAfterMs: 5_000 });
+    expect(opened.record.steps.map((step) => step.text.value)).toEqual(["读取当前任务", "检查控制台可用性"]);
+    expect(opened.record.throughSequence).toBe(2);
+
+    clock = NOW + 8_000;
+    const continued = await reader.read({ runId: "run-engineer-optimization", afterSequence: 2 });
+    expect(continued.incremental).toBe(true);
+    expect(continued.record.steps.map((step) => step.text.value)).toEqual(["本轮优化完成"]);
+    expect(continued.record.status).toEqual({
+      kind: "stopped",
+      outcome: "completed",
+      stoppedAt: Date.parse("2026-09-20T10:07:30.000Z"),
+      durationMs: 138_000,
+    });
+    expect(continued.record.throughSequence).toBe(3);
   });
 
   it("keeps every sample match inside the last 24 hours whatever hour it is read at", async () => {

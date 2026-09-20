@@ -7,6 +7,7 @@ import {
   type WorkRecordReader,
   type WorkRecordSearchQuery,
   type WorkRecordSearchResult,
+  type WorkRecordStep,
   type WorkRecordSummaryStatus,
 } from "../observability/work-record-reader.js";
 
@@ -289,6 +290,11 @@ function renderHit(hit: readonly { value: string; matched: boolean }[]): string 
     .join("");
 }
 
+/** The role name a person reads, in the same words the option shows. */
+function roleLabel(role: string | undefined): string {
+  return role === undefined || role === "" ? "全部角色" : role;
+}
+
 function renderSearchForm(query: WorkRecordSearchQuery): string {
   const role = query.role ?? "";
   const range = rangeValue(query);
@@ -296,13 +302,18 @@ function renderSearchForm(query: WorkRecordSearchQuery): string {
     `<option value="${value}"${role === value ? " selected" : ""}>${label}</option>`;
   const rangeOption = (value: string, label: string): string =>
     `<option value="${value}"${range === value ? " selected" : ""}>${label}</option>`;
+  // A select names both the field and the choice already made: a person who
+  // cannot tell which option the control displays still hears the criteria the
+  // results were narrowed by, not only the field they sit under.
+  const roleChoice = roleLabel(query.role);
+  const rangeChoice = workRecordRangeLabel(query.fromInclusive, query.toExclusive);
   return `<form class="toolbar record-search" method="get" action="/records" role="search">`
     + `<div><label for="log-query">搜索工作记录</label>`
     + `<input id="log-query" name="keyword" type="search" value="${escapeHtml(query.keyword)}" placeholder="输入错误、动作或关键词"></div>`
-    + `<div><label for="log-role">智能体角色</label><select id="log-role" name="role">`
+    + `<div><label for="log-role">智能体角色</label><select id="log-role" name="role" aria-label="智能体角色，当前 ${escapeHtml(roleChoice)}">`
     + roleOption("", "全部角色") + roleOption("prototype", "prototype") + roleOption("engineer", "engineer")
     + `</select></div>`
-    + `<div><label for="log-time">发生时间</label><select id="log-time" name="range">`
+    + `<div><label for="log-time">发生时间</label><select id="log-time" name="range" aria-label="发生时间，当前 ${escapeHtml(rangeChoice)}">`
     + rangeOption("24h", "最近 24 小时") + rangeOption("7d", "最近 7 天") + rangeOption("all", "全部时间")
     + `</select></div>`
     + `<button type="submit">搜索记录</button></form>`;
@@ -355,12 +366,26 @@ function statusChip(kind: "running" | "stopped", outcome?: "completed" | "error"
   }
 }
 
-function renderResultItem(match: WorkRecordSearchResult["matches"][number], query: WorkRecordSearchQuery): string {
+function renderResultItem(
+  match: WorkRecordSearchResult["matches"][number],
+  query: WorkRecordSearchQuery,
+  index: number,
+): string {
   // The row is one link around the fields it shows. Keeping the fields in
   // their own list lets each one carry a label on a phone without hiding what
-  // the row is about.
-  return `<li class="result"><a class="result-link" href="${recordsHref(query, match.runId)}"><ol class="result-fields">`
-    + `<li class="result-head"><strong>${escapeHtml(match.role)} · ${escapeHtml(match.name)}</strong>${renderMatchStatus(match.status)}</li>`
+  // the row is about, and the list names the work it holds so a reader meets
+  // the record a person is looking for before its details, not after them.
+  //
+  // The name comes from a hidden copy of the title rather than from the title
+  // on screen: an accessibility name read out of a child that is rendered too
+  // is dropped as redundant, and the row has to keep the name while the title
+  // is visible. The copy sits after the title so the visible one stays the
+  // first thing in the row.
+  const title = `${match.role} · ${match.name}`;
+  const titleId = `record-name-${index}`;
+  return `<li class="result"><a class="result-link" href="${recordsHref(query, match.runId)}"><ol class="result-fields" aria-labelledby="${titleId}">`
+    + `<li class="result-head"><strong>${escapeHtml(title)}</strong>${renderMatchStatus(match.status)}`
+    + `<span id="${titleId}" hidden>记录 ${escapeHtml(title)}</span></li>`
     + `<li class="result-meta"><span class="meta">${formatClock(match.occurredAt)} · ${escapeHtml(match.requirement.title)}</span></li>`
     + `<li class="result-hit">命中：${renderHit(match.hit)}</li>`
     + `</ol></a></li>`;
@@ -369,7 +394,32 @@ function renderResultItem(match: WorkRecordSearchResult["matches"][number], quer
 function renderResults(result: WorkRecordSearchResult): string {
   return `<section class="panel flush" aria-labelledby="results-title"><div class="section-head">`
     + `<div><h2 id="results-title">匹配记录</h2><p>找到 ${result.matches.length} 条完整记录</p></div></div>`
-    + `<ol class="result-list">${result.matches.map((match) => renderResultItem(match, result.query)).join("")}</ol></section>`;
+    + `<ol class="result-list">${result.matches.map((match, index) => renderResultItem(match, result.query, index)).join("")}</ol></section>`;
+}
+
+/** One step of a complete record. The entry is its own log region: the time
+ * and the sentence it carries are published as one readable line rather than
+ * as two unrelated nodes. */
+function renderStep(step: WorkRecordStep): string {
+  const at = formatClock(step.occurredAt);
+  return `<div class="step ${step.kind}" data-kind="${step.kind}" data-sequence="${step.sequence}" role="log" aria-label="${escapeHtml(`${at} ${step.text.value}`)}">`
+    + `<time datetime="${new Date(step.occurredAt).toISOString()}">${at}</time> `
+    + `<span>${escapeHtml(step.text.value)}</span></div>`;
+}
+
+/** The notice under a record that is still being written. */
+function runningNotice(): string {
+  return `<div class="notice attention" id="record-waiting" role="status"><h2>正在等待最新记录写入</h2>`
+    + `<p>匹配的智能体仍在工作，完整记录尚未结束；后续内容会自动出现，页面会自动刷新，已有片段不会丢失。</p></div>`;
+}
+
+/** The notice under a record that stopped, read against how it ended. */
+function stoppedNotice(outcome: "completed" | "error" | "stopped"): string {
+  return outcome === "completed"
+    ? `<div class="notice attention" id="record-finished"><h2>本轮工作已结束</h2>`
+      + `<p>完整记录按时间顺序保留，工作正常结束。</p></div>`
+    : `<div class="notice attention" id="record-finished"><h2>问题前后的行为</h2>`
+      + `<p>失败前后按时间顺序保留，相邻行为没有被截断，其他工作的行为不会混入。</p></div>`;
 }
 
 function renderRecord(record: WorkRecordDetail): string {
@@ -378,23 +428,21 @@ function renderRecord(record: WorkRecordDetail): string {
   const meta = status.kind === "running"
     ? `开始 ${formatClock(record.startedAt)} · 仍在进行`
     : `开始 ${formatClock(record.startedAt)} · 结束 ${formatClock(status.stoppedAt)} · 共 ${formatWorkRecordDuration(status.durationMs)}`;
-  const steps = record.steps
-    .map((step) => `<li class="step ${step.kind}" data-kind="${step.kind}">`
-      + `<time datetime="${new Date(step.occurredAt).toISOString()}">${formatClock(step.occurredAt)}</time> `
-      + `<span>${escapeHtml(step.text.value)}</span></li>`)
-    .join("");
-  const waiting = status.kind === "running"
-    ? `<div class="notice attention" role="status"><h2>正在等待最新记录写入</h2>`
-      + `<p>匹配的智能体仍在工作，完整记录尚未结束；后续内容会自动出现，页面会自动刷新，已有片段不会丢失。</p></div>`
-    : `<div class="notice attention"><h2>问题前后的行为</h2>`
-      + `<p>失败前后按时间顺序保留，相邻行为没有被截断，其他工作的行为不会混入。</p></div>`;
-  return `<article class="panel" id="record" aria-labelledby="record-title"><div class="section-head">`
-    + `<div><div class="version-label">完整工作记录</div><h2 id="record-title">${escapeHtml(record.role)} · ${escapeHtml(record.name)}</h2></div>`
-    + chip + `</div>`
-    + `<div class="row"><span class="meta">${meta}</span>`
+  const steps = record.steps.map(renderStep).join("");
+  const notice = status.kind === "running" ? runningNotice() : stoppedNotice(status.outcome);
+  // The cursors a running record publishes are how the browser asks for only
+  // what has not been written yet; a stopped record carries none because there
+  // is nothing left to append.
+  const cursors = status.kind === "running"
+    ? ` data-run-id="${escapeHtml(record.runId)}" data-through-sequence="${record.throughSequence}" data-refresh-after-ms="${status.refreshAfterMs}"`
+    : ` data-run-id="${escapeHtml(record.runId)}" data-through-sequence="${record.throughSequence}"`;
+  return `<article class="panel" id="record"${cursors} aria-labelledby="record-title"><div class="section-head">`
+    + `<div><h2 class="version-label">完整工作记录</h2><h2 id="record-title">${escapeHtml(record.role)} · ${escapeHtml(record.name)}</h2></div>`
+    + `<span id="record-status">${chip}</span></div>`
+    + `<div class="row"><span class="meta" id="record-meta">${meta}</span>`
     + `<a href="/requirements/${encodeURIComponent(record.requirement.id)}">查看关联需求</a></div>`
-    + `<hr class="divider"><ol class="log">${steps}</ol>`
-    + `<hr class="divider">${waiting}</article>`;
+    + `<hr class="divider"><div class="log" id="record-log">${steps}</div>`
+    + `<hr class="divider">${notice}</article>`;
 }
 
 function renderReady(state: Extract<WorkRecordSearchState, { kind: "ready" }>): string {
@@ -402,17 +450,20 @@ function renderReady(state: Extract<WorkRecordSearchState, { kind: "ready" }>): 
   return `<div class="record-split" data-layout="split">${renderResults(state.result)}${record}</div>`;
 }
 
-function renderLoading(request: WorkRecordSearchRequest): string {
-  const query = request.query;
+/** What the loading notice says is being read: the person's own criteria. */
+function loadingScope(query: WorkRecordSearchQuery): string {
   const range = workRecordRangeLabel(query.fromInclusive, query.toExclusive);
-  // The notice names the range and roles being read, because those are the
-  // criteria the person chose; when a keyword is set it names that instead of
-  // pretending the read is a browse.
-  const scope = query.keyword === ""
-    ? `${range}内全部角色的工作记录`
-    : `${range}内包含“${escapeHtml(query.keyword)}”的工作记录`;
-  return `<section class="state-page" aria-live="polite"><div class="state-card" role="status">`
-    + `<h2>正在读取${scope}</h2>`
+  if (query.keyword === "") return `${range}内${roleLabel(query.role)}的工作记录`;
+  const role = query.role === undefined || query.role === "" ? "" : `（${escapeHtml(query.role)}）`;
+  return `${range}内包含“${escapeHtml(query.keyword)}”的工作记录${role}`;
+}
+
+function renderLoading(request: WorkRecordSearchRequest): string {
+  const scope = loadingScope(request.query);
+  // The status is the element that carries the sentence: a live region whose
+  // own text is empty announces nothing to a reader that only sees the region.
+  return `<section class="state-page" aria-live="polite"><div class="state-card">`
+    + `<h2 role="status">正在读取${scope}</h2>`
     + `<p>请稍候。上一次范围的结果不会冒充本次结果。</p>`
     + `</div></section>`;
 }
@@ -465,6 +516,7 @@ const RECORDS_PAGE_STYLE = [
   ".record-split{display:grid;grid-template-columns:minmax(280px,1fr) minmax(320px,2fr);gap:20px;align-items:start}",
   ".panel{background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-panel);padding:16px}",
   ".section-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.section-head h2{font-size:18px;margin:0}",
+  ".section-head .version-label{font-size:14px;font-weight:400;margin:0 0 2px}",
   ".result-list{list-style:none;margin:12px 0 0;padding:0;display:flex;flex-direction:column;gap:12px}.result-list a{color:var(--color-text);text-decoration:none;display:block}",
   ".result-fields{list-style:none;margin:0;padding:0}",
   ".result-head{display:flex;justify-content:space-between;gap:8px;align-items:baseline}",
@@ -482,7 +534,8 @@ const RECORDS_PAGE_STYLE = [
   ".state-card h2{font-size:18px;margin:0 0 8px}.mobile-nav{display:none}",
   "@media (max-width:760px){.shell{grid-template-columns:1fr}.sidebar{display:none}main{padding:16px}.record-split{grid-template-columns:1fr}",
   ".mobile-nav{display:flex;position:sticky;bottom:0;background:var(--color-surface);border-top:1px solid var(--color-border);justify-content:space-around;padding:8px 0}",
-  ".mobile-link{padding:8px 12px;text-decoration:none;color:var(--color-text)}.mobile-link[aria-current=page]{color:var(--color-action);font-weight:550}}",
+  ".mobile-link{padding:8px 12px;text-decoration:none;color:var(--color-text)}.mobile-link[aria-current=page]{color:var(--color-action);font-weight:550}",
+  ".mobile-current{display:flex}}",
 ].join("");
 
 /**
@@ -521,13 +574,26 @@ const RECORDS_CLIENT_SCRIPT = [
   "    search.set('range', c.range);",
   "    return search;",
   "  }",
+  "  function roleLabel(c) {",
+  "    return c.role ? c.role : '全部角色';",
+  "  }",
   "  function scope(c) {",
   "    var label = rangeLabel(c.range);",
-  "    return c.keyword ? label + '内包含“' + escapeHtml(c.keyword) + '”的工作记录' : label + '内全部角色的工作记录';",
+  "    if (!c.keyword) return label + '内' + roleLabel(c) + '的工作记录';",
+  "    return label + '内包含“' + escapeHtml(c.keyword) + '”的工作记录' + (c.role ? '（' + escapeHtml(c.role) + '）' : '');",
+  "  }",
+  "  // The controls live outside the part of the page a search replaces, so the",
+  "  // criteria a person just chose have to be written back onto them; otherwise",
+  "  // the field keeps naming the choice it held before the search.",
+  "  function syncCriteria(c) {",
+  "    var role = document.getElementById('log-role');",
+  "    var time = document.getElementById('log-time');",
+  "    if (role) role.setAttribute('aria-label', '智能体角色，当前 ' + roleLabel(c));",
+  "    if (time) time.setAttribute('aria-label', '发生时间，当前 ' + rangeLabel(c.range));",
   "  }",
   "  function loadingHtml(c) {",
-  "    return '<section class=\"state-page\" aria-live=\"polite\"><div class=\"state-card\" role=\"status\">'",
-  "      + '<h2>正在读取' + scope(c) + '</h2>'",
+  "    return '<section class=\"state-page\" aria-live=\"polite\"><div class=\"state-card\">'",
+  "      + '<h2 role=\"status\">正在读取' + scope(c) + '</h2>'",
   "      + '<p>请稍候。上一次范围的结果不会冒充本次结果。</p>'",
   "      + '</div></section>';",
   "  }",
@@ -552,6 +618,8 @@ const RECORDS_CLIENT_SCRIPT = [
   "    var search = params(c);",
   "    var started = Date.now();",
   "    view.innerHTML = loadingHtml(c);",
+  "    syncCriteria(c);",
+  "    watch();",
   "    try { history.replaceState(null, '', '/records?' + search.toString()); } catch { /* history is optional; the search still runs */ }",
   "    fetch('/records?' + search.toString(), { headers: { 'X-Records-View': 'fragment' } })",
   "      .then(function (response) {",
@@ -569,8 +637,84 @@ const RECORDS_CLIENT_SCRIPT = [
   "        setTimeout(function () {",
   "          if (id !== requestId) return;",
   "          view.innerHTML = outcome.html;",
+  "          watch();",
   "        }, outcome.wait);",
   "      });",
+  "  }",
+  "  // A complete record that is still being written keeps growing while the page",
+  "  // is open. Only what has not been rendered yet is asked for and appended, so",
+  "  // the person sees the rest arrive without searching again.",
+  "  var watchTimer = null;",
+  "  function clockText(ms) {",
+  "    return new Date(ms).toISOString().slice(11, 19);",
+  "  }",
+  "  function durationText(ms) {",
+  "    var total = Math.max(0, Math.round(ms / 1000));",
+  "    return Math.floor(total / 60) + '分' + (total % 60) + '秒';",
+  "  }",
+  "  function chipHtml(status) {",
+  "    if (status.kind === 'running') return '<span class=\"status running\" role=\"status\">运行中</span>';",
+  "    if (status.outcome === 'error') return '<span class=\"status danger\" role=\"status\">出现错误</span>';",
+  "    if (status.outcome === 'completed') return '<span class=\"status success\" role=\"status\">已完成</span>';",
+  "    return '<span class=\"status\" role=\"status\">已停止</span>';",
+  "  }",
+  "  function stepHtml(step) {",
+  "    var at = clockText(step.occurredAt);",
+  "    return '<div class=\"step ' + step.kind + '\" data-kind=\"' + step.kind + '\" data-sequence=\"' + step.sequence + '\" role=\"log\" aria-label=\"' + escapeHtml(at + ' ' + step.text.value) + '\">'",
+  "      + '<time datetime=\"' + new Date(step.occurredAt).toISOString() + '\">' + at + '</time> '",
+  "      + '<span>' + escapeHtml(step.text.value) + '</span></div>';",
+  "  }",
+  "  function finishedHtml(status) {",
+  "    var heading = status.outcome === 'completed' ? '本轮工作已结束' : '问题前后的行为';",
+  "    var line = status.outcome === 'completed' ? '完整记录按时间顺序保留，工作正常结束。' : '失败前后按时间顺序保留，相邻行为没有被截断，其他工作的行为不会混入。';",
+  "    return '<div class=\"notice attention\" id=\"record-finished\"><h2>' + heading + '</h2><p>' + line + '</p></div>';",
+  "  }",
+  "  function watch() {",
+  "    if (watchTimer) { clearTimeout(watchTimer); watchTimer = null; }",
+  "    var record = document.getElementById('record');",
+  "    if (!record) return;",
+  "    var runId = record.getAttribute('data-run-id');",
+  "    var refresh = Number(record.getAttribute('data-refresh-after-ms') || '0');",
+  "    if (!runId || !(refresh > 0)) return;",
+  "    var cursor = Number(record.getAttribute('data-through-sequence') || '0');",
+  "    var shown = {};",
+  "    var entries = record.querySelectorAll('.log .step');",
+  "    for (var i = 0; i < entries.length; i++) shown[entries[i].getAttribute('data-sequence')] = true;",
+  "    function schedule() { watchTimer = setTimeout(read, refresh); }",
+  "    function read() {",
+  "      fetch('/api/work-records/' + encodeURIComponent(runId) + '?afterSequence=' + cursor)",
+  "        .then(function (response) {",
+  "          if (!response.ok) throw new Error('the record could not be read');",
+  "          return response.json();",
+  "        })",
+  "        .then(apply)",
+  "        .catch(schedule);",
+  "    }",
+  "    function apply(payload) {",
+  "      var next = payload && payload.record;",
+  "      if (!payload || !payload.incremental || !next || next.runId !== runId) { schedule(); return; }",
+  "      if (Number(next.throughSequence) <= cursor) { schedule(); return; }",
+  "      var log = document.getElementById('record-log');",
+  "      for (var j = 0; j < next.steps.length; j++) {",
+  "        var step = next.steps[j];",
+  "        if (shown[String(step.sequence)]) continue;",
+  "        shown[String(step.sequence)] = true;",
+  "        if (log) log.insertAdjacentHTML('beforeend', stepHtml(step));",
+  "      }",
+  "      cursor = Number(next.throughSequence);",
+  "      var chip = document.getElementById('record-status');",
+  "      var meta = document.getElementById('record-meta');",
+  "      if (chip) chip.innerHTML = chipHtml(next.status);",
+  "      if (next.status.kind === 'running') {",
+  "        if (meta) meta.textContent = '开始 ' + clockText(next.startedAt) + ' · 仍在进行';",
+  "        schedule();",
+  "        return;",
+  "      }",
+  "      if (meta) meta.textContent = '开始 ' + clockText(next.startedAt) + ' · 结束 ' + clockText(next.status.stoppedAt) + ' · 共 ' + durationText(next.status.durationMs);",
+  "      var waiting = document.getElementById('record-waiting');",
+  "      if (waiting) waiting.outerHTML = finishedHtml(next.status);",
+  "    }",
+  "    schedule();",
   "  }",
   "  function searchOf(control) {",
   "    var form = control && control.form;",
@@ -589,8 +733,23 @@ const RECORDS_CLIENT_SCRIPT = [
   "    var input = document.getElementById('log-query');",
   "    if (input) input.focus();",
   "  });",
+  "  watch();",
   "})();",
 ].join("\n");
+
+/**
+ * The bottom navigation. The current destination is its own named navigation
+ * region so the bar states where the person is, not only which item is filled
+ * in.
+ */
+function renderMobileNav(): string {
+  return `<nav class="mobile-nav" aria-label="手机导航">`
+    + `<a class="mobile-link" href="/">总览</a>`
+    + `<a class="mobile-link" href="/costs">费用</a>`
+    + `<a class="mobile-link" href="/roles">配置</a>`
+    + `<nav class="mobile-current" aria-label="记录"><a class="mobile-link" aria-current="page" href="/records">记录</a></nav>`
+    + `</nav>`;
+}
 
 /**
  * The complete work-records document. Every state renders the same search
@@ -616,11 +775,7 @@ export function renderWorkRecordsPage(state: WorkRecordSearchState): string {
     + renderSearchForm(query)
     + `<div id="records-view">${renderState(state)}</div>`
     + `</main></div>`
-    + `<nav class="mobile-nav" aria-label="手机导航">`
-    + `<a class="mobile-link" href="/">总览</a>`
-    + `<a class="mobile-link" href="/costs">费用</a>`
-    + `<a class="mobile-link" href="/roles">配置</a>`
-    + `<a class="mobile-link" aria-current="page" href="/records">记录</a></nav>`
+    + renderMobileNav()
     + `<script>${RECORDS_CLIENT_SCRIPT}</script>`
     + `</body></html>`;
 }
