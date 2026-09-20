@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { StorySection } from "../notion/blocks/story-page.js";
-import type { Client, InStatement } from "@libsql/client";
+import type { Client, InStatement, Row } from "@libsql/client";
 import { redactForExport } from "../observability/redact.js";
 import {
   assertStoryTransition,
@@ -20,6 +20,7 @@ import {
   type StopSummaryBaselineFailure,
   type StopSummaryDispatchFailure,
   type StopSummaryMergeBounce,
+  type StopSummaryRound,
 } from "./stop-summary.js";
 import type { ConvergenceClassification } from "../pipeline/convergence.js";
 
@@ -912,10 +913,20 @@ export class StoryExecutionStore {
       args: [cardId],
     })).rows[0];
     const since = Number(story?.last_human_action_at ?? 0);
-    const [verifications, events, refusals, spend] = await this.client.batch([
+    const [verifications, unjudged, events, refusals, spend] = await this.client.batch([
       {
         sql: `SELECT round, failed_scenarios, evidence_dir FROM verify_records
               WHERE card_id = ? AND created_at > ? AND verdict = 'rejected' ORDER BY round`,
+        args: [cardId, since],
+      },
+      {
+        // Read whatever the reason for stopping was, not only when the
+        // inconclusive count is what ended the card. A round that reached no
+        // verdict is the whole story of a card whose scenario cannot be
+        // staged, and S-R237511MB-02 stopped on its reopen budget with two of
+        // them behind it and a summary that said nothing at all.
+        sql: `SELECT round, failed_scenarios, evidence_dir FROM verify_records
+              WHERE card_id = ? AND created_at > ? AND verdict = 'inconclusive' ORDER BY round`,
         args: [cardId, since],
       },
       {
@@ -940,24 +951,32 @@ export class StoryExecutionStore {
       },
     ], "read");
 
-    const rounds = verifications!.rows.map((row) => ({
-      round: numberValue(row.round, "round"),
-      failed: parseStringArray(row.failed_scenarios, "failed scenarios"),
-      reasons: [] as { scenarioId: string; reason: string; detail?: string }[],
-    }));
     // The per-scenario reasons live in the verification artifact, which is the
     // only place the words the verifier used survive.
-    for (const round of rounds) {
-      const artifact = (await this.client.execute({
-        sql: `SELECT body FROM phase_artifacts
-              WHERE card_id = ? AND phase = 'VERIFY' AND round = ? AND kind = 'verification'
-              ORDER BY id DESC LIMIT 1`,
-        args: [cardId, round.round],
-      })).rows[0];
-      if (!artifact) continue;
-      round.reasons = scenarioFailuresOf(stringValue(artifact.body, "verification artifact"))
-        .map((failure) => ({ scenarioId: failure.scenarioId, reason: failure.reason }));
-    }
+    const roundsFrom = async (rows: readonly Row[]): Promise<StopSummaryRound[]> => {
+      const built: StopSummaryRound[] = [];
+      for (const row of rows) {
+        const round = {
+          round: numberValue(row.round, "round"),
+          failed: parseStringArray(row.failed_scenarios, "failed scenarios"),
+          reasons: [] as { scenarioId: string; reason: string; detail?: string }[],
+        };
+        const artifact = (await this.client.execute({
+          sql: `SELECT body FROM phase_artifacts
+                WHERE card_id = ? AND phase = 'VERIFY' AND round = ? AND kind = 'verification'
+                ORDER BY id DESC LIMIT 1`,
+          args: [cardId, round.round],
+        })).rows[0];
+        if (artifact) {
+          round.reasons = scenarioFailuresOf(stringValue(artifact.body, "verification artifact"))
+            .map((failure) => ({ scenarioId: failure.scenarioId, reason: failure.reason }));
+        }
+        built.push(round);
+      }
+      return built;
+    };
+    const rounds = await roundsFrom(verifications!.rows);
+    const unjudgedRounds = await roundsFrom(unjudged!.rows);
 
     const mergeBounces: StopSummaryMergeBounce[] = [];
     const baselineFailures: StopSummaryBaselineFailure[] = [];
@@ -990,10 +1009,15 @@ export class StoryExecutionStore {
       reason,
       spent: numberValue(detail?.spent ?? rounds.length + mergeBounces.length, "rounds spent"),
       ...(detail?.budget === undefined ? {} : { budget: numberValue(detail.budget, "round budget") }),
-      ...(detail?.inconclusive === undefined ? {} : {
+      ...(detail?.inconclusive === undefined && unjudgedRounds.length === 0 ? {} : {
         inconclusive: {
-          attempts: numberValue(detail.inconclusive, "inconclusive attempts"),
-          scenarios: parseStringArray(JSON.stringify(detail.inconclusiveScenarios ?? []), "inconclusive scenarios"),
+          attempts: detail?.inconclusive === undefined
+            ? unjudgedRounds.length
+            : numberValue(detail.inconclusive, "inconclusive attempts"),
+          scenarios: detail?.inconclusive === undefined
+            ? [...new Set(unjudgedRounds.flatMap((round) => round.failed))].toSorted()
+            : parseStringArray(JSON.stringify(detail.inconclusiveScenarios ?? []), "inconclusive scenarios"),
+          rounds: unjudgedRounds,
         },
       }),
       rounds,
