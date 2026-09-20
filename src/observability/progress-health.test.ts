@@ -140,6 +140,25 @@ describe("readProgressSnapshot", () => {
     });
   });
 
+  it("dates a card by what it last did, not by when its row was last written", async () => {
+    await client.batch([
+      "INSERT INTO stories (id, notion_page_id, title, requirement, state, created_at, updated_at) VALUES ('S-E1-01', 's1', 'One', 'r', 'CODE', 1, 9000)",
+      "INSERT INTO event_log (run_id, seq, card_id, type, ts, data) VALUES ('r1', 1, 'S-E1-01', 'phase.enter', 1000, '{}')",
+    ], "write");
+
+    const read = await readProgressSnapshot(client);
+    expect(read.workingCards).toEqual([{ cardId: "S-E1-01", state: "CODE", updatedAt: 1000 }]);
+  });
+
+  it("falls back to the row for a card that has not done anything yet", async () => {
+    await client.execute(
+      "INSERT INTO stories (id, notion_page_id, title, requirement, state, created_at, updated_at) VALUES ('S-E1-01', 's1', 'One', 'r', 'CODE', 1, 9000)",
+    );
+
+    const read = await readProgressSnapshot(client);
+    expect(read.workingCards).toEqual([{ cardId: "S-E1-01", state: "CODE", updatedAt: 9000 }]);
+  });
+
   it("stops reporting an Epic once its scenarios have passed somewhere", async () => {
     await client.batch([
       "INSERT INTO epics (id, notion_page_id, title, state, created_at, updated_at) VALUES ('E1', 'p1', 'Board', 'EXECUTING', 1, 1)",
