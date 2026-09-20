@@ -32,6 +32,7 @@ function match(overrides: Partial<WorkRecordMatch> = {}): WorkRecordMatch {
     role: "prototype",
     name: "原型出口修正",
     occurredAt: NOW - 60_000,
+    status: { kind: "running" },
     requirement: { id: "R-101", title: "Hivemind 的 web 管理后台" },
     hit: [{ value: `${FAILURE} 后保持未处理`, matched: true, redaction: "applied" }],
     ...overrides,
@@ -152,8 +153,7 @@ describe("work records page", () => {
 
     expect(loading.kind).toBe("loading");
     const html = renderWorkRecordsPage(loading);
-    expect(html).toContain("正在搜索完整工作记录");
-    expect(html).toContain("正在查找最近 24 小时内包含“Notion 保存失败”的记录，请稍候。");
+    expect(html).toContain("正在读取最近 24 小时内包含“Notion 保存失败”的工作记录");
     expect(html).not.toContain("周期性优化");
     // A search is an in-place change: the browser swaps the view to the loading
     // notice the moment the form is submitted, before the read comes back, so
@@ -162,7 +162,23 @@ describe("work records page", () => {
     expect(html).toContain('id="records-view"');
     expect(html).toContain('class="toolbar record-search"');
     expect(html).toContain("getElementById('records-view')");
-    expect(html).toContain("'<h2>正在搜索完整工作记录</h2>'");
+    expect(html).toContain("'<h2>正在读取' + scope(c) + '</h2>'");
+  });
+
+  it("@scenario S-R237511TR-02-loading 空关键词读取时说明正在读取最近二十四小时内全部角色的工作记录", () => {
+    const browse = query({ keyword: "" });
+    const loading = reduceWorkRecordScreen(
+      { kind: "idle", draft: browse },
+      { type: "search_started", request: request("browse-1", browse) },
+    );
+
+    expect(loading.kind).toBe("loading");
+    const html = renderWorkRecordsPage(loading);
+    expect(html).toContain("正在读取最近 24 小时内全部角色的工作记录");
+    expect(html).toContain("工作记录排查");
+    expect(html).toContain('<option value="24h" selected>最近 24 小时</option>');
+    expect(html).toContain('<option value="" selected>全部角色</option>');
+    expect(html).not.toContain("周期性优化");
   });
 
   it("@scenario S-R237511TR-01-error 读取失败后保留三个条件并可重新搜索且不显示旧结果", () => {
@@ -176,8 +192,8 @@ describe("work records page", () => {
 
     expect(failed.kind).toBe("failed");
     const html = renderWorkRecordsPage(failed);
-    expect(html).toContain("无法搜索工作记录");
-    expect(html).toContain("重新搜索");
+    expect(html).toContain("无法读取工作记录");
+    expect(html).toContain("重新读取");
     expect(html).toContain("value=\"Notion 保存失败\"");
     expect(html).toContain("value=\"prototype\" selected");
     expect(html).toContain("value=\"24h\" selected");
@@ -219,6 +235,20 @@ describe("work records page", () => {
     expect(html).toContain("出现错误");
     expect(html).toContain("形成操作型界面的设计计划");
     expect(html).toContain("保持待办为");
+    expect(html).toContain("@media (max-width:760px)");
+    expect(html).toContain(".record-split{grid-template-columns:1fr}");
+  });
+
+  it("@scenario S-R237511TR-02-mobile 手机上筛选、结果与完整记录按顺序单列且底部把记录标为当前", () => {
+    const html = renderWorkRecordsPage(readyState(query({ keyword: "" }), [
+      match({ runId: "run-running", name: "周期性优化", status: { kind: "running" } }),
+      match({ runId: "run-selected", status: { kind: "stopped", outcome: "error", stoppedAt: NOW } }),
+    ], { kind: "ready", runId: "run-selected", requestId: "s4", record: stoppedErrorRecord() }));
+
+    expect(html.indexOf('class="toolbar record-search"')).toBeLessThan(html.indexOf("匹配记录"));
+    expect(html.indexOf("匹配记录")).toBeLessThan(html.indexOf("完整工作记录"));
+    expect(html).toContain("aria-label=\"手机导航\"");
+    expect(html).toContain("aria-current=\"page\" href=\"/records\">记录</a>");
     expect(html).toContain("@media (max-width:760px)");
     expect(html).toContain(".record-split{grid-template-columns:1fr}");
   });

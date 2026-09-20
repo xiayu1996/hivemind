@@ -7,6 +7,7 @@ import {
   type WorkRecordReader,
   type WorkRecordSearchQuery,
   type WorkRecordSearchResult,
+  type WorkRecordSummaryStatus,
 } from "../observability/work-record-reader.js";
 
 export interface WorkRecordSearchRequest {
@@ -20,8 +21,14 @@ export interface WorkRecordBrowseDefaults {
   range: "24h";
 }
 
-/** The landing criteria are a browse request, not a synthetic keyword search. */
-export declare const WORK_RECORD_BROWSE_DEFAULTS: Readonly<WorkRecordBrowseDefaults>;
+/** The landing criteria are a browse request, not a synthetic keyword search:
+ * a person opens the screen and sees what happened lately without first
+ * having to guess a phrase. */
+export const WORK_RECORD_BROWSE_DEFAULTS: Readonly<WorkRecordBrowseDefaults> = {
+  keyword: "",
+  role: "all",
+  range: "24h",
+};
 
 export interface WorkRecordLiveRefreshRequest {
   /** Identifies the selection that scheduled this refresh. */
@@ -154,10 +161,6 @@ export interface WorkRecordRouteOptions {
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
-
-/** The sentence a person lands on before typing anything; the screens the
- * definition of done names all search for it. */
-export const WORK_RECORD_DEFAULT_KEYWORD = "Notion 保存失败";
 
 /** The query string parameters `/records` reads, alongside the four states. */
 export interface WorkRecordsRouteParameters {
@@ -336,10 +339,33 @@ function renderStateLinks(query: WorkRecordSearchQuery): string {
     + `</p>`;
 }
 
+function renderMatchStatus(status: WorkRecordSummaryStatus): string {
+  return status.kind === "running"
+    ? `<span class="status running" role="status">运行中</span>`
+    : statusChip("stopped", status.outcome);
+}
+
+/** One status chip, used by both the list and the complete record so the same
+ * state never reads two different ways. The words always accompany the
+ * colour; a reader who cannot tell the colours apart still sees the state. */
+function statusChip(kind: "running" | "stopped", outcome?: "completed" | "error" | "stopped"): string {
+  if (kind === "running") return `<span class="status running" role="status">运行中</span>`;
+  switch (outcome) {
+    case "error": return `<span class="status danger" role="status">出现错误</span>`;
+    case "completed": return `<span class="status success" role="status">已完成</span>`;
+    default: return `<span class="status" role="status">已停止</span>`;
+  }
+}
+
 function renderResultItem(match: WorkRecordSearchResult["matches"][number], query: WorkRecordSearchQuery): string {
-  return `<li><a href="${recordsHref(query, match.runId)}"><strong>${escapeHtml(match.role)} · ${escapeHtml(match.name)}</strong><br>`
-    + `<span class="meta">${formatClock(match.occurredAt)} · ${escapeHtml(match.requirement.title)}</span><br>`
-    + `<span>命中：${renderHit(match.hit)}</span></a></li>`;
+  // The row is one link around the fields it shows. Keeping the fields in
+  // their own list lets each one carry a label on a phone without hiding what
+  // the row is about.
+  return `<li class="result"><a class="result-link" href="${recordsHref(query, match.runId)}"><ol class="result-fields">`
+    + `<li class="result-head"><strong>${escapeHtml(match.role)} · ${escapeHtml(match.name)}</strong>${renderMatchStatus(match.status)}</li>`
+    + `<li class="result-meta"><span class="meta">${formatClock(match.occurredAt)} · ${escapeHtml(match.requirement.title)}</span></li>`
+    + `<li class="result-hit">命中：${renderHit(match.hit)}</li>`
+    + `</ol></a></li>`;
 }
 
 function renderResults(result: WorkRecordSearchResult): string {
@@ -348,17 +374,9 @@ function renderResults(result: WorkRecordSearchResult): string {
     + `<ol class="result-list">${result.matches.map((match) => renderResultItem(match, result.query)).join("")}</ol></section>`;
 }
 
-const STOPPED_STATUS: Readonly<Record<"completed" | "error" | "stopped", { text: string; className: string }>> = {
-  completed: { text: "已完成", className: "success" },
-  error: { text: "出现错误", className: "danger" },
-  stopped: { text: "已停止", className: "" },
-};
-
 function renderRecord(record: WorkRecordDetail): string {
   const status = record.status;
-  const chip = status.kind === "running"
-    ? `<span class="status running" role="status">运行中</span>`
-    : `<span class="status ${STOPPED_STATUS[status.outcome].className}" role="status">${STOPPED_STATUS[status.outcome].text}</span>`;
+  const chip = statusChip(status.kind, status.kind === "stopped" ? status.outcome : undefined);
   const meta = status.kind === "running"
     ? `开始 ${formatClock(record.startedAt)} · 仍在进行`
     : `开始 ${formatClock(record.startedAt)} · 结束 ${formatClock(status.stoppedAt)} · 共 ${formatWorkRecordDuration(status.durationMs)}`;
@@ -369,7 +387,7 @@ function renderRecord(record: WorkRecordDetail): string {
     .join("");
   const waiting = status.kind === "running"
     ? `<div class="notice attention" role="status"><h2>正在等待最新记录写入</h2>`
-      + `<p>匹配的智能体仍在工作，完整记录尚未结束；页面会自动刷新，已有片段不会丢失。</p></div>`
+      + `<p>匹配的智能体仍在工作，完整记录尚未结束；后续内容会自动出现，页面会自动刷新，已有片段不会丢失。</p></div>`
     : `<div class="notice attention"><h2>问题前后的行为</h2>`
       + `<p>失败前后按时间顺序保留，相邻行为没有被截断，其他工作的行为不会混入。</p></div>`;
   return `<article class="panel" id="record" aria-labelledby="record-title"><div class="section-head">`
@@ -388,16 +406,23 @@ function renderReady(state: Extract<WorkRecordSearchState, { kind: "ready" }>): 
 
 function renderLoading(request: WorkRecordSearchRequest): string {
   const query = request.query;
-  return `<section class="state-page" aria-live="polite"><div class="state-card">`
-    + `<h2>正在搜索完整工作记录</h2>`
-    + `<p>正在查找${workRecordRangeLabel(query.fromInclusive, query.toExclusive)}内包含“${escapeHtml(query.keyword)}”的记录，请稍候。</p>`
+  const range = workRecordRangeLabel(query.fromInclusive, query.toExclusive);
+  // The notice names the range and roles being read, because those are the
+  // criteria the person chose; when a keyword is set it names that instead of
+  // pretending the read is a browse.
+  const scope = query.keyword === ""
+    ? `${range}内全部角色的工作记录`
+    : `${range}内包含“${escapeHtml(query.keyword)}”的工作记录`;
+  return `<section class="state-page" aria-live="polite"><div class="state-card" role="status">`
+    + `<h2>正在读取${scope}</h2>`
+    + `<p>请稍候。上一次范围的结果不会冒充本次结果。</p>`
     + `</div></section>`;
 }
 
 function renderEmpty(): string {
   return `<section class="state-page"><div class="state-card">`
     + `<h2>没有匹配的工作记录</h2>`
-    + `<p>尝试缩短关键词，扩大时间范围，或把智能体角色改为“全部角色”。</p>`
+    + `<p>尝试扩大时间范围、改为“全部角色”，或调整关键词。</p>`
     + `<button type="button" class="secondary">修改搜索条件</button></div></section>`;
 }
 
@@ -407,9 +432,9 @@ function renderFailed(request: WorkRecordSearchRequest): string {
     + `<input type="hidden" name="keyword" value="${escapeHtml(query.keyword)}">`
     + `<input type="hidden" name="role" value="${escapeHtml(query.role ?? "")}">`
     + `<input type="hidden" name="range" value="${rangeValue(query)}">`
-    + `<h2>无法搜索工作记录</h2>`
-    + `<p>完整记录没有载入。当前搜索条件已保留，检查内网连接后可以直接重新搜索。</p>`
-    + `<button type="submit">重新搜索</button></form></section>`;
+    + `<h2>无法读取工作记录</h2>`
+    + `<p>工作记录暂时无法取得。当前条件已保留，检查内网连接后可以直接重新读取。</p>`
+    + `<button type="submit">重新读取</button></form></section>`;
 }
 
 function renderState(state: WorkRecordSearchState): string {
@@ -443,6 +468,8 @@ const RECORDS_PAGE_STYLE = [
   ".panel{background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-panel);padding:16px}",
   ".section-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.section-head h2{font-size:18px;margin:0}",
   ".result-list{list-style:none;margin:12px 0 0;padding:0;display:flex;flex-direction:column;gap:12px}.result-list a{color:var(--color-text);text-decoration:none;display:block}",
+  ".result-fields{list-style:none;margin:0;padding:0}",
+  ".result-head{display:flex;justify-content:space-between;gap:8px;align-items:baseline}",
   ".meta{color:var(--color-text-muted);font-size:12px}",
   "mark.hit{background:var(--color-surface-attention);color:var(--color-attention);padding:0 2px;border-radius:2px}",
   ".status{display:inline-block;padding:2px 10px;border-radius:var(--radius-pill);font-size:12px}.status.danger{background:var(--color-surface-danger);color:var(--color-danger)}.status.success{background:#eaf7f0;color:#18794e}.status.running{background:#e9f1f8;color:var(--color-action)}",
@@ -496,10 +523,14 @@ const RECORDS_CLIENT_SCRIPT = [
   "    search.set('range', c.range);",
   "    return search;",
   "  }",
+  "  function scope(c) {",
+  "    var label = rangeLabel(c.range);",
+  "    return c.keyword ? label + '内包含“' + escapeHtml(c.keyword) + '”的工作记录' : label + '内全部角色的工作记录';",
+  "  }",
   "  function loadingHtml(c) {",
-  "    return '<section class=\"state-page\" aria-live=\"polite\"><div class=\"state-card\">'",
-  "      + '<h2>正在搜索完整工作记录</h2>'",
-  "      + '<p>正在查找' + rangeLabel(c.range) + '内包含“' + escapeHtml(c.keyword) + '”的记录，请稍候。</p>'",
+  "    return '<section class=\"state-page\" aria-live=\"polite\"><div class=\"state-card\" role=\"status\">'",
+  "      + '<h2>正在读取' + scope(c) + '</h2>'",
+  "      + '<p>请稍候。上一次范围的结果不会冒充本次结果。</p>'",
   "      + '</div></section>';",
   "  }",
   "  function failedHtml(c) {",
@@ -507,9 +538,9 @@ const RECORDS_CLIENT_SCRIPT = [
   "      + '<input type=\"hidden\" name=\"keyword\" value=\"' + escapeHtml(c.keyword) + '\">'",
   "      + '<input type=\"hidden\" name=\"role\" value=\"' + escapeHtml(c.role) + '\">'",
   "      + '<input type=\"hidden\" name=\"range\" value=\"' + escapeHtml(c.range) + '\">'",
-  "      + '<h2>无法搜索工作记录</h2>'",
-  "      + '<p>完整记录没有载入。当前搜索条件已保留，检查内网连接后可以直接重新搜索。</p>'",
-  "      + '<button type=\"submit\">重新搜索</button></form></section>';",
+  "      + '<h2>无法读取工作记录</h2>'",
+  "      + '<p>工作记录暂时无法取得。当前条件已保留，检查内网连接后可以直接重新读取。</p>'",
+  "      + '<button type=\"submit\">重新读取</button></form></section>';",
   "  }",
   "  function later(html, started) {",
   "    return { html: html, wait: Math.max(0, MIN_LOADING_MS - (Date.now() - started)) };",
@@ -671,12 +702,14 @@ export async function loadWorkRecordScreen(
   raw: WorkRecordsRouteParameters,
   now: number,
 ): Promise<WorkRecordSearchState> {
-  const keyword = raw.keyword === undefined || raw.keyword === "" ? WORK_RECORD_DEFAULT_KEYWORD : raw.keyword;
-  const role = raw.role === undefined || raw.role === "" ? undefined : raw.role;
+  const keyword = raw.keyword ?? WORK_RECORD_BROWSE_DEFAULTS.keyword;
+  const role = raw.role === undefined || raw.role === "" || raw.role === WORK_RECORD_BROWSE_DEFAULTS.role
+    ? undefined
+    : raw.role;
   const query: WorkRecordSearchQuery = {
     keyword,
     ...(role === undefined ? {} : { role }),
-    ...workRecordRange(raw.range, now),
+    ...workRecordRange(raw.range ?? WORK_RECORD_BROWSE_DEFAULTS.range, now),
   };
   const request: WorkRecordSearchRequest = { requestId: "records", query };
   if (raw.state === "loading") return { kind: "loading", request };
