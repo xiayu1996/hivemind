@@ -105,6 +105,7 @@ import { processGitCommand } from "../src/vcs/story-delivery.js";
 import { checkoutKey, checkoutPath, ensureCheckout, processRemoteGit, remoteDefaultBranch } from "../src/vcs/repository-checkout.js";
 import { RepositoryRegistry } from "../src/vcs/repository-registry.js";
 import { planDispatchAcrossRepositories } from "../src/orchestrator/repository-dispatch.js";
+import type { RepositoryStory } from "../src/orchestrator/scheduler.js";
 import { readInterfaceContract } from "../src/pipeline/interface-contract.js";
 import { runProjectCheck } from "../src/vcs/project-check-runner.js";
 import { recheckEpicHeads } from "../src/orchestrator/epic-head-recheck.js";
@@ -1297,12 +1298,16 @@ async function main(): Promise<void> {
         )).kind === "present",
         stories: rows.filter((row) => String(row.repo) === slug && !(
           String(row.state) === "MERGE" && headFailures.has(String(row.epic_id ?? ""))
-        )).map((row) => ({
-          id: String(row.id),
-          state: String(row.state),
-          dependsOn: JSON.parse(String(row.depends_on ?? "[]")) as string[],
-          predictedFootprint: JSON.parse(String(row.predicted_footprint ?? "[]")) as string[],
-        })),
+        )).map((row) => {
+          const story: RepositoryStory = {
+            id: String(row.id),
+            state: String(row.state),
+            dependsOn: JSON.parse(String(row.depends_on ?? "[]")) as string[],
+            predictedFootprint: JSON.parse(String(row.predicted_footprint ?? "[]")) as string[],
+          };
+          if (row.epic_id) story.epicId = String(row.epic_id);
+          return story;
+        }),
       }))));
       for (const cycleFound of plan.cycles) {
         // Reported per repository rather than raised: another repository's

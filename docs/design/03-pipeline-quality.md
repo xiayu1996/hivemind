@@ -84,6 +84,17 @@ DECOMPOSE 为每个 Story 产出：
 
 校准闭环：Story 合入后用实际 diff 回写 actual_footprint，预测偏差率进 memory 作为 DECOMPOSE 质量指标（进料通道带流速观测）。残余风险："不相交"的 Story 仍可能语义冲突——由合流后子集重验 + E2E loop 兜底。
 
+**2026-09-20 修订：footprint 相交只在同一 Epic 内构成串行。** 上面的"两两不相交"默认所有
+Story 争的是同一棵树，这只对同 Epic 成立——同 Epic 的第二张卡在 MERGE 时 rebase 到前一张
+刚留下的 `epic/<id>`，footprint 相交就是抢同一棵树。跨 Epic 不是：各自的 worktree、各自的
+分支，MERGE 各自 rebase 到自己的 Epic 分支，重叠只在 Epic→main 那一次合流出现，由 git 与
+人解一次，而不是让第二张卡永远不开跑。把它们读成竞争者的代价实测是整条需求停摆：9 张卡分属
+6 个 Epic、全部声明 `src/console`，调度每轮只产出一张，其中两张四小时没动过一次。
+hotspot 清单不随之收窄——它是人明说"这条路径的冲突根本不值得发生"，那既是对一棵树的判断，
+也是对 Epic 合流的判断，所以跨 Epic 照样强制串行，也因此它是把某个共享文件（如路由表）
+重新串起来的唯一开关。目录粒度本身不变：文件粒度实测不准，且本例中 6/7 张卡真的都改
+`src/console/server.ts` 的同样三处，收窄到文件也救不了。
+
 ### 1.3 分支与合流：epic 集成分支 + Story 分支逐个合入 + Epic 单 MR
 
 - `epic/<id>` 从 main cut，是 Epic 的集成基准；每 Story 独立 worktree + `story/<epic>-<id>` 分支；**依赖 Story 在被依赖者合入后才 cut 分支**（天然拿到依赖代码，无需 cherry-pick）。
