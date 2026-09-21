@@ -73,7 +73,7 @@ describe("work records route", () => {
 
   it("@scenario S-R237511TR-01-loading serves what is being searched and no previous result", async () => {
     const body = await records("/records?keyword=Notion%20%E4%BF%9D%E5%AD%98%E5%A4%B1%E8%B4%A5&role=prototype&range=24h&state=loading");
-    expect(body).toContain("<h2 role=\"status\">正在搜索完整工作记录</h2>");
+    expect(body).toContain('<div class="state-card" role="status"><h2>正在搜索完整工作记录</h2>');
     expect(body).toContain("正在查找最近 24 小时内包含“Notion 保存失败”的记录，请稍候。");
     expect(body).not.toContain("周期性优化");
   });

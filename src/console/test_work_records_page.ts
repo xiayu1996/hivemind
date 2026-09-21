@@ -153,7 +153,10 @@ describe("work records page", () => {
 
     expect(loading.kind).toBe("loading");
     const html = renderWorkRecordsPage(loading);
-    expect(html).toContain("<h2 role=\"status\">正在搜索完整工作记录</h2>");
+    // The sentence is a heading and the live region is the card around it.
+    // A role="status" on the h2 replaces the heading role, so the title the
+    // DoD declares cannot be found by anything that reads the page structure.
+    expect(html).toContain('<div class="state-card" role="status"><h2>正在搜索完整工作记录</h2>');
     expect(html).toContain("正在查找最近 24 小时内包含“Notion 保存失败”的记录，请稍候。");
     expect(html).not.toContain("周期性优化");
     // A search is an in-place change: the browser swaps the view to the loading
@@ -163,7 +166,7 @@ describe("work records page", () => {
     expect(html).toContain('id="records-view"');
     expect(html).toContain('class="toolbar record-search"');
     expect(html).toContain("getElementById('records-view')");
-    expect(html).toContain("'<h2 role=\"status\">正在搜索完整工作记录</h2>'");
+    expect(html).toContain("'<h2>正在搜索完整工作记录</h2>'");
     expect(html).toContain("'正在查找' + rangeLabel(c.range) + '内包含“' + escapeHtml(c.keyword) + '”的记录，请稍候。'");
   });
 
