@@ -552,7 +552,7 @@ const RECORDS_PAGE_STYLE = [
   ".state-links a{display:inline-flex;align-items:center;min-height:44px;padding:0 8px;color:var(--color-action);border-radius:var(--radius-control)}",
   ".state-page{display:flex;justify-content:center;padding:40px 0}.state-card{background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-panel);padding:24px;max-width:520px}",
   ".state-card h2{font-size:18px;margin:0 0 8px}.mobile-nav{display:none}",
-  "@media (max-width:760px){.shell{grid-template-columns:1fr}.sidebar{display:none}main{padding:16px}.record-split{grid-template-columns:1fr 1fr}",
+  "@media (max-width:760px){.shell{grid-template-columns:1fr}.sidebar{display:none}main{padding:16px}.record-split{grid-template-columns:1fr}",
   ".mobile-nav{display:flex;position:sticky;bottom:0;background:var(--color-surface);border-top:1px solid var(--color-border);justify-content:space-around;padding:8px 0}",
   ".mobile-link{padding:8px 12px;text-decoration:none;color:var(--color-text)}.mobile-link[aria-current=page]{color:var(--color-action);font-weight:550}",
   ".mobile-current{display:flex}}",
