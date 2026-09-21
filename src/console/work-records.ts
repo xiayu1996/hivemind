@@ -450,21 +450,28 @@ function renderReady(state: Extract<WorkRecordSearchState, { kind: "ready" }>): 
   return `<div class="record-split" data-layout="split">${renderResults(state.result)}${record}</div>`;
 }
 
-/** What the loading notice says is being read: the person's own criteria. */
-function loadingScope(query: WorkRecordSearchQuery): string {
-  const range = workRecordRangeLabel(query.fromInclusive, query.toExclusive);
-  if (query.keyword === "") return `${range}内${roleLabel(query.role)}的工作记录`;
-  const role = query.role === undefined || query.role === "" ? "" : `（${escapeHtml(query.role)}）`;
-  return `${range}内包含“${escapeHtml(query.keyword)}”的工作记录${role}`;
-}
-
+/**
+ * The loading notice a keyword search shows.
+ *
+ * A read the person typed a keyword into is a search, not a browse of the
+ * recent record, so it says so and names the phrase it is looking for. The
+ * empty keyword keeps the browse wording the recent record already used: the
+ * two are different acts and a person reads which one they started.
+ */
 function renderLoading(request: WorkRecordSearchRequest): string {
-  const scope = loadingScope(request.query);
+  const query = request.query;
   // The status is the element that carries the sentence: a live region whose
   // own text is empty announces nothing to a reader that only sees the region.
+  if (query.keyword === "") {
+    const scope = `${workRecordRangeLabel(query.fromInclusive, query.toExclusive)}内${roleLabel(query.role)}的工作记录`;
+    return `<section class="state-page" aria-live="polite"><div class="state-card">`
+      + `<h2 role="status">正在读取${scope}</h2>`
+      + `<p>请稍候。上一次范围的结果不会冒充本次结果。</p>`
+      + `</div></section>`;
+  }
   return `<section class="state-page" aria-live="polite"><div class="state-card">`
-    + `<h2 role="status">正在读取${scope}</h2>`
-    + `<p>请稍候。上一次范围的结果不会冒充本次结果。</p>`
+    + `<h2 role="status">正在搜索完整工作记录</h2>`
+    + `<p>正在查找${workRecordRangeLabel(query.fromInclusive, query.toExclusive)}内包含“${escapeHtml(query.keyword)}”的记录，请稍候。</p>`
     + `</div></section>`;
 }
 
@@ -577,11 +584,6 @@ const RECORDS_CLIENT_SCRIPT = [
   "  function roleLabel(c) {",
   "    return c.role ? c.role : '全部角色';",
   "  }",
-  "  function scope(c) {",
-  "    var label = rangeLabel(c.range);",
-  "    if (!c.keyword) return label + '内' + roleLabel(c) + '的工作记录';",
-  "    return label + '内包含“' + escapeHtml(c.keyword) + '”的工作记录' + (c.role ? '（' + escapeHtml(c.role) + '）' : '');",
-  "  }",
   "  // The controls live outside the part of the page a search replaces, so the",
   "  // criteria a person just chose have to be written back onto them; otherwise",
   "  // the field keeps naming the choice it held before the search.",
@@ -592,9 +594,17 @@ const RECORDS_CLIENT_SCRIPT = [
   "    if (time) time.setAttribute('aria-label', '发生时间，当前 ' + rangeLabel(c.range));",
   "  }",
   "  function loadingHtml(c) {",
+  "    if (!c.keyword) {",
+  "      return '<section class=\"state-page\" aria-live=\"polite\"><div class=\"state-card\">'",
+  "        + '<h2 role=\"status\">正在读取' + rangeLabel(c.range) + '内' + roleLabel(c) + '的工作记录</h2>'",
+  "        + '<p>请稍候。上一次范围的结果不会冒充本次结果。</p>'",
+  "        + '</div></section>';",
+  "    }",
   "    return '<section class=\"state-page\" aria-live=\"polite\"><div class=\"state-card\">'",
-  "      + '<h2 role=\"status\">正在读取' + scope(c) + '</h2>'",
-  "      + '<p>请稍候。上一次范围的结果不会冒充本次结果。</p>'",
+  "      + '<h2 role=\"status\">正在搜索完整工作记录</h2>'",
+  "      + '<p>'",
+  "      + '正在查找' + rangeLabel(c.range) + '内包含“' + escapeHtml(c.keyword) + '”的记录，请稍候。'",
+  "      + '</p>'",
   "      + '</div></section>';",
   "  }",
   "  function failedHtml(c) {",
