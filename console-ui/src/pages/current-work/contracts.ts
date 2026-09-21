@@ -124,7 +124,10 @@ export function reduceCurrentWorkDetailView(
   return state;
 }
 
-/** SPECIFY scaffold. CODE replaces this sentinel with the identity-specific route. */
-export function detailPath(_entry: RunningEntryDto): string {
-  return "";
+/** The detail route for one running entry. Identity decides the route, so a
+ * task is never sent to a requirement's screen. */
+export function detailPath(entry: RunningEntryDto): string {
+  return entry.kind === "requirement"
+    ? `/requirements/${encodeURIComponent(entry.requirementId)}/detail`
+    : `/stories/${encodeURIComponent(entry.cardId)}/detail`;
 }

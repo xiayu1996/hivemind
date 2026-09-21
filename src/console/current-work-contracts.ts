@@ -134,7 +134,13 @@ export const RUNNING_OVERVIEW_API_PATH = "/api/current-work";
 export const REQUIREMENT_DETAIL_API_PATH = "/api/requirements/:requirementId/detail";
 export const TASK_DETAIL_API_PATH = "/api/stories/:cardId/detail";
 
-/** SPECIFY scaffold. CODE replaces this sentinel with the identity-specific route. */
-export function currentWorkDetailPath(_ref: CurrentWorkRef): string {
-  return "";
+/**
+ * The person-visible detail route for one running thing. The identity comes
+ * from the discriminated union, never from the shape of the id, so a task id
+ * can never be routed to a requirement's screen.
+ */
+export function currentWorkDetailPath(ref: CurrentWorkRef): string {
+  return ref.kind === "requirement"
+    ? `/requirements/${encodeURIComponent(ref.requirementId)}/detail`
+    : `/stories/${encodeURIComponent(ref.cardId)}/detail`;
 }
