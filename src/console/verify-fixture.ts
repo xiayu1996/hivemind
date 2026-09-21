@@ -55,6 +55,12 @@ export function fixtureFor(scenarioId: string | null): VerifyFixture {
   if (scenarioId === null || scenarioId === "") return "empty";
   switch (stateOf(scenarioId)) {
     case "answer":
+    case "stable":
+      // A scenario about the sample todo surviving the reads a browser makes
+      // after it drew the page. Its sample data is the same waiting answer:
+      // an empty ledger would take away the state the scenario exists to
+      // judge, and the full set would open on a different waiting todo, so
+      // neither the question nor its answer box would be on screen at all.
       return "answer";
     case "open":
     case "approve":
