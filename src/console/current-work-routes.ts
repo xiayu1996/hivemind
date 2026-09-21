@@ -3,6 +3,7 @@ import {
   REQUIREMENT_DETAIL_API_PATH,
   RUNNING_OVERVIEW_API_PATH,
   TASK_DETAIL_API_PATH,
+  asRequirementDetail,
   type CurrentWorkReadPort,
 } from "./current-work-contracts.js";
 
@@ -28,8 +29,14 @@ export function registerCurrentWorkRoutes(
     );
     const result = await port.readRequirementDetail(requirementId);
     switch (result.kind) {
-      case "ok":
-        return reply.code(200).send(result.detail);
+      case "ok": {
+        // The requirement screen is handed the requirement's own detail only:
+        // a task read answered here is refused rather than rendered under the
+        // requirement's title.
+        const detail = asRequirementDetail(result.detail);
+        if (!detail) return reply.code(502).send({ error: "requirement detail is not a requirement" });
+        return reply.code(200).send(detail);
+      }
       case "not_found":
         return reply.code(404).send({ error: "requirement not found" });
       case "failed":

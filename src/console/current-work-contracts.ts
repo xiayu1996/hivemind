@@ -144,3 +144,15 @@ export function currentWorkDetailPath(ref: CurrentWorkRef): string {
     ? `/requirements/${encodeURIComponent(ref.requirementId)}/detail`
     : `/stories/${encodeURIComponent(ref.cardId)}/detail`;
 }
+
+/**
+ * One requirement's own detail, or null when the read answered with a task's.
+ * The two identities never stand in for each other: a requirement's screen
+ * lists its running `tasks` as the person's way into each task's own detail,
+ * and a task served in its place would call a task a requirement.
+ */
+export function asRequirementDetail(
+  detail: CurrentWorkDetail,
+): RequirementCurrentWorkDetail | null {
+  return detail.kind === "requirement" ? detail : null;
+}
