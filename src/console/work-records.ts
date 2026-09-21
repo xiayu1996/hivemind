@@ -460,17 +460,18 @@ function renderReady(state: Extract<WorkRecordSearchState, { kind: "ready" }>): 
  */
 function renderLoading(request: WorkRecordSearchRequest): string {
   const query = request.query;
-  // The status is the element that carries the sentence: a live region whose
-  // own text is empty announces nothing to a reader that only sees the region.
+  // The heading carries the sentence and the card is the live region around
+  // it. A role="status" on the heading itself would replace the heading role
+  // and a reader navigating by headings would never meet the title.
   if (query.keyword === "") {
     const scope = `${workRecordRangeLabel(query.fromInclusive, query.toExclusive)}内${roleLabel(query.role)}的工作记录`;
-    return `<section class="state-page" aria-live="polite"><div class="state-card">`
-      + `<h2 role="status">正在读取${scope}</h2>`
+    return `<section class="state-page"><div class="state-card" role="status">`
+      + `<h2>正在读取${scope}</h2>`
       + `<p>请稍候。上一次范围的结果不会冒充本次结果。</p>`
       + `</div></section>`;
   }
-  return `<section class="state-page" aria-live="polite"><div class="state-card">`
-    + `<h2 role="status">正在搜索完整工作记录</h2>`
+  return `<section class="state-page"><div class="state-card" role="status">`
+    + `<h2>正在搜索完整工作记录</h2>`
     + `<p>正在查找${workRecordRangeLabel(query.fromInclusive, query.toExclusive)}内包含“${escapeHtml(query.keyword)}”的记录，请稍候。</p>`
     + `</div></section>`;
 }
@@ -608,13 +609,13 @@ const RECORDS_CLIENT_SCRIPT = [
   "  }",
   "  function loadingHtml(c) {",
   "    if (!c.keyword) {",
-  "      return '<section class=\"state-page\" aria-live=\"polite\"><div class=\"state-card\">'",
-  "        + '<h2 role=\"status\">正在读取' + rangeLabel(c.range) + '内' + roleLabel(c) + '的工作记录</h2>'",
+  "      return '<section class=\"state-page\"><div class=\"state-card\" role=\"status\">'",
+  "        + '<h2>正在读取' + rangeLabel(c.range) + '内' + roleLabel(c) + '的工作记录</h2>'",
   "        + '<p>请稍候。上一次范围的结果不会冒充本次结果。</p>'",
   "        + '</div></section>';",
   "    }",
-  "    return '<section class=\"state-page\" aria-live=\"polite\"><div class=\"state-card\">'",
-  "      + '<h2 role=\"status\">正在搜索完整工作记录</h2>'",
+  "    return '<section class=\"state-page\"><div class=\"state-card\" role=\"status\">'",
+  "      + '<h2>正在搜索完整工作记录</h2>'",
   "      + '<p>'",
   "      + '正在查找' + rangeLabel(c.range) + '内包含“' + escapeHtml(c.keyword) + '”的记录，请稍候。'",
   "      + '</p>'",
