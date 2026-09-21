@@ -477,7 +477,7 @@ function renderLoading(request: WorkRecordSearchRequest): string {
 
 function renderEmpty(): string {
   return `<section class="state-page"><div class="state-card">`
-    + `<h2>没有匹配的工作</h2>`
+    + `<h2>没有匹配的工作记录</h2>`
     + `<p>尝试扩大时间范围、改为“全部角色”，或调整关键词。</p>`
     + `<button type="button" class="secondary">修改搜索条件</button></div></section>`;
 }
