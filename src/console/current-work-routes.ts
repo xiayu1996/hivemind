@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import {
+  REQUIREMENT_DETAIL_API_PATH,
   RUNNING_OVERVIEW_API_PATH,
   type CurrentWorkReadPort,
 } from "./current-work-contracts.js";
@@ -18,5 +19,20 @@ export function registerCurrentWorkRoutes(
     const result = await port.readRunningOverview();
     if (result.kind === "ok") return reply.code(200).send(result.snapshot);
     return reply.code(503).send({ error: "current work is unavailable" });
+  });
+
+  app.get(REQUIREMENT_DETAIL_API_PATH, async (request, reply) => {
+    const requirementId = String(
+      (request.params as { requirementId?: string }).requirementId ?? "",
+    );
+    const result = await port.readRequirementDetail(requirementId);
+    switch (result.kind) {
+      case "ok":
+        return reply.code(200).send(result.detail);
+      case "not_found":
+        return reply.code(404).send({ error: "requirement not found" });
+      case "failed":
+        return reply.code(503).send({ error: "requirement detail is unavailable" });
+    }
   });
 }

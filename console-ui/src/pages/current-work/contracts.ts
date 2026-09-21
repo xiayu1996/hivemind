@@ -105,23 +105,44 @@ export type CurrentWorkDetailViewAction =
   | { type: "select_round"; round: number | null }
   | { type: "set_history_expanded"; expanded: boolean };
 
-/** SPECIFY scaffold. CODE replaces this sentinel with the default current-round view. */
+/** The default view: nothing read yet, the current round selected and the
+ * history closed. A person arrives on the current round and opens history only
+ * when they ask for it. */
 export function initialCurrentWorkDetailView(): CurrentWorkDetailViewState {
   return {
     status: "idle",
     requestId: 0,
     detail: null,
-    selectedRound: -1,
-    historyExpanded: true,
+    selectedRound: null,
+    historyExpanded: false,
   };
 }
 
-/** SPECIFY scaffold. CODE replaces this no-op with latest-request state transitions. */
+/**
+ * Moves the detail screen between its states.
+ *
+ * A load starts a new request and changes nothing else, so a refresh never
+ * blanks the content a person is reading. A response is applied only when it
+ * answers the newest request; a superseded one is dropped whole. Selecting a
+ * round and opening the history are a person's own moves and no read
+ * overwrites them.
+ */
 export function reduceCurrentWorkDetailView(
   state: CurrentWorkDetailViewState,
-  _action: CurrentWorkDetailViewAction,
+  action: CurrentWorkDetailViewAction,
 ): CurrentWorkDetailViewState {
-  return state;
+  switch (action.type) {
+    case "load":
+      return { ...state, status: "loading", requestId: state.requestId + 1 };
+    case "loaded":
+      if (action.requestId !== state.requestId) return state;
+      if (action.result.kind === "failed") return { ...state, status: "error" };
+      return { ...state, status: "ready", detail: action.result.detail };
+    case "select_round":
+      return { ...state, selectedRound: action.round };
+    case "set_history_expanded":
+      return { ...state, historyExpanded: action.expanded };
+  }
 }
 
 /** The detail route for one running entry. Identity decides the route, so a
