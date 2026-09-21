@@ -402,7 +402,7 @@ function renderResults(result: WorkRecordSearchResult): string {
  * as two unrelated nodes. */
 function renderStep(step: WorkRecordStep): string {
   const at = formatClock(step.occurredAt);
-  return `<div class="step ${step.kind}" data-kind="${step.kind}" data-sequence="${step.sequence}" role="log" aria-label="${escapeHtml(`${at} ${step.text.value}`)}">`
+  return `<div class="${step.kind}" data-kind="${step.kind}" data-sequence="${step.sequence}" role="log" aria-label="${escapeHtml(`${at} ${step.text.value}`)}">`
     + `<time datetime="${new Date(step.occurredAt).toISOString()}">${at}</time> `
     + `<span>${escapeHtml(step.text.value)}</span></div>`;
 }
