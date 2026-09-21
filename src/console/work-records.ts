@@ -387,7 +387,7 @@ function renderResultItem(
     + `<li class="result-head"><strong>${escapeHtml(title)}</strong>${renderMatchStatus(match.status)}`
     + `<span id="${titleId}" hidden>记录 ${escapeHtml(title)}</span></li>`
     + `<li class="result-meta"><span class="meta">${formatClock(match.occurredAt)} · ${escapeHtml(match.requirement.title)}</span></li>`
-    + `<li class="result-hit">命中：${renderHit(match.hit)}</li>`
+    + `<li class="result-hit">命中${renderHit(match.hit)}</li>`
     + `</ol></a></li>`;
 }
 
