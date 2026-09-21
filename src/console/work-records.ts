@@ -450,28 +450,21 @@ function renderReady(state: Extract<WorkRecordSearchState, { kind: "ready" }>): 
   return `<div class="record-split" data-layout="split">${renderResults(state.result)}${record}</div>`;
 }
 
-/**
- * The loading notice a keyword search shows.
- *
- * A read the person typed a keyword into is a search, not a browse of the
- * recent record, so it says so and names the phrase it is looking for. The
- * empty keyword keeps the browse wording the recent record already used: the
- * two are different acts and a person reads which one they started.
- */
+/** What the loading notice says is being read: the person's own criteria. */
+function loadingScope(query: WorkRecordSearchQuery): string {
+  const range = workRecordRangeLabel(query.fromInclusive, query.toExclusive);
+  if (query.keyword === "") return `${range}内${roleLabel(query.role)}的工作记录`;
+  const role = query.role === undefined || query.role === "" ? "" : `（${escapeHtml(query.role)}）`;
+  return `${range}内包含“${escapeHtml(query.keyword)}”的工作记录${role}`;
+}
+
 function renderLoading(request: WorkRecordSearchRequest): string {
-  const query = request.query;
+  const scope = loadingScope(request.query);
   // The status is the element that carries the sentence: a live region whose
   // own text is empty announces nothing to a reader that only sees the region.
-  if (query.keyword === "") {
-    const scope = `${workRecordRangeLabel(query.fromInclusive, query.toExclusive)}内${roleLabel(query.role)}的工作记录`;
-    return `<section class="state-page" aria-live="polite"><div class="state-card">`
-      + `<h2 role="status">正在读取${scope}</h2>`
-      + `<p>请稍候。上一次范围的结果不会冒充本次结果。</p>`
-      + `</div></section>`;
-  }
   return `<section class="state-page" aria-live="polite"><div class="state-card">`
-    + `<h2 role="status">正在搜索完整工作记录</h2>`
-    + `<p>正在查找${workRecordRangeLabel(query.fromInclusive, query.toExclusive)}内包含“${escapeHtml(query.keyword)}”的记录，请稍候。</p>`
+    + `<h2 role="status">正在读取${scope}</h2>`
+    + `<p>请稍候。上一次范围的结果不会冒充本次结果。</p>`
     + `</div></section>`;
 }
 
@@ -482,28 +475,15 @@ function renderEmpty(): string {
     + `<button type="button" class="secondary">修改搜索条件</button></div></section>`;
 }
 
-/**
- * The failure notice keeps whatever the person asked for and offers the act
- * back. A keyword search failed to search; a browse failed to read. Naming the
- * act is what lets a person find the screen again and know the retry repeats
- * what they asked instead of starting over.
- */
 function renderFailed(request: WorkRecordSearchRequest): string {
   const query = request.query;
-  const form = `<section class="state-page"><form class="state-card record-search" method="get" action="/records">`
+  return `<section class="state-page"><form class="state-card record-search" method="get" action="/records">`
     + `<input type="hidden" name="keyword" value="${escapeHtml(query.keyword)}">`
     + `<input type="hidden" name="role" value="${escapeHtml(query.role ?? "")}">`
-    + `<input type="hidden" name="range" value="${rangeValue(query)}">`;
-  if (query.keyword === "") {
-    return form
-      + `<h2>无法读取工作记录</h2>`
-      + `<p>工作记录暂时无法取得。当前条件已保留，检查内网连接后可以直接重新读取。</p>`
-      + `<button type="submit">重新读取</button></form></section>`;
-  }
-  return form
-    + `<h2>无法搜索工作记录</h2>`
-    + `<p>完整记录没有载入。当前搜索条件已保留，检查内网连接后可以直接重新搜索。</p>`
-    + `<button type="submit">重新搜索</button></form></section>`;
+    + `<input type="hidden" name="range" value="${rangeValue(query)}">`
+    + `<h2>无法读取工作记录</h2>`
+    + `<p>工作记录暂时无法取得。当前条件已保留，检查内网连接后可以直接重新读取。</p>`
+    + `<button type="submit">重新读取</button></form></section>`;
 }
 
 function renderState(state: WorkRecordSearchState): string {
@@ -597,6 +577,11 @@ const RECORDS_CLIENT_SCRIPT = [
   "  function roleLabel(c) {",
   "    return c.role ? c.role : '全部角色';",
   "  }",
+  "  function scope(c) {",
+  "    var label = rangeLabel(c.range);",
+  "    if (!c.keyword) return label + '内' + roleLabel(c) + '的工作记录';",
+  "    return label + '内包含“' + escapeHtml(c.keyword) + '”的工作记录' + (c.role ? '（' + escapeHtml(c.role) + '）' : '');",
+  "  }",
   "  // The controls live outside the part of the page a search replaces, so the",
   "  // criteria a person just chose have to be written back onto them; otherwise",
   "  // the field keeps naming the choice it held before the search.",
@@ -607,34 +592,19 @@ const RECORDS_CLIENT_SCRIPT = [
   "    if (time) time.setAttribute('aria-label', '发生时间，当前 ' + rangeLabel(c.range));",
   "  }",
   "  function loadingHtml(c) {",
-  "    if (!c.keyword) {",
-  "      return '<section class=\"state-page\" aria-live=\"polite\"><div class=\"state-card\">'",
-  "        + '<h2 role=\"status\">正在读取' + rangeLabel(c.range) + '内' + roleLabel(c) + '的工作记录</h2>'",
-  "        + '<p>请稍候。上一次范围的结果不会冒充本次结果。</p>'",
-  "        + '</div></section>';",
-  "    }",
   "    return '<section class=\"state-page\" aria-live=\"polite\"><div class=\"state-card\">'",
-  "      + '<h2 role=\"status\">正在搜索完整工作记录</h2>'",
-  "      + '<p>'",
-  "      + '正在查找' + rangeLabel(c.range) + '内包含“' + escapeHtml(c.keyword) + '”的记录，请稍候。'",
-  "      + '</p>'",
+  "      + '<h2 role=\"status\">正在读取' + scope(c) + '</h2>'",
+  "      + '<p>请稍候。上一次范围的结果不会冒充本次结果。</p>'",
   "      + '</div></section>';",
   "  }",
   "  function failedHtml(c) {",
-  "    var head = '<section class=\"state-page\"><form class=\"state-card record-search\" method=\"get\" action=\"/records\">'",
+  "    return '<section class=\"state-page\"><form class=\"state-card record-search\" method=\"get\" action=\"/records\">'",
   "      + '<input type=\"hidden\" name=\"keyword\" value=\"' + escapeHtml(c.keyword) + '\">'",
   "      + '<input type=\"hidden\" name=\"role\" value=\"' + escapeHtml(c.role) + '\">'",
-  "      + '<input type=\"hidden\" name=\"range\" value=\"' + escapeHtml(c.range) + '\">';",
-  "    if (!c.keyword) {",
-  "      return head",
-  "        + '<h2>无法读取工作记录</h2>'",
-  "        + '<p>工作记录暂时无法取得。当前条件已保留，检查内网连接后可以直接重新读取。</p>'",
-  "        + '<button type=\"submit\">重新读取</button></form></section>';",
-  "    }",
-  "    return head",
-  "      + '<h2>无法搜索工作记录</h2>'",
-  "      + '<p>完整记录没有载入。当前搜索条件已保留，检查内网连接后可以直接重新搜索。</p>'",
-  "      + '<button type=\"submit\">重新搜索</button></form></section>';",
+  "      + '<input type=\"hidden\" name=\"range\" value=\"' + escapeHtml(c.range) + '\">'",
+  "      + '<h2>无法读取工作记录</h2>'",
+  "      + '<p>工作记录暂时无法取得。当前条件已保留，检查内网连接后可以直接重新读取。</p>'",
+  "      + '<button type=\"submit\">重新读取</button></form></section>';",
   "  }",
   "  function later(html, started) {",
   "    return { html: html, wait: Math.max(0, MIN_LOADING_MS - (Date.now() - started)) };",
