@@ -16,22 +16,26 @@
  * accessibility tree, so the roles are part of the contract, not decoration:
  *
  *   1. title bar   -- the page heading (`待办处理`), the way back to the
- *                     overview, and the handling status beside it: `未处理`
- *                     while undecided, `已处理` only once the result is
- *                     confirmed kept. A read that failed shows no handling
- *                     status at all.
+ *                     overview, and the handling status beside it (`role`
+ *                     `status`): `未处理` while undecided, `已处理` only once
+ *                     the result is confirmed kept. A read that failed shows
+ *                     no handling status at all.
  *   2. decision    -- `需要你决定` as the heading, the blocks of ledger text
  *                     that say what is being decided, then the controls of the
  *                     todo's kind. Every control has its own direct label;
  *                     nothing is preselected, including a recommended option.
+ *                     A refused submission says so in an `alert` that itself
+ *                     carries `答复未提交，请重试`, so the sentence a scenario
+ *                     requires is on the node that has the role.
  *   3. summary     -- `待办摘要`: type, the requirement it belongs to, how
  *                     long it has waited, and where the result will be kept.
  *   4. actions     -- one primary action whose label is the kind's own submit
  *                     word. It is disabled for the whole request, so a
  *                     submission in flight cannot be triggered twice.
- *   5. save state  -- after submitting: `已处理` with the line that says the
- *                     result is kept and where, or `正在等待 Notion 确认保存`
- *                     with `检查保存结果` while it is not confirmed.
+ *   5. save state  -- after submitting: `已处理` with a `status` line that says
+ *                     the result is kept and where, or `正在等待 Notion 确认保存`
+ *                     with `检查保存结果` while it is not confirmed. The empty
+ *                     state's `所有事项都已处理` is also a `status`.
  *
  * There are no controls for creating a requirement, editing a task or moving
  * work on. Not hidden, not disabled: absent, because the console offers no
@@ -188,7 +192,7 @@ onBeforeUnmount(() => {
     <header class="page-head">
       <a class="back-link" href="/">{{ TODO_COPY.back }}</a>
       <h1>{{ TODO_COPY.heading }}</h1>
-      <span v-if="todo && view.status !== 'error'" class="status" :class="view.status === 'processed' ? 'status-done' : 'status-open'">
+      <span v-if="todo && view.status !== 'error'" class="status" role="status" :class="view.status === 'processed' ? 'status-done' : 'status-open'">
         {{ view.status === "processed" ? TODO_COPY.statusProcessed : TODO_COPY.statusUnhandled }}
       </span>
     </header>
@@ -200,7 +204,7 @@ onBeforeUnmount(() => {
 
     <div v-else-if="view.status === 'none'" class="state-card">
       <h2>{{ TODO_COPY.none }}</h2>
-      <p>{{ TODO_COPY.noneBody }}</p>
+      <p role="status">{{ TODO_COPY.noneBody }}</p>
       <a class="button" href="/">{{ TODO_COPY.back }}</a>
     </div>
 
@@ -266,8 +270,8 @@ onBeforeUnmount(() => {
               <li v-for="issue in view.issues" :key="issue">{{ validationMessage(issue) }}</li>
             </ul>
 
-            <div v-if="view.status === 'submission_rejected'" class="submission-rejected" role="alert">
-              <p class="submission-rejected-title">{{ TODO_COPY.answerNotSubmitted }}</p>
+            <div v-if="view.status === 'submission_rejected'" class="submission-rejected">
+              <p class="submission-rejected-title" role="alert">{{ TODO_COPY.answerNotSubmitted }}</p>
               <p class="field-help">{{ TODO_COPY.submissionRejectedBody }}</p>
             </div>
 
@@ -281,7 +285,7 @@ onBeforeUnmount(() => {
 
         <section v-if="view.status === 'processed'" class="panel" aria-live="polite">
           <h2>{{ TODO_COPY.statusProcessed }}</h2>
-          <p>{{ formatProcessedLine(todo) }}</p>
+          <p role="status">{{ formatProcessedLine(todo) }}</p>
           <p>{{ TODO_COPY.processedBody }}</p>
           <a class="button" href="/">{{ TODO_COPY.back }}</a>
         </section>
