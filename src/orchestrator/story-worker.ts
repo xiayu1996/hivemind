@@ -17,13 +17,21 @@ import {
   parseDoD,
   renderDoDLanguageFindings,
   renderMissingInterfaceContract,
+  renderMissingPage,
   renderMissingVisible,
   footprintWithoutGround,
   renderFootprintWithoutGround,
+  scenariosMissingPage,
   scenariosMissingVisible,
   type DefinitionOfDone,
 } from "../pipeline/dod.js";
 import { assemblePhasePrompt, type PhaseInput } from "../pipeline/phase-input.js";
+import {
+  renderUnreachableScreens,
+  screenPages,
+  type ScreenPage,
+  type UnreachableScreen,
+} from "../pipeline/screen-reachability.js";
 import type { InterfaceContract } from "../pipeline/interface-contract.js";
 import {
   StoryExecutionStore,
@@ -209,6 +217,16 @@ export interface StoryWorkerOptions {
    * worktree records the footprint unchecked, which is all it can do.
    */
   repositoryHas?: (path: string) => boolean;
+  /**
+   * Opens each screen the DoD promises on the application this repository
+   * starts, and says which ones were not there.
+   *
+   * `null` when the repository declares no way to start one: there is no
+   * entry point to ask about, so nothing is asked. Optional for the same
+   * reason as the other tree ports -- a caller with no worktree cannot start
+   * anything.
+   */
+  screensReachable?: (pages: readonly ScreenPage[]) => Promise<UnreachableScreen[] | null>;
   runId?: (cardId: string, phase: StoryPhase, round: number) => string;
 }
 
@@ -283,6 +301,7 @@ export class SingleStoryWorker {
   private readonly treeSha: (() => Promise<string>) | undefined;
   private readonly interfaceContract: (() => Promise<InterfaceContract | null>) | undefined;
   private readonly repositoryHas: ((path: string) => boolean) | undefined;
+  private readonly screensReachable: StoryWorkerOptions["screensReachable"];
 
   constructor(
     private readonly store: StoryExecutionStore,
@@ -300,6 +319,7 @@ export class SingleStoryWorker {
     this.treeSha = options.treeSha;
     this.interfaceContract = options.interfaceContract;
     this.repositoryHas = options.repositoryHas;
+    this.screensReachable = options.screensReachable;
     this.maxInconclusiveRounds = options.maxInconclusiveRounds ?? 2;
     this.maxInnerLoopRounds = options.maxInnerLoopRounds ?? 3;
     this.specifyExitRounds = options.specifyExitRounds ?? 3;
@@ -447,7 +467,8 @@ export class SingleStoryWorker {
         if (overspent) return overspent;
         round += 1;
         const codeRunId = this.createRunId(cardId, "CODE", round);
-        const code = await this.runPhase(cardId, "CODE", round, codeRunId);
+        const screenGate = this.screenGate(cardId, codeRunId);
+        const code = await this.runPhase(cardId, "CODE", round, codeRunId, screenGate ? [screenGate] : undefined);
         artifact(code, "implementation");
         let verifyRunId = this.createRunId(cardId, "VERIFY", round);
         await this.store.transition(cardId, "CODE", "VERIFY", "system", verifyRunId);
@@ -697,7 +718,9 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
       if (overspent) return overspent;
       round += 1;
       const fixRunId = this.createRunId(cardId, "REGRESSION_FIX", round);
-      const fix = await this.runPhase(cardId, "REGRESSION_FIX", round, fixRunId);
+      const fixScreenGate = this.screenGate(cardId, fixRunId);
+      const fix = await this.runPhase(cardId, "REGRESSION_FIX", round, fixRunId,
+        fixScreenGate ? [fixScreenGate] : undefined);
       artifact(fix, "implementation");
       let verifyRunId = this.createRunId(cardId, "VERIFY", round);
       let verification = await this.runVerification(cardId, round, verifyRunId, fix.sessionId, definitionOfDone);
@@ -941,6 +964,48 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
   }
 
   /**
+   * The screens this card promises, opened on the application the repository
+   * itself starts.
+   *
+   * A phase that wrote a page and never mounted it has green tests and a
+   * missing feature, and every layer after this one is too late or looking at
+   * the wrong server: VERIFY reads a browser, and until an application lane
+   * existed that browser could be pointed at something the verifier had
+   * assembled itself. Handed back inside the session that wrote the code, so
+   * it costs no round -- mounting what you just built is a work item, not a
+   * verdict on the Story.
+   *
+   * Counted, so the rule is judged on evidence rather than on how reasonable
+   * it sounds: a gate that never fires says the prompt was already enough.
+   */
+  private screenGate(cardId: string, runId: string): PhaseExitGate | null {
+    const reachable = this.screensReachable;
+    if (!reachable) return null;
+    return {
+      name: "screen-reachable",
+      maxRounds: 2,
+      exhausted: "fail",
+      evaluate: async () => {
+        const definitionOfDone = await this.store.getDefinitionOfDone(cardId);
+        const pages = screenPages(definitionOfDone);
+        if (pages.length === 0) return { passed: true };
+        const unreachable = await reachable(pages);
+        // No application to ask: this repository declares no way to start one,
+        // and a screen no entry point can be asked about is the browser's
+        // question again, not this gate's.
+        if (unreachable === null || unreachable.length === 0) return { passed: true };
+        await this.friction?.record({
+          cardId,
+          runId,
+          kind: "screen_not_mounted",
+          detail: unreachable.map((entry) => `${entry.scenarioId} ${entry.page}`).join(", "),
+        });
+        return { passed: false, findings: renderUnreachableScreens(unreachable) };
+      },
+    };
+  }
+
+  /**
    * The contract a person judges the card by: it has to parse, and it has to
    * be written in their language.
    *
@@ -962,11 +1027,20 @@ The regression loop reopened this Story ${story.regressionReopens} times; the ca
         } catch (cause) {
           return { passed: false, findings: (cause as Error).message };
         }
-        // The structural layer's basis, asked for here because a judgement's
-        // basis cannot be written by the round it judges (08 section 6).
+        // The screen judgements' basis, asked for here because a judgement's
+        // basis cannot be written by the round it judges (08 section 6). Both
+        // in one pass: a DoD missing each would otherwise spend two of the
+        // three rounds saying two halves of the same sentence.
         const missingVisible = scenariosMissingVisible(definitionOfDone);
-        if (missingVisible.length > 0) {
-          return { passed: false, findings: renderMissingVisible(missingVisible) };
+        const missingPage = scenariosMissingPage(definitionOfDone);
+        if (missingVisible.length > 0 || missingPage.length > 0) {
+          return {
+            passed: false,
+            findings: [
+              ...(missingPage.length > 0 ? [renderMissingPage(missingPage)] : []),
+              ...(missingVisible.length > 0 ? [renderMissingVisible(missingVisible)] : []),
+            ].join("\n\n"),
+          };
         }
         // Before the language, because a footprint that names nothing is a
         // fact about the tree rather than about the sentence, and the session

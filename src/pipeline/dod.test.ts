@@ -8,9 +8,12 @@ import {
   refusableStatements,
   footprintWithoutGround,
   renderFootprintWithoutGround,
+  renderMissingPage,
   renderMissingVisible,
   renderDoDLanguageFindings,
   scanScenarioCoverage,
+  scenariosMissingPage,
+  structuralRequirements,
   scenariosMissingVisible,
   scenarioTitle,
   seedOf,
@@ -193,6 +196,77 @@ describe("what a screen scenario says a person will see", () => {
 
   it("names every scenario still missing them, so one round closes them all", () => {
     expect(renderMissingVisible(["S-A-01-a", "S-A-01-b"])).toContain("- S-A-01-a\n- S-A-01-b");
+  });
+});
+
+describe("what the structural layer compares against", () => {
+  const screen = [
+    "    layers: [ui]",
+    "    source: the stories table",
+    "    page: /tasks",
+    "    examples:",
+    "      - kind: shows",
+    "        text: 运行控制台",
+    "      - kind: excludes",
+    "        text: 还没有任何任务",
+    "    visible:",
+    "      - role: heading",
+    "        text: 运行控制台",
+  ].join("\n");
+
+  it("takes the roles a screen scenario promised", () => {
+    const dod = parseDoD(yaml.replace("    layers: [unit, integration]", screen));
+
+    expect(structuralRequirements(dod).get("S-EPIC12-03-a")).toEqual([{ role: "heading", text: "运行控制台" }]);
+  });
+
+  it("asks nothing of a scenario whose given a browser could not build, once it moved to the code layers", () => {
+    // What an operator leaves behind when a screen scenario turns out to be
+    // unprovable in a browser: the layer changes, the promise it once made
+    // stays written down.
+    const moved = yaml.replace("    layers: [unit, integration]", screen.replace("    layers: [ui]", "    layers: [integration]"));
+
+    expect(structuralRequirements(parseDoD(moved)).size).toBe(0);
+  });
+});
+
+describe("where a screen scenario is served", () => {
+  const screen = [
+    "    layers: [ui]",
+    "    source: the stories table",
+    "    examples:",
+    "      - kind: shows",
+    "        text: 运行控制台",
+    "      - kind: excludes",
+    "        text: 还没有任何任务",
+  ].join("\n");
+  const withScreen = (extra = ""): string =>
+    yaml.replace("    layers: [unit, integration]", `${screen}${extra}`);
+
+  it("asks a scenario a browser settles where its page is", () => {
+    expect(scenariosMissingPage(parseDoD(withScreen()))).toEqual(["S-EPIC12-03-a"]);
+  });
+
+  it("asks nothing of a scenario a test runner settles", () => {
+    expect(scenariosMissingPage(parseDoD(yaml))).toEqual([]);
+  });
+
+  it("is satisfied once the scenario names the path", () => {
+    const dod = parseDoD(withScreen("\n    page: /operator/costs"));
+
+    expect(dod.scenarios[0]?.page).toBe("/operator/costs");
+    expect(scenariosMissingPage(dod)).toEqual([]);
+  });
+
+  it("refuses anything that is not an application path", () => {
+    expect(() => parseDoD(withScreen("\n    page: http://localhost:4319/operator/costs")))
+      .toThrow(/page must be an application path/);
+    expect(() => parseDoD(withScreen("\n    page: operator/costs")))
+      .toThrow(/page must be an application path/);
+  });
+
+  it("names every scenario still missing one, so one round closes them all", () => {
+    expect(renderMissingPage(["S-A-01-a", "S-A-01-b"])).toContain("- S-A-01-a\n- S-A-01-b");
   });
 });
 

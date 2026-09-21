@@ -65,6 +65,21 @@ const scenario = z.object({
    * nothing but a 404 body still produced four screenshots and four confident
    * verdicts, because no code had anything to compare the page against.
    */
+  /**
+   * Where the application serves this scenario's screen, as a path beginning
+   * with `/`. Required of scenarios a browser settles; optional in the schema
+   * because a DoD frozen before this existed still has to parse.
+   *
+   * It is what turns "is the screen reachable at all" into a question code can
+   * answer before a browser is involved. A component that was written and
+   * never mounted passes every unit test it has, and a verifier that stands up
+   * its own server finds the screen there because it wired the module itself.
+   * Only the product's own entry point can say whether a person reaches it.
+   *
+   * A screen reached by clicking -- a dialog, a tab -- names the page carrying
+   * it: reachability proves that page is served, not that the dialog opens.
+   */
+  page: z.string().trim().regex(/^\/\S*$/, "page must be an application path beginning with /").optional(),
   visible: z.array(z.object({
     /** The ARIA role, as the snapshot names it: heading, link, button, list. */
     role: z.string().trim().min(1),
@@ -245,6 +260,46 @@ export function scenariosMissingVisible(definition: DefinitionOfDone): string[] 
   return definition.scenarios
     .filter((entry) => hasScreen(entry) && entry.visible === undefined)
     .map((entry) => entry.id);
+}
+
+/**
+ * Screen scenarios that did not say where their screen is served.
+ *
+ * Asked here for the same reason as `visible[]`: the basis of a judgement
+ * cannot be written by the round it judges. Without it the only witness that
+ * a screen exists is a browser, and a browser pointed at a server the verifier
+ * assembled itself sees screens the product never mounts.
+ */
+export function scenariosMissingPage(definition: DefinitionOfDone): string[] {
+  return definition.scenarios
+    .filter((entry) => hasScreen(entry) && entry.page === undefined)
+    .map((entry) => entry.id);
+}
+
+export function renderMissingPage(ids: readonly string[]): string {
+  return [
+    "这些 scenario 要打开页面才能判定，所以每条都要写 `page`：这一页在应用里的路径，例如 `/operator/costs`。",
+    "写完代码那一步系统会把应用起起来访问它——组件写好了却没在入口挂上，单测照样全绿，只有这一步看得出来。",
+    "靠点击才出现的弹窗或子页签，写承载它的那一页。",
+    ...ids.map((id) => `- ${id}`),
+  ].join("\n");
+}
+
+/**
+ * What the structural layer compares each screen against.
+ *
+ * Only the scenarios a browser settles, even though `visible[]` may outlive a
+ * screen layer: a scenario moved to the code layers because its given could
+ * not be built in a browser still carries what it once promised to show, and
+ * asking a lane that never ran for a page structure record refuses it every
+ * round for something no round could have produced.
+ */
+export function structuralRequirements(definition: DefinitionOfDone): Map<string, DoDScenario["visible"] & {}> {
+  return new Map(
+    screenScenarios(definition)
+      .filter((entry) => entry.visible !== undefined)
+      .map((entry) => [entry.id, entry.visible!]),
+  );
 }
 
 /** What the session is asked to add, in the words it wrote the DoD in. */
