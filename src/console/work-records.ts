@@ -409,7 +409,7 @@ function renderStep(step: WorkRecordStep): string {
 
 /** The notice under a record that is still being written. */
 function runningNotice(): string {
-  return `<div class="notice attention" id="record-waiting" role="status"><h2>正在等待最新记录写入</h2>`
+  return `<div class="notice attention" id="record-waiting" role="status"><h2>正在等待记录写入</h2>`
     + `<p>匹配的智能体仍在工作，完整记录尚未结束；后续内容会自动出现，页面会自动刷新，已有片段不会丢失。</p></div>`;
 }
 
