@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import {
   REQUIREMENT_DETAIL_API_PATH,
   RUNNING_OVERVIEW_API_PATH,
+  TASK_DETAIL_API_PATH,
   type CurrentWorkReadPort,
 } from "./current-work-contracts.js";
 
@@ -33,6 +34,19 @@ export function registerCurrentWorkRoutes(
         return reply.code(404).send({ error: "requirement not found" });
       case "failed":
         return reply.code(503).send({ error: "requirement detail is unavailable" });
+    }
+  });
+
+  app.get(TASK_DETAIL_API_PATH, async (request, reply) => {
+    const cardId = String((request.params as { cardId?: string }).cardId ?? "");
+    const result = await port.readTaskDetail(cardId);
+    switch (result.kind) {
+      case "ok":
+        return reply.code(200).send(result.detail);
+      case "not_found":
+        return reply.code(404).send({ error: "task not found" });
+      case "failed":
+        return reply.code(503).send({ error: "task detail is unavailable" });
     }
   });
 }
