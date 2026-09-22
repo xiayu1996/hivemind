@@ -22,8 +22,8 @@ export type DispatchFailureDecision =
   | { kind: "provider_fault"; errorClass: ErrorClass }
   /** No card to charge, or one that finished anyway. */
   | { kind: "ignored" }
-  | { kind: "reenter"; state: StoryState; attempt: number; budget: number; errorClass: ErrorClass }
-  | { kind: "park"; state: StoryState; attempt: number; budget: number; errorClass: ErrorClass };
+  | { kind: "reenter"; state: StoryState; attempt: number; budget: number; errorClass: ErrorClass; refusal?: PhaseExitRefusal }
+  | { kind: "park"; state: StoryState; attempt: number; budget: number; errorClass: ErrorClass; refusal?: PhaseExitRefusal };
 
 /**
  * A failure that happened before the card's own work could begin.
@@ -50,6 +50,35 @@ export function isHostFault(message: string): boolean {
   return HOST_FAULT.some((pattern) => pattern.test(message));
 }
 
+/** A phase exit that used up its handbacks and refused what the round wrote. */
+export interface PhaseExitRefusal {
+  /** The phase whose exit refused, as the exit itself names it. */
+  gate: string;
+  /** What it asked for, which is the whole of what a person has to act on. */
+  detail: string;
+}
+
+const EXIT_REFUSAL = /([A-Z_]+) exit checks were not met:\s*([\s\S]*)$/;
+
+/**
+ * Whether this run died of its own exit rather than of something unknown.
+ *
+ * Both arrive here identically -- a child process that exited non-zero with a
+ * message -- and the classifier can only call the message UNKNOWN, so the page
+ * said "3 runs died before producing anything" over three rounds whose exits
+ * had each stated, in full, what was missing. Reading the refusal out keeps
+ * the budget exactly where it was (three rounds that cannot satisfy their own
+ * exit is a card for a person) and makes the stop say which exit refused and
+ * what it asked for.
+ */
+export function describePhaseExitRefusal(message: string): PhaseExitRefusal | undefined {
+  const match = EXIT_REFUSAL.exec(message);
+  if (!match) return undefined;
+  const detail = (match[2] ?? "").trim();
+  if (detail === "") return undefined;
+  return { gate: match[1]!, detail };
+}
+
 /**
  * What a dead Story run costs the card.
  *
@@ -67,7 +96,8 @@ export function decideDispatchFailure(facts: DispatchFailureFacts): DispatchFail
   if (!facts.card || facts.card.state === "DELIVERED") return { kind: "ignored" };
   const attempt = facts.card.phaseReentries + 1;
   const kind = mayReenterPhase(facts.card.state, attempt, facts.budget) ? "reenter" : "park";
-  return { kind, state: facts.card.state, attempt, budget: facts.budget, errorClass };
+  const refusal = describePhaseExitRefusal(facts.message);
+  return { kind, state: facts.card.state, attempt, budget: facts.budget, errorClass, ...(refusal ? { refusal } : {}) };
 }
 
 export interface DispatchFailureStore {
@@ -77,6 +107,7 @@ export interface DispatchFailureStore {
     state: StoryState;
     errorClass: string;
     message: string;
+    refusal?: PhaseExitRefusal;
     attempt: number;
     budget: number;
     runId: string;
@@ -123,18 +154,22 @@ export async function settleDispatchFailure(input: {
   await input.store.recordDispatchFailure({
     cardId: input.cardId,
     state: decision.state,
-    errorClass: decision.errorClass,
+    // Named for what it is. UNKNOWN is the honest answer for a message nobody
+    // can place, and this one places itself.
+    errorClass: decision.refusal ? "PHASE_EXIT_REFUSED" : decision.errorClass,
     message,
     attempt: decision.attempt,
     budget,
     runId,
+    ...(decision.refusal ? { refusal: decision.refusal } : {}),
   });
   if (decision.kind === "park") {
     await input.store.stopForInput(input.cardId, decision.state, "retry_limit_exceeded", runId, {
-      classification: "reentry",
+      classification: decision.refusal ? "phase_exit_refused" : "reentry",
       attempt: decision.attempt,
       budget,
-      errorClass: decision.errorClass,
+      errorClass: decision.refusal ? "PHASE_EXIT_REFUSED" : decision.errorClass,
+      ...(decision.refusal ? { refusal: decision.refusal } : {}),
     });
   }
   return decision;

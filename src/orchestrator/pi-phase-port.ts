@@ -503,7 +503,16 @@ export class PiStoryPhasePort implements StoryPhasePort {
     // asking a phase that must leave its tests failing for green evidence
     // would refuse every correct SPECIFY.
     if (codeExit && IMPLEMENTING_PHASES.has(input.phase)) {
-      const dodScenarioIds = input.context.specs.map((spec) => spec.id);
+      // A regression round may only touch the scenarios its cards name -- the
+      // definition of done it is given is narrowed to them -- so asking for
+      // fresh red-then-green evidence of every other scenario of the Story
+      // refuses every correct run of it. S-R237511MB-02 was reopened for one
+      // scenario and refused three times for the eight it was never asked to
+      // rewrite, which reads as three mystery crashes and parks the card.
+      const reopened = [...new Set((input.context.regressions ?? []).map((card) => card.scenarioId))].toSorted();
+      const dodScenarioIds = input.phase === "REGRESSION_FIX" && reopened.length > 0
+        ? reopened
+        : input.context.specs.map((spec) => spec.id);
       const roundTags = roundTasks(input.context).map((task) => task.tag);
       const collect = this.options.collectExitFacts ?? ((gate, scenarioIds) => this.measureCodeExit(gate, scenarioIds));
       let refused: readonly string[] = [];
