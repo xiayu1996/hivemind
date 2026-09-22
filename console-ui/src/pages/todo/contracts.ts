@@ -384,6 +384,16 @@ export function formatProcessedLine(todo: TodoDetailDto): string {
   });
 }
 
+/** The concise confirmed-save status required by the acceptance criteria.
+ * It names the destination kind while `formatProcessedLine` retains the fuller
+ * entry-specific wording for contexts that need the entry title. */
+export function formatSavedConfirmation(todo: TodoDetailDto): string {
+  return fill(copy.savedConfirmationTemplate, {
+    prefix: copy.savedPrefixes[todo.kind],
+    destination: copy.destinationValues[todo.notionTarget.kind],
+  });
+}
+
 /** The words a validation issue turns into. */
 export function validationMessage(issue: TodoValidationIssueDto): string {
   return copy.validation[issue];

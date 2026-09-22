@@ -46,7 +46,7 @@ import {
   TODO_COPY,
   TODO_REFRESH_INTERVAL_MS,
   formatNotionTargetLine,
-  formatProcessedLine,
+  formatSavedConfirmation,
   formatWaiting,
   initialTodoView,
   reduceTodoView,
@@ -285,7 +285,7 @@ onBeforeUnmount(() => {
 
         <section v-if="view.status === 'processed'" class="panel" aria-live="polite">
           <h2>{{ TODO_COPY.statusProcessed }}</h2>
-          <p role="status">{{ formatProcessedLine(todo) }}</p>
+          <p role="status">{{ formatSavedConfirmation(todo) }}</p>
           <p>{{ TODO_COPY.processedBody }}</p>
           <a class="button" href="/">{{ TODO_COPY.back }}</a>
         </section>
