@@ -14,6 +14,8 @@ import {
   DoDValidationError,
   hasScreen,
   lintDoDLanguage,
+  persistenceGaps,
+  renderPersistenceGaps,
   parseDoD,
   renderDoDLanguageFindings,
   renderMissingInterfaceContract,
@@ -1054,12 +1056,18 @@ ${orphanLines}`,
         // three rounds saying two halves of the same sentence.
         const missingVisible = scenariosMissingVisible(definitionOfDone);
         const missingPage = scenariosMissingPage(definitionOfDone);
-        if (missingVisible.length > 0 || missingPage.length > 0) {
+        // Asked in the same pass and for the same reason: what proves a screen
+        // kept what a person put into it is part of the basis, and a screen
+        // judged only in the moment it writes is satisfied by a store that
+        // forgets between visits.
+        const persistence = persistenceGaps(definitionOfDone);
+        if (missingVisible.length > 0 || missingPage.length > 0 || persistence.length > 0) {
           return {
             passed: false,
             findings: [
               ...(missingPage.length > 0 ? [renderMissingPage(missingPage)] : []),
               ...(missingVisible.length > 0 ? [renderMissingVisible(missingVisible)] : []),
+              ...(persistence.length > 0 ? [renderPersistenceGaps(persistence)] : []),
             ].join("\n\n"),
           };
         }

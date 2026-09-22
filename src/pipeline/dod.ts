@@ -80,6 +80,28 @@ const scenario = z.object({
    * it: reachability proves that page is served, not that the dialog opens.
    */
   page: z.string().trim().regex(/^\/\S*$/, "page must be an application path beginning with /").optional(),
+  /**
+   * Whether acting out this scenario changes something the system keeps. Asked
+   * of every screen scenario, because the answer decides whether a read-back
+   * scenario is owed and a scenario that never answers it owes nothing.
+   *
+   * Optional in the schema because a DoD frozen before this existed still has
+   * to parse; the SHAPE exit gate requires it of anything written from now on.
+   */
+  mutates: z.boolean().optional(),
+  /**
+   * The scenario that proves this one's change outlived the page. Required of
+   * a scenario that mutates.
+   *
+   * Without it a screen that writes is only ever judged in the moment it
+   * writes, and a store that forgets everything between visits satisfies it:
+   * R237511RC and R237511TR were each built on sample data that reseeded on
+   * every page open, passed every round, and were accepted for screens that
+   * could not keep a single edit. A save that does not survive a reload is the
+   * one failure such a screen has, and it fails deterministically, so it
+   * belongs in the definition of done rather than in a reviewer's eye.
+   */
+  persisted_by: scenarioId.optional(),
   visible: z.array(z.object({
     /** The ARIA role, as the snapshot names it: heading, link, button, list. */
     role: z.string().trim().min(1),
@@ -274,6 +296,72 @@ export function scenariosMissingPage(definition: DefinitionOfDone): string[] {
   return definition.scenarios
     .filter((entry) => hasScreen(entry) && entry.page === undefined)
     .map((entry) => entry.id);
+}
+
+/**
+ * What a screen scenario still owes about the change it makes.
+ *
+ * Three questions, one pass, because they are one sentence to whoever writes
+ * the DoD: does this screen change anything kept, which scenario proves the
+ * change survived, and does that scenario actually revisit the same page.
+ */
+export interface PersistenceGap {
+  scenarioId: string;
+  what: "unanswered" | "no_read_back" | "read_back_missing" | "read_back_elsewhere" | "read_back_not_in_browser";
+  detail?: string;
+}
+
+/**
+ * Screen scenarios that say nothing about whether their change outlives the
+ * page, and the read-backs they name that could not prove it.
+ *
+ * A read-back has to be settled in a browser and has to open the same page:
+ * one proved by a unit test proves the function was called, and one on another
+ * page proves something else entirely. Both would leave the only failure such
+ * a screen has -- the edit is gone when you come back -- outside the criteria.
+ */
+export function persistenceGaps(definition: DefinitionOfDone): PersistenceGap[] {
+  const byId = new Map(definition.scenarios.map((entry) => [entry.id, entry]));
+  const gaps: PersistenceGap[] = [];
+  for (const entry of screenScenarios(definition)) {
+    if (entry.mutates === undefined) {
+      gaps.push({ scenarioId: entry.id, what: "unanswered" });
+      continue;
+    }
+    if (!entry.mutates) continue;
+    const readBackId = entry.persisted_by;
+    if (readBackId === undefined) {
+      gaps.push({ scenarioId: entry.id, what: "no_read_back" });
+      continue;
+    }
+    const readBack = byId.get(readBackId);
+    if (!readBack) {
+      gaps.push({ scenarioId: entry.id, what: "read_back_missing", detail: readBackId });
+      continue;
+    }
+    if (!hasScreen(readBack)) {
+      gaps.push({ scenarioId: entry.id, what: "read_back_not_in_browser", detail: readBackId });
+      continue;
+    }
+    if (entry.page !== undefined && readBack.page !== undefined && readBack.page !== entry.page) {
+      gaps.push({ scenarioId: entry.id, what: "read_back_elsewhere", detail: `${readBackId} -> ${readBack.page}` });
+    }
+  }
+  return gaps;
+}
+
+export function renderPersistenceGaps(gaps: readonly PersistenceGap[]): string {
+  const lines: Record<PersistenceGap["what"], string> = {
+    unanswered: "要回答这条会不会改变系统里存着的东西（`mutates: true` 或 `false`）",
+    no_read_back: "这条会改东西，所以要再写一条「重新打开这一页，改动还在」的 scenario，并用 `persisted_by` 指向它",
+    read_back_missing: "`persisted_by` 指的 scenario 不存在",
+    read_back_elsewhere: "`persisted_by` 指的 scenario 打开的是另一页，证不了这一页的改动还在",
+    read_back_not_in_browser: "`persisted_by` 指的 scenario 不在浏览器里判定，证不了重新打开之后的事",
+  };
+  return [
+    "改东西的页面要有「改完之后还在」这条验收：只在改的那一刻判定的页面，换成一个每次打开都重置的假存储也照样通过，而人打开它会发现自己刚存的东西没了。",
+    ...gaps.map((gap) => `- ${gap.scenarioId} ${lines[gap.what]}${gap.detail ? `：${gap.detail}` : ""}`),
+  ].join("\n");
 }
 
 export function renderMissingPage(ids: readonly string[]): string {
