@@ -566,7 +566,7 @@ export function renderRecordsPage(view: RecordsPageView): string {
     body = noticeBlock({
       tone: "",
       heading: "正在读取工作记录",
-      bare: `正在读取 ${conditions} 的工作记录`,
+      bare: `正在读取 ${conditions} 的工作记录${recordConditionText(view.query)}`,
     });
   } else if (view.state === "unavailable") {
     body = noticeBlock({
@@ -606,6 +606,16 @@ export function renderRecordsPage(view: RecordsPageView): string {
     current: "records",
     body: head + recordsToolbar(view.query) + body,
   });
+}
+
+/** The query conditions spelled out, for the state that must say what it is
+ * reading. The toolbar holds the same values, but a field's content is not a
+ * sentence a person reads at a glance; this repeats them as text. */
+function recordConditionText(query: WorkRecordQuery): string {
+  const parts: string[] = [];
+  if (query.role !== undefined) parts.push(`角色 ${query.role}`);
+  if (query.keyword !== undefined) parts.push(`关键词 ${query.keyword}`);
+  return parts.length === 0 ? "" : `，${parts.join("、")}`;
 }
 
 function recordRetryFields(query: WorkRecordQuery): Record<string, string> {
