@@ -40,6 +40,7 @@ import {
 } from "./story-execution-store.js";
 import type { StoryState } from "./state-machine.js";
 import type { ResolvedAgentSpec } from "../runner/agent-spec.js";
+import { describeOrphanedCard } from "../regression/orphaned-cards.js";
 
 export interface ManagedPhaseInput {
   runId: string;
@@ -695,14 +696,21 @@ export class SingleStoryWorker {
     }
     if (story.regressionReopens >= this.maxRegressionReopens) {
       const runId = this.createRunId(cardId, "REGRESSION_FIX", story.innerLoopRounds);
+      // An open card whose scenario has left the sweep pool needs naming here,
+      // not a count: no sweep and no round can ever close it, so a person
+      // reading only "reopened twice" is told to wait for something that is
+      // never going to happen. S-R237511MB-02-access stopped this way twice.
+      const orphans = await this.store.orphanedRegressionCards(cardId);
       // Carries its own numbers: the page showed "重试次数用尽" over a budget
       // that belongs to the inner loop, which this stop is not about.
       await this.store.stopForInput(cardId, "REGRESSION_FIX", "retry_limit_exceeded", runId, {
         spent: story.regressionReopens,
         budget: this.maxRegressionReopens,
         reopened: cards.map((card) => card.scenarioId),
+        orphaned: orphans.map((card) => card.scenarioId),
       });
       await this.projection.enqueue(cardId);
+      const orphanLines = orphans.map((card) => `\n${describeOrphanedCard(card)}`).join("");
       return {
         state: "NEEDS_INPUT",
         rounds: story.innerLoopRounds,
@@ -711,7 +719,7 @@ export class SingleStoryWorker {
         stopReport: `${cardId} stopped: retry.maxRegressionReopens
 
 The regression loop reopened this Story ${story.regressionReopens} times; the cards still open: ${cards.map((card) => card.scenarioId).join(", ")}
-`,
+${orphanLines}`,
       };
     }
     await this.store.countRegressionReopen(cardId);

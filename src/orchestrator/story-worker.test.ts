@@ -1328,6 +1328,32 @@ describe("SingleStoryWorker regression fix", () => {
     expect(await store.getStory("S-EPIC1-01")).toMatchObject({ stopReason: "retry_limit_exceeded" });
   });
 
+  it("says an open card no sweep can close is exactly that, not just a count of reopens", async () => {
+    await openCard();
+    await client.execute("UPDATE stories SET regression_reopens = 2 WHERE id = 'S-EPIC1-01'");
+    const { phases, verifier, integration, delivery, projection } = regressionPorts(true);
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier, delivery, projection, { integration, maxRegressionReopens: 2 });
+
+    const result = await worker.run("S-EPIC1-01");
+    expect(result.stopReport).toContain("no sweep can close the card");
+    const event = (await client.execute("SELECT data FROM event_log WHERE type = 'story.stopped'")).rows[0];
+    expect(JSON.parse(String(event?.data)).orphaned).toEqual(["S-EPIC1-01-a"]);
+  });
+
+  it("keeps quiet about a card the next sweep can still close", async () => {
+    await openCard();
+    await client.execute(
+      "INSERT INTO scenario_registry (scenario_id, story_id, epic_id, pool, created_at, updated_at) VALUES ('S-EPIC1-01-a','S-EPIC1-01','EPIC1','epic',1,1)",
+    );
+    await client.execute("UPDATE stories SET regression_reopens = 2 WHERE id = 'S-EPIC1-01'");
+    const { phases, verifier, integration, delivery, projection } = regressionPorts(true);
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier, delivery, projection, { integration, maxRegressionReopens: 2 });
+
+    const result = await worker.run("S-EPIC1-01");
+    expect(result.stopReport).toContain("retry.maxRegressionReopens");
+    expect(result.stopReport).not.toContain("left the sweep pool");
+  });
+
   it("leaves through MERGE when nothing is left to fix, because the work may never have landed", async () => {
     // S-R237511MB-02 reached DELIVERED from here with 29 commits still ahead
     // of its Epic head: the round that reopened it stopped before the fix
