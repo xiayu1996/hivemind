@@ -16,6 +16,9 @@ const EXPECTED: Record<string, Array<[string, string]>> = {
   deepseek: [
     ["auth", "AUTH"],
   ],
+  mimo: [
+    ["auth", "AUTH"],
+  ],
   "openai-codex": [
     ["auth", "AUTH"],
     ["quota", "QUOTA"],
