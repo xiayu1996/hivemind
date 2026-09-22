@@ -34,6 +34,7 @@ import {
   type ScreenPage,
   type UnreachableScreen,
 } from "../pipeline/screen-reachability.js";
+import { renderEntrypointsTouched } from "../verify/app-entrypoint.js";
 import type { InterfaceContract } from "../pipeline/interface-contract.js";
 import {
   StoryExecutionStore,
@@ -230,6 +231,14 @@ export interface StoryWorkerOptions {
    * anything.
    */
   screensReachable?: (pages: readonly ScreenPage[]) => Promise<UnreachableScreen[] | null>;
+  /**
+   * The application lane's own entry points that this round rewrote.
+   *
+   * Empty when it left them alone, and `null` when there is no lane to speak
+   * of -- the same silence the reachability probe keeps for a repository that
+   * declares no way to start itself.
+   */
+  appEntrypointsTouched?: () => Promise<readonly string[] | null>;
   runId?: (cardId: string, phase: StoryPhase, round: number) => string;
 }
 
@@ -305,6 +314,7 @@ export class SingleStoryWorker {
   private readonly interfaceContract: (() => Promise<InterfaceContract | null>) | undefined;
   private readonly repositoryHas: ((path: string) => boolean) | undefined;
   private readonly screensReachable: StoryWorkerOptions["screensReachable"];
+  private readonly appEntrypointsTouched: StoryWorkerOptions["appEntrypointsTouched"];
 
   constructor(
     private readonly store: StoryExecutionStore,
@@ -323,6 +333,7 @@ export class SingleStoryWorker {
     this.interfaceContract = options.interfaceContract;
     this.repositoryHas = options.repositoryHas;
     this.screensReachable = options.screensReachable;
+    this.appEntrypointsTouched = options.appEntrypointsTouched;
     this.maxInconclusiveRounds = options.maxInconclusiveRounds ?? 2;
     this.maxInnerLoopRounds = options.maxInnerLoopRounds ?? 3;
     this.specifyExitRounds = options.specifyExitRounds ?? 3;
@@ -1012,6 +1023,19 @@ ${orphanLines}`,
         const definitionOfDone = await this.store.getDefinitionOfDone(cardId);
         const pages = screenPages(definitionOfDone);
         if (pages.length === 0) return { passed: true };
+        // Asked before the probe, because it decides whether the probe proves
+        // anything: a round that edited the start command is asking a witness
+        // it just rewrote.
+        const rewritten = (await this.appEntrypointsTouched?.()) ?? null;
+        if (rewritten !== null && rewritten.length > 0) {
+          await this.friction?.record({
+            cardId,
+            runId,
+            kind: "app_entrypoint_rewritten",
+            detail: rewritten.join(", "),
+          });
+          return { passed: false, findings: renderEntrypointsTouched(rewritten) };
+        }
         const unreachable = await reachable(pages);
         // No application to ask: this repository declares no way to start one,
         // and a screen no entry point can be asked about is the browser's

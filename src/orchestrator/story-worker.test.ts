@@ -913,6 +913,45 @@ describe("SingleStoryWorker SHAPE re-entry after a crash", () => {
     expect(friction.record).toHaveBeenCalledWith(expect.objectContaining({ kind: "screen_not_mounted" }));
   });
 
+  it("refuses a round that rewrote the entry point its own screen probe is started from", async () => {
+    // R237511RC added the page's data ports to the start script alone. Every
+    // screen was reachable because the probe started that script, and the
+    // product's own mount never received them.
+    const reachable = vi.fn(async () => []);
+    let rewritten: readonly string[] = ["scripts/serve-console.ts"];
+    const phases = vi.fn(async (input: ManagedPhaseInput) => {
+      if (input.phase === "SHAPE") return frontPhase(input, withScreens(DOD))!;
+      const front = frontPhase(input);
+      if (front) return front;
+      if (input.phase === "CODE") {
+        const gate = input.exitGates!.find((candidate) => candidate.name === "screen-reachable")!;
+        const refused = await gate.evaluate([{ kind: "implementation", body: "done" }], 1);
+        expect(refused).toMatchObject({ passed: false, findings: expect.stringContaining("scripts/serve-console.ts") });
+        // The probe is not even spent on a round whose witness was rewritten.
+        expect(reachable).not.toHaveBeenCalled();
+        rewritten = [];
+        expect(await gate.evaluate([{ kind: "implementation", body: "done" }], 2)).toEqual({ passed: true });
+        return {
+          sessionId: `session-code-${input.round}`,
+          artifacts: [{ kind: "implementation", body: "done" }],
+          exitGateRounds: { "screen-reachable": 2 },
+        };
+      }
+      return { sessionId: "session-merge", artifacts: [{ kind: "delivery-report", body: "两个场景都通过了。" }] };
+    });
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => ({ sessionId: `session-verify-${input.round}`, verdict: "accepted" as const, failedScenarios: [], artifact: "{}" })),
+    };
+    const friction = { record: vi.fn(async () => undefined) };
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier,
+      { deliver: vi.fn(async () => ({ mrUrl: null })) }, { enqueue: vi.fn(async () => undefined) },
+      { friction, screensReachable: reachable, appEntrypointsTouched: async () => rewritten });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
+    expect(phases.mock.calls.filter(([input]) => input.phase === "CODE")).toHaveLength(1);
+    expect(friction.record).toHaveBeenCalledWith(expect.objectContaining({ kind: "app_entrypoint_rewritten" }));
+  });
+
   it("asks nothing of a repository that declares no way to start an application", async () => {
     const reachable = vi.fn(async () => null);
     const phases = vi.fn(async (input: ManagedPhaseInput) => {
