@@ -982,9 +982,14 @@ export async function registerMobileConsoleRoutes(
 ): Promise<void> {
   const now = (): Date => dependencies.now?.() ?? new Date();
 
-  app.addContentTypeParser("application/x-www-form-urlencoded", { parseAs: "string" }, (_request, body, done) => {
-    done(null, Object.fromEntries(new URLSearchParams(body as string)));
-  });
+  // A caller that already registered a form parser -- the console contract
+  // does when it owns `/` and `/costs` -- added the same one, and adding it
+  // twice is a startup error when the two share one application.
+  if (!app.hasContentTypeParser("application/x-www-form-urlencoded")) {
+    app.addContentTypeParser("application/x-www-form-urlencoded", { parseAs: "string" }, (_request, body, done) => {
+      done(null, Object.fromEntries(new URLSearchParams(body as string)));
+    });
+  }
 
   const guard = async (request: FastifyRequest, reply: FastifyReply): Promise<boolean> => {
     const decision = dependencies.access.decide({ remoteAddress: request.ip });
@@ -1179,13 +1184,21 @@ export async function registerMobileConsoleRoutes(
   };
 
   for (const path of ["/operator/access", "/access"]) app.get(path, accessRoute);
-  for (const path of ["/operator/costs", "/costs"]) app.get(path, costsRoute);
+  // The bare aliases are the screens' only routes a caller may already own: a
+  // console that serves its own `/costs` and `/` mounts these screens for the
+  // `/operator/*` paths and keeps its pages. Claiming a route twice is a
+  // startup error, so the screens take each alias only when it is free.
+  for (const path of ["/operator/costs", "/costs"]) {
+    if (!app.hasRoute({ method: "GET", url: path })) app.get(path, costsRoute);
+  }
   for (const path of ["/operator/records", "/records"]) app.get(path, recordsRoute);
   for (const path of ["/operator/roles", "/roles"]) {
     app.get(path, rolesGetRoute);
     app.post(path, rolesPostRoute);
   }
-  app.get("/", async (_request, reply) => reply.redirect("/operator/costs", 302));
+  if (!app.hasRoute({ method: "GET", url: "/" })) {
+    app.get("/", async (_request, reply) => reply.redirect("/operator/costs", 302));
+  }
 }
 
 function roleDraft(view: RoleConfigurationView, query: Record<string, unknown>): RoleConfiguration {

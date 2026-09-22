@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { registerMobileConsoleRoutes, renderOperatorAccessPage, type MobileConsoleDependencies } from "./operator-screens.js";
+import { createMobileConsoleSample } from "./operator-sample.js";
 import type { ConsoleAccessPolicy } from "./operator-contract.js";
 import { fileURLToPath } from "node:url";
 import { costsPageZones, renderCostsRoute } from "./costs-page.js";
@@ -69,21 +70,20 @@ export interface ConsoleServerOptions {
   uiRoot?: string;
   serveUi?: boolean;
   /**
-   * The console's network boundary. When given, the gate runs as the first
-   * hook before every route -- the read APIs, the static shell and the mobile
-   * screens -- so a peer outside the allowed networks is answered with the
-   * access screen and never with a row read from the store. Without it the
-   * server stays open, which is what the sample servers and single-process
-   * tests rely on.
+   * The console's network boundary. The gate runs as the first hook before
+   * every route -- the read APIs, the static shell and the mobile screens -- so
+   * a peer outside the allowed networks is answered with the access screen and
+   * never with a row read from the store. A process that declares no policy
+   * still gets the boundary the mobile screens carry; it is never left open.
    */
   access?: ConsoleAccessPolicy;
   /** The one write surface. Without it the console stays entirely read-only. */
   configWriter?: ConsoleConfigWritePort;
   /**
-   * The mobile cost, record and role screens and their read ports. When given,
-   * the server renders those screens itself: the process that holds the store
-   * is the one that owes a person the screen, whether or not somebody ran a
-   * build.
+   * The mobile cost, record and role screens and their read ports. The sample
+   * screen set is mounted when omitted, so the process that starts the console
+   * always owes a person these screens rather than a route lookup; a process
+   * holding durable ports replaces it here.
    */
   screens?: MobileConsoleDependencies;
   /** The requirement-limit write surface. Without it the limit form has no
@@ -133,26 +133,35 @@ export async function createConsoleServer(
   // and the static shell has to close those too, or the screens are the only
   // thing the network check guarded. `/access` has to answer when denied, and
   // `/health` carries no operator data, so both stay reachable.
-  const access = options.access ?? options.screens?.access;
-  if (access) {
-    app.addHook("onRequest", async (request, reply) => {
-      const path = request.url.split("?")[0] ?? "";
-      if (path === "/access" || path === "/operator/access" || path === "/health") return;
-      const decision = access.decide({ remoteAddress: request.ip });
-      if (decision.allowed) return;
-      await reply.code(403).type("text/html; charset=utf-8").send(renderOperatorAccessPage(decision));
-    });
-  }
+  //
+  // The boundary is always on. A process that declares its own policy gets it;
+  // otherwise the console closes on the same networks the mobile screens are
+  // for, so a peer outside them is answered with the access screen rather than
+  // a route lookup -- a deployed console that wired no policy answered with a
+  // not-found page instead, which says nothing about the network a person has
+  // to join.
+  // The process that starts the console may not yet hold durable mobile read
+  // ports. It must still register a usable screen rather than leaving a phone
+  // at a route lookup; callers replace this sample set as soon as they own
+  // those ports.
+  const screens = options.screens ?? createMobileConsoleSample();
+  const access = options.access ?? screens.access;
+  app.addHook("onRequest", async (request, reply) => {
+    const path = request.url.split("?")[0] ?? "";
+    if (path === "/access" || path === "/operator/access" || path === "/health") return;
+    const decision = access.decide({ remoteAddress: request.ip });
+    if (decision.allowed) return;
+    await reply.code(403).type("text/html; charset=utf-8").send(renderOperatorAccessPage(decision));
+  });
   const writable = new Set(options.configWriter
     ? ["/api/config/value", "/api/config/rollback"]
     : []);
   // Role changes are the one write the mobile screens own; they go through the
   // role port, which validates and versions the change, so the read-only hook
-  // lets those two paths through exactly as it does the config writes.
-  if (options.screens) {
-    writable.add("/operator/roles");
-    writable.add("/roles");
-  }
+  // lets those two paths through exactly as it does the config writes. The
+  // screens are always mounted, so these are always writable.
+  writable.add("/operator/roles");
+  writable.add("/roles");
   // Only what the mount point handed over. Falling back to the data source's
   // own store made a write surface appear because a reader happened to also be
   // able to write: scripts/serve-console.ts mounts the live database for a
@@ -160,10 +169,13 @@ export async function createConsoleServer(
   // form that writes a requirement's cost limit into it.
   const costLimitStore = options.costLimitStore;
   if (costLimitStore) writable.add("/costs/requirement-limit");
-  // Mounting the mobile screens hands them the page surface: they serve `/`
-  // and `/costs` themselves, and fastify refuses a second handler for a route.
-  // The read APIs, the health probe and the config writes are unaffected --
-  // they are the same answers whichever screens are in front of them.
+  // Screens a caller passed in own the page surface: they serve `/` and
+  // `/costs` themselves, and fastify refuses a second handler for a route. The
+  // sample fallback is mounted into a console that already answers those with
+  // its own costs and overview pages, and it leaves them alone for that
+  // reason. The read APIs, the health probe and the config writes are
+  // unaffected -- they are the same answers whichever screens are in front of
+  // them.
   const screensOwnPages = options.screens !== undefined;
   // The screens register the same parser for their own forms, and fastify
   // refuses a second one for a content type. It is the same parser either way.
@@ -334,10 +346,10 @@ export async function createConsoleServer(
 
   // Registered before the built shell claims its routes: the screens this
   // process renders are the ones somebody is judged on, and a shell that
-  // happens to be built must not answer in their place.
-  if (options.screens) {
-    await registerMobileConsoleRoutes(app, options.screens);
-  }
+  // happens to be built must not answer in their place. The sample set is the
+  // fallback for a process that holds the store but not yet the mobile ports,
+  // and it leaves `/` and `/costs` to the routes above when they were built.
+  await registerMobileConsoleRoutes(app, screens);
   if (options.serveUi !== false) {
     const uiRoot = findConsoleUiRoot(options.uiRoot ?? "console-ui/dist");
     const index = uiRoot === null ? null : await readOptional(join(uiRoot, "index.html"));
