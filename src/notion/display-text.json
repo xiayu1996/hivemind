@@ -225,6 +225,7 @@
     "baselineFailing": "Epic 分支上「{check}」本来就没通过（{failures}），这不是这张卡的问题。",
     "refusal": "有一轮的产出被出口检查挡下：{reason}",
     "dispatchFailed": "有 {count} 次运行还没产出就断了。",
+    "exitRefused": "「{phase}」这一步连续 {count} 次没能交出合格的产出：{detail}",
     "spend": "这张卡到目前花了 {amount} 美元。",
     "budget": "这段已经用掉 {spent}/{budget} 轮。",
     "inconclusive": "连续 {attempts} 轮都没能判成：{scenarios}。",
