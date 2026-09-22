@@ -61,6 +61,15 @@ function renderAlertSummary(view: OverviewCostAlertPageView): string {
     + `<ul class="ledger">${rows}</ul></section>`;
 }
 
+/**
+ * The alert panel on its own, so the page that also carries the running rail
+ * can compose it rather than duplicate its wording. The two must read as one
+ * screen: a person sees what is running and what is over its limit together.
+ */
+export function renderOverviewAlertPanel(view: OverviewCostAlertPageView): string {
+  return renderAlertSummary(view);
+}
+
 /** The complete run-overview document. */
 export function renderOverviewCostAlertPage(view: OverviewCostAlertPageView): string {
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">`

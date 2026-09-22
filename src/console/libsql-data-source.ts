@@ -16,6 +16,8 @@ import {
 import type { RequirementSummaryRow } from "./requirement-detail-page.js";
 import type { ConsoleDataSource } from "./server.js";
 import { LibsqlStoryProgressReadPort, type StoryProgressReadResult } from "./story-progress.js";
+import { LibsqlCurrentWorkReadPort } from "./current-work-read-port.js";
+import type { CurrentWorkReadPort } from "./current-work-contracts.js";
 
 function plain(row: Row): Record<string, unknown> {
   return Object.fromEntries(Object.entries(row));
@@ -26,6 +28,8 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
   private readonly requirementCostPort: LibsqlRequirementCostReadPort;
   readonly requirementCostLimitStore: LibsqlRequirementCostLimitStore;
   private readonly requirementCostLimitPort: LibsqlRequirementCostLimitReadPort;
+  /** The running rail and the two detail screens, over the same central store. */
+  readonly currentWork: CurrentWorkReadPort;
 
   constructor(
     private readonly client: Client,
@@ -43,6 +47,7 @@ export class LibsqlConsoleDataSource implements ConsoleDataSource {
       this.requirementCostPort,
       this.requirementCostLimitStore,
     );
+    this.currentWork = new LibsqlCurrentWorkReadPort(client);
   }
 
   /** The requirement-progress read, built once and reused: it holds no state

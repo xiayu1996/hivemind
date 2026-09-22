@@ -9,6 +9,12 @@ import { fileURLToPath } from "node:url";
 import { costsPageZones, renderCostsRoute } from "./costs-page.js";
 import { toOverviewCostAlertsView } from "./overview-cost-alerts.js";
 import { renderOverviewCostAlertPage } from "./overview-cost-alert-page.js";
+import { registerCurrentWorkRoutes } from "./current-work-routes.js";
+import {
+  registerCurrentWorkPageRoutes,
+  renderRunningOverviewPage,
+} from "./current-work-page.js";
+import type { CurrentWorkReadPort } from "./current-work-contracts.js";
 import { saveRequirementCostLimit } from "./requirement-cost-limit.js";
 import {
   renderRequirementDetailPage,
@@ -60,6 +66,10 @@ export interface ConsoleDataSource {
    * store publishes it here, so the console can offer the one write it owes
    * without every caller having to remember a second port. */
   requirementCostLimitStore?: RequirementCostLimitStore;
+  /** The running overview and the two detail screens' read port. Optional so a
+   * source that cannot read the ledger keeps the server-rendered alert page
+   * rather than publishing routes that answer nothing. */
+  currentWork?: CurrentWorkReadPort;
 }
 
 export interface ConsoleConfigWritePort {
@@ -118,9 +128,9 @@ export async function createConsoleServer(
   const app = Fastify({ logger: false });
   // Only what the mount point handed over. Falling back to the data source's
   // own store made a write surface appear because a reader happened to also be
-  // able to write: scripts/serve-console.ts mounts the live database for a
-  // verification round to look at, passes no ports at all, and was serving a
-  // form that writes a requirement's cost limit into it.
+  // able to write: scripts/serve-console.ts mounts a store for a verification
+  // round to look at, passes no ports at all, and was serving a form that
+  // writes a requirement's cost limit into it.
   const costLimitStore = options.costLimitStore;
   const writable = new Set(options.configWriter
     ? ["/api/config/value", "/api/config/rollback"]
@@ -175,7 +185,16 @@ export async function createConsoleServer(
   // and never translated into a paused state.
   app.get("/", async (_request, reply) => {
     const snapshots = data.overLimitRequirements ? await data.overLimitRequirements() : [];
-    return reply.type("text/html").send(renderOverviewCostAlertPage({ alert: toOverviewCostAlertsView(snapshots) }));
+    const alert = { alert: toOverviewCostAlertsView(snapshots) };
+    // The running rail is where a person reaches the detail screens from. A
+    // source that cannot read it keeps the alert page exactly as it was: an
+    // empty rail would read as "nothing is running", which is a different
+    // claim from "this console cannot say".
+    const currentWork = data.currentWork;
+    if (!currentWork) return reply.type("text/html").send(renderOverviewCostAlertPage(alert));
+    const running = await currentWork.readRunningOverview();
+    if (running.kind === "failed") return reply.type("text/html").send(renderOverviewCostAlertPage(alert));
+    return reply.type("text/html").send(renderRunningOverviewPage(alert, { entries: running.snapshot.entries }));
   });
 
   // Saving a requirement limit is scoped to the one requirement named in the
@@ -198,6 +217,16 @@ export async function createConsoleServer(
     const outcome = response.kind === "saved" ? "limitSaved=1" : `limitError=${response.kind}`;
     return reply.redirect(`/costs?requirement=${encodeURIComponent(requirementId)}&${outcome}`, 303);
   });
+
+  // The running overview and the two person-visible detail screens read the
+  // same snapshots their JSON routes publish. They exist whether or not a
+  // browser bundle was built, because they are served by the process that
+  // holds the ledger rather than by whatever ran a build.
+  const currentWork = data.currentWork;
+  if (currentWork) {
+    registerCurrentWorkRoutes(app, currentWork);
+    registerCurrentWorkPageRoutes(app, currentWork);
+  }
 
   // A requirement's cumulative cost is the central ledger's answer, so it is
   // served by the same process that holds the store, whether or not a browser

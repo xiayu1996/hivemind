@@ -1,21 +1,22 @@
 /**
- * The console, on its own, for a verification round to open pages against.
+ * The console as a standalone process, so a round can open its pages and judge
+ * them.
  *
- * A scenario declared `ui` or `e2e` is judged on a screen, and a screen needs
- * something serving it. Until this existed the repository had no way to start
- * its own application, so `verify.appStartCommand` stayed empty and every such
- * scenario came back inconclusive -- or worse, came back passed from a session
- * that had stood up something of its own and judged that instead.
+ * The orchestrator mounts the same server in-process and that is the console a
+ * person reads: it serves the central store. This entry exists for the rounds
+ * that judge the screens -- and a round must judge the sample data its
+ * scenarios declare, not whatever the worktree happened to inherit. The
+ * orchestrator exports `HIVEMIND_DB_URL` to every child it starts, so a review
+ * that honored it would serve a real deployment's running work and every
+ * scenario written about its own sample would be refused for the work it could
+ * not see. The review therefore opens a temporary store and fills it with the
+ * declared dataset; only an explicit `--db` reads a database somebody named on
+ * purpose, and that one is still served from a private copy so the round cannot
+ * write to it.
  *
- * It serves a private snapshot of the central database, taken when it starts
- * and deleted when it stops. Real data, because the screens under judgement are
- * screens of real rounds, real costs and real blockers -- a freshly migrated
- * database renders every page as its empty state, which is exactly one of the
- * things the scenarios need to tell apart. A snapshot rather than the database
- * itself, because a round that submits a decision on a screen must not submit a
- * real one: the writing surfaces are what the scenarios are there to exercise,
- * and the only safe place for that write is a copy nobody reads afterwards.
- * It also means two rounds judging the same screen start from the same picture.
+ * The store is a temporary file rather than `:memory:` because a read runs in
+ * its own transaction, and an in-memory database does not survive the
+ * connection that closes it.
  */
 import { execFile } from "node:child_process";
 import { hostname, tmpdir } from "node:os";
@@ -24,7 +25,9 @@ import { promisify } from "node:util";
 import { existsSync, mkdtempSync, readdirSync, rmSync, statfsSync, statSync } from "node:fs";
 import { createConsoleServer, listenConsole } from "../src/console/server.js";
 import { LibsqlConsoleDataSource } from "../src/console/libsql-data-source.js";
+import { seedCurrentWorkDemo } from "../src/console/current-work-demo.js";
 import { openDb } from "../src/persistence/client.js";
+import { migrate } from "../src/persistence/migrate.js";
 import { pinnedPiVersion } from "../src/runner/pi-binary.js";
 
 const execFileAsync = promisify(execFile);
@@ -39,18 +42,6 @@ function flag(name: string): string | undefined {
 const port = Number(flag("port") ?? process.env.HIVEMIND_CONSOLE_PORT ?? 4319);
 if (!Number.isInteger(port) || port < 1 || port > 65_535) {
   throw new Error(`--port must be a port number, got ${flag("port")}`);
-}
-// The worktree under verification has no data directory of its own -- data/ is
-// ignored -- so the central database is named by the environment the worker
-// already runs in, and only fallen back to relative for a direct invocation.
-const url = flag("db") ?? process.env.HIVEMIND_DB_URL ?? "file:data/hivemind.db";
-// libsql creates a missing file, so an unset HIVEMIND_DB_URL would serve every
-// page as its empty state and look like a working application. Refusing is
-// what lets the round report that it had no application rather than judge the
-// screens of a database nobody wrote to.
-const file = url.startsWith("file:") ? url.slice("file:".length).split("?")[0]! : "";
-if (file !== "" && !existsSync(file)) {
-  throw new Error(`no database at ${file}: set HIVEMIND_DB_URL or pass --db`);
 }
 
 const uiRoot = join(ROOT, "console-ui", "dist");
@@ -69,19 +60,16 @@ if (existsSync(join(ROOT, "vite.config.ts"))) {
   }
 }
 
-// The snapshot is taken through the database rather than off the filesystem:
-// a file copy would miss whatever is still in the write-ahead log, and what is
-// newest is exactly what a round is judging.
-// A console killed outright never reaches its own cleanup, and a snapshot is
-// the size of the central database, so the leak is measured in gigabytes. One
-// round lasts minutes; anything of ours still here after an hour was orphaned.
-const SNAPSHOT_PREFIX = "hivemind-console-";
+// A console killed outright never reaches its own cleanup, and a store is the
+// size of the central database, so the leak is measured in gigabytes. One round
+// lasts minutes; anything of ours still here after an hour was orphaned.
+const TEMP_PREFIX = "hivemind-console-";
 const ORPHAN_AGE_MS = 60 * 60 * 1000;
 
-function removeOrphanedSnapshots(): void {
+function removeOrphanedStores(): void {
   const now = Date.now();
   for (const entry of readdirSync(tmpdir())) {
-    if (!entry.startsWith(SNAPSHOT_PREFIX)) continue;
+    if (!entry.startsWith(TEMP_PREFIX)) continue;
     const path = join(tmpdir(), entry);
     try {
       if (now - statSync(path).mtimeMs < ORPHAN_AGE_MS) continue;
@@ -93,8 +81,30 @@ function removeOrphanedSnapshots(): void {
   }
 }
 
-removeOrphanedSnapshots();
-const snapshotDir = url.startsWith("file:") ? mkdtempSync(join(tmpdir(), SNAPSHOT_PREFIX)) : null;
+removeOrphanedStores();
+const temporaryDirectory = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
+
+const explicitUrl = flag("db");
+let serveUrl: string;
+if (explicitUrl === undefined) {
+  serveUrl = await openDemonstrationStore(join(temporaryDirectory, "console.db"));
+} else {
+  serveUrl = await openPrivateCopy(explicitUrl, temporaryDirectory);
+}
+
+// The demonstration store is migrated and filled with the samples the
+// scenarios declare. A real database handed in through `--db` keeps exactly
+// what it holds; a round must never be served sample data it did not ask for.
+async function openDemonstrationStore(path: string): Promise<string> {
+  const handle = openDb(`file:${path}`);
+  try {
+    await migrate(handle.client);
+    await seedCurrentWorkDemo(handle.client, Date.now());
+  } finally {
+    handle.close();
+  }
+  return `file:${path}`;
+}
 
 // A snapshot is the size of the central database. Running out of disk halfway
 // through one leaves a truncated copy that reads like a database with less in
@@ -113,10 +123,17 @@ function assertRoomFor(databaseFile: string, directory: string): void {
   );
 }
 
-async function snapshotOf(source: string, directory: string): Promise<string> {
+async function openPrivateCopy(url: string, directory: string): Promise<string> {
+  // libsql creates a missing file, so a wrong URL would serve every page as its
+  // empty state and look like a working application. Refusing is what lets the
+  // round report that it had no application rather than judge the screens of a
+  // database nobody wrote to.
+  const file = url.startsWith("file:") ? url.slice("file:".length).split("?")[0]! : "";
+  if (file === "") return url;
+  if (!existsSync(file)) throw new Error(`no database at ${file}: pass --db or leave it out for the sample store`);
   const target = join(directory, "console.db");
   assertRoomFor(file, directory);
-  const origin = openDb(source);
+  const origin = openDb(url);
   try {
     await origin.client.execute({ sql: "VACUUM INTO ?", args: [target] });
   } finally {
@@ -125,7 +142,7 @@ async function snapshotOf(source: string, directory: string): Promise<string> {
   return `file:${target}`;
 }
 
-const handle = openDb(snapshotDir === null ? url : await snapshotOf(url, snapshotDir));
+const handle = openDb(serveUrl);
 const app = await createConsoleServer(
   new LibsqlConsoleDataSource(handle.client, async () => [{
     hostId: hostname(),
@@ -142,7 +159,7 @@ console.log(`console ready at ${address}`);
 const close = async (): Promise<void> => {
   await app.close().catch(() => undefined);
   handle.close();
-  if (snapshotDir !== null) rmSync(snapshotDir, { recursive: true, force: true });
+  rmSync(temporaryDirectory, { recursive: true, force: true });
 };
 process.once("SIGINT", () => void close().then(() => process.exit(0)));
 process.once("SIGTERM", () => void close().then(() => process.exit(0)));
