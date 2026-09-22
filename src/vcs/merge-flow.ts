@@ -130,6 +130,8 @@ export class EpicMergeFlow {
     const target = integrationBranch(input.epicId);
     await this.ensureIntegrationBranch(target);
     await this.requireCleanIntegrationBranch();
+    const diverged = await this.adoptRemoteIntegrationHead(target);
+    if (diverged !== undefined) return diverged;
     await this.requireCleanStoryBranch(input.story.branch);
     try {
       await this.git.run(this.options.storyWorktree, ["rebase", target]);
@@ -274,6 +276,57 @@ export class EpicMergeFlow {
       await this.git.run(this.options.integrationWorktree, ["switch", target]);
     } catch {
       await this.git.run(this.options.integrationWorktree, ["switch", "-c", target, this.mainBranch]);
+    }
+  }
+
+  /**
+   * Takes the Epic head origin holds before anything is measured against it.
+   *
+   * Everything after this point -- the rebase, the base revision, the subset
+   * re-verification, the fast-forward -- is computed from the local branch,
+   * and the run ends by pushing it. Nothing reconciled that branch with the
+   * remote, so any other writer of the same Epic head made the whole run
+   * unlandable: the push came back `non-fast-forward`, which the orchestrator
+   * can only read as an UNKNOWN crash, and three of those park the card. That
+   * is what happened to S-R237511DT-03 on 2026-09-22, after a person pushed a
+   * refresh of the Epic head; on more than one host it is the ordinary case,
+   * because two hosts landing Stories of the same Epic both push here.
+   *
+   * Behind the remote is a fast-forward. Diverged means a previous push of
+   * this branch was lost, so both sides are real work and the remote's is
+   * merged in rather than discarded -- this is the shared Epic head, and a
+   * force push here drops another host's landed Story. A conflict in that
+   * merge is left to a person, named for what it is.
+   */
+  private async adoptRemoteIntegrationHead(target: string): Promise<MergeResult | undefined> {
+    const tracking = `refs/remotes/origin/${target}`;
+    try {
+      await this.git.run(this.options.integrationWorktree, ["ls-remote", "--exit-code", "origin", `refs/heads/${target}`]);
+    } catch {
+      // No such branch on origin: this run is the one that creates it.
+      return undefined;
+    }
+    await this.git.run(this.options.integrationWorktree, ["fetch", "origin", `+refs/heads/${target}:${tracking}`]);
+    const counts = await this.git.run(this.options.integrationWorktree, ["rev-list", "--left-right", "--count", `HEAD...${tracking}`]);
+    const [ahead = "0", behind = "0"] = counts.trim().split(/\s+/);
+    if (behind === "0") return undefined;
+    if (ahead === "0") {
+      await this.git.run(this.options.integrationWorktree, ["merge", "--ff-only", tracking]);
+      return undefined;
+    }
+    try {
+      await this.git.run(this.options.integrationWorktree, ["merge", "--no-edit", tracking]);
+      return undefined;
+    } catch (cause) {
+      const reason = cause instanceof Error ? cause.message : String(cause);
+      await this.git.run(this.options.integrationWorktree, ["merge", "--abort"]).catch(() => undefined);
+      return {
+        kind: "verification_failed",
+        integrationBranch: target,
+        scenarioIds: [],
+        attribution: "environment",
+        reason: `the Epic head on origin has diverged from this host by ${ahead} local and ${behind} remote commits and the two do not merge cleanly: ${reason}`,
+      };
     }
   }
 
