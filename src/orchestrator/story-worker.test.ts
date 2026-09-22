@@ -118,8 +118,8 @@ function frontPhase(input: ManagedPhaseInput, dod: string = DOD) {
 }
 
 /** The same DoD with its first scenario judged on a screen. A screen scenario
- * owes examples, a source, the page it is served at and the roles it shows,
- * so all five are here. */
+ * owes examples, a source, the page it is served at, the roles it shows and an
+ * answer about whether it changes anything kept, so all six are here. */
 function withScreens(dod: string): string {
   return dod.replace("    layers: [integration]", [
     "    layers: [ui]",
@@ -130,6 +130,7 @@ function withScreens(dod: string): string {
     "      - kind: excludes",
     "        text: 还没有任何任务",
     "    page: /tasks",
+    "    mutates: false",
     "    visible:",
     "      - role: button",
     "        text: 新建任务",
@@ -812,6 +813,34 @@ describe("SingleStoryWorker SHAPE re-entry after a crash", () => {
     expect(shaped).toBe(2);
     const frozen = await store.getDefinitionOfDone("S-EPIC1-01");
     expect(frozen.scenarios[0]?.page).toBe("/tasks");
+  });
+
+  it("hands a screen that changes something but never reopens the page back to the session that wrote it", async () => {
+    await store.transition("S-EPIC1-01", "QUEUED", "SHAPE", "system", "run-shape");
+    const screens = withScreens(DOD);
+    // A screen that saves and is only ever judged in the moment it saves is
+    // satisfied by a store that forgets between visits, which is how two Epics
+    // were accepted for screens that could not keep an edit.
+    const writesOnly = screens.replace("    mutates: false", "    mutates: true");
+    let shaped = 0;
+    const phases = vi.fn(async (input: ManagedPhaseInput) => {
+      if (input.phase === "SHAPE") {
+        shaped++;
+        return frontPhase(input, shaped === 1 ? writesOnly : screens)!;
+      }
+      const front = frontPhase(input);
+      if (front) return front;
+      if (input.phase === "CODE") return { sessionId: `session-code-${input.round}`, artifacts: [{ kind: "implementation", body: "done" }] };
+      return { sessionId: "session-merge", artifacts: [{ kind: "delivery-report", body: "两个场景都通过了。" }] };
+    });
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => ({ sessionId: `session-verify-${input.round}`, verdict: "accepted" as const, failedScenarios: [], artifact: "{}" })),
+    };
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier,
+      { deliver: vi.fn(async () => ({ mrUrl: null })) }, { enqueue: vi.fn(async () => undefined) });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
+    expect(shaped).toBe(2);
   });
 
   it("hands a footprint the repository has no room for back to the session that wrote it", async () => {
