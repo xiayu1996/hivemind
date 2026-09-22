@@ -1,9 +1,28 @@
 import type { ConfigStore } from "../config/store.js";
+import { directoryOf } from "../util/repository-path.js";
 
 export interface SchedulableStory {
   id: string;
   dependsOn: readonly string[];
   predictedFootprint: readonly string[];
+  /**
+   * The Epic whose branch this Story's work lands on.
+   *
+   * Two Stories under one Epic share a branch: the second rebases onto what
+   * the first left there, so an overlapping footprint is a race for one tree
+   * and they may not run together. Two Stories under different Epics never
+   * touch the same tree -- separate worktrees, separate branches, and MERGE
+   * rebases each onto its own `epic/<id>` -- so their overlap is a conflict
+   * between two Epic branches, which git resolves once at the Epic merge
+   * rather than by never running the second card.
+   *
+   * Reading them as competitors cost this installation the whole requirement:
+   * nine cards across six Epics each declared `src/console`, the plan held one
+   * batch of one, and two of them had not started after four hours. Absent,
+   * the Story is treated as sharing a branch with everything, which is the
+   * conservative answer for a Story that has no Epic yet.
+   */
+  epicId?: string;
 }
 
 export interface PlannedStoryExecution {
@@ -62,30 +81,6 @@ function findDependencyCycle(stories: readonly SchedulableStory[]): readonly str
   return undefined;
 }
 
-/**
- * The directory a footprint entry names, whichever way it was spelled.
- *
- * A trailing slash and a trailing glob both name the subtree they are attached
- * to, and neither may change the answer. Untrimmed, `src/console/` and
- * `src/console/**` each failed to contain `src/console/tabs` while
- * `src/console` contained it, so two Stories in one subtree could be planned
- * side by side. All three spellings come from real cards: the DoD rewrites the
- * footprint the decomposition validated and asks only for non-empty strings.
- *
- * Only a whole segment is dropped, so `src/consoles` and a file named `*`
- * keep their own names.
- */
-function directoryOf(path: string): string {
-  let end = path.length;
-  for (;;) {
-    while (end > 1 && path[end - 1] === "/") end -= 1;
-    const segment = path.lastIndexOf("/", end - 1) + 1;
-    const last = path.slice(segment, end);
-    if (segment === 0 || (last !== "*" && last !== "**")) return path.slice(0, end);
-    end = segment;
-  }
-}
-
 function pathsIntersect(rawLeft: string, rawRight: string): boolean {
   const left = directoryOf(rawLeft);
   const right = directoryOf(rawRight);
@@ -104,8 +99,17 @@ export function storiesShareHotspot(left: SchedulableStory, right: SchedulableSt
   return hotspots.some((hotspot) => coversHotspot(left, hotspot) && coversHotspot(right, hotspot));
 }
 
+/** Whether the two Stories' work lands on the same branch. */
+function shareBranch(left: SchedulableStory, right: SchedulableStory): boolean {
+  return !left.epicId || !right.epicId || left.epicId === right.epicId;
+}
+
 function storiesConflict(left: SchedulableStory, right: SchedulableStory, hotspots: readonly string[]): boolean {
-  return footprintsIntersect(left, right) || storiesShareHotspot(left, right, hotspots);
+  // Hotspots are not scoped to a branch: they are the operator naming a path
+  // whose conflicts are not worth having at all, which is a statement about
+  // the Epic merge as much as about one tree.
+  if (storiesShareHotspot(left, right, hotspots)) return true;
+  return shareBranch(left, right) && footprintsIntersect(left, right);
 }
 
 export async function planRepositoryStoryExecution(
@@ -155,11 +159,15 @@ export function dispatchableStories(stories: readonly RepositoryStory[]): Schedu
   };
   return stories
     .filter((story) => open.has(story.id) && !isHeld(story.id, new Set()))
-    .map((story) => ({
-      id: story.id,
-      dependsOn: story.dependsOn.filter((dependency) => open.has(dependency)),
-      predictedFootprint: story.predictedFootprint,
-    }));
+    .map((story) => {
+      const planned: SchedulableStory = {
+        id: story.id,
+        dependsOn: story.dependsOn.filter((dependency) => open.has(dependency)),
+        predictedFootprint: story.predictedFootprint,
+      };
+      if (story.epicId) planned.epicId = story.epicId;
+      return planned;
+    });
 }
 
 export interface StoryExecutionOptions {

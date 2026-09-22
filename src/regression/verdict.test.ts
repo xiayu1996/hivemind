@@ -46,7 +46,7 @@ describe("judgeRegression", () => {
       .toMatchObject({ kind: "raise", failures: 6, signature: "sig-a" });
   });
 
-  it("will not raise a card when every failure looks different", () => {
+  it("will not raise a card when a scenario that still works fails differently every time", () => {
     const observations: RegressionObservation[] = [
       { outcome: "failed", failureSignature: "sig-a" },
       { outcome: "failed", failureSignature: "sig-b" },
@@ -54,8 +54,26 @@ describe("judgeRegression", () => {
       { outcome: "failed", failureSignature: "sig-d" },
       { outcome: "failed", failureSignature: "sig-e" },
       { outcome: "failed", failureSignature: "sig-f" },
+      ...runs("PPPP"),
     ];
     expect(judgeRegression(observations, policy)).toMatchObject({ kind: "suspect" });
+  });
+
+  it("raises for a scenario that has never once worked, however differently it fails", () => {
+    // A screen's failure is a sentence somebody wrote about what they saw, so
+    // the wording -- and the signature -- is new every round. Holding out for
+    // agreement left a scenario that never worked with no card, no owner, and
+    // an Epic waiting at its review gate for somebody to fix it.
+    const observations: RegressionObservation[] = [
+      { outcome: "failed", failureSignature: "sig-a" },
+      { outcome: "failed", failureSignature: "sig-b" },
+      { outcome: "failed", failureSignature: "sig-c" },
+    ];
+    expect(judgeRegression(observations, policy)).toMatchObject({ kind: "raise", signature: "sig-a" });
+  });
+
+  it("still waits for a third failure before calling a never-green scenario broken", () => {
+    expect(judgeRegression(runs("FF", "sig-a"), policy)).toMatchObject({ kind: "suspect", failures: 2 });
   });
 
   it("names the break that dominates the window", () => {
@@ -77,9 +95,10 @@ describe("judgeRegression", () => {
     const observations: RegressionObservation[] = [
       { outcome: "failed", failureSignature: "sig-new" },
       ...runs("FFFF", "sig-old"),
+      ...runs("PPPP"),
     ];
     expect(judgeRegression(observations, policy)).toMatchObject({ kind: "suspect" });
-    expect(judgeRegression([...runs("FFF", "sig-new"), ...runs("FFFF", "sig-old")], policy))
+    expect(judgeRegression([...runs("FFF", "sig-new"), ...runs("FFFF", "sig-old"), ...runs("PPP")], policy))
       .toMatchObject({ kind: "raise", signature: "sig-new" });
   });
 

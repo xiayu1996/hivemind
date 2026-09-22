@@ -160,6 +160,16 @@ describe("EpicCompletion with scenarios to judge", () => {
     expect(outcomes).toEqual([{ epicId: "E1", kind: "done" }]);
   });
 
+  it("sends the batch back to work on a gap while its review request is still open", async () => {
+    await judged.execute("UPDATE epic_acceptance_items SET status = 'gap', decided_at = 5, note = '提交答复没生效' WHERE epic_id = 'E1'");
+    const outcomes = await new EpicCompletion(judged, { state: async () => "open" }, () => 10).tick();
+    expect(outcomes).toMatchObject([{ epicId: "E1", kind: "gap", storyIds: ["S-E1-01"] }]);
+    expect((await judged.execute("SELECT state, mr_url FROM epics WHERE id = 'E1'")).rows[0])
+      .toMatchObject({ state: "EXECUTING", mr_url: null });
+    expect((await judged.execute("SELECT requirement FROM stories WHERE id = 'S-E1-01'")).rows[0]?.requirement)
+      .toContain("提交答复没生效");
+  });
+
   it("sends the batch back to work when the person said a scenario is missing", async () => {
     await judged.execute("UPDATE epic_acceptance_items SET status = 'gap', decided_at = 5, note = '列表没刷新' WHERE epic_id = 'E1'");
     const outcomes = await new EpicCompletion(judged, merged, () => 10).tick();

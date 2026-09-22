@@ -1,4 +1,5 @@
 import { parse } from "yaml";
+import { directoryOf } from "../util/repository-path.js";
 import { z } from "zod";
 import { lintHumanSentence } from "../report/business-language.js";
 
@@ -64,6 +65,21 @@ const scenario = z.object({
    * nothing but a 404 body still produced four screenshots and four confident
    * verdicts, because no code had anything to compare the page against.
    */
+  /**
+   * Where the application serves this scenario's screen, as a path beginning
+   * with `/`. Required of scenarios a browser settles; optional in the schema
+   * because a DoD frozen before this existed still has to parse.
+   *
+   * It is what turns "is the screen reachable at all" into a question code can
+   * answer before a browser is involved. A component that was written and
+   * never mounted passes every unit test it has, and a verifier that stands up
+   * its own server finds the screen there because it wired the module itself.
+   * Only the product's own entry point can say whether a person reaches it.
+   *
+   * A screen reached by clicking -- a dialog, a tab -- names the page carrying
+   * it: reachability proves that page is served, not that the dialog opens.
+   */
+  page: z.string().trim().regex(/^\/\S*$/, "page must be an application path beginning with /").optional(),
   visible: z.array(z.object({
     /** The ARIA role, as the snapshot names it: heading, link, button, list. */
     role: z.string().trim().min(1),
@@ -246,6 +262,46 @@ export function scenariosMissingVisible(definition: DefinitionOfDone): string[] 
     .map((entry) => entry.id);
 }
 
+/**
+ * Screen scenarios that did not say where their screen is served.
+ *
+ * Asked here for the same reason as `visible[]`: the basis of a judgement
+ * cannot be written by the round it judges. Without it the only witness that
+ * a screen exists is a browser, and a browser pointed at a server the verifier
+ * assembled itself sees screens the product never mounts.
+ */
+export function scenariosMissingPage(definition: DefinitionOfDone): string[] {
+  return definition.scenarios
+    .filter((entry) => hasScreen(entry) && entry.page === undefined)
+    .map((entry) => entry.id);
+}
+
+export function renderMissingPage(ids: readonly string[]): string {
+  return [
+    "这些 scenario 要打开页面才能判定，所以每条都要写 `page`：这一页在应用里的路径，例如 `/operator/costs`。",
+    "写完代码那一步系统会把应用起起来访问它——组件写好了却没在入口挂上，单测照样全绿，只有这一步看得出来。",
+    "靠点击才出现的弹窗或子页签，写承载它的那一页。",
+    ...ids.map((id) => `- ${id}`),
+  ].join("\n");
+}
+
+/**
+ * What the structural layer compares each screen against.
+ *
+ * Only the scenarios a browser settles, even though `visible[]` may outlive a
+ * screen layer: a scenario moved to the code layers because its given could
+ * not be built in a browser still carries what it once promised to show, and
+ * asking a lane that never ran for a page structure record refuses it every
+ * round for something no round could have produced.
+ */
+export function structuralRequirements(definition: DefinitionOfDone): Map<string, DoDScenario["visible"] & {}> {
+  return new Map(
+    screenScenarios(definition)
+      .filter((entry) => entry.visible !== undefined)
+      .map((entry) => [entry.id, entry.visible!]),
+  );
+}
+
 /** What the session is asked to add, in the words it wrote the DoD in. */
 /**
  * What a person is told when a card has screens and its repository has no
@@ -261,6 +317,52 @@ export function renderMissingInterfaceContract(scenarioIds: readonly string[]): 
     `这张卡有要看的界面（${ids}），但目标分支上还没有界面契约。`,
     "没有契约的话，这张卡只能自己发明一套样子，下一张卡会发明另一套。",
     "先在需求的方案关确认一份界面契约（token 表、组件清单、可运行的页面原型），再把这张卡放回去。",
+  ].join("\n");
+}
+
+/**
+ * Footprint entries that name a place the repository has no room for.
+ *
+ * The footprint is a prediction, so an entry may name something the card is
+ * about to create: `console-ui/src/pages/records` is a fair thing to write
+ * before that directory exists. What is not fair is an entry with no existing
+ * ancestor above the repository root, because a card almost never starts a new
+ * top-level directory and a near-miss on an existing one costs the scheduler
+ * everything it has. `S-R237511MB-02` declared `console/` and worked in
+ * `src/console`: the scheduler widens an entry to the directory it names, read
+ * `console` as intersecting nothing, and planned the card beside one that
+ * shares `src/console` with it -- which is the merge conflict the footprint
+ * exists to prevent, arranged by the mechanism meant to prevent it.
+ *
+ * `exists` is asked rather than the filesystem, so the rule is testable
+ * without a tree and identical on every host.
+ */
+export function footprintWithoutGround(
+  definition: DefinitionOfDone,
+  exists: (path: string) => boolean,
+): string[] {
+  const grounded = (raw: string): boolean => {
+    let path = directoryOf(raw);
+    if (exists(path)) return true;
+    for (;;) {
+      const cut = path.lastIndexOf("/");
+      // The root is not an ancestor that grounds anything: every entry has it.
+      if (cut <= 0) return false;
+      path = path.slice(0, cut);
+      if (exists(path)) return true;
+    }
+  };
+  return definition.predicted_footprint.filter((entry) => !grounded(entry));
+}
+
+/** What the session is asked to correct, with the tree in front of it. */
+export function renderFootprintWithoutGround(entries: readonly string[]): string {
+  return [
+    "`predicted_footprint` 里这几条在仓库里找不到落点：它们本身不存在，往上也没有任何一层存在的目录。",
+    "调度器按这些路径决定哪些卡不能同时动，一条落不到地的路径等于告诉它这张卡谁也不碰，",
+    "于是另一张真正改同一处的卡会被安排在旁边跑，合流时撞在一起。",
+    "请对着树把它们改成这张卡真正会动的路径（新建的目录可以写，只要它的上层已经存在）。",
+    ...entries.map((entry) => `- ${entry}`),
   ].join("\n");
 }
 

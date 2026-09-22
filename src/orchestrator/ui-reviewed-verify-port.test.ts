@@ -316,6 +316,54 @@ describe("UiReviewedVerifyPort", () => {
       expect(calls.stopped).toBe(1);
     });
 
+    it("tells the reviewer the data was never staged when the repository seeds nothing", async () => {
+      // S-R237511TR-01's repository configured no seed command. Every scenario
+      // still declared sample records, and the reviewer was told they were in
+      // place, so it judged the screen against records nobody had put there.
+      const { handle } = fakeApp();
+      let seen: { scenarios: Array<{ seed?: string; unstagedSeed?: string }> } | undefined;
+      const { instance } = port({
+        functional: functionalResult(),
+        onReview: (input) => { seen = input as typeof seen; },
+        app: { ...app, seedCommand: [] },
+        appUnderReview: () => handle,
+      });
+
+      await instance.run(verifyInput(withSeed(dod([["ui"], ["ui"]]))));
+
+      expect(seen?.scenarios.map((scenario) => scenario.seed)).toEqual([undefined, undefined]);
+      expect(seen?.scenarios.map((scenario) => scenario.unstagedSeed))
+        .toEqual(["一个仓库下有 3 个 Story", undefined]);
+    });
+
+    it("gives the application a port of its own, as the blind lane does", async () => {
+      const { calls, handle } = fakeApp();
+      let seen: { appUrl?: string } | undefined;
+      const { instance } = port({
+        functional: functionalResult(),
+        onReview: (input) => { seen = input as typeof seen; },
+        app: {
+          startCommand: ["npx", "tsx", "scripts/serve-console.ts", "--port", "{port}"],
+          readyUrl: "http://127.0.0.1:{port}/",
+          readyTimeoutMs: 1000,
+          seedCommand: ["npm", "run", "seed", "--", "--port", "{port}"],
+        },
+        appUnderReview: () => handle,
+      });
+
+      await instance.run(verifyInput(withSeed(dod([["ui"], ["ui"]]))));
+
+      // Whatever port the host handed out, the same one everywhere: a literal
+      // `{port}` reaches the application as an argument it refuses.
+      const started = calls.start[0] as { command: string[]; readyUrl: string };
+      const seeded = calls.seed[0] as { command: string[] };
+      const chosen = started.command.at(-1)!;
+      expect(chosen).toMatch(/^\d+$/);
+      expect(started.readyUrl).toBe(`http://127.0.0.1:${chosen}/`);
+      expect(seeded.command.at(-1)).toBe(chosen);
+      expect(seen?.appUrl).toBe(`http://127.0.0.1:${chosen}/`);
+    });
+
     it("stops the application even when the reviewer throws", async () => {
       const { calls, handle } = fakeApp();
       const { instance } = port({
@@ -454,6 +502,32 @@ describe("UiReviewedVerifyPort and the interface contract", () => {
     expect(unreadable[0]).toContain("verify.appStartCommand");
     expect(friction.map((entry) => entry.kind)).toContain("ui_contract_no_app");
     expect(result.verdict).toBe("accepted");
+  });
+
+  it("distinguishes an application that would not come up from one nobody declared", async () => {
+    // The two ask for different things, and one sentence for both pointed at a
+    // setting that was in fact configured: the friction log said
+    // `verify.appStartCommand is empty` next to a record holding that command.
+    const friction: Array<{ kind: string; detail: string }> = [];
+    const styles = collector(offTable);
+    const { instance } = port({
+      functional,
+      friction: async (given) => { friction.push(given); },
+      app: { startCommand: ["npm", "run", "dev"], readyUrl: "http://app.local:3000/", readyTimeoutMs: 1000, seedCommand: [] },
+      appUnderReview: () => ({
+        start: async () => ({ started: false, reason: "exited with code 1 before answering" }),
+        seed: async () => ({ ok: true, output: "" }),
+        stop: async () => undefined,
+      }),
+      uiContract: { enforce: "warn", tokens: async () => tokens, collector: styles.make },
+    });
+
+    await instance.run(verifyInput(dod([["ui"]])));
+
+    const noApp = friction.find((entry) => entry.kind === "ui_contract_no_app");
+    expect(noApp?.detail).toContain("did not come up");
+    expect(noApp?.detail).toContain("exited with code 1 before answering");
+    expect(noApp?.detail).not.toContain("verify.appStartCommand is empty");
   });
 
   it("delivers the round but records what it found while the layer is only warning", async () => {

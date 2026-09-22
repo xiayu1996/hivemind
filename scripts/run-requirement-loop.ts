@@ -3,6 +3,8 @@ import { hostname } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defaultSecretsPath, loadSecretsFile } from "../src/config/secrets-file.js";
+import { CANONICAL_CAPTURE_ENV } from "../src/observability/capture-contract.js";
+import { finishLaneCapture, laneCapturePath } from "../src/observability/lane-capture.js";
 import { ConfigStore } from "../src/config/store.js";
 import { CommentIngestor } from "../src/notion/comment-ingest.js";
 import { NotionGateway } from "../src/notion/gateway.js";
@@ -11,6 +13,7 @@ import { NotionOutbox } from "../src/notion/outbox.js";
 import {
   NotionRequirementPageDelivery,
   REQUIREMENT_OUTBOX_OPERATIONS,
+  REQUIREMENT_WHOLE_STATE_OPERATIONS,
 } from "../src/notion/requirement-page-delivery.js";
 import { RequirementPageProjector } from "../src/notion/requirement-projection.js";
 import { approvalJudgeSetup, describeJudgeSetup, judgeConfigFrom, usabilityJudgeSetup } from "../src/judge/settings.js";
@@ -34,6 +37,7 @@ import { createWorktree, locateWorktree, worktreeLayout } from "../src/vcs/workt
 import { discoverMRPort } from "../src/vcs/mr/adapters.js";
 import { RequirementStore } from "../src/orchestrator/requirement-store.js";
 import { openDb } from "../src/persistence/client.js";
+import { holdDaemonSingleton } from "../src/orchestrator/daemon-singleton.js";
 import { migrate } from "../src/persistence/migrate.js";
 import { assertSchemaCurrent } from "../src/persistence/schema-fingerprint.js";
 import { ModelPolicy } from "../src/runner/model-policy.js";
@@ -41,7 +45,6 @@ import { resolveAgentSpec } from "../src/runner/agent-spec.js";
 import { cacheRetentionEnv } from "../src/runner/cache-retention.js";
 import { CostLedger } from "../src/observability/cost-ledger.js";
 import { RepositoryRegistry } from "../src/vcs/repository-registry.js";
-import { CANONICAL_CAPTURE_ENV } from "../src/observability/capture-contract.js";
 import { needsApiKeyEnv, providerKeyEnv } from "../src/runner/provider-env.js";
 import { defaultModelCatalog } from "../src/runner/catalog.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
@@ -82,6 +85,16 @@ async function main(): Promise<void> {
   // records itself as migrated while enforcing the older constraints, and the
   // first thing that notices is a write failing inside somebody's Story.
   await assertSchemaCurrent(handle.client);
+  // This loop writes the requirement pages and shares the outbox with the
+  // orchestrator, so it is a Notion writer too and gets its own claim. A second
+  // copy of it would answer the same clarification twice.
+  const singleton = await holdDaemonSingleton(handle.client, "requirements", {
+    hostId: hostname(),
+    onLost: (reason) => {
+      console.error(`FAILED: this requirements daemon no longer holds the role (${reason})`);
+      process.exit(1);
+    },
+  });
   const config = await ConfigStore.load(handle.client);
   const gateway = new NotionGateway({ transport: createNotionHttpTransport({ token }) });
   const store = new RequirementStore(handle.client);
@@ -133,10 +146,8 @@ async function main(): Promise<void> {
   const pm = new PiPmPort({
     binary: piBinary,
     spec,
-    env: {
-      ...providerEnv,
-      [CANONICAL_CAPTURE_ENV]: join(evidenceRoot, "requirement-requests.jsonl"),
-    },
+    env: providerEnv,
+    captureRoot: evidenceRoot,
     extensions: [resolve(ROOT, "extensions", "canonical-capture.ts")],
     promptRoot: resolve(ROOT, "prompts"),
     // The product manager reads requirements, never a tree; it runs above the
@@ -194,38 +205,43 @@ async function main(): Promise<void> {
           "prototype",
           (await policy.providersFor("prototype"))[0]!,
         );
-        return new PiPrototypePort({
-          binary: piBinary,
-          spec: drawingSpec,
-          promptRoot: resolve(ROOT, "prompts"),
-          worktreePath,
-          contractRoot: input.contractRoot,
-          auditPath: join(evidenceRoot, `${input.requirementId}-prototype-audit.jsonl`),
-          maxRounds: config.get("prototype.maxRounds"),
-          inspector: playwrightPrototypeInspector,
-          extensions: [
-            resolve(ROOT, "extensions", "hive-guard.ts"),
-            resolve(ROOT, "extensions", "canonical-capture.ts"),
-          ],
-          env: {
-            ...providerEnv,
-            [CANONICAL_CAPTURE_ENV]: join(evidenceRoot, "prototype-requests.jsonl"),
-          },
-          designLint: { binary: defaultDesignLintBinary() },
-          ...(usabilityJudge.settings ? { usability: usabilityJudge.settings } : {}),
-          recordFriction: async (row) => { await store.recordFriction(row); },
-          recordUsage: async ({ usage, spec: used }) => {
-            await ledger.record({
-              runId: `pm-prototype-${Date.now()}`,
-              purpose: "prototype",
-              tier: used.tier,
-              provider: used.model.provider,
-              modelId: used.model.id,
-              hostId: hostname(),
-              isSubscription: !used.metered,
-            }, usage);
-          },
-        }).run(input);
+        const capturePath = laneCapturePath(evidenceRoot, `prototype-${input.requirementId}`, Date.now());
+        try {
+          return await new PiPrototypePort({
+            binary: piBinary,
+            spec: drawingSpec,
+            promptRoot: resolve(ROOT, "prompts"),
+            worktreePath,
+            contractRoot: input.contractRoot,
+            auditPath: join(evidenceRoot, `${input.requirementId}-prototype-audit.jsonl`),
+            maxRounds: config.get("prototype.maxRounds"),
+            inspector: playwrightPrototypeInspector,
+            extensions: [
+              resolve(ROOT, "extensions", "hive-guard.ts"),
+              resolve(ROOT, "extensions", "canonical-capture.ts"),
+            ],
+            env: {
+              ...providerEnv,
+              [CANONICAL_CAPTURE_ENV]: capturePath,
+            },
+            designLint: { binary: defaultDesignLintBinary() },
+            ...(usabilityJudge.settings ? { usability: usabilityJudge.settings } : {}),
+            recordFriction: async (row) => { await store.recordFriction(row); },
+            recordUsage: async ({ usage, spec: used }) => {
+              await ledger.record({
+                runId: `pm-prototype-${Date.now()}`,
+                purpose: "prototype",
+                tier: used.tier,
+                provider: used.model.provider,
+                modelId: used.model.id,
+                hostId: hostname(),
+                isSubscription: !used.metered,
+              }, usage);
+            },
+          }).run(input);
+        } finally {
+          await finishLaneCapture(capturePath);
+        }
       },
     },
     {
@@ -366,7 +382,13 @@ async function main(): Promise<void> {
     }
 
     // The orchestrator shares this outbox; each side replays only its own rows.
-    const replayed = await outbox.replay(delivery, { operations: REQUIREMENT_OUTBOX_OPERATIONS });
+    const replayed = await outbox.replay(delivery, {
+      operations: REQUIREMENT_OUTBOX_OPERATIONS,
+      wholeStateOperations: REQUIREMENT_WHOLE_STATE_OPERATIONS,
+    });
+    for (const row of replayed.superseded) {
+      console.log(`Notion outbox: dropped a stale ${row.operation} for ${row.cardId ?? "no card"} after ${row.attempts} attempts; the page already holds a newer one`);
+    }
     for (const failure of replayed.failures) {
       console.warn(`Notion outbox: ${failure.operation} for ${failure.cardId ?? "no card"} failed (attempt ${failure.attempts}): ${failure.error}`);
     }
@@ -376,7 +398,10 @@ async function main(): Promise<void> {
   };
 
   await pass();
-  if (once) return;
+  if (once) {
+    await singleton.release().catch(() => undefined);
+    return;
+  }
   for (;;) {
     await new Promise((settle) => setTimeout(settle, intervalMs));
     await pass().catch((error: unknown) => {

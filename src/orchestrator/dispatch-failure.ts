@@ -16,12 +16,39 @@ export interface DispatchFailureFacts {
 export type DispatchFailureDecision =
   /** This process ended the run; the card did nothing and keeps its budget. */
   | { kind: "cancelled" }
+  /** This host could not run its own command; the card never started. */
+  | { kind: "host_fault"; reason: string }
   /** A provider event, not the card's doing: the breaker holds dispatch. */
   | { kind: "provider_fault"; errorClass: ErrorClass }
   /** No card to charge, or one that finished anyway. */
   | { kind: "ignored" }
   | { kind: "reenter"; state: StoryState; attempt: number; budget: number; errorClass: ErrorClass }
   | { kind: "park"; state: StoryState; attempt: number; budget: number; errorClass: ErrorClass };
+
+/**
+ * A failure that happened before the card's own work could begin.
+ *
+ * These say the host cannot run the command it was asked to run -- the binary
+ * is missing, the script is not declared. Nothing about the card is on trial,
+ * and charging it is worse than useless: the next attempt runs the same broken
+ * command, so the whole budget is spent in a minute and the card stops for a
+ * person who then finds nothing wrong with it. The host's own dependencies
+ * were emptied under a running orchestrator on 2026-09-20 and
+ * S-R237511TD-02 -- which had existed for ninety seconds -- burned all three
+ * attempts on `sh: tsx: command not found`.
+ *
+ * Deliberately narrow. A missing module or a non-zero exit can be the card's
+ * own code and must stay the card's to answer for.
+ */
+const HOST_FAULT = [
+  /\bcommand not found\b/i,
+  /\bspawn\b[^\n]*\bENOENT\b/i,
+  /\bnpm (?:ERR!|error) missing script\b/i,
+];
+
+export function isHostFault(message: string): boolean {
+  return HOST_FAULT.some((pattern) => pattern.test(message));
+}
 
 /**
  * What a dead Story run costs the card.
@@ -34,6 +61,7 @@ export type DispatchFailureDecision =
  */
 export function decideDispatchFailure(facts: DispatchFailureFacts): DispatchFailureDecision {
   if (facts.stopping || facts.signal === "SIGTERM" || facts.signal === "SIGINT") return { kind: "cancelled" };
+  if (isHostFault(facts.message)) return { kind: "host_fault", reason: facts.message };
   const { class: errorClass } = classifyError(facts.message);
   if (errorClass !== "UNKNOWN") return { kind: "provider_fault", errorClass };
   if (!facts.card || facts.card.state === "DELIVERED") return { kind: "ignored" };
@@ -81,7 +109,9 @@ export async function settleDispatchFailure(input: {
   const message = input.error instanceof Error ? input.error.message : String(input.error);
   const signal = (input.error as { signal?: string | null }).signal;
   const cancelled = decideDispatchFailure({ signal, stopping: input.stopping, message, budget: 0 });
-  if (cancelled.kind === "cancelled" || cancelled.kind === "provider_fault") return cancelled;
+  if (cancelled.kind === "cancelled" || cancelled.kind === "provider_fault" || cancelled.kind === "host_fault") {
+    return cancelled;
+  }
 
   await input.config.reload();
   const budget = input.config.get("retry.maxPhaseReentries");

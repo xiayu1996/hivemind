@@ -65,6 +65,21 @@ const READ_ATTEMPTS = 3;
  * or got one Notion itself calls temporary. Anything else -- a 400 the API will
  * refuse forever, a parse error, a bug -- is not transient, so an error nobody
  * recognises is reported rather than retried until a budget runs out. */
+/**
+ * Says which request failed when the transport throws rather than answers.
+ *
+ * A refusal already carries its method and path; a timeout carried nothing but
+ * "The operation was aborted due to timeout", and a page projection is dozens
+ * of requests, so the line in the outbox named an operation and a card and left
+ * the actual call to guesswork. The original message is kept inside the new one
+ * because transience is decided by reading it.
+ */
+function nameTheRequest(cause: unknown, request: NotionRequest): unknown {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  if (message.startsWith(`${request.method} ${request.path} `)) return cause;
+  return new Error(`${request.method} ${request.path} failed: ${message}`, { cause });
+}
+
 export function isTransientNotionFailure(error: unknown): boolean {
   if (error instanceof NotionGatewayError && error.status !== undefined) {
     return error.status >= 500 || error.status === 429;
@@ -243,7 +258,7 @@ export class NotionGateway {
         const response = await this.#transport(request);
         if (response.status < 500 || attempt >= attempts) return response;
       } catch (cause) {
-        if (attempt >= attempts || !isTransientNotionFailure(cause)) throw cause;
+        if (attempt >= attempts || !isTransientNotionFailure(cause)) throw nameTheRequest(cause, request);
       }
       await sleep(this.#readRetryBackoffMs * attempt);
       while (!this.#tryTakeToken()) await sleep(this.#millisecondsUntilToken());

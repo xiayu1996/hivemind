@@ -22,12 +22,11 @@ export interface EpicRegressionGate {
  * The scenarios standing between an Epic and its review request: registered
  * under it with no passing run at the revision that request would propose.
  *
- * Exported because the sweep scheduler has to ask the same question. It sweeps
- * these ahead of everything else and without waiting for the host to go idle,
- * and asking a looser one ("has it ever passed?") let an Epic whose head had
- * moved drop out of that set: every scenario of S-R237511DT-02 had passed on
+ * Asking a looser question ("has it ever passed?") let an Epic whose head had
+ * moved drop out of this set: every scenario of S-R237511DT-02 had passed on
  * the previous head, so the Epic waited on an idle host that a 7x24 service
- * does not reliably produce.
+ * does not reliably produce. The sweep scheduler asks the wider
+ * `scenariosAwaitingDelivery`, which adds the carded ones.
  */
 export async function unprovenScenarios(
   client: Client,
@@ -44,6 +43,40 @@ export async function unprovenScenarios(
                   AND u.revision = ?
                   AND u.outcome = 'passed'
              )
+           ORDER BY r.scenario_id`,
+    args: [epicId, revision],
+  })).rows.map((row) => String(row.scenario_id));
+}
+
+/**
+ * Everything standing between an Epic and its review request: the unproven
+ * scenarios, plus those carrying an open regression card.
+ *
+ * The card limb is here because a card closes on evidence -- a window of the
+ * scenario that no longer fails -- and on a 7x24 host the only sweeps that
+ * ever gather it are the ones the foreground asks for. Left out, an Epic whose
+ * scenarios all pass at its head still waits on cards, and the sweeps that
+ * would close them are the idle ones that never come.
+ */
+export async function scenariosAwaitingDelivery(
+  client: Client,
+  epicId: string,
+  revision: string,
+): Promise<string[]> {
+  return (await client.execute({
+    sql: `SELECT r.scenario_id
+            FROM scenario_registry r
+           WHERE r.epic_id = ?
+             AND (NOT EXISTS (
+                   SELECT 1 FROM regression_runs u
+                    WHERE u.scenario_id = r.scenario_id
+                      AND u.revision = ?
+                      AND u.outcome = 'passed'
+                 )
+                 OR EXISTS (
+                   SELECT 1 FROM regression_cards c
+                    WHERE c.scenario_id = r.scenario_id AND c.resolved_at IS NULL
+                 ))
            ORDER BY r.scenario_id`,
     args: [epicId, revision],
   })).rows.map((row) => String(row.scenario_id));

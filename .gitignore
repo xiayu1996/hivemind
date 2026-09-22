@@ -10,3 +10,6 @@ data/
 # configured output directory of its own.
 .playwright-cli/
 .playwright/
+
+# macOS writes these into every directory it opens; none of them belong to the repository.
+.DS_Store

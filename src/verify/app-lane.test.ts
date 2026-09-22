@@ -12,6 +12,16 @@ const SERVER = [
   ].join(" "),
 ];
 
+const namedServer = (id: string): string[] => [
+  process.execPath,
+  "-e",
+  [
+    "const http = require('node:http');",
+    `http.createServer((req, res) => res.end('${id}')).listen(Number(process.env.APP_PORT));`,
+    "setInterval(() => undefined, 1000);",
+  ].join(" "),
+];
+
 let nextPort = 44_000 + Math.floor(Math.random() * 1000);
 const port = () => nextPort++;
 
@@ -35,6 +45,48 @@ describe("startAppLane", () => {
       await lane.stop();
     }
     await expect(fetch(`http://127.0.0.1:${p}/`, { signal: AbortSignal.timeout(500) })).rejects.toThrow();
+  });
+
+  it("gives two lanes started at once a port each, so neither is answered by the other's application", async () => {
+    // A fixed port goes to whichever lane started first; the rest poll it, are
+    // answered by that application and judge it. One Story's round verified the
+    // console of a different Epic's worktree and spent its budget calling its
+    // own screens unconfirmable.
+    const lane = (id: string) => startAppLane({
+      cwd: process.cwd(),
+      command: namedServer(id),
+      readyUrl: "http://127.0.0.1:{port}/",
+      timeoutMs: 10_000,
+      env: { APP_PORT: "{port}" },
+    }, []);
+
+    const [first, second] = await Promise.all([lane("first"), lane("second")]);
+    try {
+      const firstUrl = "url" in first.app ? first.app.url : "";
+      const secondUrl = "url" in second.app ? second.app.url : "";
+      expect(firstUrl).not.toBe("");
+      expect(secondUrl).not.toBe(firstUrl);
+      await expect((await fetch(firstUrl)).text()).resolves.toBe("first");
+      await expect((await fetch(secondUrl)).text()).resolves.toBe("second");
+    } finally {
+      await Promise.all([first.stop(), second.stop()]);
+    }
+  });
+
+  it("leaves a repository that names its own port exactly as it wrote it", async () => {
+    const p = port();
+    const lane = await startAppLane({
+      cwd: process.cwd(),
+      command: SERVER,
+      readyUrl: `http://127.0.0.1:${p}/`,
+      timeoutMs: 10_000,
+      env: { APP_PORT: String(p) },
+    }, []);
+    try {
+      expect(lane.app).toEqual({ url: `http://127.0.0.1:${p}/` });
+    } finally {
+      await lane.stop();
+    }
   });
 
   it("says the repository declares no application rather than leaving the verifier to invent one", async () => {

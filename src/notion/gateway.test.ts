@@ -155,6 +155,33 @@ describe("a fault that says nothing about the payload", () => {
     expect(calls).toBe(1);
   });
 
+  // A page projection is dozens of requests, so "The operation was aborted due
+  // to timeout" on its own named an operation and a card and left the call
+  // itself to guesswork -- one Story's page failed that way five times running.
+  it("says which request timed out", async () => {
+    const gateway = new NotionGateway({
+      transport: async () => { throw new Error("The operation was aborted due to timeout"); },
+      ratePerSecond: 1_000_000,
+      mergeWindowMs: 10,
+      readRetryBackoffMs: 0,
+    });
+
+    await expect(gateway.request({
+      method: "PATCH",
+      path: "/v1/blocks/page-1/children",
+      priority: "projection",
+      body: { children: [] },
+    })).rejects.toThrow("PATCH /v1/blocks/page-1/children failed: The operation was aborted due to timeout");
+  });
+
+  // Transience is decided by reading the message, so the wrapper has to keep
+  // the original inside it or a timeout stops being retryable.
+  it("keeps a named timeout retryable", () => {
+    expect(isTransientNotionFailure(
+      new Error("PATCH /v1/blocks/page-1/children failed: The operation was aborted due to timeout"),
+    )).toBe(true);
+  });
+
   it("gives up on a read that keeps faulting", async () => {
     let calls = 0;
     const gateway = new NotionGateway({

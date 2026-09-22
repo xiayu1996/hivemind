@@ -81,7 +81,21 @@ export interface UiReviewScenario {
   /** The sentences a refusal may cite: the scenario's then and its examples. */
   refusable: readonly string[];
   /** The sample data the given asked for, already put into the application when present. */
+  /** The sample data the scenario names, which was put into the application. */
   seed?: string;
+  /**
+   * The sample data the scenario names that nothing put into the application.
+   *
+   * Set whenever a scenario declares data and no seed ran for it -- the
+   * repository configured no `verify.seedCommand`, or the one it configured
+   * failed for this scenario. The prompt used to claim every declared seed was
+   * in place regardless, which is what S-R237511TR-01 was judged against: all
+   * seven of its scenarios named sample records, none were staged, and the
+   * reviewer correctly reported the page contents against data nobody had put
+   * there. Two rounds went to that, and the card answered the unstageable
+   * states by building state toggles into the delivered page.
+   */
+  unstagedSeed?: string;
 }
 
 export interface UiReviewReference {
@@ -217,6 +231,7 @@ export function promptFor(input: UiReviewInput, attached: LoadedScreenshots): st
     "Accept or reject this Story as the product manager who asked for it. You are looking at the delivered interface, not at the code: judge what a user sees and can do.",
     "Two answers are wanted and they are not the same question.",
     "1. Acceptance, per declared scenario: is the thing that was asked for actually there, reachable, and does it do what the statement says? Drive the browser to check anything a screenshot cannot show. `failed` means the function is missing, unreachable or wrong; `inconclusive` means you could not get to a screen that would tell you.",
+    "Every statement opens with the situation it is judged in. Put the application into that situation first and judge only from there: a screen that is right for the situation you are actually in says nothing about one you never created. Some situations are not yours to create -- the request has to come from somewhere your browser cannot reach it from, the clock has to read something else, the one asking has to be an account you do not hold. Those scenarios are `inconclusive`, and the reason names the situation you could not put the application into. That costs the card no round, while judging the sentence as if the situation held rejects work that was never shown to you.",
     "A `failed` must rest on the DoD: put in `cites` the exact sentence, from the scenario's `then` or its examples below, that the screen contradicts. A refusal that cites nothing the DoD says is not a rejection of this Story — it is recorded as a finding and proposed to the person who owns the DoD as an amendment, and only they can make it a requirement. Write it as a failure anyway, without `cites`, so that proposal reaches them.",
     ...(input.outOfScope && input.outOfScope.length > 0
       ? [`Out of scope by the DoD, never a reason to fail a scenario: ${input.outOfScope.join("; ")}.`]
@@ -230,7 +245,7 @@ export function promptFor(input: UiReviewInput, attached: LoadedScreenshots): st
       ? ["A prototype is attached for reference. It was drawn before this was built and is not expected to match pixel for pixel: a difference from it is a finding at most, and only a requirement that says in words that it must match exactly makes a difference an acceptance failure."]
       : []),
     ...(input.appUrl
-      ? [`The application is running at ${input.appUrl}. Open it there to check anything a screenshot cannot show; the sample data each scenario declares below has already been put into it, so a scenario that says what data it expects is judged on that data, not on an empty page.`]
+      ? [`The application is running at ${input.appUrl}. Open it there to check anything a screenshot cannot show. Each scenario below says whether the sample data it names is in the application. A scenario whose data is in place is judged on that data rather than on an empty page. A scenario whose data nobody put there is judged on what is actually in front of you, and when its statement cannot be told apart without that data, and you cannot produce it through the interface, the scenario is \`inconclusive\` with the reason naming the data nobody staged. Judging it against records that are not there rejects work for a situation it was never shown.`]
       : []),
     ...(input.allowedHosts.length > 0
       // The address goes into the browser section too: without it that section
@@ -246,6 +261,9 @@ export function promptFor(input: UiReviewInput, attached: LoadedScreenshots): st
     input.scenarios.map((scenario) => [
       `${scenario.id}: ${scenario.statement}`,
       ...(scenario.seed ? [`  sample data in place: ${scenario.seed}`] : []),
+      ...(scenario.unstagedSeed
+        ? [`  sample data this scenario names, which nothing put into the application: ${scenario.unstagedSeed}`]
+        : []),
       ...scenario.refusable.map((sentence) => `  - ${sentence}`),
     ].join("\n")).join("\n"),
     ...(attached.names.length > 0

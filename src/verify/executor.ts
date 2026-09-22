@@ -1,12 +1,12 @@
 import { z } from "zod";
 import type { ResolvedAgentSpec } from "../runner/agent-spec.js";
 import { EVIDENCE_DIR_ENV, assembleGuardPolicy, type GuardPolicy } from "../guard/policy.js";
-import { captureTreePin, evaluateTreePin, type TreePin } from "../guard/tree-pin.js";
+import { captureTreePin, describeTreePinMismatch, evaluateTreePin, type TreePin } from "../guard/tree-pin.js";
 import {
   type EnvironmentJudgeSettings,
   judgeEnvironmentReasons,
 } from "../judge/environment-reasons.js";
-import { splitScenarioFailures } from "../pipeline/failure-classification.js";
+import { type ScenarioReason, splitScenarioFailures } from "../pipeline/failure-classification.js";
 import { validateVerdict, type TrajectoryEvidence, type VerdictDocument } from "../pipeline/verdict.js";
 import type { PiRunner, RpcEvent, TokenUsage } from "../runner/types.js";
 import { promptWithContinueRetry } from "../runner/continue-retry.js";
@@ -423,6 +423,12 @@ const defaultTreePin: TreePinPort = {
  * did fail for environmental reasons alone is inconclusive, so the convergence
  * criterion never sees it (03 section 8.6).
  */
+/** Kept absent rather than false, so a reason nobody classified stays the two
+ * fields it has always been to everything that reads it. */
+function scenarioReason(scenarioId: string, reason: string, environmental: boolean): ScenarioReason {
+  return environmental ? { scenarioId, reason, environmental } : { scenarioId, reason };
+}
+
 function verdictOf(input: {
   hasDocument: boolean;
   valid: boolean;
@@ -570,7 +576,7 @@ export class BlindVerifyExecutor {
     const after = this.pins.capture(input.worktreePath);
     const pin = evaluateTreePin(before, after);
     if (!pin.matches) {
-      await this.pins.quarantine(input.worktreePath, "tree-pin mismatch after VERIFY");
+      await this.pins.quarantine(input.worktreePath, `tree-pin mismatch after VERIFY: ${describeTreePinMismatch(before, after)}`);
     }
 
     const observed = trajectory(events);
@@ -579,6 +585,7 @@ export class BlindVerifyExecutor {
           verdict: document,
           declaredScenarioIds: input.declaredScenarioIds,
           ...(input.screenScenarioIds ? { screenScenarioIds: input.screenScenarioIds } : {}),
+          ...(input.app && "url" in input.app ? { appUrl: input.app.url } : {}),
           trajectory: observed,
           commitMessages: input.commitMessages,
           evidenceRoot: input.evidencePath,
@@ -628,10 +635,36 @@ export class BlindVerifyExecutor {
       ...structural.map((finding) => finding.id),
     ])].toSorted();
     const scenarioReasons = [
+      // `inconclusive` is the verifier saying it could not tell, and it is
+      // carried here rather than recovered from the sentence afterwards. The
+      // schema offers the status, the prompt teaches it, and the UI review
+      // lane has always honoured it; only this lane folded it into `failed`
+      // and then asked a pattern table written in English to recognise a
+      // reason the same prompt requires to be written in Chinese. What got
+      // through was whatever the judge happened to score above the threshold:
+      // S-R237511OV-02 round 3 answered `inconclusive` for all four screen
+      // scenarios with `net::ERR_CONNECTION_REFUSED` in their detail, three
+      // moved at 0.74-0.84 and the fourth did not, so the round counted
+      // against the code and the card was parked two rounds later.
+      //
+      // A claim of `inconclusive` cannot hide a failure. The trajectory is the
+      // box's own record, so a scenario it shows failing is failed whatever
+      // the verdict says about it -- the status is taken at its word only for
+      // a scenario nothing else contradicts. A refused claim or a structural
+      // finding adds its own reason for the same scenario, and a scenario is
+      // environmental only if every reason for it is. A lane that answers
+      // nothing but `inconclusive` is bounded by the consecutive-inconclusive
+      // limit, which stops the card saying exactly that.
       ...document?.scenarios
         .filter((scenario) => scenario.status !== "passed" && scenario.reason)
-        .map((scenario) => ({ scenarioId: scenario.id, reason: scenario.reason! })) ?? [],
-      ...structural.map((finding) => ({ scenarioId: finding.id, reason: finding.reason })),
+        .map((scenario) =>
+          scenarioReason(
+            scenario.id,
+            scenario.reason!,
+            scenario.status === "inconclusive" && !observedFailures.includes(scenario.id),
+          )) ?? [],
+      ...structural.map((finding) =>
+        scenarioReason(finding.id, finding.reason, finding.evidenceMissing === true)),
       // A scenario the trajectory failed while the verdict called it passed has
       // no reason of the verifier's own: the verifier did not think it had
       // failed. The box knows why it is failed anyway and says so, because a
@@ -642,12 +675,13 @@ export class BlindVerifyExecutor {
         .filter((id) => !(document?.scenarios ?? []).some((scenario) => scenario.id === id && scenario.status !== "passed"))
         .map((id) => ({ scenarioId: id, reason: "这条场景在运行记录里判为未通过，但结论里写成通过" })),
     ];
+    const missingEvidence = new Set(validation?.missingEvidence ?? []);
     const environmentReasons = [
       ...scenarioReasons,
-      ...(validation?.errors ?? []).map((error) => ({
-        scenarioId: error.slice(0, error.indexOf(": ")),
-        reason: error,
-      })),
+      // The check that wrote one of these looked for a file and did not find
+      // it, so there is nothing to recognise and nothing to be confident about.
+      ...(validation?.errors ?? []).map((error) =>
+        scenarioReason(error.slice(0, error.indexOf(": ")), error, missingEvidence.has(error))),
     ];
     // A round the box lost says nothing about the code, and the convergence
     // criterion only means something on code-level failures (03 section 8.6).

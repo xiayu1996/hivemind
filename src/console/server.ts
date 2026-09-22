@@ -8,7 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { costsPageZones, renderCostsRoute } from "./costs-page.js";
 import { toOverviewCostAlertsView } from "./overview-cost-alerts.js";
-import { renderOverviewPage } from "./overview-page.js";
+import { renderOverviewCostAlertPage } from "./overview-cost-alert-page.js";
 import { saveRequirementCostLimit } from "./requirement-cost-limit.js";
 import {
   renderRequirementDetailPage,
@@ -116,11 +116,12 @@ export async function createConsoleServer(
   options: ConsoleServerOptions = {},
 ): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
-  // The limit write surface is the data source's own store when the caller does
-  // not hand one over: the process that can read the limit is the process that
-  // can write it, and a mount point that forgot the port used to leave the form
-  // with no destination at all.
-  const costLimitStore = options.costLimitStore ?? data.requirementCostLimitStore;
+  // Only what the mount point handed over. Falling back to the data source's
+  // own store made a write surface appear because a reader happened to also be
+  // able to write: scripts/serve-console.ts mounts the live database for a
+  // verification round to look at, passes no ports at all, and was serving a
+  // form that writes a requirement's cost limit into it.
+  const costLimitStore = options.costLimitStore;
   const writable = new Set(options.configWriter
     ? ["/api/config/value", "/api/config/rollback"]
     : []);
@@ -174,7 +175,7 @@ export async function createConsoleServer(
   // and never translated into a paused state.
   app.get("/", async (_request, reply) => {
     const snapshots = data.overLimitRequirements ? await data.overLimitRequirements() : [];
-    return reply.type("text/html").send(renderOverviewPage({ alert: toOverviewCostAlertsView(snapshots) }));
+    return reply.type("text/html").send(renderOverviewCostAlertPage({ alert: toOverviewCostAlertsView(snapshots) }));
   });
 
   // Saving a requirement limit is scoped to the one requirement named in the

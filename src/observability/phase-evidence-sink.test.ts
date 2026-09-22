@@ -1,9 +1,10 @@
 import { createClient } from "@libsql/client";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { migrate } from "../persistence/migrate.js";
+import { readCanonicalLog } from "./canonical-log.js";
 import { testAgentSpec } from "../runner/agent-spec.testing.js";
 import { DrainLoop } from "./drain.js";
 import { EventBuffer } from "./event-buffer.js";
@@ -38,8 +39,8 @@ describe("phase evidence sink", () => {
     buffer.emit("phase.telemetry", await telemetry("run-1"));
     await loop.tick();
 
-    const log = await readFile(join(directory, "run-1", "run-events.jsonl"), "utf8");
-    expect(log).toContain("request/provider-payload");
+    const log = await readCanonicalLog(join(directory, "run-1", "run-events.jsonl"));
+    expect(log.map((event) => event.type)).toContain("request/provider-payload");
     const turns = await client.execute("SELECT run_id FROM turn_usage");
     expect(turns.rows).toMatchObject([{ run_id: "run-1" }]);
     client.close();

@@ -30,6 +30,8 @@ export interface SweepResult {
    * left unrecorded so it raises no regression card and ages no scenario. */
   inconclusive: readonly string[];
   raised: ReadonlyArray<{ scenarioId: string; signature: string }>;
+  /** Cards the sweep closed because the scenario stopped failing. */
+  cleared: ReadonlyArray<{ scenarioId: string; signature: string }>;
 }
 
 /**
@@ -51,12 +53,13 @@ export class RegressionSweeper {
     policy: RegressionPolicy,
   ): Promise<SweepResult> {
     if (input.scenarioIds.length === 0) {
-      return { pool: input.pool, revision: "", verified: [], failed: [], inconclusive: [], raised: [] };
+      return { pool: input.pool, revision: "", verified: [], failed: [], inconclusive: [], raised: [], cleared: [] };
     }
     const { revision, outcomes, inconclusive = [] } = await this.port.run(input);
     const verified: string[] = [];
     const failed: string[] = [];
     const raised: Array<{ scenarioId: string; signature: string }> = [];
+    const cleared: Array<{ scenarioId: string; signature: string }> = [];
 
     for (const outcome of outcomes) {
       const result = await this.store.record({
@@ -71,8 +74,9 @@ export class RegressionSweeper {
       if (result.cardRaised && result.judgement.kind === "raise") {
         raised.push({ scenarioId: outcome.scenarioId, signature: result.judgement.signature });
       }
+      for (const signature of result.cardsCleared) cleared.push({ scenarioId: outcome.scenarioId, signature });
     }
     await this.registry.markVerified(verified);
-    return { pool: input.pool, revision, verified, failed, inconclusive: [...inconclusive], raised };
+    return { pool: input.pool, revision, verified, failed, inconclusive: [...inconclusive], raised, cleared };
   }
 }

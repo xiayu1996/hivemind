@@ -57,6 +57,8 @@ npm run requirements:run                       # 产品经理常驻（与上者�
 
 npx tsx scripts/repository-add.ts <git-url> [--default-branch main]   # 注册一个仓库并在本机拉出 checkout
 
+npx tsx scripts/serve-console.ts [--port 4319] [--db <url>]          # 只起控制台（只读），供 ui/e2e 场景在浏览器里核验；库由 HIVEMIND_DB_URL 指定
+
 deploy/linux/install.sh --repository-url <git-url>   # 部署唯一入口，幂等；Ubuntu / Arch(Omarchy) / WSL2 Ubuntu 同一条命令
 
 npx tsx scripts/catalog-snapshot.ts <provider>   # 采 provider 目录快照（该机需有这家凭据）
@@ -76,7 +78,7 @@ npx tsx scripts/replay-phase.ts --card-id <id> --phase CODE --print-prompt      
 Node `>=26`，ESM，包管理用 npm。部署只有 Linux 一条路：Windows 主机跑在 WSL2 Ubuntu 里，不再有原生 Windows 路径。
 `deploy/linux/install.sh` 是唯一入口，每个阶段先查再做，人工步骤（凭据、pi 登录、gh 登录）原地停下、重跑续接；见 [docs/runbooks/linux-single-node.md](docs/runbooks/linux-single-node.md)。
 pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src/runner/pi-binary.ts` 取，shell 经 `node -p` 取，不得再出现字面版本号。
-`scripts/` 只放长期入口（run-* / smoke-* / preflight / health-check / notion-bootstrap / install-pi / pi-login / catalog-snapshot / provider-add / repository-add / inspect-round / replay-phase）；一次性排障脚本用完即删，不进仓库。
+`scripts/` 只放长期入口（run-* / smoke-* / serve-console / preflight / health-check / notion-bootstrap / install-pi / pi-login / catalog-snapshot / provider-add / repository-add / inspect-round / replay-phase）；一次性排障脚本用完即删，不进仓库。
 
 ### 本地验证顺序
 
@@ -103,9 +105,12 @@ pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src
 - **内环收敛判据是"不得重复"**：`failed(N)` 与此前任一轮（回看窗口 `retry.oscillationLookback`）相同即停 `verify_loop_exceeded`——下一轮会是已经跑过的那一轮。换掉一批失败（修好三个、坏掉一个）是进展，照常消耗一轮继续；兜底是轮次预算而不是判据。轮次硬上限（内环 3，含归因到本 Story 的合流打回 / phase 连续崩溃 3，前进即清零 / continue 8 / regression 重开 2）设在离散轮次，不设在时长或 token；内环预算耗尽停 `retry_limit_exceeded`。
 - **技术栈与界面是需求级决策，不是卡级决策**（08）：PRD 与拆解禁写技术方案、DESIGN 禁止提问且只看得见一张卡，所以此前**没有任何一层的作用域够大**——需要新栈的需求只能被某张卡顺手决定，涉及界面的需求全链路没有一处描述"长什么样"。需求层为此加一道 `SOLUTION` 关（PRD 确认之后、拆解之前）：产出选定方案与被否的备选、`stackChanges`、`openDecisions`（这是"主动提技术疑问"的出口）、`qualityGates`，涉及界面时再产出进仓库的界面契约（`docs/prototype/` 的 token 表 + 组件清单 + 可运行页面原型）。**停不停人由确定性条件决定**：`stackChanges` 或界面契约非空即必须人批，不接受模型自称不用审。卡越界改依赖由 CODE 出口拒掉并升级回这一关——仓库级不可逆的决定不由一张卡替所有卡做。等人仍停在 SOLUTION 状态内，四类真停点不变。
 - **界面判据分三层，只有前两层能否决**（08 §6，修订 03 §9.2）：结构层（该场景声明要看见的角色与文本是否出现在 aria 快照里）与契约层（色值/字号/间距是否全部来自 token 表）可否决，因为两者有限可枚举、可收敛；观感永不否决。**像素级一致不做**——它是无限精度的判据，模型每轮都能挑出新的一处差，失败集合永不重复、判据永不生效，卡只会烧完预算。原型的作用是给前两层供数，不是一张要被像素对齐的图。
+- **「这一页在不在」是代码问题，「这一页对不对」才是浏览器问题**（03 §13）：写好了组件却没在产品入口挂上，单测照样全绿，而能抓住它的场景 `layers` 是 `["e2e","ui"]`，于是这件 code 层完全证得了的事被整条交给了浏览器道——`applyDowngrades` 只朝一个方向开口（code 证不了 → 交给浏览器），反方向没有出口。所以屏幕场景必填 `page`（应用里的路径，与 `visible[]` 同一轮要），CODE 与 REGRESSION_FIX 出口起仓库声明的应用逐个打开它，findings 回喂同一 session（不耗轮次）。判据刻意窄：只有 **404/410** 与**完全没应答**会拒，302/401/500 都说明路由挂上了，要求 200 会让每个需要登录态的页面依赖这一阶段造不出来的数据。仓库没声明启动命令、或这一轮应用起不来，都什么都不问——此刻"箱子起不来"与"代码把启动搞坏了"是同一个观测。同一批补上了三层防造假里缺掉的第三层：屏幕场景报的页面地址必须与应用道同源（此前只有 prompt 一层，而 host 白名单是主机名级的，自起服务的端口照样在 localhost 上）；工具面那一层仍未做。
 - **出口检查只有一套机制**：`evaluate → findings 回喂同一 session → 重解析`，每个 phase 的出口由一张表声明（`pi-phase-port.ts` 的 `builtInGates`），调用方需要现场状态时自己传 gate。会话内回喂是关键：拒绝是一个工作项，不是对 Story 的判决，所以不耗轮次、不算重入，也不用重新加载这个 session 已经读过的东西——S-AGENTRULES-01 就是被两次"换个 session 重做"的 SPECIFY 拒绝停掉的。每个 gate 声明用尽轮次后是 `fail` 还是 `ship`：没有否决权的那些（交付报告、设计摘要）照发，因为卡在文字上比文字不好读更糟。
 
 - **判官只许把答案从确定性地板上移开，且只往安全的那一边**：`src/judge/` 是 pi 之外的第二条模型路径，只回类型化判断（Noul / Choice / Score），不生成文本、不进 failover chain、不计费用上限。每一个问到它的问题都必须先有一个确定性答案，判官不可用、超时或不确定时那个答案就是全部答案——所以它**永远只能加**，不能把地板已经判定的东西拿走。方向由代价决定而不是由准确率决定，而且**两个问题的安全方向不一样、阈值不共用**：环境/代码这一处，把真缺陷读成环境会让卡永不收敛，把环境失败读成代码只损失一轮，所以只许往环境侧移；Notion 批准意图那一处，漏读一次批准只多重写一版而人会再说一遍，凭空读出一次批准则是没人批准过的东西被拿去建，所以门槛更高（01 §4.2.1）。问题一次只问一条（一条理由 / 一条评论一个请求）：实测同一句话的概率随同批内容摆动 0.29，而固定输入重跑只差 0.02，批量问会让一条的结论取决于同批恰好还有什么。判断随该轮 / 该次轮询用掉，不在 prompt 组装路径上，`assemblePhasePrompt` 的逐字节确定性不受影响。默认关，开了而缺凭据要说出来；每次移动都记 friction，用数据决定留不留。
+
+- **自己写下的理由不进猜的那条路**：模式表读的是模型写的散文，这是它存在的全部理由。hivemind 自己从一个它检查过的条件里发出的理由——验证道声明了却没留下的页面结构记录、验证道自报的 `inconclusive`、箱子没能起起来的应用——不是待识别的散文，写它的那段代码就知道它是什么，所以由产出方直接标注（`ScenarioReason.environmental`），既不问表也不问判官。把这类理由丢进表里，等于让它的分类取决于措辞、再取决于判官对该措辞的把握：`snapshot does not exist` 因为表里写的是 `screenshot` 而长期落空，同一轮四个场景问成四个问题、两个过线两个没过，S-R237511OV-02 的预算就花在这个差别上（2026-09-19）。反向不成立：运行记录里判为失败的场景，`inconclusive` 盖不住它——箱子自己的记录压过模型的自述。
 
 - **状态只经守卫语句写**：Epic 与 Story 的 state 一律由 `epicTransitionStatement` / `storyTransitionStatement` 生成——声明的边与 `WHERE state = ?` 守卫出自同一对状态，不可能分叉，并发下输的那个拿到 `rowsAffected === 0` 而不是覆盖赢家。它们返回语句而不直接写库：迁移必须和它的事件与看板投影同一 batch 落地，拆开就会有状态变了而没有记录的那一刻。全仓不应再出现手写的 `UPDATE epics/stories SET state`。
 

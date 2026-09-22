@@ -283,6 +283,10 @@ CREATE INDEX IF NOT EXISTS idx_scenario_registry_pool ON scenario_registry(pool,
 
 -- Every regression observation, kept per revision so a failure can be judged
 -- against a window instead of on its own.
+-- One row per scenario per sweep. `failure_text` is the readable half of the
+-- signature -- the same text the hash is taken over -- because a card carries
+-- it to the Story reopened to fix the break, which was otherwise handed
+-- thirty-two hex characters and asked to reproduce them.
 CREATE TABLE IF NOT EXISTS regression_runs (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
   scenario_id       TEXT NOT NULL,
@@ -290,6 +294,7 @@ CREATE TABLE IF NOT EXISTS regression_runs (
   revision          TEXT NOT NULL,
   outcome           TEXT NOT NULL CHECK (outcome IN ('passed','failed')),
   failure_signature TEXT,
+  failure_text      TEXT,
   ts                INTEGER NOT NULL,
   CHECK ((outcome = 'failed' AND failure_signature IS NOT NULL) OR
          (outcome = 'passed' AND failure_signature IS NULL))
@@ -302,6 +307,7 @@ CREATE INDEX IF NOT EXISTS idx_regression_runs_scenario ON regression_runs(scena
 CREATE TABLE IF NOT EXISTS regression_cards (
   scenario_id       TEXT NOT NULL,
   failure_signature TEXT NOT NULL,
+  failure_text      TEXT,
   attributed_story  TEXT,
   created_at        INTEGER NOT NULL,
   resolved_at       INTEGER,
@@ -479,7 +485,12 @@ CREATE TABLE IF NOT EXISTS event_log (
   seq        INTEGER NOT NULL,
   card_id    TEXT,
   phase      TEXT,
-  type       TEXT NOT NULL,
+  -- The RPC stream belongs in the run's own events file and nowhere else.
+  -- Mirroring it here copied that file into the table every orchestration read
+  -- goes through: 2.4 million rows, a database past a gigabyte, and nothing
+  -- that ever read them back. The writer is gone; this is what keeps it gone,
+  -- by making the mirror a failed insert instead of a database nobody can open.
+  type       TEXT NOT NULL CHECK (type NOT LIKE 'rpc.%'),
   ts         INTEGER NOT NULL,
   data       TEXT NOT NULL,
   UNIQUE (run_id, seq)

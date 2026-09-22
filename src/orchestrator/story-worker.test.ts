@@ -118,7 +118,8 @@ function frontPhase(input: ManagedPhaseInput, dod: string = DOD) {
 }
 
 /** The same DoD with its first scenario judged on a screen. A screen scenario
- * owes examples, a source and the roles it shows, so all four are here. */
+ * owes examples, a source, the page it is served at and the roles it shows,
+ * so all five are here. */
 function withScreens(dod: string): string {
   return dod.replace("    layers: [integration]", [
     "    layers: [ui]",
@@ -128,6 +129,7 @@ function withScreens(dod: string): string {
     "        text: 新建任务",
     "      - kind: excludes",
     "        text: 还没有任何任务",
+    "    page: /tasks",
     "    visible:",
     "      - role: button",
     "        text: 新建任务",
@@ -785,6 +787,159 @@ describe("SingleStoryWorker SHAPE re-entry after a crash", () => {
     expect(titles.rows.map((row) => row.title)).toEqual(["上一阶段的产出还在", "打回后问题变少"]);
   });
 
+  it("hands a screen scenario with no page back to the session that wrote it", async () => {
+    await store.transition("S-EPIC1-01", "QUEUED", "SHAPE", "system", "run-shape");
+    const screens = withScreens(DOD);
+    const pageless = screens.replace("    page: /tasks\n", "");
+    let shaped = 0;
+    const phases = vi.fn(async (input: ManagedPhaseInput) => {
+      if (input.phase === "SHAPE") {
+        shaped++;
+        return frontPhase(input, shaped === 1 ? pageless : screens)!;
+      }
+      const front = frontPhase(input);
+      if (front) return front;
+      if (input.phase === "CODE") return { sessionId: `session-code-${input.round}`, artifacts: [{ kind: "implementation", body: "done" }] };
+      return { sessionId: "session-merge", artifacts: [{ kind: "delivery-report", body: "两个场景都通过了。" }] };
+    });
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => ({ sessionId: `session-verify-${input.round}`, verdict: "accepted" as const, failedScenarios: [], artifact: "{}" })),
+    };
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier,
+      { deliver: vi.fn(async () => ({ mrUrl: null })) }, { enqueue: vi.fn(async () => undefined) });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
+    expect(shaped).toBe(2);
+    const frozen = await store.getDefinitionOfDone("S-EPIC1-01");
+    expect(frozen.scenarios[0]?.page).toBe("/tasks");
+  });
+
+  it("hands a footprint the repository has no room for back to the session that wrote it", async () => {
+    await store.transition("S-EPIC1-01", "QUEUED", "SHAPE", "system", "run-shape");
+    const ungrounded = DOD.replace("predicted_footprint: [src/orchestrator]", "predicted_footprint: [orchestrator/]");
+    let shaped = 0;
+    const phases = vi.fn(async (input: ManagedPhaseInput) => {
+      if (input.phase === "SHAPE") {
+        shaped++;
+        return frontPhase(input, shaped === 1 ? ungrounded : DOD)!;
+      }
+      const front = frontPhase(input);
+      if (front) return front;
+      if (input.phase === "CODE") return { sessionId: `session-code-${input.round}`, artifacts: [{ kind: "implementation", body: "done" }] };
+      return { sessionId: "session-merge", artifacts: [{ kind: "delivery-report", body: "两个场景都通过了。" }] };
+    });
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => ({ sessionId: `session-verify-${input.round}`, verdict: "accepted" as const, failedScenarios: [], artifact: "{}" })),
+    };
+    const friction = { record: vi.fn(async () => undefined) };
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier,
+      { deliver: vi.fn(async () => ({ mrUrl: null })) }, { enqueue: vi.fn(async () => undefined) },
+      { friction, repositoryHas: (path) => path === "src" || path === "src/orchestrator" });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
+    expect(shaped).toBe(2);
+    expect(friction.record).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "footprint_without_ground",
+      detail: "orchestrator/",
+    }));
+    const frozen = await store.getDefinitionOfDone("S-EPIC1-01");
+    expect(frozen.predicted_footprint).toEqual(["src/orchestrator"]);
+  });
+
+  it("sends a screen the application does not serve back to the session that wrote it", async () => {
+    let mounted = false;
+    const reachable = vi.fn(async (pages: readonly { scenarioId: string; page: string }[]) =>
+      mounted ? [] : pages.map((entry) => ({ ...entry, reason: "应用回了「找不到页面」（HTTP 404）" })));
+    const phases = vi.fn(async (input: ManagedPhaseInput) => {
+      if (input.phase === "SHAPE") return frontPhase(input, withScreens(DOD))!;
+      const front = frontPhase(input);
+      if (front) return front;
+      if (input.phase === "CODE") {
+        const gate = input.exitGates!.find((candidate) => candidate.name === "screen-reachable")!;
+        const refused = await gate.evaluate([{ kind: "implementation", body: "done" }], 1);
+        expect(refused).toMatchObject({ passed: false, findings: expect.stringContaining("/tasks") });
+        // The same session mounts it and is asked again.
+        mounted = true;
+        expect(await gate.evaluate([{ kind: "implementation", body: "done" }], 2)).toEqual({ passed: true });
+        return {
+          sessionId: `session-code-${input.round}`,
+          artifacts: [{ kind: "implementation", body: "done" }],
+          exitGateRounds: { "screen-reachable": 2 },
+        };
+      }
+      return { sessionId: "session-merge", artifacts: [{ kind: "delivery-report", body: "两个场景都通过了。" }] };
+    });
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => ({ sessionId: `session-verify-${input.round}`, verdict: "accepted" as const, failedScenarios: [], artifact: "{}" })),
+    };
+    const friction = { record: vi.fn(async () => undefined) };
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier,
+      { deliver: vi.fn(async () => ({ mrUrl: null })) }, { enqueue: vi.fn(async () => undefined) },
+      { friction, screensReachable: reachable });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
+    // One CODE run: the handback happened inside it and cost no round.
+    expect(phases.mock.calls.filter(([input]) => input.phase === "CODE")).toHaveLength(1);
+    expect(reachable).toHaveBeenCalledWith([{ scenarioId: "S-EPIC1-01-a", page: "/tasks" }]);
+    expect(friction.record).toHaveBeenCalledWith(expect.objectContaining({ kind: "screen_not_mounted" }));
+  });
+
+  it("asks nothing of a repository that declares no way to start an application", async () => {
+    const reachable = vi.fn(async () => null);
+    const phases = vi.fn(async (input: ManagedPhaseInput) => {
+      if (input.phase === "SHAPE") return frontPhase(input, withScreens(DOD))!;
+      const front = frontPhase(input);
+      if (front) return front;
+      if (input.phase === "CODE") {
+        const gate = input.exitGates!.find((candidate) => candidate.name === "screen-reachable")!;
+        expect(await gate.evaluate([{ kind: "implementation", body: "done" }], 1)).toEqual({ passed: true });
+        return { sessionId: `session-code-${input.round}`, artifacts: [{ kind: "implementation", body: "done" }] };
+      }
+      return { sessionId: "session-merge", artifacts: [{ kind: "delivery-report", body: "两个场景都通过了。" }] };
+    });
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => ({ sessionId: `session-verify-${input.round}`, verdict: "accepted" as const, failedScenarios: [], artifact: "{}" })),
+    };
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier,
+      { deliver: vi.fn(async () => ({ mrUrl: null })) }, { enqueue: vi.fn(async () => undefined) },
+      { screensReachable: reachable });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
+    expect(reachable).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands back a contract that does not parse instead of throwing out of the phase", async () => {
+    const phases = vi.fn(async (input: ManagedPhaseInput) => {
+      if (input.phase === "SPECIFY") {
+        const gate = input.exitGates!.find((candidate) => candidate.name === "specify-exit")!;
+        // What the model actually wrote: the contract plus one key the schema
+        // does not have. Thrown, this left the process and cost a re-entry.
+        const refused = await gate.evaluate(
+          [{ kind: "test-contract", body: `${TEST_CONTRACT}\nobservations: []\n` }],
+          1,
+        );
+        expect(refused).toMatchObject({ passed: false, findings: expect.stringContaining("observations") });
+        return {
+          sessionId: "session-specify",
+          artifacts: [{ kind: "test-contract", body: TEST_CONTRACT }],
+          exitGateRounds: { "specify-exit": 2 },
+        };
+      }
+      const front = frontPhase(input);
+      if (front) return front;
+      if (input.phase === "CODE") return { sessionId: `session-code-${input.round}`, artifacts: [{ kind: "implementation", body: "done" }] };
+      return { sessionId: "session-merge", artifacts: [{ kind: "delivery-report", body: "Both scenarios passed." }] };
+    });
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => ({ sessionId: `session-verify-${input.round}`, verdict: "accepted" as const, failedScenarios: [], artifact: "{}" })),
+    };
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier,
+      { deliver: vi.fn(async () => ({ mrUrl: null })) }, { enqueue: vi.fn(async () => undefined) });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
+    expect(phases.mock.calls.filter(([input]) => input.phase === "SPECIFY")).toHaveLength(1);
+  });
+
   it("lets the SPECIFY session correct a contract the exit refuses, without spending a phase run", async () => {
     const phases = vi.fn(async (input: ManagedPhaseInput) => {
       if (input.phase === "SPECIFY") {
@@ -1179,6 +1334,61 @@ describe("SingleStoryWorker regression fix", () => {
 
     await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
     expect(phases).not.toHaveBeenCalled();
+  });
+
+  it("re-verifies a reopened scenario the environment could not judge, buying no second fix", async () => {
+    // S-R237511MB-02 was reopened for a scenario judged from outside the
+    // allowed networks. Going back around the loop bought a REGRESSION_FIX
+    // turn, and that turn answered the unreachable premise by rendering the
+    // denial page to every caller.
+    await openCard();
+    const outcomes = [
+      { verdict: "inconclusive" as const, failedScenarios: ["S-EPIC1-01-a"] },
+      { verdict: "accepted" as const, failedScenarios: [] },
+    ];
+    let attempt = 0;
+    const { phases, integration, delivery, projection } = regressionPorts(true);
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => {
+        const outcome = outcomes[attempt++]!;
+        return { sessionId: `session-verify-${input.round}`, artifact: JSON.stringify(outcome), ...outcome };
+      }),
+    };
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier, delivery, projection, { integration });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
+    expect(phases.mock.calls.map(([input]) => input.phase)).toEqual(["SPECIFY", "REGRESSION_FIX"]);
+    expect(verifier.run).toHaveBeenCalledTimes(2);
+    // Both attempts judged the same fix, so the tree the retry is compared
+    // against is the tree that was already there.
+    const sessions = new Set((verifier.run as ReturnType<typeof vi.fn>).mock.calls
+      .map(([input]) => (input as { codeSessionId: string }).codeSessionId));
+    expect(sessions.size).toBe(1);
+  });
+
+  it("stops for a person when the environment loses the reopened scenario twice, and says which", async () => {
+    await openCard();
+    const { phases, integration, delivery, projection } = regressionPorts(true);
+    const verifier: StoryVerifyPort = {
+      run: vi.fn(async (input) => ({
+        sessionId: `session-verify-${input.round}`,
+        artifact: "{}",
+        verdict: "inconclusive" as const,
+        failedScenarios: ["S-EPIC1-01-a"],
+      })),
+    };
+    const friction = { record: vi.fn(async () => undefined) };
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier, delivery, projection, { integration, friction });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({
+      state: "NEEDS_INPUT", stopReason: "verify_loop_exceeded",
+    });
+    expect(phases.mock.calls.map(([input]) => input.phase)).toEqual(["SPECIFY", "REGRESSION_FIX"]);
+    expect(friction.record).toHaveBeenCalledWith(expect.objectContaining({ kind: "verification_inconclusive" }));
+    const summary = JSON.parse(String((await client.execute(
+      "SELECT stop_summary FROM stories WHERE id = 'S-EPIC1-01'",
+    )).rows[0]?.stop_summary));
+    expect(summary.inconclusive).toMatchObject({ attempts: 2, scenarios: ["S-EPIC1-01-a"] });
   });
 
   it("keeps trying when the Epic head refuses the fix, with the refusal as the next round's task", async () => {
