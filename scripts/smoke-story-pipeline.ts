@@ -20,6 +20,7 @@ import { SingleStoryWorker } from "../src/orchestrator/story-worker.js";
 import { PiModelCatalog, resolveModel } from "../src/runner/model-resolver.js";
 import { resolveAgentSpec } from "../src/runner/agent-spec.js";
 import { ConfigStore } from "../src/config/store.js";
+import { installSolPiConfig, renderSolPiConfig, solPiConfigPath } from "../src/runner/sol-pi.js";
 import type { ModelPurpose } from "../src/pipeline/phase.js";
 import { RpcPiRunner } from "../src/runner/rpc-runner.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
@@ -180,8 +181,25 @@ async function main(): Promise<void> {
     // The smoke run pins one deterministic model, so every purpose resolves to
     // it; the spec is still built through the real entry point so the spawn has
     // the shape production produces.
+    // HIVEMIND_SMOKE_SOL_PI=actionFusion,observationPack runs the same flow with
+    // those SoL-Pi mechanisms on, which is how the before-and-after is taken:
+    // the mechanisms change the tool block and the tool results, so the only
+    // honest acceptance is the whole pipeline passing on both settings.
+    const solPiRequest = (process.env.HIVEMIND_SMOKE_SOL_PI ?? "").split(",").map((name) => name.trim());
+    const smokeConfig = await ConfigStore.load(client);
+    if (solPiRequest.some((name) => name.length > 0)) {
+      await smokeConfig.set("agent.solPi", {
+        actionFusion: solPiRequest.includes("actionFusion"),
+        observationPack: solPiRequest.includes("observationPack"),
+      }, "smoke-story-pipeline");
+      await installSolPiConfig(
+        renderSolPiConfig(smokeConfig.get("agent.solPi") as { actionFusion: boolean; observationPack: boolean }),
+        solPiConfigPath(),
+      );
+      console.log(`sol-pi mechanisms on: ${solPiRequest.join(", ")}`);
+    }
     const smokeSpec = (purpose: ModelPurpose) => resolveAgentSpec({
-      config: ConfigStore.defaults(),
+      config: smokeConfig,
       policy: {
         resolve: async () => model,
         providersFor: async () => ["mock"],

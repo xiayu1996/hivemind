@@ -110,7 +110,7 @@ function wantsToolCall(messages) {
   const lastUser = messages.toReversed().find((m) => m.role === "user");
   const alreadyRan = messages.some((m) => m.role === "tool" || Array.isArray(m?.tool_calls));
   const text = messageText(lastUser);
-  return (/USE_(?:TOOL|WRITE):/.test(text) || text.includes("Perform an independent blind verification")) && !alreadyRan;
+  return (/USE_(?:TOOL|WRITE|FUSED):/.test(text) || text.includes("Perform an independent blind verification")) && !alreadyRan;
 }
 
 // The verifier is told which scenarios were declared; that section is the only
@@ -128,6 +128,21 @@ function toolRequest(messages) {
   if (text.includes("Perform an independent blind verification")) {
     const scenario = declaredScenario(text);
     return { name: "bash", arguments: { command: `echo HIVEMIND_TEST_RESULT ${scenario} passed` } };
+  }
+  // `USE_FUSED:<path>|<command>` aims a SoL-Pi Action Fusion call at the guard:
+  // the mutation and the command it carries arrive as one tool call, which is
+  // the shape that would otherwise slip past the shell rules entirely.
+  const fused = /USE_FUSED:([^\n]*)/.exec(text);
+  if (fused) {
+    const [path, ...rest] = fused[1].trim().split("|");
+    return {
+      name: "write",
+      arguments: {
+        path: path.trim(),
+        content: "mock fused write\n",
+        then_run: { command: rest.join("|").trim() },
+      },
+    };
   }
   const write = /USE_WRITE:([^\n]*)/.exec(text);
   if (write) {
