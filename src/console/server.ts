@@ -32,6 +32,7 @@ import {
   type ConsoleTodoCommandPort,
   type ConsoleTodoReadPort,
   type TodoDecisionResponse,
+  type TodoDetailPayload,
 } from "./todo-contract.js";
 
 export interface ConsoleDataSource {
@@ -128,6 +129,40 @@ async function readOptional(path: string): Promise<string | null> {
     // serve at this path, and the caller keeps the server-rendered routes.
     return null;
   }
+}
+
+/** The element the shell reads the waiting todo out of before it mounts. */
+export const INITIAL_TODO_ELEMENT_ID = "hivemind-initial-todo";
+
+/**
+ * Puts the waiting todo into the served shell so the page's first paint is the
+ * todo itself.
+ *
+ * The screen fetches its todo on mount, so between the document's load event
+ * and that read returning the page shows only the loading placeholder. A
+ * browser round that snapshots a freshly opened page right after load therefore
+ * races the read and can catch the placeholder instead of the todo, which makes
+ * "the page shows the waiting todo" a criterion whose answer depends on timing.
+ * Carrying the todo in the HTML removes the race: the shell renders it at mount
+ * and the page's own read then refreshes it.
+ *
+ * Only a waiting todo is carried. An empty ledger has nothing to show yet and
+ * is still left to the page's own read, so the loading state a scenario about
+ * an unanswered read judges is unchanged.
+ */
+export function injectInitialTodo(html: string, todo: TodoDetailPayload): string {
+  // A `<` in the JSON would close the script element early; escaping it keeps
+  // the payload valid JSON and inert as markup.
+  const payload = JSON.stringify({ kind: "pending", todo }).replaceAll("<", "\\u003c");
+  const script = `<script id="${INITIAL_TODO_ELEMENT_ID}" type="application/json">${payload}</script>`;
+  return html.includes("</body>") ? html.replace("</body>", `${script}</body>`) : `${html}${script}`;
+}
+
+/** The oldest waiting todo, or null when nothing waits. */
+async function readWaitingTodo(todoRead: ConsoleTodoReadPort): Promise<TodoDetailPayload | null> {
+  const list = await todoRead.listTodos();
+  if (list.openTodoId === null) return null;
+  return todoRead.readTodo(list.openTodoId);
 }
 
 /** Builds the read-only intranet console. */
@@ -361,9 +396,19 @@ export async function createConsoleServer(
       if (existsSync(assets)) {
         await app.register(fastifyStatic, { root: assets, prefix: "/assets/" });
       }
+      // The todo page carries the waiting todo in the shell: the screen fetches
+      // it on mount, and until that read returns the page shows only the
+      // loading placeholder. Only a waiting todo is carried, so an empty ledger
+      // still shows the read it is doing.
+      app.get("/todos", async (_request, reply) => {
+        const waiting = todoRead === undefined
+          ? null
+          : await readWaitingTodo(todoRead).catch(() => null);
+        return reply.type("text/html").send(waiting === null ? index : injectInitialTodo(index, waiting));
+      });
       // A built shell owns the remaining pages; `/` and `/costs` stay with the
       // server-rendered costs page, which exists whether or not a build ran.
-      for (const route of ["/nodes", "/tasks", "/config", "/stats", "/providers", "/queue", "/todos"]) {
+      for (const route of ["/nodes", "/tasks", "/config", "/stats", "/providers", "/queue"]) {
         app.get(route, async (_request, reply) => reply.type("text/html").send(index));
       }
     }

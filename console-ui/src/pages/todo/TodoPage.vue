@@ -55,6 +55,7 @@ import {
   validationMessage,
   type TodoDetailDto,
   type TodoPagePort,
+  type TodoReadResultDto,
   type TodoSubmissionDto,
   type TodoViewState,
 } from "./contracts.js";
@@ -73,11 +74,20 @@ const props = withDefaults(
     submittedBy?: string;
     /** Overridden only to make a test's refresh deterministic. */
     refreshIntervalMs?: number;
+    /** The waiting todo the served document carried, if any. It is what the
+     * first paint shows; the read on mount then refreshes it, so a page that
+     * opened before this read answers does not race it for what is on screen. */
+    initial?: TodoReadResultDto | null;
   }>(),
-  { todoId: null, submittedBy: "本人", refreshIntervalMs: TODO_REFRESH_INTERVAL_MS },
+  { todoId: null, submittedBy: "本人", refreshIntervalMs: TODO_REFRESH_INTERVAL_MS, initial: null },
 );
 
-const view = ref<TodoViewState>(initialTodoView(props.todoId));
+function initialView(initial: TodoReadResultDto | null): TodoViewState {
+  const base = initialTodoView(props.todoId);
+  return initial === null ? base : reduceTodoView(base, { type: "loaded", requestId: 1, result: initial });
+}
+
+const view = ref<TodoViewState>(initialView(props.initial));
 let timer: ReturnType<typeof setInterval> | null = null;
 
 // The form is the screen's own state: the reducer holds what the ledger said,
