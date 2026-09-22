@@ -12,6 +12,8 @@ import {
   renderMissingVisible,
   renderDoDLanguageFindings,
   scanScenarioCoverage,
+  persistenceGaps,
+  renderPersistenceGaps,
   scenariosMissingPage,
   structuralRequirements,
   scenariosMissingVisible,
@@ -294,5 +296,101 @@ describe("a footprint the repository has no room for", () => {
   it("names every entry it refused, in the words they were written in", () => {
     expect(renderFootprintWithoutGround(["console/", "web"])).toContain("- console/");
     expect(renderFootprintWithoutGround(["console/", "web"])).toContain("- web");
+  });
+});
+
+const screen = (id: string, extra: string): string => [
+  `  - id: ${id}`,
+  "    given: 打开设置页",
+  "    when: 改一个名字并保存",
+  "    then: 页面显示新的名字",
+  "    layers: [ui]",
+  "    page: /settings",
+  "    source: the roles table",
+  "    examples:",
+  "      - kind: shows",
+  "        text: 已保存",
+  "      - kind: excludes",
+  "        text: 保存失败",
+  extra,
+].join("\n");
+
+describe("what proves a screen kept what a person put into it", () => {
+
+  const build = (...entries: string[]): string =>
+    yaml.replace(
+      [
+        "  - id: S-EPIC12-03-a",
+        "    given: A taxable cart",
+        "    when: A flat coupon is applied",
+        "    then: Tax uses the discounted subtotal",
+        "    layers: [unit, integration]",
+      ].join("\n"),
+      entries.join("\n"),
+    ).replace("scenarios: [S-EPIC12-03-a]", "scenarios: [S-EPIC12-03-a]");
+
+  it("asks every screen scenario whether it changes anything kept", () => {
+    const dod = parseDoD(build(screen("S-EPIC12-03-a", "    visible:\n      - role: heading\n        text: 设置")));
+
+    expect(persistenceGaps(dod)).toEqual([{ scenarioId: "S-EPIC12-03-a", what: "unanswered" }]);
+  });
+
+  it("asks a scenario that changes something for the one proving the change survived", () => {
+    const dod = parseDoD(build(screen("S-EPIC12-03-a", "    mutates: true\n    visible:\n      - role: heading\n        text: 设置")));
+
+    expect(persistenceGaps(dod)).toEqual([{ scenarioId: "S-EPIC12-03-a", what: "no_read_back" }]);
+  });
+
+  it("asks nothing of a scenario that only reads", () => {
+    const dod = parseDoD(build(screen("S-EPIC12-03-a", "    mutates: false\n    visible:\n      - role: heading\n        text: 设置")));
+
+    expect(persistenceGaps(dod)).toEqual([]);
+  });
+
+  it("is satisfied by a read-back on the same page in the same browser", () => {
+    const dod = parseDoD(build(
+      screen("S-EPIC12-03-a", "    mutates: true\n    persisted_by: S-EPIC12-03-b\n    visible:\n      - role: heading\n        text: 设置"),
+      screen("S-EPIC12-03-b", "    mutates: false\n    visible:\n      - role: heading\n        text: 设置"),
+    ));
+
+    expect(persistenceGaps(dod)).toEqual([]);
+  });
+
+  it("refuses a read-back that opens another page, which proves something else", () => {
+    const elsewhere = screen("S-EPIC12-03-b", "    mutates: false\n    visible:\n      - role: heading\n        text: 设置")
+      .replace("    page: /settings\n    source: the roles table\n    examples:\n      - kind: shows\n        text: 已保存\n      - kind: excludes\n        text: 保存失败\n    mutates: false", "    page: /audit\n    source: the roles table\n    examples:\n      - kind: shows\n        text: 已保存\n      - kind: excludes\n        text: 保存失败\n    mutates: false");
+    const dod = parseDoD(build(
+      screen("S-EPIC12-03-a", "    mutates: true\n    persisted_by: S-EPIC12-03-b\n    visible:\n      - role: heading\n        text: 设置"),
+      elsewhere,
+    ));
+
+    expect(persistenceGaps(dod)).toEqual([
+      { scenarioId: "S-EPIC12-03-a", what: "read_back_elsewhere", detail: "S-EPIC12-03-b -> /audit" },
+    ]);
+  });
+
+  it("refuses a read-back no browser settles, which proves a call and not a visit", () => {
+    const unitOnly = [
+      "  - id: S-EPIC12-03-b",
+      "    given: 存过一个名字",
+      "    when: 再读一次",
+      "    then: 读到刚才那个名字",
+      "    layers: [integration]",
+    ].join("\n");
+    const dod = parseDoD(build(
+      screen("S-EPIC12-03-a", "    mutates: true\n    persisted_by: S-EPIC12-03-b\n    visible:\n      - role: heading\n        text: 设置"),
+      unitOnly,
+    ));
+
+    expect(persistenceGaps(dod)).toEqual([
+      { scenarioId: "S-EPIC12-03-a", what: "read_back_not_in_browser", detail: "S-EPIC12-03-b" },
+    ]);
+  });
+
+  it("says why a screen that only writes is not enough, in the words of the person who asked", () => {
+    const rendered = renderPersistenceGaps([{ scenarioId: "S-A-01-a", what: "no_read_back" }]);
+
+    expect(rendered).toContain("每次打开都重置");
+    expect(rendered).toContain("- S-A-01-a");
   });
 });
