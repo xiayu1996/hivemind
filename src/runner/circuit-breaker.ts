@@ -1,6 +1,6 @@
 import type { ConfigStore } from "../config/store.js";
 import { classifyError, type ErrorClass } from "./classify.js";
-import { parseUsageLimit } from "./usage-limit.js";
+import { backoffCeilingMs, readResetWindow, type ResetWindow } from "./reset-window.js";
 
 export type BreakerState = "closed" | "open" | "half_open";
 
@@ -42,9 +42,13 @@ const DEFAULT_QUOTA_HOLD_MAX_MS = 4 * 3_600_000;
  * spends one every 30 minutes for as long as the account stays spent, which is
  * how a quiet weekend burns a day of quota on probes alone.
  */
-function windowlessQuotaHold(policy: BreakerPolicy, consecutiveFailures: number): number {
+function windowlessQuotaHold(
+  policy: BreakerPolicy,
+  consecutiveFailures: number,
+  window: ResetWindow | null,
+): number {
   const base = policy.quotaHoldMs ?? DEFAULT_QUOTA_HOLD_MS;
-  const ceiling = policy.quotaHoldMaxMs ?? DEFAULT_QUOTA_HOLD_MAX_MS;
+  const ceiling = backoffCeilingMs(window, policy.quotaHoldMaxMs ?? DEFAULT_QUOTA_HOLD_MAX_MS);
   const exponent = Math.min(Math.max(consecutiveFailures - 1, 0), 20);
   return Math.min(base * 2 ** exponent, Math.max(base, ceiling));
 }
@@ -71,8 +75,9 @@ export function closedHealth(provider: string, at: number): ProviderHealth {
 
 /**
  * One failure moves the provider's health. The window a provider names for
- * itself always wins over a policy default: a usage limit reports the minutes
- * it needs, and those minutes are relative to the event, not to now.
+ * itself always wins over a policy default, in whichever shape it named it
+ * (see `reset-window.ts`); a duration it reports is relative to the event and
+ * never to the moment this is read.
  */
 export function onProviderFailure(health: ProviderHealth, input: ProviderFailure): ProviderHealth {
   const { at, errorMessage, policy } = input;
@@ -94,19 +99,27 @@ export function onProviderFailure(health: ProviderHealth, input: ProviderFailure
   });
 
   if (classification.class === "AUTH") return opened(null, true);
+  // What the provider itself said about its window, whichever shape it said it
+  // in. Read once here, from the message, at the event's own time.
+  const window = readResetWindow(errorMessage, at);
   if (classification.class === "QUOTA") {
-    const limit = parseUsageLimit(errorMessage, at);
-    if (limit !== null && limit.resetAt !== null) return opened(limit.resetAt, false);
+    if (window !== null && window.resetAt !== null) return opened(window.resetAt, false);
     // A subscription usage limit reopens on its own even when the message
-    // names no window; a credentials probe cannot tell when, so the breaker
-    // holds for a fixed period and a real dispatch is the test. A spent
-    // balance ("insufficient_quota") does not come back without a person.
-    if (/usage limit/i.test(errorMessage)) {
-      return opened(at + windowlessQuotaHold(policy, consecutiveFailures), false);
+    // names no instant; nothing can tell when, so the breaker holds and a real
+    // dispatch is the test. A named window length does not say when this one
+    // ends, only how long these windows are, so it bounds the backoff rather
+    // than becoming the wait. A spent balance ("insufficient_quota") does not
+    // come back without a person.
+    if (/usage limit/i.test(errorMessage) || (window !== null && window.windowMs !== null)) {
+      return opened(at + windowlessQuotaHold(policy, consecutiveFailures, window), false);
     }
     return opened(null, true);
   }
-  if (classification.class === "RATE_LIMIT") return opened(at + policy.rateLimitOpenMs, false);
+  if (classification.class === "RATE_LIMIT") {
+    // A 429 that names when to come back is worth more than our own default:
+    // the provider is the only party that knows its window.
+    return opened(window?.resetAt ?? at + policy.rateLimitOpenMs, false);
+  }
   if (consecutiveFailures >= policy.failureThreshold) {
     // An unrecognised wording gets no self-healing window: nothing knows what
     // would have to change for the next attempt to differ, so reopening on a

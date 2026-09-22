@@ -2,7 +2,7 @@ import type { ConfigStore } from "../config/store.js";
 import { usableProviders, type BreakerPolicy, type ProviderHealth } from "./circuit-breaker.js";
 import type { ResolvedModel } from "./model-resolver.js";
 import type { ModelPurpose } from "./model-policy.js";
-import { parseUsageLimit, usageLimitAction } from "./usage-limit.js";
+import { readResetWindow, shouldWaitOut } from "./reset-window.js";
 
 export interface ProviderHealthPort {
   snapshot(): Promise<ReadonlyMap<string, ProviderHealth>>;
@@ -74,9 +74,9 @@ export async function runWithFailover<T>(
       // The window belongs to the event, so it is read from the message at the
       // moment the failure happened, never from the clock at the moment we
       // decide what to do about it.
-      const limit = parseUsageLimit(errorMessage, health.updatedAt);
-      if (limit && usageLimitAction(limit, deps.policy.deferWithinMinutes) === "defer" && limit.resetAt !== null) {
-        throw new ProviderDeferredError(provider, limit.resetAt, errorMessage);
+      const window = readResetWindow(errorMessage, health.updatedAt);
+      if (shouldWaitOut(window, health.updatedAt, deps.policy.deferWithinMinutes)) {
+        throw new ProviderDeferredError(provider, window!.resetAt!, errorMessage);
       }
     }
   }

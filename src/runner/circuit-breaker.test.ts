@@ -153,3 +153,33 @@ describe("provider circuit breaker", () => {
     expect(usableProviders(["openai-codex"], healths, NOW + 30_000)).toEqual(["openai-codex"]);
   });
 });
+
+describe("a window the provider named", () => {
+  const namedWindowPolicy = {
+    failureThreshold: 3, transientOpenMs: 60_000, rateLimitOpenMs: 300_000,
+    deferWithinMinutes: 10, quotaHoldMs: 30 * 60_000, quotaHoldMaxMs: 4 * 3_600_000,
+  };
+  const at = Date.parse("2026-09-22T05:00:00.000Z");
+
+  it("holds until the exact reset a weekly limit reported", () => {
+    // The live failure: without this the breaker used its own backoff and
+    // probed the same wall every twenty minutes for three days.
+    const message = `429: {"message":"You've reached your weekly usage limit for your plan. `
+      + `Your limit resets at 2026-09-25T09:16:02.084Z.","type":"rate_limit_error","code":"RATE_LIMITED"}`;
+
+    const health = onProviderFailure(closedHealth("command-code", at), { at, errorMessage: message, policy: namedWindowPolicy });
+    expect(health).toMatchObject({ state: "open", needsHuman: false });
+    expect(health.retryAt).toBe(Date.parse("2026-09-25T09:16:02.084Z"));
+    expect(probeDue(health, at + 3_600_000)).toBe(false);
+  });
+
+  it("stretches the blind hold to fit a window it can only name", () => {
+    const message = "You have reached your weekly usage limit.";
+    let health = closedHealth("command-code", at);
+    for (let failure = 0; failure < 8; failure += 1) {
+      health = onProviderFailure(health, { at, errorMessage: message, policy: namedWindowPolicy });
+    }
+    // The policy ceiling alone would be four hours; a week-long window earns a day.
+    expect(health.retryAt).toBe(at + 24 * 3_600_000);
+  });
+});
