@@ -73,6 +73,7 @@ import { GitMrStoryDelivery, processGitCommand } from "../src/vcs/story-delivery
 import { appLaneConfig, startAppLane } from "../src/verify/app-lane.js";
 import { probeScreens, type ScreenPage } from "../src/pipeline/screen-reachability.js";
 import { entrypointsTouched } from "../src/verify/app-entrypoint.js";
+import { introducedExports, unwiredExports } from "../src/pipeline/unwired-exports.js";
 import { piModelDeclarationsPath } from "../src/runner/pi-model-declarations.js";
 
 const execFileAsync = promisify(execFile);
@@ -618,6 +619,22 @@ async function main(): Promise<void> {
         // point a box that will not come up and code that broke the start are
         // the same observation, and refusing on it would let a held port stop
         // cards. VERIFY still reports that round inconclusive.
+        // Measured against the branch this card came from, so an export that
+        // has been unused since before it is somebody else's debt. The grep is
+        // the whole tree minus the tests: where it is wired matters less than
+        // that anything outside its own file knows it exists.
+        unwiredExports: async () => {
+          const diff = await git(worktreePath, ["diff", "--unified=0", `${targetBranch}...HEAD`]);
+          const introduced = introducedExports(diff);
+          if (introduced.length === 0) return [];
+          const mentions = new Map<string, string[]>();
+          for (const entry of introduced) {
+            const found = await git(worktreePath, ["grep", "-l", "--fixed-strings", entry.name, "--", "."])
+              .catch(() => "");
+            mentions.set(entry.name, found.split("\n").map((line) => line.trim()).filter(Boolean));
+          }
+          return unwiredExports(introduced, mentions);
+        },
         // The lane's own entry points, measured against the branch this card
         // came from. Uncommitted work counts: a round that has not committed
         // its rewrite of the start script is still asking a witness it wrote.
