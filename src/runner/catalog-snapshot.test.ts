@@ -34,7 +34,7 @@ describe("recorded provider catalogues", () => {
 describe("models hivemind declares to pi", () => {
   it.each([...declaredModelIds()])("%s: every declared model is in the recorded catalogue", (provider, ids) => {
     // A declared id missing from the recording means the capture ran on a host
-    // that had not installed deploy/pi/models.json, and configuration would
+    // that had not yet rendered the declaration, and configuration would
     // then refuse an id pi actually serves.
     expect(snapshotModelIds(provider)).toEqual(expect.arrayContaining(ids));
   });

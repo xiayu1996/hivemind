@@ -49,6 +49,7 @@ import { needsApiKeyEnv, providerKeyEnv } from "../src/runner/provider-env.js";
 import { defaultModelCatalog } from "../src/runner/catalog.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
 import { defaultDesignLintBinary } from "../src/verify/design-lint-binary.js";
+import { piModelDeclarationsPath } from "../src/runner/pi-model-declarations.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -119,7 +120,7 @@ async function main(): Promise<void> {
 
   const piBinary = defaultPiBinary();
   const catalog = defaultModelCatalog(piBinary);
-  const policy = new ModelPolicy(config, catalog);
+  const policy = new ModelPolicy(config, catalog, piModelDeclarationsPath());
   const provider = optional("--provider") ?? (await policy.providersFor("product_manager"))[0];
   if (!provider) throw new Error("no provider in the failover chain serves the product manager tier");
   const spec = await resolveAgentSpec({ config, policy }, "product_manager", provider);
