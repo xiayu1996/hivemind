@@ -872,6 +872,20 @@ export const CONFIG_KEYS = {
     description: "Tools each call site may use. The default is one set for every purpose: tool definitions lead the cached prefix, so a per-purpose surface breaks the cache for every request behind it, and phase discipline is carried by the prompt and the deterministic exits instead. Order is stable and must stay that way; one reordering invalidates every downstream cache entry.",
     dangerous: true,
   }),
+  "agent.solPi": def({
+    schema: z.object({
+      actionFusion: z.boolean(),
+      observationPack: z.boolean(),
+    }),
+    // Off until a host has measured its own before-and-after, because turning
+    // either one on changes the tool block at the very front of every request
+    // and throws the whole prefix cache away once on the way in.
+    default: { actionFusion: false, observationPack: false },
+    scope: "global",
+    reload: "next-spawn",
+    description: "SoL-Pi mechanisms hivemind runs. Action Fusion lets an edit carry the command that validates it, removing a model round trip from every edit-then-test pair. ObservationPack replaces a replayed large tool result with a handle the model pages back through obs_recall. The other two SoL-Pi mechanisms are not offered: the Evidence-Preserving Reducer calls a model outside the RPC stream where no ceiling, breaker or classifier can see it, and Online Context Compact trades score for a cache-read saving that is worth nothing on a subscription provider.",
+    dangerous: true,
+  }),
   "agent.purposePrompts": def({
     schema: z.partialRecord(modelPurpose, z.object({
       /** Replaces the phase layer wholesale; absent uses the repository file. */

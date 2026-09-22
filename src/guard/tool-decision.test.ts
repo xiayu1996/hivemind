@@ -335,3 +335,76 @@ describe("browser driven from the shell", () => {
     expect(decision.reason).toContain("CODE");
   });
 });
+
+describe("a mutation that carries its own follow-up command", () => {
+  const frozen = compileFencedPatterns(["src/a.test.ts"]);
+  const readOnly = {
+    ...policy,
+    phase: "VERIFY",
+    bannedBash: [...READ_ONLY_BASH_PATTERNS],
+  };
+
+  it("judges the fused command by the same red lines a bash call gets", () => {
+    const decision = decideToolCall(
+      call("edit", { path: "/wt/task-1/src/a.ts", then_run: { command: "rm -rf /" } }),
+      policy,
+      fenced,
+    );
+    expect(decision.block).toBe(true);
+    expect(decision.target).toBe("rm -rf /");
+  });
+
+  it("refuses a shell write smuggled past a phase that may not write", () => {
+    const decision = decideToolCall(
+      call("edit", { path: "/wt/task-1/src/a.ts", then_run: { command: "echo x > src/a.ts" } }),
+      readOnly,
+      fenced,
+      compileBannedBashPatterns(readOnly.bannedBash),
+    );
+    expect(decision.block).toBe(true);
+    expect(decision.reason).toContain("VERIFY");
+  });
+
+  it("still fences the file the mutation names", () => {
+    const decision = decideToolCall(
+      call("edit", { path: "/wt/task-1/src/a.test.ts", then_run: { command: "npm test" } }),
+      policy,
+      frozen,
+    );
+    expect(decision.block).toBe(true);
+    expect(decision.target).toBe("/wt/task-1/src/a.test.ts");
+  });
+
+  it("lets an ordinary edit plus verification through", () => {
+    const decision = decideToolCall(
+      call("edit", { path: "/wt/task-1/src/a.ts", then_run: { command: "npm test" } }),
+      policy,
+      fenced,
+    );
+    expect(decision.block).toBe(false);
+    expect(decision.target).toBe("/wt/task-1/src/a.ts");
+  });
+
+  it("leaves a mutation with no fused command exactly as it was", () => {
+    expect(decideToolCall(call("edit", { path: "/wt/task-1/src/a.ts" }), policy, fenced).block)
+      .toBe(false);
+  });
+
+  it("refuses a fused block whose command is not a string, rather than ignoring it", () => {
+    const decision = decideToolCall(
+      call("edit", { path: "/wt/task-1/src/a.ts", then_run: { timeout: 30 } }),
+      policy,
+      fenced,
+    );
+    expect(decision.block).toBe(true);
+  });
+
+  it("covers a tool the fence would otherwise wave through", () => {
+    const decision = decideToolCall(
+      call("read", { path: "/wt/task-1/src/a.ts", then_run: { command: "rm -rf /" } }),
+      policy,
+      fenced,
+    );
+    expect(decision.block).toBe(true);
+  });
+});

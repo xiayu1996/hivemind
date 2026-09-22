@@ -1,4 +1,5 @@
 import { mkdir, stat } from "node:fs/promises";
+import { solPiConfigPath } from "../src/runner/sol-pi.js";
 import { hostname } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -123,7 +124,7 @@ async function main(): Promise<void> {
   const policy = new ModelPolicy(config, catalog, piModelDeclarationsPath());
   const provider = optional("--provider") ?? (await policy.providersFor("product_manager"))[0];
   if (!provider) throw new Error("no provider in the failover chain serves the product manager tier");
-  const spec = await resolveAgentSpec({ config, policy }, "product_manager", provider);
+  const spec = await resolveAgentSpec({ config, policy, solPiConfigPath: solPiConfigPath() }, "product_manager", provider);
   // systemd hands the daemon the secrets file; a run by hand inherits nothing,
   // and pi then reports an API-key provider as unconfigured.
   const profile = await policy.profileOf(provider);

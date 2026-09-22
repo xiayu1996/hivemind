@@ -2,6 +2,12 @@ import type { ConfigStore } from "../config/store.js";
 import { MODEL_PURPOSES, type ModelPurpose, type ModelTier } from "../pipeline/phase.js";
 import type { ModelCatalog, ResolvedModel } from "./model-resolver.js";
 import { ModelPolicy } from "./model-policy.js";
+import {
+  installSolPiConfig,
+  OBSERVATION_PACK_TOOL,
+  renderSolPiConfig,
+  type SolPiConfig,
+} from "./sol-pi.js";
 
 /**
  * The one place a spawn's seven dimensions are decided.
@@ -60,6 +66,14 @@ export interface ResolvedAgentSpec {
   limits: AgentLimits;
   skills: readonly string[];
   mcpServers: readonly string[];
+  /**
+   * SoL-Pi mechanisms this spawn runs. It sits on the spec so that the tool
+   * block and the extension list come from one decision: ObservationPack hands
+   * the model a handle it can only open with `obs_recall`, so a spawn that
+   * loads the extension without the tool, or the tool without the extension,
+   * is broken in a way neither half can detect.
+   */
+  solPi: SolPiConfig;
 }
 
 /** The default tool set, used for any purpose the config does not name. */
@@ -89,6 +103,12 @@ export interface AgentSpecSources {
   config: ConfigStore;
   catalog?: ModelCatalog;
   policy?: AgentModelPolicy;
+  /** Where this host's SoL-Pi reads its mechanism switches. Left out in tests
+   * and anywhere no pi is spawned, which then renders nothing. The same
+   * reasoning as the provider declaration: pi is a separate process that reads
+   * the file off disk, so the configuration has to be written before a spawn,
+   * and doing it here means every spawn passes the one place that decides it. */
+  solPiConfigPath?: string;
 }
 
 function policyOf(sources: AgentSpecSources): AgentModelPolicy {
@@ -124,6 +144,10 @@ export async function resolveAgentSpec(
   const limits = config.get("agent.purposeLimits") as PurposeMap<AgentLimits>;
   const skills = config.get("agent.purposeSkills") as PurposeMap<string[]>;
   const mcp = config.get("agent.purposeMcp") as PurposeMap<string[]>;
+  const solPi = config.get("agent.solPi") as SolPiConfig;
+  if (sources.solPiConfigPath !== undefined) {
+    await installSolPiConfig(renderSolPiConfig(solPi), sources.solPiConfigPath);
+  }
 
   return {
     [BRAND]: true,
@@ -133,13 +157,20 @@ export async function resolveAgentSpec(
     metered,
     // `code` carries the default set so that one edit moves every phase at
     // once; a purpose naming its own set opts out deliberately.
-    tools: stableList(tools[purpose] ?? tools.code, DEFAULT_AGENT_TOOLS),
+    // `obs_recall` rides with the mechanism that creates the handles it opens,
+    // so it cannot be listed for a spawn that does not load ObservationPack.
+    tools: stableList(
+      [...(tools[purpose] ?? tools.code ?? DEFAULT_AGENT_TOOLS),
+        ...(solPi.observationPack ? [OBSERVATION_PACK_TOOL] : [])],
+      DEFAULT_AGENT_TOOLS,
+    ),
     prompt: prompts[purpose] ?? {},
     guard: guard[purpose] ?? {},
     contextPaths: stableList(context[purpose], []),
     limits: limits[purpose] ?? {},
     skills: stableList(skills[purpose], []),
     mcpServers: stableList(mcp[purpose], []),
+    solPi,
   };
 }
 

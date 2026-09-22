@@ -63,6 +63,8 @@ deploy/linux/install.sh --repository-url <git-url>   # 部署唯一入口，幂�
 npx tsx scripts/catalog-snapshot.ts <provider>   # 采 provider 目录快照（该机需有这家凭据）
 npx tsx scripts/provider-add.ts <provider> ...   # 声明 provider（写 model.providers，等价于在 console 上改）
 
+bash scripts/install-sol-pi.sh                   # 装 pin 住的 SoL-Pi extension（幂等，与 pi 同样按 ref 并存）
+
 npx tsx scripts/smoke-runner.ts            # 真实 pi 子进程冒烟
 npx tsx scripts/smoke-context-isolation.ts # 验证 context 文件不泄漏
 npx tsx scripts/smoke-crash-recovery.ts    # SIGKILL 后从 checkpoint 续跑
@@ -77,7 +79,8 @@ npx tsx scripts/replay-phase.ts --card-id <id> --phase CODE --print-prompt      
 Node `>=26`，ESM，包管理用 npm。部署只有 Linux 一条路：Windows 主机跑在 WSL2 Ubuntu 里，不再有原生 Windows 路径。
 `deploy/linux/install.sh` 是唯一入口，每个阶段先查再做，人工步骤（凭据、pi 登录、gh 登录）原地停下、重跑续接；见 [docs/runbooks/linux-single-node.md](docs/runbooks/linux-single-node.md)。
 pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src/runner/pi-binary.ts` 取，shell 经 `node -p` 取，不得再出现字面版本号。
-`scripts/` 只放长期入口（run-* / smoke-* / serve-console / preflight / health-check / notion-bootstrap / install-pi / install-pi-models / pi-login / catalog-snapshot / provider-add / repository-add / inspect-round / replay-phase）；一次性排障脚本用完即删，不进仓库。
+SoL-Pi 的 commit pin 同理只写在 `hivemind.solPiRef`，代码经 `src/runner/sol-pi.ts` 取。
+`scripts/` 只放长期入口（run-* / smoke-* / serve-console / preflight / health-check / notion-bootstrap / install-pi / install-pi-models / install-sol-pi / pi-login / catalog-snapshot / provider-add / repository-add / inspect-round / replay-phase）；一次性排障脚本用完即删，不进仓库。
 
 ### 本地验证顺序
 
@@ -122,6 +125,8 @@ pi 版本 pin 只写在 `package.json` 的 `hivemind.piVersion`，代码经 `src
 - **大脑档是这条成本序的唯一例外，由 `model.tierFailoverChains` 单独排序**：拆解/设计/界面走查读的是人话、判的是屏幕，这一档最强的模型在前（`gpt-5.6-sol`），便宜的在后。它后面仍挂满整条链——**订阅打满只许降级，不许停工**；全系统唯一能因"没模型可用"停下的原因，是最后那个计费 API 没钱了。per-tier 顺序只能命名 `model.failoverChain` 里的 provider（`assertModelPolicy` 强制），因为链才是发凭据、采错误文案、记熔断状态的那份全集。
 - **provider 目录有两个源**：pinned pi 的实时目录是权威，`fixtures/model-catalogs/` 的采集快照是无 pi / 无该家凭据时的兜底（漂移测试守住一致）。快照进仓库还有第二个作用：它让"这个 model id 是否存在"变成**同步**判据，配置写入当场就能拒绝坏 id，而不是等到 spawn 时卡住一张卡。
 - **验证命令永不硬编码**，由 agent 看现场决定。防造假靠三层：prompt 约束、工具面物理掐断、verdict 代码校验；三层缺一不可，prompt 是最弱的一层。
+- **带 `then_run` 的工具调用要过同一套 shell 红线**：SoL-Pi 的 Action Fusion 让 `edit`/`write` 捎带一条命令，而守卫此前只对 `bash` 读 `command`——命令换个位置，工具面那层物理掐断就被整层绕过，CODE 冻结测试的 `fencedPatterns` 同时失效。判定在 `decideToolCall` 最前面，对**任何**带 `then_run` 的调用先判一次（不只今天被替换的那两个工具），`then_run` 在而 `command` 不是字符串时拒绝而非忽略。真实 pi 的证明在 `scripts/smoke-guard.ts` 的 FUSED 探针。
+- **SoL-Pi 只收两个机制，且开关是数据不是代码**（07 §6a）：Action Fusion 与 ObservationPack 由 `agent.solPi` 开关，`~/.pi/agent/sol-pi.json` 每次 spawn 前由 `resolveAgentSpec` 渲染（同 `models.json` 的模式与理由）。**Evidence-Preserving Reducer 永不开**——它在 extension 内部调第二个模型，那条调用不过 RPC 事件流，费用上限、熔断、错误分类、`turn_usage` 全都看不见它。**Online Context Compact 也不开**：它省的是 cache read，而我们绝大部分流量跑在订阅 provider 上，这份节省是零，代价却是 NVIDIA 自己消融里唯一的掉分。工具名 `obs_recall` 与扩展装载必须同生共死——实测 pi 对白名单里的未知工具名静默忽略，没有运行期报错兜底。
 - **`VERIFY.session_id != CODE.session_id`** 由 DB CHECK 强制，不靠应用层自觉。
 
 ### 持久化
