@@ -18,6 +18,7 @@ function snapshot(overrides: Partial<ProgressSnapshot> = {}): ProgressSnapshot {
     waitingEpics: [],
     unmergeableEpics: [],
     oldestPendingOutboxAt: null,
+    orphanedCards: [],
     registeredScenarios: 1,
     regressionRunsEver: 1,
     lastPassingRegressionAt: NOW - MINUTE,
@@ -62,6 +63,31 @@ describe("assessProgress", () => {
     expect(report.findings).toHaveLength(1);
     expect(report.findings[0]).toMatchObject({ severity: "queued" });
     expect(renderProgressReport(report)).toContain("Queued behind the host's concurrency limit:");
+  });
+
+  it("names a regression card no sweep can close without calling the service unhealthy", () => {
+    // S-R237511MB-02-access: its premise is a device outside the allowed
+    // networks, which no browser on the host can be, so the scenario moved to
+    // the code lane and left the pool. The card it had already raised can be
+    // closed by no sweep and by no round, and it drove the Story into
+    // retry_limit_exceeded twice while nothing said so.
+    const report = assessProgress(snapshot({
+      orphanedCards: [{
+        scenarioId: "S-R237511MB-02-access",
+        failureSignature: "290ca60d124a0221a4e69f706587054b",
+        attributedStory: "S-R237511MB-02",
+        layers: '["integration"]',
+        createdAt: NOW - 2_600 * MINUTE,
+      }],
+    }), NOW);
+
+    expect(report.healthy).toBe(true);
+    expect(report.findings).toHaveLength(1);
+    expect(report.findings[0]).toMatchObject({ severity: "orphaned" });
+    const rendered = renderProgressReport(report);
+    expect(rendered).toContain("Regression cards no sweep can close:");
+    expect(rendered).toContain("S-R237511MB-02-access");
+    expect(rendered).not.toContain("Stuck:");
   });
 
   it("calls a card stuck when it is not running and nothing else is either", () => {

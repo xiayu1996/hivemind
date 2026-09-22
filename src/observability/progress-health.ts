@@ -1,4 +1,5 @@
 import type { Client } from "@libsql/client";
+import { describeOrphanedCard, readOrphanedCards, type OrphanedRegressionCard } from "../regression/orphaned-cards.js";
 
 /**
  * Whether the service is getting work done, as distinct from being up.
@@ -66,13 +67,17 @@ export interface ProgressSnapshot {
   unmergeableEpics: readonly UnmergeableEpic[];
   /** Creation time of the oldest Notion write still pending, if any. */
   oldestPendingOutboxAt: number | null;
+  /** Open regression cards no sweep can ever close, because their scenario has
+   * left the pool. Reported, never counted: the predicate knows the card is
+   * orphaned and cannot know whether it deserves closing. */
+  orphanedCards: readonly OrphanedRegressionCard[];
   /** Scenarios in the registry. Zero means nothing is owed a sweep yet. */
   registeredScenarios: number;
   regressionRunsEver: number;
   lastPassingRegressionAt: number | null;
 }
 
-export type FindingSeverity = "stalled" | "waiting" | "queued";
+export type FindingSeverity = "stalled" | "waiting" | "queued" | "orphaned";
 
 export interface ProgressFinding {
   severity: FindingSeverity;
@@ -83,8 +88,9 @@ export interface ProgressFinding {
 export interface ProgressReport {
   findings: readonly ProgressFinding[];
   /**
-   * Nothing is stuck. Cards waiting on a person, and cards queued behind the
-   * host's concurrency limit, are reported but not counted.
+   * Nothing is stuck. Cards waiting on a person, cards queued behind the host's
+   * concurrency limit, and orphaned regression cards are reported but not
+   * counted: none of them is a thing the service could do differently.
    */
   healthy: boolean;
 }
@@ -181,6 +187,15 @@ export function assessProgress(
         summary: "Regression sweeps have run but none has ever passed, so no Epic can be shown to integrate.",
       });
     }
+  }
+
+  // A card no sweep can close does not stop anything on its own -- the Epic
+  // gate reaches cards through the registry, so an orphan does not hold a
+  // review request either -- but nothing else mentions it, and the Story it
+  // owns re-enters the regression loop against it until the reopen budget is
+  // gone. Naming it is the whole fix; closing it is a person's judgement.
+  for (const card of snapshot.orphanedCards) {
+    findings.push({ severity: "orphaned", summary: describeOrphanedCard(card) });
   }
 
   if (snapshot.oldestPendingOutboxAt !== null) {
@@ -285,6 +300,8 @@ export async function readProgressSnapshot(client: Client, now: number = Date.no
     "SELECT MIN(created_at) AS oldest FROM notion_outbox WHERE state = 'pending'",
   )).rows[0]?.oldest;
 
+  const orphanedCards = await readOrphanedCards(client);
+
   const registered = Number((await client.execute(
     "SELECT COUNT(*) AS count FROM scenario_registry",
   )).rows[0]?.count ?? 0);
@@ -303,6 +320,7 @@ export async function readProgressSnapshot(client: Client, now: number = Date.no
     waitingEpics,
     unmergeableEpics,
     oldestPendingOutboxAt: typeof oldestPending === "number" ? oldestPending : null,
+    orphanedCards,
     registeredScenarios: registered,
     regressionRunsEver: runs,
     lastPassingRegressionAt: typeof lastPass === "number" ? lastPass : null,
@@ -315,6 +333,7 @@ export function renderProgressReport(report: ProgressReport): string {
   const stalled = report.findings.filter((finding) => finding.severity === "stalled");
   const waiting = report.findings.filter((finding) => finding.severity === "waiting");
   const queued = report.findings.filter((finding) => finding.severity === "queued");
+  const orphaned = report.findings.filter((finding) => finding.severity === "orphaned");
   const lines: string[] = [];
   if (stalled.length > 0) {
     lines.push("Stuck:", ...stalled.map((finding) => `  ${finding.summary}`));
@@ -324,6 +343,9 @@ export function renderProgressReport(report: ProgressReport): string {
   }
   if (waiting.length > 0) {
     lines.push("Waiting on a person or on evidence:", ...waiting.map((finding) => `  ${finding.summary}`));
+  }
+  if (orphaned.length > 0) {
+    lines.push("Regression cards no sweep can close:", ...orphaned.map((finding) => `  ${finding.summary}`));
   }
   return lines.join("\n");
 }

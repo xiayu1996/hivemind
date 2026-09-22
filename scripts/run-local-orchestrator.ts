@@ -79,6 +79,7 @@ import { EpicMrDelivery } from "../src/vcs/epic-delivery.js";
 import { escalateParkedStories } from "../src/orchestrator/epic-escalation.js";
 import { enqueueEpicPages } from "../src/orchestrator/epic-page-projection.js";
 import { epicRegressionClean, epicsAwaitingDelivery, scenariosAwaitingDelivery } from "../src/regression/epic-gate.js";
+import { describeOrphanedCard, readOrphanedCards } from "../src/regression/orphaned-cards.js";
 import { discoverMRPort } from "../src/vcs/mr/adapters.js";
 import { NotionStoryProjection } from "../src/notion/story-projection.js";
 import { NotionSyncCoordinator, type NotionSyncPoller } from "../src/notion/sync.js";
@@ -1079,6 +1080,29 @@ async function main(): Promise<void> {
     // own page, next to the review request that carries it.
     const judged = await new EpicAcceptance(handle.client).open(epicId);
     if (judged.length > 0) console.log(`Epic ${epicId} acceptance: ${judged.length} scenarios to judge`);
+    // Said once, where a person is being asked to judge this batch: a card no
+    // sweep can close is not holding the review request -- the gate reaches
+    // cards through the registry, and an orphan has no row there -- but it is
+    // still open, and whoever accepts the Epic is the one who can decide
+    // whether the lane it moved to actually proves it. Recorded as an event as
+    // well as logged, because a log tail is not somewhere a decision waits.
+    const orphans = await readOrphanedCards(handle.client, { epicId });
+    for (const card of orphans) console.log(`Epic ${epicId}: ${describeOrphanedCard(card)}`);
+    if (orphans.length > 0) {
+      const runId = `epic-acceptance:${epicId}`;
+      await handle.client.execute({
+        sql: `INSERT INTO event_log (run_id, seq, card_id, phase, type, ts, data)
+              VALUES (?, (SELECT COALESCE(MAX(seq), -1) + 1 FROM event_log WHERE run_id = ?), ?, NULL,
+                      'regression.orphaned_cards', ?, ?)`,
+        args: [runId, runId, epicId, Date.now(), JSON.stringify({
+          cards: orphans.map((card) => ({
+            scenarioId: card.scenarioId,
+            attributedStory: card.attributedStory,
+            layers: card.layers,
+          })),
+        })],
+      });
+    }
     console.log(`Epic ${epicId} review request: ${delivered.mrUrl}`);
   };
 
