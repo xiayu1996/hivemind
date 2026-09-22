@@ -98,6 +98,7 @@ import { resolveAgentSpec } from "../src/runner/agent-spec.js";
 import { cacheRetentionEnv } from "../src/runner/cache-retention.js";
 import { StoryExecutionStore } from "../src/orchestrator/story-execution-store.js";
 import { absoluteDbUrl, openDb } from "../src/persistence/client.js";
+import { holdDaemonSingleton } from "../src/orchestrator/daemon-singleton.js";
 import { migrate } from "../src/persistence/migrate.js";
 import { assertSchemaCurrent } from "../src/persistence/schema-fingerprint.js";
 import { createWorktree, locateWorktree, retireWorktree, worktreeLayout } from "../src/vcs/worktree.js";
@@ -237,6 +238,24 @@ async function main(): Promise<void> {
   // records itself as migrated while enforcing the older constraints, and the
   // first thing that notices is a write failing inside somebody's Story.
   await assertSchemaCurrent(handle.client);
+  // Before the gateway exists. This process is the only writer of Notion and
+  // of every system-owned field, and a second one would break the premise the
+  // store relies on to skip conflict resolution, so the claim is taken before
+  // anything that could write.
+  // Assigned once the Story children are known; until then losing the claim
+  // can only mean stopping, because nothing has been dispatched yet.
+  let onClaimLost: ((reason: string) => void) | undefined;
+  const singleton = await holdDaemonSingleton(handle.client, "orchestrator", {
+    hostId: hostname(),
+    onLost: (reason) => {
+      if (onClaimLost !== undefined) {
+        onClaimLost(reason);
+        return;
+      }
+      console.error(`FAILED: this orchestrator no longer holds the role (${reason})`);
+      process.exit(1);
+    },
+  });
   const gateway = new NotionGateway({
     transport: createNotionHttpTransport({ token }),
   });
@@ -1553,6 +1572,9 @@ async function main(): Promise<void> {
     await app.close();
     await operationsConsole?.close();
     await projections.stop();
+    // Freed before the handle closes, so a restart takes the role at once
+    // instead of waiting out the lapse.
+    await singleton.release().catch(() => undefined);
     handle.close();
   };
   // A second signal stops waiting. The drain above is deliberately unbounded
@@ -1571,6 +1593,15 @@ async function main(): Promise<void> {
     if (storyChildren.size === 0) return;
     console.log(`Stopping ${storyChildren.size} in-flight Story run(s) now; each keeps its budget`);
     for (const child of storyChildren) child.kill("SIGTERM");
+  };
+  // Losing the claim means another daemon owns the role and is writing. Ours
+  // stops at once rather than draining: a drain keeps the outbox walking, which
+  // is exactly the second writer the claim exists to prevent. The children are
+  // signalled first so they settle as cancelled and keep their budgets.
+  onClaimLost = (reason: string): void => {
+    console.error(`FAILED: this orchestrator no longer holds the role (${reason})`);
+    for (const child of storyChildren) child.kill("SIGTERM");
+    process.exit(1);
   };
   process.on("SIGINT", signalled);
   process.on("SIGTERM", signalled);
