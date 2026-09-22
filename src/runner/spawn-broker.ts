@@ -38,6 +38,9 @@ export interface SpawnBrokerOptions {
   maxWaitMs?: number;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
+  /** Where this host's SoL-Pi reads its switches; passed to the spec resolver,
+   * which is the one place that knows which mechanisms are configured. */
+  solPiConfigPath?: string;
 }
 
 const DEFAULT_WAIT_MS = 5_000;
@@ -111,7 +114,13 @@ export class SpawnBroker {
         });
         if (!slot) continue;
         try {
-          const spec = await resolveAgentSpec({ config, policy }, purpose, provider);
+          const spec = await resolveAgentSpec(
+            { config, policy, ...(this.options.solPiConfigPath === undefined
+              ? {}
+              : { solPiConfigPath: this.options.solPiConfigPath }) },
+            purpose,
+            provider,
+          );
           return { spec, release: () => slots.release(slot.slotId) };
         } catch (cause) {
           // A provider that cannot resolve must not keep the slot it just took.

@@ -14,6 +14,7 @@ import { mechanicalFindings } from "../verify/usability-mechanical.js";
 import { loadPmPromptLayers } from "../pipeline/prompt-loader.js";
 import { lastAssistantText } from "../runner/assistant-text.js";
 import type { ResolvedAgentSpec } from "../runner/agent-spec.js";
+import { solPiExtensionPath } from "../runner/sol-pi.js";
 import { promptWithContinueRetry } from "../runner/continue-retry.js";
 import { RpcPiRunner, type RpcRunnerConfig } from "../runner/rpc-runner.js";
 import type { PiRunner, PromptResult } from "../runner/types.js";
@@ -143,7 +144,15 @@ export class PiPrototypePort implements PrototypePort {
       skillDiscovery: "explicit",
       skills: [...this.options.spec.skills],
       contextFiles: "explicit",
-      ...(this.options.extensions ? { extensions: this.options.extensions } : {}),
+      extensions: [
+        ...(this.options.extensions ?? []),
+        // Loaded wherever a spec may carry `obs_recall`, because that tool is
+        // only implemented by this extension: listing it without loading the
+        // extension would put a name in the allowlist that pi cannot resolve.
+        ...(this.options.spec.solPi.actionFusion || this.options.spec.solPi.observationPack
+          ? [solPiExtensionPath()]
+          : []),
+      ],
       env: { ...this.options.env, [POLICY_ENV_VAR]: serializeGuardPolicy(policy) },
       systemPrompt: { mode: "replace", text: layers.combined },
     });

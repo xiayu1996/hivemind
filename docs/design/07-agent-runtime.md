@@ -359,6 +359,60 @@ MQ 能提供的每一项在中央 libsql 里都已有对等物：任务持久化
 
 采集数据还暴露了工具面现在根本不是一个受控的面：VERIFY 是 `[read, bash, grep, find, ls]`、DESIGN 是 `[read, bash]`，两个都"只读"却完全不同，因为 VERIFY 走 `blind-verify-port.ts` 另一条路。`agent.purposeTools` 收口时一并处理。
 
+## 6a. SoL-Pi：只收两个机制（2026-09-22 增补）
+
+NVIDIA 的 SoL-Pi 是 pi 0.85.1 的标准 extension（不改 pi 源码，全走公开 API，默认四个机制全关），
+打包了它在 535 个可执行环境里搜出来的四条省法。它的 pin 与我们一致，因此可以直接装载。
+
+本机实测（`turn_usage`，09-18 至 09-22）决定了收哪两个：输入 16.6 亿 token 里 99% 是缓存命中，
+其中 14.98 亿跑在包月的 command-code 上。**所以 SoL-Pi 论文里 33% 的账单节省在这里基本不存在**，
+真正的价值是少撞订阅的 usage-limit 窗口、缩短每张卡的轮次——而 CODE 平均 107 轮、峰值上下文 189K，
+64 次里 41 次超过 150K，正是前两个机制针对的形态。
+
+| 机制 | 收不收 | 理由 |
+|---|---|---|
+| Action Fusion | 收 | `edit`/`write` 多一个可选 `then_run`，改完在同一次工具调用里跑验证命令，省掉 CODE 里每一对「改—跑测试」的一个模型往返 |
+| ObservationPack | 收 | 超 10 KiB 的工具结果只完整发 2 次，之后换句柄 + 摘要，`obs_recall` 分页取回原文；只改投喂给 provider 的投影，session 文件不动 |
+| Evidence-Preserving Reducer | 不收 | 它在 extension 内部直接调第二个模型，这条调用**不过 RPC 事件流**，于是 `sumUsage`、`turn_usage`、`cost.perCardUsdCeiling`、熔断、错误分类全都看不见它——等于在所有护栏之外开一条模型路径。它还改写落进 session 的 tool_result，而那正是 VERIFY 证据比对与 SPECIFY 测试报告读的文本 |
+| Online Context Compact | 不收 | 省得最多，也是 NVIDIA 自己的消融里唯一掉分的（44.8 → 42.0）。它省的是 cache read，而承载我们绝大部分流量的 provider 按订阅计费，这份节省在账单上是零；它还要在 turn 中途 `abort` 再发隐藏消息续跑，与「`clear_queue` + `abort` 是放弃一轮的信号」直接相撞 |
+
+### 装载方式与三条纪律
+
+1. **不用 `pi install`**：那会把包写进宿主机的 pi 设置，让 prompt 取决于机器——正是 `--no-context-files` 与
+   `--no-skills` 要挡的那一类。改为像 pi 自己一样按 pin 装在 `~/.hivemind/sol-pi/<ref>/`
+   （`scripts/install-sol-pi.sh`，幂等，校验 checkout 就是那个 commit），spawn 时经 `-e` 显式装载。
+   ref 只写在 `package.json` 的 `hivemind.solPiRef`，代码经 `src/runner/sol-pi.ts` 取，不得再出现字面 sha。
+2. **开关是数据，文件由 hivemind 渲染**：`agent.solPi`（registry 键，console 可编辑，标了 dangerous）是
+   唯一真相，`~/.pi/agent/sol-pi.json` 由 `resolveAgentSpec` 在每次 spawn 前渲染——与 `models.json`
+   同一个模式、同一个理由（pi 是另一个进程，只读磁盘上的文件）。不收的两个机制**显式写成 false 而不是省略**，
+   因为这个文件就是那个决定的审计；reducer 的 provider/model 一行都不写，这样没有任何日志能经它离开本机。
+3. **`obs_recall` 与创建句柄的机制同生共死**：spawn 传的是显式工具白名单，所以工具名与扩展装载必须出自
+   同一个决定（`ResolvedAgentSpec.solPi`）。装了扩展不给工具，模型拿到打不开的句柄；给了工具不装扩展，
+   白名单里是一个 pi 解析不了的名字。实测 pi 对白名单里的未知工具名**静默忽略**，所以这件事没有运行期报错兜底。
+
+### 融合调用把工具面那层红线整个绕开了
+
+`decideToolCall` 此前只对 `bash` 取 `command` 过 `checkBash`，而 Action Fusion 的命令藏在
+`edit.then_run.command` 里——三层防造假中最硬的那层（工具面物理掐断）会被一个换位置的命令整层绕过，
+CODE 冻结测试的 `fencedPatterns` 与全局红线同时失效。修法是把命令判定抽成一段，在函数最前面对**任何**
+带 `then_run` 的调用先判一次，而不是只判今天被替换的那两个工具；`then_run` 在而 `command` 不是字符串时
+拒绝而非忽略，与 bash 的 fail-closed 同构。验证不靠单测自证：`scripts/smoke-guard.ts` 里新增的三条
+FUSED 探针跑的是真实 pi + 真实 SoL-Pi，由确定性 mock provider 发出融合调用，
+审计里出现 `deny write rm -rf …` 才算过；放行那条要求事件流里有 `then_run:succeeded`，
+因为内置 `write` 根本没有 `then_run`，这个标记是「扩展真的生效了」唯一的物证。
+
+### 与工具输出截断的先后
+
+hive-guard 在 `tool_result` 截断，ObservationPack 在 `context` 投影改写，所以**守卫在前**：
+归档的是已经截断过的字节，`obs_recall` 取回的也只到守卫允许的那条线。这是对的方向——守卫仍是上界——
+但也意味着 ObservationPack 在这里省的不是「一次大输出」，而是那次输出在其后每一轮里的重放。
+
+### 验收
+
+开关默认关，因为工具块位于缓存前缀最前面，开任一个都会让前缀缓存整体作废一次。
+判据用现成的 `turn_usage`：对比开关前后 CODE 与 REGRESSION_FIX 的 turns_per_run 与每轮输入 token，
+并看订阅 provider 撞窗口的频率是否下降。
+
 ## 7. 不变量清单
 
 本文档新增或改写的不变量，实施时逐条对照：
@@ -372,4 +426,6 @@ MQ 能提供的每一项在中央 libsql 里都已有对等物：任务持久化
 7. **宿主机 skill 与 context 文件都不得注入**。跨机重建 prompt 逐字节相同这条不变量骑在它上面。
 8. **并发上限是 per-provider 的**，凭据共享 + 单点刷新，永不复制 `auth.json`。
 8b. **租约的 holder 是执行实例不是机器，fence 跨 revoke 单调，且状态写入必须带 fence**（§5.1a）。三条缺任何一条，租约就只是看起来在防双执行。
-9. **控制台写面只开 prompt 与模型两族**；工具 / skill / mcp 只读。
+9. **SoL-Pi 的开关、工具名与扩展装载出自同一个 `ResolvedAgentSpec.solPi`**，不收的两个机制显式写 false；
+   任何带 `then_run` 的工具调用都要过一遍 shell 红线，否则工具面那层防造假形同虚设（§6a）。
+10. **控制台写面只开 prompt 与模型两族**；工具 / skill / mcp 只读。

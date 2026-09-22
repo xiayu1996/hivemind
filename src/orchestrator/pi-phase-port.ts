@@ -23,6 +23,7 @@ import { fencedSourcesFor } from "../pipeline/path-glob.js";
 import { PHASE_LANE, type ModelPurpose } from "../pipeline/phase.js";
 import { pinSessionFile, type CacheKeyScope } from "../runner/session-file.js";
 import type { ResolvedAgentSpec } from "../runner/agent-spec.js";
+import { solPiExtensionPath } from "../runner/sol-pi.js";
 import type { AgentSpawnGrant } from "../runner/spawn-broker.js";
 import {
   businessSection,
@@ -394,6 +395,11 @@ export class PiStoryPhasePort implements StoryPhasePort {
       skills: [...spec.skills],
       extensions: [
         ...(this.options.extensions ?? []),
+        // First, so its replacements for `edit` and `write` are the ones the
+        // later extensions see. The guard hooks tool calls rather than tool
+        // definitions, so it judges the fused call either way; ordering here
+        // is about which definition reaches the model.
+        ...(spec.solPi.actionFusion || spec.solPi.observationPack ? [solPiExtensionPath()] : []),
         this.options.guardExtension,
         this.options.canonicalCaptureExtension,
       ],

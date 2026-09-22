@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -41,6 +41,7 @@ import { defaultPiBinary, pinnedPiVersion } from "../src/runner/pi-binary.js";
 import { checkoutPath, redactRemoteUrl } from "../src/vcs/repository-checkout.js";
 import { RepositoryRegistry } from "../src/vcs/repository-registry.js";
 import { piModelDeclarationsPath } from "../src/runner/pi-model-declarations.js";
+import { pinnedSolPiRef, solPiExtensionPath } from "../src/runner/sol-pi.js";
 
 const execFileAsync = promisify(execFile);
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -484,6 +485,23 @@ async function main(): Promise<void> {
       );
     }
     return `impeccable ${reported} (engine-v${pin.engineVersion})`;
+  }, "WARN");
+
+  // A host whose configuration turns a mechanism on but never installed the
+  // extension fails at spawn, with a pi-side error about a file it cannot load.
+  // Asking here turns that into one line at startup. A host with both switches
+  // off is told so rather than passed silently: "off" and "missing" look the
+  // same from the outside, and only one of them is a decision.
+  await attempt("SoL-Pi extension matches the configuration", async () => {
+    const solPi = config?.get("agent.solPi") as { actionFusion: boolean; observationPack: boolean };
+    if (!solPi) throw new Error("the configuration store never loaded, so the switches are unknown");
+    const enabled = Object.entries(solPi).filter(([, on]) => on).map(([name]) => name);
+    if (enabled.length === 0) return "no mechanism is enabled, so the extension is never loaded";
+    const path = solPiExtensionPath();
+    if (!existsSync(path)) {
+      throw new Error(`${enabled.join(" and ")} enabled but ${path} is missing; run scripts/install-sol-pi.sh`);
+    }
+    return `${enabled.join(" and ")} at ${pinnedSolPiRef().slice(0, 12)}`;
   }, "WARN");
 
   await attempt("headless Chromium for the browser lane", async () => {

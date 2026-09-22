@@ -1,4 +1,5 @@
 import type { Row } from "@libsql/client";
+import { solPiConfigPath } from "../src/runner/sol-pi.js";
 import { execFile, type ChildProcess } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
@@ -633,7 +634,7 @@ async function main(): Promise<void> {
       }),
       new PiDecomposePort({
         binary: piBinary,
-        spec: await resolveAgentSpec({ config: epicConfig, policy: modelPolicy }, "decompose", provider),
+        spec: await resolveAgentSpec({ config: epicConfig, policy: modelPolicy, solPiConfigPath: solPiConfigPath() }, "decompose", provider),
         // The requirement lane spends on the brain tier; without this its cost
         // is simply missing, and a card's bill reads as the execution half
         // only.

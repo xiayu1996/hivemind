@@ -139,6 +139,64 @@ function extractPath(input: unknown): string | undefined {
 }
 
 /**
+ * Judges one shell command against the phase's red lines.
+ *
+ * Shared by the standalone `bash` tool and by the follow-up command a fused
+ * mutation carries in `then_run`, so a command cannot escape the shell rules by
+ * riding along with an edit.
+ */
+function decideCommand(
+  command: string,
+  policy: GuardPolicy,
+  bannedBashPatterns: RegExp[],
+): GuardDecision {
+  const verdict = checkBash(command);
+  if (verdict.deny) return { block: true, reason: verdict.reason, target: command };
+  const judged = withoutPermittedRedirects(command, policy);
+  if (bannedBashPatterns.some((pattern) => pattern.test(judged))) {
+    return { block: true, reason: `shell write is forbidden in ${policy.phase}`, target: command };
+  }
+  // Only read-only phases get a browser lane, and they judge the running
+  // system; a browser told to answer requests itself would be judging a
+  // fixture the verifier wrote.
+  if (policy.e2eHostAllowlist.length > 0 && ROUTE_INTERCEPTION.test(command)) {
+    return {
+      block: true,
+      reason: `request interception fakes the system under test and is forbidden in ${policy.phase}`,
+      target: command,
+    };
+  }
+  for (const target of navigationTargets(command)) {
+    const navigation = decideNavigation(target, policy);
+    if (navigation.block) return navigation;
+  }
+  return { block: false, target: command };
+}
+
+/**
+ * The decision for a fused follow-up command, or undefined when the call
+ * carries none. A `then_run` whose command is not a string is refused rather
+ * than ignored: the shape is the extension's contract, and a call that does not
+ * match it is one this function cannot judge.
+ */
+function fusedDecision(
+  input: unknown,
+  policy: GuardPolicy,
+  bannedBashPatterns: RegExp[],
+): GuardDecision | undefined {
+  if (typeof input !== "object" || input === null) return undefined;
+  const thenRun = (input as { then_run?: unknown }).then_run;
+  if (thenRun === undefined || thenRun === null) return undefined;
+  const command = typeof thenRun === "object" ? (thenRun as { command?: unknown }).command : undefined;
+  if (typeof command !== "string") {
+    return { block: true, reason: "fused then_run carried no command string" };
+  }
+  const decision = decideCommand(command, policy, bannedBashPatterns);
+  return decision.block ? decision : undefined;
+}
+
+
+/**
  * Decides a single tool call against a phase policy.
  *
  * Pure: no filesystem, no clock, no environment, so the whole decision table is
@@ -162,32 +220,19 @@ export function decideToolCall(
     };
   }
 
+  // Before anything else, because a fused follow-up command can ride along with
+  // any tool that grows the capability, not only the two Action Fusion replaces
+  // today. Without this the whole shell layer is bypassed by moving a command
+  // into `then_run`.
+  const fused = fusedDecision(event.input, policy, bannedBashPatterns);
+  if (fused) return fused;
+
   if (event.toolName === "bash") {
     const command = (event.input as { command?: unknown } | null)?.command;
     if (typeof command !== "string") {
       return { block: true, reason: "bash call carried no command string" };
     }
-    const verdict = checkBash(command);
-    if (verdict.deny) return { block: true, reason: verdict.reason, target: command };
-    const judged = withoutPermittedRedirects(command, policy);
-    if (bannedBashPatterns.some((pattern) => pattern.test(judged))) {
-      return { block: true, reason: `shell write is forbidden in ${policy.phase}`, target: command };
-    }
-    // Only read-only phases get a browser lane, and they judge the running
-    // system; a browser told to answer requests itself would be judging a
-    // fixture the verifier wrote.
-    if (policy.e2eHostAllowlist.length > 0 && ROUTE_INTERCEPTION.test(command)) {
-      return {
-        block: true,
-        reason: `request interception fakes the system under test and is forbidden in ${policy.phase}`,
-        target: command,
-      };
-    }
-    for (const target of navigationTargets(command)) {
-      const navigation = decideNavigation(target, policy);
-      if (navigation.block) return navigation;
-    }
-    return { block: false, target: command };
+    return decideCommand(command, policy, bannedBashPatterns);
   }
 
   // Browser tools reach pi through the MCP adapter, so they are named by the

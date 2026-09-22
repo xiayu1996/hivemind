@@ -46,6 +46,7 @@ import { renderMovedReasons } from "../src/judge/environment-reasons.js";
 import { needsApiKeyEnv, providerKeyEnv } from "../src/runner/provider-env.js";
 import { cacheRetentionEnv } from "../src/runner/cache-retention.js";
 import type { ProviderProfile } from "../src/runner/model-policy.js";
+import { solPiConfigPath } from "../src/runner/sol-pi.js";
 import { type ExplicitContextFile } from "../src/runner/context-files.js";
 import { defaultModelCatalog } from "../src/runner/catalog.js";
 import { ModelPolicy } from "../src/runner/model-policy.js";
@@ -100,7 +101,7 @@ const RUNNABLE_STATES: StoryState[] = [
 async function resolveUiReviewSpec(config: ConfigStore, policy: ModelPolicy) {
   const providers = await policy.providersFor("ui_review");
   for (const provider of providers) {
-    const spec = await resolveAgentSpec({ config, policy }, "ui_review", provider);
+    const spec = await resolveAgentSpec({ config, policy, solPiConfigPath: solPiConfigPath() }, "ui_review", provider);
     if (spec.model.images === true) return spec;
     console.warn(`UI review skips ${spec.model.id}: it does not accept image input`);
   }
@@ -298,6 +299,7 @@ async function main(): Promise<void> {
     // phase run on the CODE tier, and what left a card that started on a
     // subscription and failed over to a metered API running with no ceiling.
     const broker = new SpawnBroker({
+      solPiConfigPath: solPiConfigPath(),
       config,
       policy: modelPolicy,
       slots,

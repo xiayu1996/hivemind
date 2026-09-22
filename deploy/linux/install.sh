@@ -147,6 +147,13 @@ PI_BIN="${PI_BIN:-$HIVEMIND_HOME/pi/${HIVEMIND_PI_VERSION:-$PI_VERSION}/pi/pi}"
 # needs no visit to this machine.
 (cd "$REPO" && npx tsx scripts/install-pi-models.ts)
 
+# The efficiency extension, pinned by commit beside pi. Its mechanism file is
+# rendered before every spawn from `agent.solPi`, so this step only has to put
+# the code on the host; a host whose configuration leaves both mechanisms off
+# simply never loads it.
+step "SoL-Pi"
+"$REPO/scripts/install-sol-pi.sh"
+
 step "Design detector"
 # The anti-pattern detector the prototype exit records friction from. It never
 # refuses a prototype, so a host without it loses data rather than a gate --

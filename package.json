@@ -9,6 +9,7 @@
   },
   "hivemind": {
     "piVersion": "0.85.1",
+    "solPiRef": "1559b5cb12c72da4a485bc50fe326586b216fb19",
     "impeccableEngineVersion": "0.1.5",
     "impeccableReportedVersion": "4.0.0"
   },

@@ -9,11 +9,18 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, readFileSync, existsSync } from "node:fs";
+import { readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { JsonlDecoder } from "../src/runner/jsonl.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
+import {
+  installSolPiConfig,
+  renderSolPiConfig,
+  solPiConfigPath,
+  solPiExtensionPath,
+} from "../src/runner/sol-pi.js";
 import {
   POLICY_ENV_VAR,
   assembleGuardPolicy,
@@ -39,6 +46,15 @@ const HARMLESS: Probe = {
   auditTarget: "echo hello-from-mock",
   expectBlocked: false,
 };
+
+// SoL-Pi's Action Fusion lets a mutation carry a shell command, so the command
+// half has to meet the same red lines a standalone bash call meets. Without the
+// fused check in the guard these two run unexamined.
+const FUSED_PROBES: Probe[] = [
+  { label: "fused rm -rf", prompt: "USE_FUSED:fused-victim.txt|rm -rf /tmp/hivemind-guard-victim", auditTarget: "rm -rf /tmp/hivemind-guard-victim", expectBlocked: true, expectReason: "recursive rm is forbidden" },
+  { label: "fused push main", prompt: "USE_FUSED:fused-victim.txt|git push origin main", auditTarget: "git push origin main", expectBlocked: true, expectReason: "push to master/main is forbidden" },
+  { label: "fused ordinary command", prompt: "USE_FUSED:fused-ok.txt|echo hello-from-fused", auditTarget: "fused-ok.txt", expectBlocked: false },
+];
 
 const PROBES: Probe[] = [
   { label: "rm -rf", prompt: "USE_TOOL:rm -rf /tmp/hivemind-guard-victim", auditTarget: "rm -rf /tmp/hivemind-guard-victim", expectBlocked: true, expectReason: "recursive rm is forbidden" },
@@ -78,12 +94,18 @@ async function waitForMock(): Promise<void> {
 }
 
 /** Runs one prompt through pi with the guard loaded and returns the raw event stream. */
-async function runProbe(probe: Probe, policy: GuardPolicy, withPolicy = true): Promise<unknown[]> {
+async function runProbe(
+  probe: Probe,
+  policy: GuardPolicy,
+  withPolicy = true,
+  extraExtensions: string[] = [],
+): Promise<unknown[]> {
   const child = spawn(
     PI_BIN,
     [
       "--mode", "rpc",
       "-e", join(REPO, "poc/rpc-context/mock-provider-extension.mjs"),
+      ...extraExtensions.flatMap((extension) => ["-e", extension]),
       "-e", join(REPO, "extensions/hive-guard.ts"),
       "--provider", "mock",
       "--model", "mock-1",
@@ -220,6 +242,45 @@ async function main(): Promise<void> {
         }
       }
       console.log(`${probe.label}: stream_blocked=${blockedInStream} audit_records=${audit.length}`);
+    }
+
+    // Real pi, real SoL-Pi: a builtin `write` has no `then_run`, so these probes
+    // only reach the guard at all because the extension replaced the tool. A
+    // fused command that is not judged is the hole this check exists for.
+    //
+    // The mechanism file is written here and put back afterwards, because a run
+    // that silently inherited the host's own switches would pass or fail for a
+    // reason that has nothing to do with this repository.
+    const solPiPath = solPiConfigPath();
+    const solPiBefore = await readFile(solPiPath, "utf8").catch(() => null);
+    await installSolPiConfig(renderSolPiConfig({ actionFusion: true, observationPack: false }), solPiPath);
+    try {
+      await runFusedProbes();
+    } finally {
+      if (solPiBefore === null) await rm(solPiPath, { force: true });
+      else await installSolPiConfig(solPiBefore, solPiPath);
+    }
+
+    async function runFusedProbes(): Promise<void> {
+    for (const probe of FUSED_PROBES) {
+      const events = await runProbe(probe, policy, true, [solPiExtensionPath()]);
+      const stream = JSON.stringify(events);
+      const blockedInStream = stream.includes("hive-guard:");
+      if (blockedInStream !== probe.expectBlocked) {
+        failures.push(`${probe.label}: event stream blocked=${blockedInStream}, expected ${probe.expectBlocked}`);
+      }
+      if (probe.expectReason && !stream.includes(probe.expectReason)) {
+        failures.push(`${probe.label}: event stream is missing the reason "${probe.expectReason}"`);
+      }
+      const audit = readAudit(auditPath).filter((record) => record.target === probe.auditTarget);
+      if (audit.length === 0) failures.push(`${probe.label}: no audit record for the fused call`);
+      // The fused command only runs when the guard let it through, so its
+      // marker is the proof that Action Fusion was live rather than ignored.
+      if (!probe.expectBlocked && !stream.includes("then_run:succeeded")) {
+        failures.push(`${probe.label}: the fused command never ran, so Action Fusion was not loaded`);
+      }
+      console.log(`FUSED ${probe.label}: stream_blocked=${blockedInStream} audit_records=${audit.length}`);
+    }
     }
 
     for (const probe of VERIFY_PROBES) {
