@@ -72,6 +72,7 @@ import { discoverMRPort } from "../src/vcs/mr/adapters.js";
 import { GitMrStoryDelivery, processGitCommand } from "../src/vcs/story-delivery.js";
 import { appLaneConfig, startAppLane } from "../src/verify/app-lane.js";
 import { probeScreens, type ScreenPage } from "../src/pipeline/screen-reachability.js";
+import { entrypointsTouched } from "../src/verify/app-entrypoint.js";
 import { piModelDeclarationsPath } from "../src/runner/pi-model-declarations.js";
 
 const execFileAsync = promisify(execFile);
@@ -617,6 +618,20 @@ async function main(): Promise<void> {
         // point a box that will not come up and code that broke the start are
         // the same observation, and refusing on it would let a held port stop
         // cards. VERIFY still reports that round inconclusive.
+        // The lane's own entry points, measured against the branch this card
+        // came from. Uncommitted work counts: a round that has not committed
+        // its rewrite of the start script is still asking a witness it wrote.
+        appEntrypointsTouched: async () => {
+          const command = config.get("verify.appStartCommand");
+          if (command.length === 0) return null;
+          const tracked = (await git(worktreePath, ["diff", "--name-only", `${targetBranch}...HEAD`]))
+            .split("\n").map((line) => line.trim()).filter(Boolean);
+          const working = (await git(worktreePath, ["diff", "--name-only", "HEAD"]))
+            .split("\n").map((line) => line.trim()).filter(Boolean);
+          const untracked = (await git(worktreePath, ["ls-files", "--others", "--exclude-standard"]))
+            .split("\n").map((line) => line.trim()).filter(Boolean);
+          return entrypointsTouched(command, [...new Set([...tracked, ...working, ...untracked])]);
+        },
         screensReachable: async (pages: readonly ScreenPage[]) => {
           const lane = await startAppLane({ cwd: worktreePath, ...appLaneConfig(config) }, allowedHosts);
           try {
