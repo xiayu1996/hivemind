@@ -5,6 +5,7 @@ import {
   emptySubmission,
   formatNotionTargetLine,
   formatProcessedLine,
+  formatSavedConfirmation,
   formatWaiting,
   initialTodoView,
   reduceTodoView,
@@ -219,12 +220,13 @@ describe("the words the page shows", () => {
     expect(TODO_COPY.statusProcessed).toBe("已处理");
   });
 
-  it("@scenario S-R237511TD-01-approve names the two approval conclusions and where the result goes", () => {
+  it("@scenario S-R237511TD-02-answer names the confirmed answer save for the acceptance check", () => {
     expect(TODO_COPY.conclusionLabels).toEqual({ approve: "批准并继续", rework: "要求返工" });
     expect(TODO_COPY.decisionHeading).toBe("需要你决定");
 
     expect(formatProcessedLine(approveDetail)).toBe("批准结果已保留到对应的 Notion 需求“控制台”。");
     expect(formatProcessedLine(answerDetail)).toBe("答复已保留到对应的 Notion 任务“回答一件事”。");
+    expect(formatSavedConfirmation(answerDetail)).toBe("答复已保留到对应 Notion 任务。");
   });
 
   it("@scenario S-R237511TD-01-open says where the result will be kept before it is submitted", () => {
