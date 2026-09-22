@@ -25,6 +25,7 @@ import { resolveAgentSpec } from "../src/runner/agent-spec.js";
 import type { CacheKeyScope } from "../src/runner/session-file.js";
 import type { StoryPhase } from "../src/pipeline/phase.js";
 import { defaultPiBinary } from "../src/runner/pi-binary.js";
+import { piModelDeclarationsPath } from "../src/runner/pi-model-declarations.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const REPLAYABLE = new Set<Phase>(["SHAPE", "DESIGN", "SPECIFY", "CODE", "MERGE", "REGRESSION_FIX"]);
@@ -82,7 +83,7 @@ async function main(): Promise<void> {
     const readiness = await probeProviderReadiness(piBinary, provider);
     if (!readiness.ready) throw new Error(`provider is not ready: ${provider} (${readiness.reason ?? "unknown reason"})`);
     const config = await ConfigStore.load(handle.client, story.repo ? { repository: story.repo } : {});
-    const policy = new ModelPolicy(config, defaultModelCatalog(piBinary, worktreePath));
+    const policy = new ModelPolicy(config, defaultModelCatalog(piBinary, worktreePath), piModelDeclarationsPath());
 
     const stamp = new Date().toISOString().replaceAll(/[:.]/g, "-");
     const replayRoot = resolve(optional("--replay-root") ?? join(homedir(), ".hivemind", "replay", cardId, stamp));

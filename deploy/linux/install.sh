@@ -141,10 +141,11 @@ step "pi"
 "$REPO/scripts/install-pi.sh"
 PI_VERSION="$(node -p "require('$REPO/package.json').hivemind.piVersion")"
 PI_BIN="${PI_BIN:-$HIVEMIND_HOME/pi/${HIVEMIND_PI_VERSION:-$PI_VERSION}/pi/pi}"
-# Models hivemind declares on top of pi's built-in catalogue. Every host needs
-# them: the recorded catalogue is what configuration validates against, and a
-# host without them advertises a smaller catalogue than the fixtures record.
-"$REPO/scripts/install-pi-models.sh"
+# Models hivemind declares on top of pi's built-in catalogue, rendered from the
+# configuration this host will run against. Doing it here only saves the first
+# spawn the work: every resolve renders it again, so a provider added later
+# needs no visit to this machine.
+(cd "$REPO" && npx tsx scripts/install-pi-models.ts)
 
 step "Design detector"
 # The anti-pattern detector the prototype exit records friction from. It never

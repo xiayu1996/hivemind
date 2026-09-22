@@ -40,6 +40,7 @@ import { defaultModelCatalog } from "../src/runner/catalog.js";
 import { defaultPiBinary, pinnedPiVersion } from "../src/runner/pi-binary.js";
 import { checkoutPath, redactRemoteUrl } from "../src/vcs/repository-checkout.js";
 import { RepositoryRegistry } from "../src/vcs/repository-registry.js";
+import { piModelDeclarationsPath } from "../src/runner/pi-model-declarations.js";
 
 const execFileAsync = promisify(execFile);
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -226,7 +227,7 @@ async function main(): Promise<void> {
         throw new Error(message);
       }), "WARN");
 
-    const policy = new ModelPolicy(config, catalog);
+    const policy = new ModelPolicy(config, catalog, piModelDeclarationsPath());
     const chain = config.get("model.failoverChain");
     const severity = chain.length > 1 ? "WARN" : "FAIL";
     await attempt("every provider in the chain has captured failure wordings", () => {
