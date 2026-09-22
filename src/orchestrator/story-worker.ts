@@ -671,11 +671,24 @@ export class SingleStoryWorker {
     const cards = (await this.store.buildPhaseInput(cardId, "REGRESSION_FIX", story.innerLoopRounds + 1)).regressions ?? [];
     if (cards.length === 0) {
       // Resolved elsewhere or retracted; a Story parked here with nothing to
-      // fix would never leave.
+      // fix would never leave. It leaves through MERGE rather than straight to
+      // DELIVERED, because "nothing left to fix" says nothing about whether
+      // the work ever landed: the round that reopened this Story may have
+      // stopped before its fix reached the Epic head, and delivering from here
+      // reports a merge that never happened. Asking MERGE is what makes the
+      // tree decide -- a branch already contained fast-forwards to the same
+      // head -- instead of guessing from the state a card sits in.
       const runId = this.createRunId(cardId, "REGRESSION_FIX", story.innerLoopRounds);
-      await this.store.transition(cardId, "REGRESSION_FIX", "DELIVERED", "system", runId);
+      if (this.integration === undefined || story.epicId === null) {
+        // Nothing to land on. A caller that owns no integration cannot merge,
+        // so the Story is as delivered as this host can make it.
+        await this.store.transition(cardId, "REGRESSION_FIX", "DELIVERED", "system", runId);
+        await this.projection.enqueue(cardId);
+        return { state: "DELIVERED", rounds: story.innerLoopRounds, mrUrl: story.mrUrl, stopReason: null };
+      }
+      await this.store.transition(cardId, "REGRESSION_FIX", "MERGE", "system", runId);
       await this.projection.enqueue(cardId);
-      return { state: "DELIVERED", rounds: story.innerLoopRounds, mrUrl: story.mrUrl, stopReason: null };
+      return { state: "MERGE", rounds: story.innerLoopRounds, mrUrl: story.mrUrl, stopReason: null };
     }
     if (!this.integration || !story.epicId) {
       throw new Error(`Story ${cardId} cannot land a regression fix without its Epic integration`);

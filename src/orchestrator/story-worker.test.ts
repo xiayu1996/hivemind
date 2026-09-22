@@ -1328,9 +1328,21 @@ describe("SingleStoryWorker regression fix", () => {
     expect(await store.getStory("S-EPIC1-01")).toMatchObject({ stopReason: "retry_limit_exceeded" });
   });
 
-  it("returns straight to DELIVERED when nothing is left to fix", async () => {
+  it("leaves through MERGE when nothing is left to fix, because the work may never have landed", async () => {
+    // S-R237511MB-02 reached DELIVERED from here with 29 commits still ahead
+    // of its Epic head: the round that reopened it stopped before the fix
+    // landed, and "no cards left" was read as "delivered".
     const { phases, verifier, integration, delivery, projection } = regressionPorts(true);
     const worker = new SingleStoryWorker(store, { run: phases }, verifier, delivery, projection, { integration });
+
+    await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "MERGE" });
+    expect(await store.getStory("S-EPIC1-01")).toMatchObject({ state: "MERGE" });
+    expect(phases).not.toHaveBeenCalled();
+  });
+
+  it("still delivers when there is no Epic to land on", async () => {
+    const { phases, verifier, delivery, projection } = regressionPorts(true);
+    const worker = new SingleStoryWorker(store, { run: phases }, verifier, delivery, projection, {});
 
     await expect(worker.run("S-EPIC1-01")).resolves.toMatchObject({ state: "DELIVERED" });
     expect(phases).not.toHaveBeenCalled();
