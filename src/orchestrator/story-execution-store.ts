@@ -26,6 +26,7 @@ import type { ConvergenceClassification } from "../pipeline/convergence.js";
 
 export type { StoryPhase } from "../pipeline/phase.js";
 import type { StoryPhase } from "../pipeline/phase.js";
+import { readOrphanedCards, type OrphanedRegressionCard } from "../regression/orphaned-cards.js";
 
 /** A child process's stderr; long enough to carry a stack, short enough that
  * one dead run cannot fill the event log. */
@@ -1184,6 +1185,15 @@ export class StoryExecutionStore {
       sql: "UPDATE stories SET regression_reopens = regression_reopens + 1, updated_at = ? WHERE id = ?",
       args: [this.now(), cardId],
     });
+  }
+
+  /**
+   * Which of this Story's open regression cards no automatic path can close.
+   * Read where the Story stops, so the report can say that rather than only a
+   * count of reopens; see `src/regression/orphaned-cards.ts`.
+   */
+  async orphanedRegressionCards(cardId: string): Promise<OrphanedRegressionCard[]> {
+    return readOrphanedCards(this.client, { storyId: cardId });
   }
 
   /** Closes a regression card once its fix is on the Epic head. False when
