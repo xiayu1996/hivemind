@@ -60,6 +60,68 @@ describe("EpicMergeFlow", () => {
     expect(calls.some(({ args }) => args[0] === "merge" && args.includes("main"))).toBe(false);
   });
 
+  /** A git whose origin holds `remoteAhead` commits this host does not, and
+   * whose local branch is `localAhead` commits ahead of origin. */
+  function divergedGit(localAhead: number, remoteAhead: number, mergeFails = false) {
+    const calls: Array<{ cwd: string; args: string[] }> = [];
+    const git = { run: vi.fn(async (cwd: string, args: string[]) => {
+      calls.push({ cwd, args });
+      const command = args.join(" ");
+      if (command === "branch --show-current") return cwd === "story" ? story.branch : "epic/E-1";
+      if (args[0] === "rev-list") return `${localAhead}\t${remoteAhead}\n`;
+      if (mergeFails && command === "merge --no-edit refs/remotes/origin/epic/E-1") {
+        throw new Error("CONFLICT (content): Merge conflict in src/console/server.ts");
+      }
+      return "";
+    }) };
+    return { git, calls };
+  }
+
+  it("takes the Epic head origin holds before it measures anything against it", async () => {
+    const { git, calls } = divergedGit(0, 3);
+    const flow = new EpicMergeFlow(git, passingVerifier, { storyWorktree: "story", integrationWorktree: "integration" });
+
+    await expect(flow.merge({ epicId: "E-1", story, integratedStories: [] })).resolves.toMatchObject({ kind: "merged" });
+    const commands = calls.map(({ args }) => args.join(" "));
+    expect(commands).toContain("fetch origin +refs/heads/epic/E-1:refs/remotes/origin/epic/E-1");
+    expect(commands.indexOf("merge --ff-only refs/remotes/origin/epic/E-1")).toBeLessThan(commands.indexOf("rebase epic/E-1"));
+  });
+
+  it("merges a diverged Epic head in rather than pushing over another host's Story", async () => {
+    const { git, calls } = divergedGit(2, 1);
+    const flow = new EpicMergeFlow(git, passingVerifier, { storyWorktree: "story", integrationWorktree: "integration" });
+
+    await expect(flow.merge({ epicId: "E-1", story, integratedStories: [] })).resolves.toMatchObject({ kind: "merged" });
+    const commands = calls.map(({ args }) => args.join(" "));
+    expect(commands).toContain("merge --no-edit refs/remotes/origin/epic/E-1");
+    expect(commands.some((command) => command.includes("--force"))).toBe(false);
+  });
+
+  it("leaves an unmergeable Epic head to a person instead of an unlandable run", async () => {
+    const { git, calls } = divergedGit(2, 1, true);
+    const flow = new EpicMergeFlow(git, passingVerifier, { storyWorktree: "story", integrationWorktree: "integration" });
+
+    const result = await flow.merge({ epicId: "E-1", story, integratedStories: [] });
+    expect(result).toMatchObject({ kind: "verification_failed", attribution: "environment" });
+    expect((result as { reason?: string }).reason).toContain("diverged from this host");
+    expect(calls.map(({ args }) => args.join(" "))).toContain("merge --abort");
+    expect(calls.some(({ args }) => args[0] === "rebase")).toBe(false);
+  });
+
+  it("creates the Epic branch on origin when there is nothing there to take", async () => {
+    const calls: Array<{ cwd: string; args: string[] }> = [];
+    const git = { run: vi.fn(async (cwd: string, args: string[]) => {
+      calls.push({ cwd, args });
+      if (args.join(" ") === "branch --show-current") return cwd === "story" ? story.branch : "epic/E-1";
+      if (args[0] === "ls-remote") throw new Error("exit status 2");
+      return "";
+    }) };
+    const flow = new EpicMergeFlow(git, passingVerifier, { storyWorktree: "story", integrationWorktree: "integration" });
+
+    await expect(flow.merge({ epicId: "E-1", story, integratedStories: [] })).resolves.toMatchObject({ kind: "merged" });
+    expect(calls.some(({ args }) => args[0] === "fetch")).toBe(false);
+  });
+
   it("S-M2-05-revision refuses to merge a revision the re-verification never saw", async () => {
     const revisions = ["aaa111", "bbb222"];
     const git = { run: vi.fn(async (cwd: string, args: string[]) => {
