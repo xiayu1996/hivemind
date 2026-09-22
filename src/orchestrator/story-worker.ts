@@ -35,6 +35,7 @@ import {
   type UnreachableScreen,
 } from "../pipeline/screen-reachability.js";
 import { renderEntrypointsTouched } from "../verify/app-entrypoint.js";
+import { renderUnwiredExports } from "../pipeline/unwired-exports.js";
 import type { InterfaceContract } from "../pipeline/interface-contract.js";
 import {
   StoryExecutionStore,
@@ -239,6 +240,13 @@ export interface StoryWorkerOptions {
    * declares no way to start itself.
    */
   appEntrypointsTouched?: () => Promise<readonly string[] | null>;
+  /**
+   * Exports this round introduced that nothing in the product mentions.
+   *
+   * `null` when the caller has no worktree to measure. Empty is the ordinary
+   * answer: a vertical slice wires what it writes.
+   */
+  unwiredExports?: () => Promise<readonly { name: string; file: string }[] | null>;
   runId?: (cardId: string, phase: StoryPhase, round: number) => string;
 }
 
@@ -315,6 +323,7 @@ export class SingleStoryWorker {
   private readonly repositoryHas: ((path: string) => boolean) | undefined;
   private readonly screensReachable: StoryWorkerOptions["screensReachable"];
   private readonly appEntrypointsTouched: StoryWorkerOptions["appEntrypointsTouched"];
+  private readonly unwiredExports: StoryWorkerOptions["unwiredExports"];
 
   constructor(
     private readonly store: StoryExecutionStore,
@@ -334,6 +343,7 @@ export class SingleStoryWorker {
     this.repositoryHas = options.repositoryHas;
     this.screensReachable = options.screensReachable;
     this.appEntrypointsTouched = options.appEntrypointsTouched;
+    this.unwiredExports = options.unwiredExports;
     this.maxInconclusiveRounds = options.maxInconclusiveRounds ?? 2;
     this.maxInnerLoopRounds = options.maxInnerLoopRounds ?? 3;
     this.specifyExitRounds = options.specifyExitRounds ?? 3;
@@ -481,8 +491,8 @@ export class SingleStoryWorker {
         if (overspent) return overspent;
         round += 1;
         const codeRunId = this.createRunId(cardId, "CODE", round);
-        const screenGate = this.screenGate(cardId, codeRunId);
-        const code = await this.runPhase(cardId, "CODE", round, codeRunId, screenGate ? [screenGate] : undefined);
+        const codeGates = this.implementationGates(cardId, codeRunId);
+        const code = await this.runPhase(cardId, "CODE", round, codeRunId, codeGates);
         artifact(code, "implementation");
         let verifyRunId = this.createRunId(cardId, "VERIFY", round);
         await this.store.transition(cardId, "CODE", "VERIFY", "system", verifyRunId);
@@ -752,9 +762,8 @@ ${orphanLines}`,
       if (overspent) return overspent;
       round += 1;
       const fixRunId = this.createRunId(cardId, "REGRESSION_FIX", round);
-      const fixScreenGate = this.screenGate(cardId, fixRunId);
       const fix = await this.runPhase(cardId, "REGRESSION_FIX", round, fixRunId,
-        fixScreenGate ? [fixScreenGate] : undefined);
+        this.implementationGates(cardId, fixRunId));
       artifact(fix, "implementation");
       let verifyRunId = this.createRunId(cardId, "VERIFY", round);
       let verification = await this.runVerification(cardId, round, verifyRunId, fix.sessionId, definitionOfDone);
@@ -1012,6 +1021,42 @@ ${orphanLines}`,
    * Counted, so the rule is judged on evidence rather than on how reasonable
    * it sounds: a gate that never fires says the prompt was already enough.
    */
+  /** Everything a round that writes implementation is held to, in the order it
+   * is cheapest to answer: what the tree says before what an application says. */
+  private implementationGates(cardId: string, runId: string): PhaseExitGate[] | undefined {
+    const gates = [this.wiringGate(cardId, runId), this.screenGate(cardId, runId)]
+      .filter((gate): gate is PhaseExitGate => gate !== null);
+    return gates.length > 0 ? gates : undefined;
+  }
+
+  /**
+   * What this round wrote that nothing in the product calls.
+   *
+   * Cheaper than the screen probe and answerable without starting anything,
+   * so it runs first: a page whose routes were never registered is unreachable
+   * for a reason the tree already knows.
+   */
+  private wiringGate(cardId: string, runId: string): PhaseExitGate | null {
+    const measure = this.unwiredExports;
+    if (!measure) return null;
+    return {
+      name: "wired-in",
+      maxRounds: 2,
+      exhausted: "fail",
+      evaluate: async () => {
+        const unwired = await measure();
+        if (unwired === null || unwired.length === 0) return { passed: true };
+        await this.friction?.record({
+          cardId,
+          runId,
+          kind: "export_never_wired",
+          detail: unwired.map((entry) => `${entry.name} ${entry.file}`).join(", "),
+        });
+        return { passed: false, findings: renderUnwiredExports(unwired) };
+      },
+    };
+  }
+
   private screenGate(cardId: string, runId: string): PhaseExitGate | null {
     const reachable = this.screensReachable;
     if (!reachable) return null;
