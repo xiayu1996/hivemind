@@ -276,6 +276,42 @@ describe("PiStoryPhasePort", () => {
     await expect(port.run(phaseInput("CODE"))).rejects.toBeInstanceOf(CodeExitNotMetError);
   });
 
+  it("asks a regression round for evidence of the scenarios it was reopened for, not of the whole Story", async () => {
+    temporary = await mkdtemp(join(tmpdir(), "hivemind-pi-phase-"));
+    const asked: string[][] = [];
+    const port = new PiStoryPhasePort({
+      binary: "pi",
+      resolveSpec: async () => ({ spec: await testAgentSpec(), release: async () => undefined }),
+      worktreePath: resolve("."),
+      promptRoot: resolve("prompts"),
+      sessionRoot: join(temporary, "sessions"),
+      evidencePath: join(temporary, "evidence"),
+      auditPath: join(temporary, "audit.jsonl"),
+      guardExtension: resolve("extensions/hive-guard.ts"),
+      canonicalCaptureExtension: resolve("extensions/canonical-capture.ts"),
+      codeExit: { baseRef: "main", projectChecks: [] },
+      createRunner: () => fakeRunner(JSON.stringify({
+        implementation: "Done; committed.\naddressed [regression:S-EPIC1-01-b]: reran the page under the failing condition.",
+      })),
+      readProviderPayloads: async () => [{ model: "mock-1", messages: [] }],
+      collectExitFacts: async (_gate, scenarioIds) => {
+        asked.push([...scenarioIds]);
+        return {
+          uncommittedPaths: [], commitCount: 1, whitespaceErrors: [],
+          redScenarioIds: [...scenarioIds], greenScenarioIds: [...scenarioIds], markedScenarioIds: [...scenarioIds],
+          dodScenarioIds: [...scenarioIds], projectChecks: [],
+        };
+      },
+    });
+
+    const input = phaseInput("REGRESSION_FIX");
+    input.context.specs = [{ id: "S-EPIC1-01-a", status: "passed", text: "given when then" }, { id: "S-EPIC1-01-b", status: "passed", text: "given when then" }];
+    input.context.regressions = [{ scenarioId: "S-EPIC1-01-b", signature: "0f1e2d3c4b5a69788796a5b4c3d2e1f0" }];
+
+    await expect(port.run(input)).resolves.toMatchObject({ artifacts: [{ kind: "implementation" }] });
+    expect(asked).toEqual([["S-EPIC1-01-b"]]);
+  });
+
   it("hands a phase exit's findings back to the same session", async () => {
     temporary = await mkdtemp(join(tmpdir(), "hivemind-pi-phase-"));
     const runner = fakeRunner(JSON.stringify({ test_contract_yaml: "story_id: S-EPIC1-01" }));

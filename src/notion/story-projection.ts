@@ -4,7 +4,7 @@ import { NotionOutbox, payloadHash } from "./outbox.js";
 import type { DesiredStoryPage } from "./blocks/story-page.js";
 import schema from "./notion-schema.json" with { type: "json" };
 import { STORY_BOARD_STATUS } from "./board-status.js";
-import { storyIcon, stopReasonWord, stopSummaryLine, waitingText } from "./display-text.js";
+import { storyIcon, stopReasonWord, stopSummaryLine, storyStateWord, waitingText } from "./display-text.js";
 import type { StopSummary } from "../orchestrator/stop-summary.js";
 import { laneWord, type DesiredRound, type DesiredSpec } from "./blocks/story-render.js";
 import { scenarioTitle } from "../pipeline/dod.js";
@@ -256,9 +256,19 @@ export class NotionStoryProjection implements StoryProjectionPort {
     for (const refusal of summary.refusals) {
       lines.push(stopSummaryLine("refusal", { reason: refusal.reason }));
     }
-    if (summary.dispatchFailures.length > 0) {
-      lines.push(stopSummaryLine("dispatchFailed", { count: String(summary.dispatchFailures.length) }));
+    // A run that died of its own phase exit is not a mystery, and saying it was
+    // one leaves the person nothing to act on: the exit stated what it wanted.
+    const refused = summary.dispatchFailures.filter((failure) => failure.refusal !== undefined);
+    if (refused.length > 0) {
+      const last = refused.at(-1)!;
+      lines.push(stopSummaryLine("exitRefused", {
+        phase: storyStateWord(last.state),
+        count: String(refused.length),
+        detail: last.refusal!.detail,
+      }));
     }
+    const died = summary.dispatchFailures.length - refused.length;
+    if (died > 0) lines.push(stopSummaryLine("dispatchFailed", { count: String(died) }));
     if (summary.inconclusive) {
       lines.push(stopSummaryLine("inconclusive", {
         attempts: String(summary.inconclusive.attempts),
