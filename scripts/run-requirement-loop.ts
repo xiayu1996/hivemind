@@ -37,6 +37,7 @@ import { createWorktree, locateWorktree, worktreeLayout } from "../src/vcs/workt
 import { discoverMRPort } from "../src/vcs/mr/adapters.js";
 import { RequirementStore } from "../src/orchestrator/requirement-store.js";
 import { openDb } from "../src/persistence/client.js";
+import { holdDaemonSingleton } from "../src/orchestrator/daemon-singleton.js";
 import { migrate } from "../src/persistence/migrate.js";
 import { assertSchemaCurrent } from "../src/persistence/schema-fingerprint.js";
 import { ModelPolicy } from "../src/runner/model-policy.js";
@@ -84,6 +85,16 @@ async function main(): Promise<void> {
   // records itself as migrated while enforcing the older constraints, and the
   // first thing that notices is a write failing inside somebody's Story.
   await assertSchemaCurrent(handle.client);
+  // This loop writes the requirement pages and shares the outbox with the
+  // orchestrator, so it is a Notion writer too and gets its own claim. A second
+  // copy of it would answer the same clarification twice.
+  const singleton = await holdDaemonSingleton(handle.client, "requirements", {
+    hostId: hostname(),
+    onLost: (reason) => {
+      console.error(`FAILED: this requirements daemon no longer holds the role (${reason})`);
+      process.exit(1);
+    },
+  });
   const config = await ConfigStore.load(handle.client);
   const gateway = new NotionGateway({ transport: createNotionHttpTransport({ token }) });
   const store = new RequirementStore(handle.client);
@@ -387,7 +398,10 @@ async function main(): Promise<void> {
   };
 
   await pass();
-  if (once) return;
+  if (once) {
+    await singleton.release().catch(() => undefined);
+    return;
+  }
   for (;;) {
     await new Promise((settle) => setTimeout(settle, intervalMs));
     await pass().catch((error: unknown) => {
