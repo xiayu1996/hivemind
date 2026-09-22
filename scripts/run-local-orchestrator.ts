@@ -114,6 +114,7 @@ import { runProjectCheck } from "../src/vcs/project-check-runner.js";
 import { recheckEpicHeads } from "../src/orchestrator/epic-head-recheck.js";
 import { reopenRejectedDecompositions } from "../src/orchestrator/decomposition-reopen.js";
 import { unrecoveredHeadFailures } from "../src/orchestrator/epic-head-failure.js";
+import { piModelDeclarationsPath } from "../src/runner/pi-model-declarations.js";
 
 const execFileAsync = promisify(execFile);
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -357,7 +358,7 @@ async function main(): Promise<void> {
   const credentialFilePath = join(homedir(), ".pi", "agent", "auth.json");
   const credentialLockPath = join(homedir(), ".hivemind", "auth-refresh.lock");
   const modelCatalog = defaultModelCatalog(piBinary);
-  const modelPolicy = new ModelPolicy(config, modelCatalog);
+  const modelPolicy = new ModelPolicy(config, modelCatalog, piModelDeclarationsPath());
   /**
    * The one variable an API-key provider's pi spawn needs. systemd hands the
    * daemon its `EnvironmentFile`, but a run by hand inherits nothing, and pi

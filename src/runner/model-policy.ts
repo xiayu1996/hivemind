@@ -1,6 +1,11 @@
 import type { ModelPurpose, ModelTier } from "../pipeline/phase.js";
 import type { ConfigStore } from "../config/store.js";
 import { isMeteredProvider } from "./provider-env.js";
+import {
+  installPiModelDeclarations,
+  renderPiModelDeclarations,
+  type PiModelDeclaration,
+} from "./pi-model-declarations.js";
 import { resolveModel, withThinkingLevel, type ModelCatalog, type ResolvedModel, type ThinkingLevel } from "./model-resolver.js";
 
 export { MODEL_PURPOSES, MODEL_TIERS } from "../pipeline/phase.js";
@@ -11,6 +16,9 @@ export interface ProviderProfile {
   envKey?: string;
   /** Whether tokens cost money as they are spent; see `isMeteredProvider`. */
   billing?: "subscription" | "metered";
+  /** What pi must be told to reach this provider; absent for one it already
+   * carries. Rendered to `~/.pi/agent/models.json` before any spawn. */
+  declaration?: PiModelDeclaration;
   tiers: Partial<Record<ModelTier, string>>;
 }
 
@@ -22,10 +30,32 @@ type ProviderProfiles = Record<string, ProviderProfile>;
  * id is always checked against the provider's own catalogue before it escapes.
  */
 export class ModelPolicy {
+  #installed: string | null = null;
+
   constructor(
     private readonly config: ConfigStore,
     private readonly catalog: ModelCatalog,
+    /** Where this host's pi reads its provider declarations. Left out in tests,
+     * which resolve models without a pi to tell. */
+    private readonly declarationsPath?: string,
   ) {}
+
+  /**
+   * Makes pi's view of the providers match this configuration.
+   *
+   * Run here because this is the one place every spawn passes through: the
+   * declaration is part of "which model may be used", and a host that resolved
+   * a model pi has never heard of would spawn a run that pi prices at zero.
+   * The rendered text is remembered so a cycle of resolutions costs one string
+   * comparison rather than a write.
+   */
+  async #tellPi(profiles: ProviderProfiles): Promise<void> {
+    if (this.declarationsPath === undefined) return;
+    const contents = renderPiModelDeclarations(profiles);
+    if (contents === this.#installed) return;
+    await installPiModelDeclarations(contents, this.declarationsPath);
+    this.#installed = contents;
+  }
 
   async tierOf(purpose: ModelPurpose): Promise<ModelTier> {
     await this.config.reload();
@@ -46,6 +76,7 @@ export class ModelPolicy {
     const profiles = this.config.get("model.providers") as ProviderProfiles;
     const id = profiles[provider]?.tiers[tier];
     if (!id) throw new Error(`provider ${provider} has no model configured for the ${tier} tier`);
+    await this.#tellPi(profiles);
     // The effort rides on the model so that every port relays it for free.
     return withThinkingLevel(await resolveModel(this.catalog, provider, id), this.thinkingFor(purpose));
   }

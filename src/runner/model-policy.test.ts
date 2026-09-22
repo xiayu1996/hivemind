@@ -1,8 +1,12 @@
+import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createClient } from "@libsql/client";
 import { beforeEach, describe, expect, it } from "vitest";
 import { ConfigStore } from "../config/store.js";
 import { migrate } from "../persistence/migrate.js";
 import { ModelPolicy, assertModelPolicy } from "./model-policy.js";
+import { piModelDeclarationsPath } from "./pi-model-declarations.js";
 
 const catalog = {
   list: async (provider: string) => ({
@@ -17,6 +21,7 @@ const catalog = {
     ],
     "zai-coding-cn": [{ provider: "zai-coding-cn", id: "glm-5" }],
     deepseek: [{ provider: "deepseek", id: "deepseek-flash", thinking: true, images: true }],
+    mimo: [{ provider: "mimo", id: "mimo-v2.6-flash", thinking: true, images: true }],
   }[provider] ?? []),
 };
 
@@ -37,6 +42,31 @@ describe("ModelPolicy", () => {
     await expect(policy.resolve("triage", "openai-codex")).resolves.toMatchObject({ id: "gpt-5.6-luna" });
   });
 
+  it("hands pi the declaration of the providers it does not know, before the first spawn", async () => {
+    const home = await mkdtemp(join(tmpdir(), "model-policy-"));
+    const path = piModelDeclarationsPath(home);
+    const policy = new ModelPolicy(config, catalog, path);
+
+    await policy.resolve("code", "openai-codex");
+
+    const declared = JSON.parse(await readFile(path, "utf8")).providers;
+    expect(Object.keys(declared)).toContain("mimo");
+    // The key stays in the host's secrets file; the declaration only names it.
+    expect(await readFile(path, "utf8")).not.toMatch(/sk-|Bearer /);
+  });
+
+  it("rewrites the declaration only when the configuration behind it changed", async () => {
+    const home = await mkdtemp(join(tmpdir(), "model-policy-"));
+    const path = piModelDeclarationsPath(home);
+    const policy = new ModelPolicy(config, catalog, path);
+
+    await policy.resolve("code", "openai-codex");
+    const first = await stat(path);
+    await policy.resolve("triage", "openai-codex");
+
+    expect((await stat(path)).mtimeMs).toBe(first.mtimeMs);
+  });
+
   it("refuses a purpose the provider declares no model for, instead of guessing one", async () => {
     const policy = new ModelPolicy(config, catalog);
     await expect(policy.resolve("design", "zai-coding-cn")).rejects.toThrow(/zai-coding-cn.*brain/);
@@ -51,6 +81,33 @@ describe("ModelPolicy", () => {
         tiers: { brain: "gpt-5.6-imaginary", standard: "gpt-5.6-terra", cheap: "gpt-5.6-luna" },
       },
     }, "test")).rejects.toThrow(/does not advertise/);
+  });
+
+  it("accepts a provider nobody has snapshotted yet when it declares its own models", async () => {
+    // Adding a provider is a configuration write, so its first write happens
+    // before any host has ever seen pi advertise it. The declaration is what
+    // makes the id known at that moment.
+    await expect(config.set("model.providers", {
+      newcomer: {
+        authType: "api_key",
+        envKey: "NEWCOMER_API_KEY",
+        declaration: {
+          baseUrl: "https://api.newcomer.example/v1",
+          api: "openai-completions",
+          models: [{
+            id: "newcomer-one",
+            name: "Newcomer One",
+            reasoning: true,
+            input: ["text"],
+            contextWindow: 200000,
+            maxTokens: 32768,
+            thinkingLevelMap: { minimal: null, low: null, medium: null, high: null, max: null },
+            cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 },
+          }],
+        },
+        tiers: { standard: "newcomer-one" },
+      },
+    }, "test")).resolves.toBeDefined();
   });
 
   it("refuses at resolve time an id no recording could have vetted", async () => {

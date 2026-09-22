@@ -71,6 +71,7 @@ import { discoverMRPort } from "../src/vcs/mr/adapters.js";
 import { GitMrStoryDelivery, processGitCommand } from "../src/vcs/story-delivery.js";
 import { appLaneConfig, startAppLane } from "../src/verify/app-lane.js";
 import { probeScreens, type ScreenPage } from "../src/pipeline/screen-reachability.js";
+import { piModelDeclarationsPath } from "../src/runner/pi-model-declarations.js";
 
 const execFileAsync = promisify(execFile);
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -260,7 +261,7 @@ async function main(): Promise<void> {
     // re-verification run) are stored under the card's slug; without the scope
     // they would read as their defaults and an unchecked merge would pass.
     const config = await ConfigStore.load(handle.client, story.repo ? { repository: story.repo } : {});
-    const modelPolicy = new ModelPolicy(config, defaultModelCatalog(piBinary, worktreePath));
+    const modelPolicy = new ModelPolicy(config, defaultModelCatalog(piBinary, worktreePath), piModelDeclarationsPath());
     // Credentials for every provider this card may reach, read once. A phase
     // resolves its own provider now, so being handed one provider's key on the
     // command line would leave the first failover spawning pi with nothing.

@@ -73,6 +73,40 @@ const providerProfiles = z.record(
      * which has to say so here.
      */
     billing: z.enum(["subscription", "metered"]).optional(),
+    /**
+     * What pi has to be told to reach this provider, for a provider its own
+     * catalogue does not carry. It lives here rather than in a file in this
+     * repository so that adding a provider stays a configuration write: every
+     * host renders `~/.pi/agent/models.json` from this row before it spawns
+     * pi, and two hosts cannot disagree about which ids exist.
+     *
+     * Absent for a provider pi already knows, whose prices and limits are pi's
+     * to state; repeating them here would pin a stale copy of them.
+     */
+    declaration: z.object({
+      baseUrl: z.string().url(),
+      /** pi's wire protocol name, e.g. `openai-completions`. */
+      api: z.string().regex(/^[a-z][a-z0-9-]*$/),
+      models: z.array(z.object({
+        id: z.string().min(1),
+        name: z.string().min(1),
+        reasoning: z.boolean(),
+        /** `image` has to be listed for a model to ever be shown a screen: pi
+         * sends text alone unless told otherwise. */
+        input: z.array(z.enum(["text", "image", "audio", "video"])).min(1),
+        contextWindow: z.number().int().positive(),
+        maxTokens: z.number().int().positive(),
+        thinkingLevelMap: z.record(z.string(), z.string().min(1).nullable()),
+        /** USD per million tokens. pi records zero for a model with no price,
+         * which silently disables the per-card spend ceiling. */
+        cost: z.object({
+          input: z.number().nonnegative(),
+          output: z.number().nonnegative(),
+          cacheRead: z.number().nonnegative(),
+          cacheWrite: z.number().nonnegative(),
+        }),
+      })).min(1),
+    }).optional(),
     tiers: z.partialRecord(modelTier, z.string().min(1)),
   }).refine(
     (profile) => profile.authType !== "api_key" || profile.envKey !== undefined,
@@ -80,8 +114,14 @@ const providerProfiles = z.record(
   ),
 ).superRefine((profiles, ctx) => {
   for (const [provider, profile] of Object.entries(profiles)) {
-    const known = snapshotModelIds(provider);
-    if (known.length === 0) continue; // no recording for this provider yet
+    // A provider this configuration declares to pi is known by that
+    // declaration: the recorded catalogue is a snapshot of what pi advertised
+    // on some host, and a provider being added right now has never been
+    // snapshotted anywhere. The snapshot still guards the ids of providers pi
+    // carries itself, which is where a typo would otherwise survive to spawn.
+    const declared = (profile.declaration?.models ?? []).map((model) => model.id);
+    const known = [...snapshotModelIds(provider), ...declared];
+    if (known.length === 0) continue; // no recording and nothing declared yet
     for (const [tier, id] of Object.entries(profile.tiers)) {
       if (!known.includes(id)) {
         ctx.addIssue({
@@ -212,6 +252,32 @@ export const CONFIG_KEYS = {
         // id serves a tier is a price decision that moves, so it is decided
         // here or in the console and never in a call site; glm-5.3-flash stays
         // declared to pi so switching is a config write, not a redeploy.
+        declaration: {
+          baseUrl: "https://api.commandcode.ai/provider/v1",
+          api: "openai-completions",
+          models: [
+            {
+              id: "deepseek/deepseek-v4.1-flash",
+              name: "DeepSeek V4.1 Flash (Command Code)",
+              reasoning: true,
+              input: ["text", "image"],
+              contextWindow: 1000000,
+              maxTokens: 65536,
+              thinkingLevelMap: { minimal: null, low: null, medium: null, high: "high", max: "max" },
+              cost: { input: 0.15, output: 0.6, cacheRead: 0.003, cacheWrite: 0 },
+            },
+            {
+              id: "z-ai/glm-5.3-flash",
+              name: "GLM-5.3 Flash (Command Code)",
+              reasoning: true,
+              input: ["text", "image"],
+              contextWindow: 1048576,
+              maxTokens: 131072,
+              thinkingLevelMap: { minimal: null, low: "low", medium: null, high: "high", max: "max" },
+              cost: { input: 0.15, output: 0.5, cacheRead: 0.03, cacheWrite: 0 },
+            },
+          ],
+        },
         tiers: {
           brain: "deepseek/deepseek-v4.1-flash",
           standard: "deepseek/deepseek-v4.1-flash",
@@ -233,7 +299,49 @@ export const CONFIG_KEYS = {
         // account is meant to spend on, and it reasons, reads images and
         // carries a 1M window, so a separate brain id would only cost more for
         // nothing. Tiers still differ here, through model.purposeThinking.
+        declaration: {
+          baseUrl: "https://api.deepseek.com",
+          api: "openai-completions",
+          models: [
+            {
+              id: "deepseek-flash",
+              name: "DeepSeek Flash",
+              reasoning: true,
+              input: ["text", "image"],
+              contextWindow: 1000000,
+              maxTokens: 384000,
+              thinkingLevelMap: { minimal: null, low: "low", medium: null, high: "high", max: "max" },
+              cost: { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+            },
+          ],
+        },
         tiers: { brain: "deepseek-flash", standard: "deepseek-flash", cheap: "deepseek-flash" },
+      },
+      // Metered, added so a spent subscription window degrades the standard
+      // tier instead of leaving deepseek as the only place a card can run. It
+      // expresses deep thinking as a switch that is on by default rather than
+      // as levels, so every level maps to null: sending an effort this API does
+      // not document would risk a refusal to buy nothing.
+      mimo: {
+        authType: "api_key",
+        envKey: "MIMO_API_KEY",
+        declaration: {
+          baseUrl: "https://api.xiaomimimo.com/v1",
+          api: "openai-completions",
+          models: [
+            {
+              id: "mimo-v2.6-flash",
+              name: "MiMo V2.6 Flash",
+              reasoning: true,
+              input: ["text", "image"],
+              contextWindow: 1000000,
+              maxTokens: 65536,
+              thinkingLevelMap: { minimal: null, low: null, medium: null, high: null, max: null },
+              cost: { input: 0.14, output: 0.28, cacheRead: 0.0014, cacheWrite: 0 },
+            },
+          ],
+        },
+        tiers: { brain: "mimo-v2.6-flash", standard: "mimo-v2.6-flash", cheap: "mimo-v2.6-flash" },
       },
     },
     scope: "global",
