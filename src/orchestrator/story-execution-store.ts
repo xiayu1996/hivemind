@@ -27,6 +27,7 @@ import type { ConvergenceClassification } from "../pipeline/convergence.js";
 export type { StoryPhase } from "../pipeline/phase.js";
 import type { StoryPhase } from "../pipeline/phase.js";
 import { readOrphanedCards, type OrphanedRegressionCard } from "../regression/orphaned-cards.js";
+import type { PhaseExitRefusal } from "./dispatch-failure.js";
 
 /** A child process's stderr; long enough to carry a stack, short enough that
  * one dead run cannot fill the event log. */
@@ -989,10 +990,12 @@ export class StoryExecutionStore {
       if (String(row.type) === "merge.baseline_failing") {
         baselineFailures.push({ check, failures });
       } else if (String(row.type) === "story.dispatch_failed") {
+        const refusal = data.refusal as { gate?: unknown; detail?: unknown } | undefined;
         dispatchFailures.push({
           state: String(data.state ?? ""),
           errorClass: String(data.errorClass ?? ""),
           message: String(data.message ?? ""),
+          ...(refusal ? { refusal: { gate: String(refusal.gate ?? ""), detail: String(refusal.detail ?? "") } } : {}),
         });
       } else if (data.spent === true) {
         mergeBounces.push({
@@ -1069,6 +1072,7 @@ export class StoryExecutionStore {
     state: StoryState;
     errorClass: string;
     message: string;
+    refusal?: PhaseExitRefusal;
     attempt: number;
     budget: number;
     runId: string;
@@ -1081,6 +1085,7 @@ export class StoryExecutionStore {
       attempt: input.attempt,
       budget: input.budget,
       message: input.message.slice(0, DISPATCH_FAILURE_MESSAGE_LIMIT),
+      ...(input.refusal ? { refusal: input.refusal } : {}),
     });
     await this.client.batch([
       {

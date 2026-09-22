@@ -25,6 +25,9 @@ export interface StopSummaryDispatchFailure {
   state: string;
   errorClass: string;
   message: string;
+  /** Set when the run died of its own phase exit rather than of something
+   * nobody can place; it is what the person reads instead of the message. */
+  refusal?: { gate: string; detail: string };
 }
 
 /**
@@ -134,7 +137,9 @@ export function renderStopSummary(summary: StopSummary): string {
     lines.push(`${refusal.phase} refused its own output: ${refusal.reason}`);
   }
   for (const failure of summary.dispatchFailures) {
-    lines.push(`A run died in ${failure.state} (${failure.errorClass}): ${failure.message}`);
+    lines.push(failure.refusal
+      ? `${failure.refusal.gate} refused its own round in ${failure.state}: ${failure.refusal.detail}`
+      : `A run died in ${failure.state} (${failure.errorClass}): ${failure.message}`);
   }
   if (summary.costUsd > 0) lines.push(`Spent on metered providers: $${summary.costUsd.toFixed(2)}`);
   return `${lines.join("\n")}\n`;

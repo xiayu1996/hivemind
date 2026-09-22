@@ -2,7 +2,8 @@ import { createClient } from "@libsql/client";
 import { describe, expect, it } from "vitest";
 import { migrate } from "../persistence/migrate.js";
 import { StoryExecutionStore } from "./story-execution-store.js";
-import { decideDispatchFailure, settleDispatchFailure } from "./dispatch-failure.js";
+import { decideDispatchFailure, describePhaseExitRefusal, settleDispatchFailure } from "./dispatch-failure.js";
+import { renderStopSummary } from "./stop-summary.js";
 
 const CARD = { state: "SHAPE" as const, phaseReentries: 0 };
 
@@ -167,6 +168,50 @@ describe("settleDispatchFailure on a broken host", () => {
     expect(story).toMatchObject({ state: "QUEUED", phase_reentries: 0 });
     expect((await client.execute("SELECT COUNT(*) n FROM event_log WHERE type = 'story.dispatch_failed'")).rows[0]?.n)
       .toBe(0);
+    client.close();
+  });
+});
+
+describe("a run that died of its own phase exit", () => {
+  const refused = new Error(`Command failed: npm run story:run -- --card-id S-EXIT-01
+judge is answering the questions that declare a deterministic fallback
+FAILED: CODE exit checks were not met: No failing-test evidence exists for: S-EXIT-01-a. Each scenario needs a test that failed before the implementation.
+`);
+
+  it("is named by the exit that refused it and by what it asked for", () => {
+    expect(describePhaseExitRefusal(refused.message)).toMatchObject({
+      gate: "CODE",
+      detail: expect.stringContaining("No failing-test evidence exists for: S-EXIT-01-a"),
+    });
+  });
+
+  it("says nothing about a message no exit produced", () => {
+    expect(describePhaseExitRefusal("Command failed: git push\n ! [rejected] non-fast-forward\n")).toBeUndefined();
+  });
+
+  it("stops the card with the refusal instead of an unplaceable message", async () => {
+    const client = createClient({ url: ":memory:" });
+    await migrate(client);
+    const store = new StoryExecutionStore(client, (() => { let time = 1_000; return () => time++; })());
+    await store.createStory({
+      id: "S-EXIT-01", notionPageId: "page", title: "Card", requirement: "r", branch: "story/exit-01",
+    });
+    await store.transition("S-EXIT-01", "QUEUED", "SHAPE", "system", "run-1");
+    await client.execute("UPDATE stories SET state = 'CODE', phase = 'CODE', phase_reentries = 2 WHERE id = 'S-EXIT-01'");
+
+    const decision = await settleDispatchFailure({
+      store,
+      config: { reload: async () => {}, get: () => 3 },
+      cardId: "S-EXIT-01",
+      error: refused,
+      stopping: false,
+    });
+
+    expect(decision).toMatchObject({ kind: "park", refusal: { gate: "CODE" } });
+    const summary = await store.stopSummary("S-EXIT-01");
+    expect(summary?.dispatchFailures[0]?.refusal?.detail).toContain("No failing-test evidence exists");
+    expect(summary?.dispatchFailures[0]?.errorClass).toBe("PHASE_EXIT_REFUSED");
+    expect(renderStopSummary(summary!)).toContain("CODE refused its own round in CODE");
     client.close();
   });
 });
