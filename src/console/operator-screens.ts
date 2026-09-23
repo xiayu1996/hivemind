@@ -832,13 +832,25 @@ export function renderRolesPage(view: RolesPageView): string {
   if (view.state === "loading") {
     body = noticeBlock({ tone: "", heading: "正在读取角色配置", bare: `正在读取${label}的当前配置与版本` });
   } else if (view.state === "unavailable") {
+    const draft = view.draft;
+    const retained = draft
+      ? `<section class="panel section"><h2>尚未提交的内容</h2>`
+        + `<div class="bare"><div class="field-label">模型供应商</div>${escapeHtml(draft.provider)}</div>`
+        + `<div class="bare"><div class="field-label">模型</div>${escapeHtml(draft.modelId)}</div>`
+        + `<div class="section"><div class="field-label">角色说明</div><div class="prompt-box">${escapeHtml(draft.prompt)}</div></div></section>`
+      : "";
     body = noticeBlock({
       tone: "danger",
       heading: "无法读取角色配置",
       body: view.failure?.detail ?? "当前版和上一版没有载入，已有配置不会改变。",
       bare: "无法读取角色配置",
-      action: retryForm("/operator/roles", { role }, "重新读取"),
-    });
+      action: retryForm("/operator/roles", {
+        role,
+        prompt: draft?.prompt ?? "",
+        provider: draft?.provider ?? "",
+        model: draft?.modelId ?? "",
+      }, "重新读取"),
+    }) + retained;
   } else if (view.state === "waiting") {
     body = noticeBlock({ tone: "attention", heading: "保存结果尚未确认", bare: "保存结果尚未确认，确认后将自动刷新" });
     body += renderRolesBrowse(view);
@@ -1076,16 +1088,23 @@ export async function registerMobileConsoleRoutes(
     if (forced === "loading") {
       return sendHtml(reply, renderRolesPage({ state: "loading", role }));
     }
+    const retainedDraft = roleDraftFromQuery(role, query);
     if (forced === "unavailable") {
       return sendHtml(reply, renderRolesPage({
         state: "unavailable",
         role,
+        ...(retainedDraft ? { draft: retainedDraft } : {}),
         failure: { code: "unavailable", detail: "读取被要求重试", retryable: true },
       }));
     }
     const read = await readInto(() => dependencies.roles.readRole(role));
     if (!read.ok) {
-      return sendHtml(reply, renderRolesPage({ state: "unavailable", role, failure: read.failure }));
+      return sendHtml(reply, renderRolesPage({
+        state: "unavailable",
+        role,
+        ...(retainedDraft ? { draft: retainedDraft } : {}),
+        failure: read.failure,
+      }));
     }
     if (read.value === null) {
       return sendHtml(reply, renderRolesPage({ state: "empty", role }));
@@ -1211,14 +1230,20 @@ export async function registerMobileConsoleRoutes(
   }
 }
 
+function roleDraftFromQuery(role: string, query: Record<string, unknown>): RoleConfiguration | undefined {
+  const prompt = text(query.prompt);
+  const provider = text(query.provider);
+  const modelId = text(query.model);
+  if (prompt === undefined && provider === undefined && modelId === undefined) return undefined;
+  return { role, prompt: prompt ?? "", provider: provider ?? "", modelId: modelId ?? "" };
+}
+
 function roleDraft(view: RoleConfigurationView, query: Record<string, unknown>): RoleConfiguration {
   const current = view.current.configuration;
-  return {
-    role: current.role,
-    prompt: text(query.prompt) ?? current.prompt,
-    provider: text(query.provider) ?? current.provider,
-    modelId: text(query.model) ?? current.modelId,
-  };
+  const retained = roleDraftFromQuery(current.role, query);
+  return retained
+    ? { role: current.role, prompt: retained.prompt || current.prompt, provider: retained.provider || current.provider, modelId: retained.modelId || current.modelId }
+    : current;
 }
 
 function roleResult(result: RoleMutationResult): RoleResultView {
