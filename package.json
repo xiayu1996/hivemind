@@ -1,58 +1,39 @@
 {
   "name": "hivemind",
-  "version": "0.1.0",
-  "license": "MIT",
+  "version": "0.2.0",
   "private": true,
+  "description": "Autonomous coding agent service: takes a requirement from a board, builds it on an integration branch item by item, and has an independent evaluator accept each item in a real browser before it lands.",
   "type": "module",
+  "license": "MIT",
   "engines": {
     "node": ">=26.0.0"
   },
-  "hivemind": {
-    "piVersion": "0.85.1",
-    "solPiRef": "1559b5cb12c72da4a485bc50fe326586b216fb19",
-    "impeccableEngineVersion": "0.1.5",
-    "impeccableReportedVersion": "4.0.0"
-  },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "oxlint src poc scripts extensions",
+    "prepare": "git config core.hooksPath .githooks || true",
+    "hivemind": "node src/main.ts",
+    "start": "node src/main.ts run",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "oxlint src",
     "test": "vitest run",
     "test:watch": "vitest",
-    "db:migrate": "tsx src/persistence/migrate.ts",
-    "regression:run": "tsx scripts/run-regression.ts",
-    "story:run": "tsx scripts/run-story.ts",
-    "orchestrator:run": "tsx scripts/run-local-orchestrator.ts",
-    "requirements:run": "tsx scripts/run-requirement-loop.ts",
-    "preflight": "tsx scripts/preflight.ts",
-    "health": "tsx scripts/health-check.ts"
+    "db:generate": "drizzle-kit generate",
+    "db:check": "drizzle-kit generate && git diff --exit-code -- drizzle && test -z \"$(git ls-files --others --exclude-standard -- drizzle)\""
   },
   "dependencies": {
-    "@fastify/static": "^10.1.3",
+    "@earendil-works/pi-agent-core": "0.87.1",
+    "@earendil-works/pi-ai": "0.87.1",
+    "@earendil-works/pi-coding-agent": "0.87.1",
     "@libsql/client": "^0.15.15",
-    "@notionhq/client": "^5.26.0",
     "drizzle-orm": "^0.45.2",
-    "fastify": "^5.12.1",
-    "fastify-raw-body": "^6.0.1",
-    "nodemailer": "^9.0.6",
-    "vue": "^3.5.42",
+    "playwright": "1.63.0",
     "yaml": "^2.9.0",
     "zod": "^4.1.13"
   },
   "devDependencies": {
-    "@playwright/cli": "0.1.18",
     "@types/node": "^24.10.1",
-    "@types/nodemailer": "^8.0.1",
-    "@vitejs/plugin-vue": "^6.0.8",
-    "axe-core": "^4.13.0",
+    "drizzle-kit": "0.31.11",
     "oxlint": "^1.24.0",
-    "tsx": "^4.20.6",
     "typescript": "^5.9.3",
-    "vite": "^7.3.6",
     "vitest": "^3.2.4"
-  },
-  "allowScripts": {
-    "esbuild@0.28.2": true,
-    "msgpackr-extract@3.0.4": true
   }
 }

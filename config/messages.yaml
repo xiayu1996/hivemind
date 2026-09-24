@@ -1,0 +1,91 @@
+# Every sentence the loop itself shows a person on the board. Sessions write
+# their own summaries (in the language their prompts ask for); these are the
+# frames around them. Placeholders are {name}; an unknown one is an error at
+# startup, not a blank on the board.
+
+gates:
+  product: 产品定义
+  architecture: 技术方案
+  milestone: 交付验收
+
+status:
+  working: "进行中：{step}"
+  waitingApproval: "等你确认{gate}"
+  waitingAnswer: "有问题等你回答"
+  waitingProvider: "模型暂时都不可用，{until} 后自动重试"
+  waitingProviderHuman: "模型都不可用，需要有人处理凭据或额度：{detail}"
+  stoppedNoProgress: "停下了：{detail}"
+  stoppedBudget: "预算用完：已花 {spent} 美元，上限 {budget} 美元"
+  done: "已交付：{link}"
+
+approval:
+  title: "{gate}：{title}"
+  body: |
+    {summary}
+
+    {decisions}
+
+    确认后继续；有修改意见直接评论，会按意见改完再请你确认。
+
+questions:
+  authorStuck: |
+    「{step}」这一步连续 {sessions} 次没写出合格的产物，卡在：
+    {findings}
+
+    请回复你的指导，我会按回复重写。
+  evaluatorStuck: |
+    验收没法判定下面这些场景，多半是场景的前提在当前产品里还造不出来：
+    {reasons}
+
+    请告诉我这些前提该怎么准备，或者确认场景本身要改。
+  builderBlocked: |
+    实现「{item}」时遇到只有人能解决的问题：
+    {blocker}
+
+    请回复处理结果或指导。
+
+reports:
+  done: |
+    # 交付：{title}
+
+    {summary}
+
+    ## 验收结果
+    {scenarios}
+
+    ## 合并请求
+    {link}
+
+    ## 花费
+    {spent} 美元（按 API 等价价格计，订阅也计入）
+  stopped: |
+    # 停下了：{title}
+
+    {detail}
+
+    评论这张卡即可带着你的意见继续；预算停下的需要先调高预算。
+  milestone: |
+    「{item}」做完了，这是计划里的一个阶段性节点。请打开产品看一眼方向对不对。
+
+    确认后继续做下一项；有修改意见直接评论，计划会按意见调整。
+
+# The Notion board: the requirements data source's property names and the
+# words of the sections hivemind appends to a requirement page. `recipe` (a
+# select) and `note` (a rich text) are optional properties; name them here, or
+# in the instance configuration, only when the data source has them.
+notion:
+  properties:
+    title: 标题
+    repository: 目标仓库
+    status: 需求状态
+  status:
+    queued: 待启动
+    working: 进行中
+    needs_input: 需要输入
+    stopped: 人工停靠
+    done: 已完成
+  version: " · 版本 "
+  approve: "批准这一版 "
+  replyWithOption: 直接回复这条评论：选一个就写序号（如 1），都不合适就直接写你的答案。
+  reply: 直接回复这条评论即可。
+  truncated: （内容过长，这里只显示开头；完整内容见仓库里的这一版。）

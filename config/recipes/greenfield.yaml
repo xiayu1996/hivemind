@@ -1,0 +1,31 @@
+# A product built from nothing: defined and approved, designed when it has
+# screens, founded on a stack a person approves, then built slice by slice.
+name: greenfield
+description: A new product, from requirement to a reviewed pull request.
+steps:
+  - id: define
+    kind: author
+    prompt: define
+    writes: [PRODUCT.md, acceptance.yaml]
+    approval: always
+    gate: product
+  - id: design
+    kind: author
+    prompt: design
+    writes: [DESIGN.md]
+    when: has_web_surface
+  - id: architecture
+    kind: author
+    prompt: architecture
+    writes: [ARCHITECTURE.md, project.yaml]
+    research: true
+    approval: always
+    gate: architecture
+  - id: plan
+    kind: author
+    prompt: plan
+    writes: [plan.yaml]
+  - id: build
+    kind: build
+  - id: review
+    kind: review
