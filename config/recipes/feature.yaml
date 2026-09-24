@@ -1,0 +1,32 @@
+# A feature in a product that already exists. The contract is extended and
+# approved; the design and architecture are revisited, and a person sees them
+# only when they changed.
+name: feature
+description: A feature in an existing product.
+steps:
+  - id: define
+    kind: author
+    prompt: define
+    writes: [PRODUCT.md, acceptance.yaml]
+    approval: always
+    gate: product
+  - id: design
+    kind: author
+    prompt: design
+    writes: [DESIGN.md]
+    when: has_web_surface
+  - id: architecture
+    kind: author
+    prompt: architecture
+    writes: [ARCHITECTURE.md, project.yaml]
+    research: true
+    approval: on_change
+    gate: architecture
+  - id: plan
+    kind: author
+    prompt: plan
+    writes: [plan.yaml]
+  - id: build
+    kind: build
+  - id: review
+    kind: review

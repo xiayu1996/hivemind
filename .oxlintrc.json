@@ -9,20 +9,11 @@
     "node": true,
     "es2023": true
   },
-  "ignorePatterns": [
-    "dist",
-    "node_modules",
-    "fixtures"
-  ],
+  "ignorePatterns": ["dist", "node_modules", "legacy", "drizzle"],
   "rules": {
     "no-console": "off",
     "eqeqeq": "error",
-    "no-unused-vars": [
-      "error",
-      {
-        "argsIgnorePattern": "^_"
-      }
-    ],
+    "no-unused-vars": ["error", { "argsIgnorePattern": "^_" }],
     "no-await-in-loop": "off"
   }
 }

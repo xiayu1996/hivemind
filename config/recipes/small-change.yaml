@@ -1,0 +1,13 @@
+# A change small enough that the finished result is the only thing a person
+# needs to see.
+name: small-change
+description: A small change, reviewed once when it is done.
+steps:
+  - id: scope
+    kind: author
+    prompt: scope
+    writes: [acceptance.yaml, plan.yaml, project.yaml]
+  - id: build
+    kind: build
+  - id: review
+    kind: review

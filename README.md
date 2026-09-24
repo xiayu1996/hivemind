@@ -1,52 +1,35 @@
 # hivemind
 
-24x7 自主编码 agent 服务：自动从 Notion 看板接取需求，分析拆解后以 TDD 驱动开发，覆盖单测/集成/snapshot/e2e/UI 五层测试，交付 MR 并将业务语言的验证报告回写 Notion。人几乎不写代码，Notion 是唯一的人机交互与内容归档空间。
-
-- 执行底座：[pi](https://github.com/earendil-works/pi)（provider 无关，day1 供应商：Codex / GLM / Grok，预留 Claude）
-- 编排拓扑：中心 orchestrator（Linux, systemd）+ 多机 worker（Mac mini / Windows 主机上的 WSL2 Ubuntu），编排式流水线 + 解耦并行（CODE 按 footprint 并行、E2E 持续回归 loop）
-- 血统：busybee（作者的上一代 agent 服务，私有仓库）的下一代独立系统，移植其约 60% 已验证的 harness 基础设施与全部生产教训
-
-## 设计文档
-
-| 文档 | 内容 |
-|---|---|
-| [docs/design/00-overview.md](docs/design/00-overview.md) | 总览：背景、决策、总体架构、路线图、风险与 PoC 清单 |
-| [docs/design/01-notion-integration.md](docs/design/01-notion-integration.md) | Notion 信息架构与集成层：双 DB + 页内区段、读写协议、人操作语义、故障降级 |
-| [docs/design/02-distributed-execution.md](docs/design/02-distributed-execution.md) | 分布式执行层：多机队列、pi 运行器、守卫审计、模型分层与 failover、部署自更新 |
-| [docs/design/03-pipeline-quality.md](docs/design/03-pipeline-quality.md) | 流水线与质量闭环：三层状态机、六段 TDD 脊柱（SHAPE/SPECIFY 在内）、并行调度、E2E 回归 loop、反馈自迭代 |
-| [docs/design/04-observability.md](docs/design/04-observability.md) | 可观测性与成本账本：事件溯源三层模型、TokenUsage 归一、循环检测、invariants |
-| [docs/design/05-web-console.md](docs/design/05-web-console.md) | 内网 Web 控制台：节点健康、动态配置子系统、Prompt 工作台、成本/统计读面 |
-| [docs/design/06-codex-oauth.md](docs/design/06-codex-oauth.md) | Codex（ChatGPT 订阅 OAuth）集成机制：登录/刷新/多机分发/失效告警 |
-| [docs/design/07-agent-runtime.md](docs/design/07-agent-runtime.md) | Agent 运行时：阶段契约注册表、`resolveAgentSpec` 七维唯一入口、缓存三件套、派单与 per-provider 分桶 |
-| [docs/plan/tasks.md](docs/plan/tasks.md) | 实施任务清单：M0–M5 全量任务拆解，每项含输出物与验证方式 |
-| [AGENTS.md](AGENTS.md) | 面向 agent 的仓库工作约定：架构不变量、pi 运行器铁律、代码风格、移植 checklist（`CLAUDE.md` 为其符号链接） |
-
-## 目录结构
+7x24 自主交付服务。它从看板接一条需求，写成产品契约、技术方案与构建计划请人确认，
+然后在一条集成分支上一项一项地测试先行实现；每一项都由一个看不到构建过程的独立评审，
+在真实运行的产品上、用真实浏览器对着契约验收，通过才落地。全部做完再整体终审，推送并开 PR，交给人做交付验收。
 
 ```
-src/
-  orchestrator/   状态机(需求/Epic/Story 三层) + intake + 调度纯函数(拓扑/footprint/hotspot)
-  notion/         gateway(令牌桶+优先级+outbox) / sync(水位) / blocks(页面 builder) / intent-interpreter
-  runner/         PiRunner port + rpc adapter + context-checkpoint + continue-retry
-  guard/          danger-rules(移植) + 运行时红线(CODE 冻结测试 / VERIFY 导航白名单)；工具面全阶段统一
-  queue/          DB 可派发集 + 租约 CAS 领单(取代 BullMQ, 见 02 §1.2)
-  worker/         worker daemon: 心跳/能力声明/粘性恢复/探针 job
-  pipeline/       DoD schema / 收敛判据 / verdict 校验 / 阶段契约与确定性出口检查 / 业务语言 lint
-  regression/     RegressionScheduler + 场景注册表 + 归因二分 + 失败签名
-  vcs/            worktree(移植) + mr(gh 优先, glab 第二)
-  console/        内网 Web 控制台(Vue3 SPA + REST): 节点健康/动态配置/prompt 工作台/成本统计
-  verify/ report/ memory/ observability/ alert/ persistence/ config/ util/   busybee 移植为主
-prompts/          基线层 + per-phase prompt(独立文件)
-extensions/       pi extensions(hive-guard / mcp-adapter vendor / model-policy 兜底)
+需求 ─> 定义产品 ─(人批准)─> 界面设计 ─> 技术方案 ─(人批准)─> 计划 ─> 逐项：构建 → 检查 → 验收 ─> 终审 ─(人验收)─> 交付
+                                                                        ↑____ 失败的发现回到同一会话 ____|
 ```
 
-## 状态
+## 快速开始
 
-设计冻结于 2026-08-22，之后按实测结论增补（最近一次：2026-09-14 的 MR 里程碑，07 为新增文档）。当前进度：
+```sh
+npm ci
+npx playwright install chromium
+npx pi                                  # 订阅型 provider 在这里 /login 一次
+node src/main.ts preflight --probe      # 配置、凭据、仓库、浏览器、每个模型都通一遍
+node src/main.ts submit --repo demo --title "任务看板" --body-file req.md
+node src/main.ts run
+```
 
-- **M0 地基 PoC**：15/16 结案（PoC-1 Windows 已在目标机 10/10 通过；仅 C5 Mac mini 待接入）。执行记录与逐项 go/no-go 见 [docs/poc/](docs/poc/)。
-- **M1 单机闭环**：29/37 已验证，7 项外部活体验收待凭据，M1-37 出口验收尚未执行；Windows 本机单测、真实 pi、可观测链、浏览器控制台与真实 MR 创建均已跑通。
-- **MP 产品经理层 / MQ 主流程收敛**：离线判据全过并接过真实 Notion 看板，遗留的活体项列在 tasks.md 对应段。
-- **MR TDD 脊柱与 Agent 运行时**：MR-01..37 已落地，`SHAPE→DESIGN→SPECIFY→CODE⇄VERIFY→MERGE→DELIVERED` 与回归道 `SPECIFY(narrow)→REGRESSION_FIX→VERIFY` 在本机以确定性 mock provider 端到端跑通（`npx tsx scripts/smoke-story-pipeline.ts`，含真实 Epic 合流与推送）；MR-38 / MR-39 仍开放，它们要的是真实卡与真实 provider。
+实例配置写在 `~/.hivemind/config.yaml`（仓库、看板、预算），密钥写在 `~/.hivemind/secrets.env`（chmod 600）。
+完整步骤见 [docs/runbook.md](docs/runbook.md)。
 
-任务级拆解与验收判据见 [docs/plan/tasks.md](docs/plan/tasks.md)。
+## 文档
+
+- [docs/design/00-overview.md](docs/design/00-overview.md)：架构与主循环
+- [docs/runbook.md](docs/runbook.md)：配置、运行、日常操作、排障
+- [docs/legacy-knowledge.md](docs/legacy-knowledge.md)：从旧系统带过来的代码与实测结论
+- [AGENTS.md](AGENTS.md)：在这个仓库里工作的规则
+
+## 许可
+
+MIT
